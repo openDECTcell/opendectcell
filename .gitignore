@@ -1,0 +1,6 @@
+work/
+*.image
+*.gpr
+*.rep/
+__pycache__/
+*.pyc
