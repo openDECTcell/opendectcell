@@ -1,6 +1,6 @@
 # AGENTS.md: rules for AI agents (and humans) working on openDECTcell
 
-This file keeps work consistent across sessions and agents. Read it completely before changing anything. When a rule here conflicts with a habit, the rule wins. If a rule is unclear or wrong, propose a change to this file in its own commit; don't silently deviate.
+This file keeps work consistent across sessions and agents. Read it completely before changing anything. For the current project state and next steps, see the maintainers' notes. When a rule here conflicts with a habit, the rule wins. If a rule is unclear or wrong, propose a change to this file in its own commit; don't silently deviate.
 
 ## 1. Project in one paragraph
 
