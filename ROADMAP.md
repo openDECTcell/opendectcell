@@ -27,6 +27,7 @@
 - [ ] Minimal mail sequences for MAC start, registration and call setup, as used by the stock stack (input for G5–G7)
 
 ## M1: Lab setup on the 7412 **[hw]**
+- [ ] Full NAND backup of a box still running AVM firmware: RAM-boot OpenWrt (eva_ramboot + initramfs, no flash writes) and dump every MTD partition (raw incl. OOB, plus plain) via SCP into `work/` (never committed)
 - [ ] OpenWrt on the 7412 with serial console access; document the boot log
 - [ ] PCB check: DECT chip marking, what hangs off GPIO10/12 ("PCM-link flash" lines)
 - [ ] Locate the factory DECT config block (TLVs incl. RFPI and calibration) in flash; write an extractor
@@ -69,6 +70,7 @@
 - [ ] `libopendectcell`: CC setup/alert/connect/release, connection-to-voice-slot binding
 - [ ] `dect-probe`: ring a handset, play a tone, echo mode
 - [ ] **[hw]** Gate G7: a handset rings and audio passes
+- [ ] After G7: clean-room review of all docs, then make openDECTcell and opendectcell-controller public
 
 ## M8: Full GAP / CAT-iq basics in libopendectcell
 - [ ] Locate, temporary identities, ciphering (DSC), outgoing calls, CLIP
@@ -87,6 +89,7 @@
 - [ ] Implementation per the controller repo's own roadmap
 
 ## M11: Multi-cell
+- [ ] Research: DECT identities for a multi-cell system (ARI classes, allocation of EMC/EIC/FPN, uniqueness, which classes GAP/CAT-iq handsets accept); define how the controller assigns the system ARI and per-cell RPNs on first run
 - [ ] Idle roaming across cells with a shared registration database (controller)
 - [ ] Research: inter-cell synchronisation (host-driven FSC on the 7412? STUB sync modes?) for seamless handover
 - [ ] Capacity per cell (about 3 calls); verify against the mode byte
