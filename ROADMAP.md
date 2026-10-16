@@ -83,7 +83,7 @@
 - [ ] Cell mode: tunnel mails (TCP, optional TLS) and audio (UDP, optional SRTP/DTLS) to the controller
 
 ## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
-- [ ] Architecture, VoIP requirements and DECT feature framework (design docs, can start now)
+- [x] Architecture, VoIP requirements and DECT feature framework (design docs in opendectcell-controller)
 - [ ] Implementation per the controller repo's own roadmap
 
 ## M11: Multi-cell
