@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 """List pointer tables in a 32-bit relocatable ELF (ARM REL / MIPS REL): for each data section,
 resolve ABS32 relocations to strings/symbols and print entries with the raw words in between."""
 import struct,sys,re

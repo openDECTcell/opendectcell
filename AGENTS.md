@@ -46,7 +46,7 @@ First target: FRITZ!Box 7412. See `README.md` and `ROADMAP.md`.
 
 - **Language:** C (C11) for all userspace components and the protocol library. It must build for big-endian MIPS (7412), little-endian ARM and x86-64. The kernel module follows Linux kernel coding style.
 - **Endianness:** STUB fields are little-endian. Always use explicit conversion helpers; never cast structs onto wire buffers.
-- **Licence header** on every source file: `SPDX-License-Identifier: GPL-2.0-only`.
+- **Licence headers:** kernel code (`kernel/`) uses `SPDX-License-Identifier: GPL-2.0-only`, as usual for the kernel. **Everything else** (userspace, `libopendectcell`, tools, tests) uses `SPDX-License-Identifier: GPL-2.0-or-later`, so that the AGPL-3.0 controller (opendectcell-controller) can link `libopendectcell`. Never add GPL-2.0-only code outside `kernel/`.
 - **`libopendectcell` is shared** by `dect-probe` on the box and by the controller. Keep it free of platform I/O: transport and timers are injected.
 - **Terminology** (use consistently): *STUB* (AVM chip firmware), *mail* (host↔STUB message), *control slot* (PCM slot carrying mails), *cell* (one box with radio), *controller* (central DECT↔SIP gateway), *FP*/*PP* (fixed and portable part), RFPI, IPUI, TPUI, PARK.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Read-only access to AVM's Lantiq-era NAND filesystem.image (7362 SL, 7412, ...).
 
 Format notes (see Fritzbox7362SL/DECT-analysis.md):

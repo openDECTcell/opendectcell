@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Minimal read-only SquashFS 4 reader (big- or little-endian, xz/gzip/lzma).
 Usage: python3 -I sqfs_be.py IMAGE OFFSET ls|cat [PATH]"""
 import lzma, zlib, struct, sys

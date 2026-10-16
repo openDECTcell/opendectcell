@@ -51,4 +51,4 @@ python3 tools/avm_nand_sqfs.py FRITZ.Box_7412.137.06.88.image extract work/7412 
 
 ## License
 
-GPL-2.0 (see [LICENSE](LICENSE)). The project includes Linux kernel drivers, so a GPL-2.0 licence fits OpenWrt and the kernel.
+GPL-2.0 (see [LICENSE](LICENSE)): kernel code under `kernel/` is GPL-2.0-only; all other code (userspace, `libopendectcell`, tools) is **GPL-2.0-or-later**, so it can be combined with the AGPL-3.0 [opendectcell-controller](https://github.com/openDECTcell/opendectcell-controller).
