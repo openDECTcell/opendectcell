@@ -20,8 +20,11 @@ SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-25.12.5-ipq40xx-*))
 TCBIN   := $(firstword $(wildcard $(SDK)/staging_dir/toolchain-*/bin))
 XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 
+STUBD_SRC := src/stubd/dect-stubd.c $(LIBDECT_SRC)
+STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
+
 .PHONY: all check cross clean
-all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap
+all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap $(BUILD)/dect-stubd
 
 $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
 	@mkdir -p $(BUILD)
@@ -31,6 +34,11 @@ $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
 $(BUILD)/dect-pcmcap: src/tools/dect-pcmcap.c kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Ikernel/include/uapi -o $@ src/tools/dect-pcmcap.c
+
+# Host build of dect-stubd: compiles everywhere, runs only on the box.
+$(BUILD)/dect-stubd: $(STUBD_SRC) src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC)
 
 # Result: build/dect-fwload.arm (stripped), ready to copy to the box.
 cross: $(FWLOAD_SRC)
@@ -45,6 +53,9 @@ cross: $(FWLOAD_SRC)
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi \
 		-o $(BUILD)/dect-pcmcap.arm src/tools/dect-pcmcap.c
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-pcmcap.arm
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror $(STUBD_INC) \
+		-o $(BUILD)/dect-stubd.arm $(STUBD_SRC)
+	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-stubd.arm
 
 $(BUILD)/test_fwimage: tests/test_fwimage.c src/fwload/fwimage.c src/fwload/fwimage.h tests/check.h
 	@mkdir -p $(BUILD)
