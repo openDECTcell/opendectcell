@@ -2,7 +2,8 @@
 /*
  * openDECTcell - DECT reset and boot strap control for the AVM 7520/7530.
  *
- * Phase A plus read-only GPIO polling diagnostics (no PCM/DMA driver).
+ * Phase A (reset, boot strap), read-only GPIO polling diagnostics and
+ * Phase B (PCM receive through the ADSS TDM block, opendectcell_pcm.c).
  */
 #include <linux/bits.h>
 #include <linux/device.h>
@@ -27,6 +28,7 @@
 #include <linux/uaccess.h>
 
 #include "opendectcell.h"
+#include "opendectcell_pcm.h"
 
 /* IPQ4019 TLMM: ctl_reg = 0x1000 * GPIO; mux selector is bits [5:2]. */
 #define IPQ40XX_GPIO_STRIDE	0x1000
@@ -55,6 +57,27 @@ static struct gpiod_lookup_table fritz7530_gpio_lookup = {
 	},
 };
 
+/* GPIO 20-22 receive clocks and frame sync (function 2), 23 DI (3). */
+static const struct dect_pcm_pin fritz7530_pcm_pins[] = {
+	{ 20, 2 }, { 21, 2 }, { 22, 2 }, { 23, 3 },
+};
+
+/* docs/pcm-tdm-ipq4019.md sections 2-4 */
+static const struct dect_pcm_board fritz7530_pcm = {
+	.adss_base = 0x07700000,
+	.adss_size = 0x300,
+	.mbox_base = 0x0770e000,	/* MBOX3 */
+	.stereo_base = 0x0770f000,	/* STEREO3 */
+	.gcc_compatible = "qcom,gcc-ipq4019",
+	.gcc_ahb_clk = 19,		/* GCC_AUDIO_AHB_CLK */
+	.gcc_ahb_cbcr = 0x01800000 + 0x1b010,
+	.gic_compatible = "qcom,msm-qgic2",
+	.irq_spi = 159,
+	.irq_type = 4,			/* IRQ_TYPE_LEVEL_HIGH */
+	.pins = fritz7530_pcm_pins,
+	.n_pins = ARRAY_SIZE(fritz7530_pcm_pins),
+};
+
 struct dect_board {
 	const char *compatible;
 	const char *transport;
@@ -65,6 +88,7 @@ struct dect_board {
 	unsigned int pcm_gpio_first;
 	unsigned int pcm_gpio_last;
 	struct gpiod_lookup_table *gpio_lookup;
+	const struct dect_pcm_board *pcm;
 };
 
 static const struct dect_board dect_boards[] = {
@@ -78,6 +102,7 @@ static const struct dect_board dect_boards[] = {
 		.pcm_gpio_first = DECT_PCM_GPIO_FIRST,
 		.pcm_gpio_last = DECT_PCM_GPIO_LAST,
 		.gpio_lookup = &fritz7530_gpio_lookup,
+		.pcm = &fritz7530_pcm,
 	},
 };
 
@@ -96,6 +121,7 @@ struct opendectcell {
 	struct gpio_desc *strap;
 	bool opened;
 	bool uart_restore_pending;
+	struct dect_pcm pcm;
 };
 
 static struct opendectcell dect;
@@ -152,6 +178,8 @@ static void dect_close_locked(struct opendectcell *dw)
 {
 	int ret;
 
+	dect_pcm_teardown(&dw->pcm);
+
 	ret = dect_unstrap_locked(dw);
 	if (ret)
 		pr_err("UART restoration failed during cleanup: %d\n", ret);
@@ -205,6 +233,22 @@ static int dect_release(struct inode *inode, struct file *file)
 	dw->opened = false;
 	mutex_unlock(&dw->lock);
 	return 0;
+}
+
+static ssize_t dect_read(struct file *file, char __user *buf, size_t count,
+			 loff_t *ppos)
+{
+	struct opendectcell *dw = file->private_data;
+
+	return dect_pcm_read(&dw->pcm, buf, count,
+			     file->f_flags & O_NONBLOCK);
+}
+
+static __poll_t dect_poll(struct file *file, poll_table *wait)
+{
+	struct opendectcell *dw = file->private_data;
+
+	return dect_pcm_poll(&dw->pcm, file, wait);
 }
 
 /*
@@ -379,9 +423,9 @@ static long dect_ioctl(struct file *file, unsigned int cmd,
 	switch (cmd) {
 	case DECT_IOC_INFO:
 		info.version = DECT_IOC_VERSION;
-		info.stage = DECT_STAGE_A;
+		info.stage = DECT_STAGE_B;
 		info.features = DECT_FEATURE_RESET | DECT_FEATURE_STRAP |
-			DECT_FEATURE_GPIO_CAPTURE;
+			DECT_FEATURE_GPIO_CAPTURE | DECT_FEATURE_PCM_RX;
 		strscpy(info.board, dw->board->compatible,
 			sizeof(info.board));
 		strscpy(info.transport, dw->board->transport,
@@ -391,6 +435,14 @@ static long dect_ioctl(struct file *file, unsigned int cmd,
 		return 0;
 	case DECT_IOC_CAPTURE:
 		return dect_ioctl_capture(dw, (void __user *)arg);
+	case DECT_IOC_PCM_CONFIG:
+	case DECT_IOC_PCM_STEP:
+	case DECT_IOC_PCM_REGS:
+	case DECT_IOC_PCM_STATS:
+		mutex_lock(&dw->lock);
+		ret = dect_pcm_ioctl(&dw->pcm, cmd, (void __user *)arg);
+		mutex_unlock(&dw->lock);
+		return ret;
 	case DECT_IOC_RESET:
 	case DECT_IOC_STRAP:
 		if (copy_from_user(&value, (void __user *)arg,
@@ -434,6 +486,8 @@ static const struct file_operations dect_fops = {
 	.owner = THIS_MODULE,
 	.open = dect_open,
 	.release = dect_release,
+	.read = dect_read,
+	.poll = dect_poll,
 	.unlocked_ioctl = dect_ioctl,
 };
 
@@ -559,6 +613,13 @@ static int __init dect_init(void)
 		goto err_map;
 	}
 
+	ret = dect_pcm_init(&dect.pcm, board->pcm, &dect.lock, dect.pcm_regs,
+			    board->pcm_gpio_first);
+	if (ret) {
+		pr_err("cannot set up the PCM path: %d\n", ret);
+		goto err_pcm;
+	}
+
 	dect.misc.minor = MISC_DYNAMIC_MINOR;
 	dect.misc.name = "dect0";
 	dect.misc.mode = 0600;
@@ -568,13 +629,14 @@ static int __init dect_init(void)
 	ret = misc_register(&dect.misc);
 	if (ret) {
 		gpiod_remove_lookup_table(board->gpio_lookup);
-		goto err_pcm;
+		goto err_pcm_init;
 	}
 
-	pr_info("Phase A + GPIO capture loaded for %s\n",
-		board->compatible);
+	pr_info("Phase A + B loaded for %s\n", board->compatible);
 	return 0;
 
+err_pcm_init:
+	dect_pcm_exit(&dect.pcm);
 err_pcm:
 	iounmap(dect.pcm_regs);
 err_map:
@@ -591,10 +653,11 @@ static void __exit dect_exit(void)
 	dect_close_locked(&dect);
 	mutex_unlock(&dect.lock);
 	gpiod_remove_lookup_table(dect.board->gpio_lookup);
+	dect_pcm_exit(&dect.pcm);
 	iounmap(dect.pcm_regs);
 	iounmap(dect.strap_ctl);
 	put_device(dect.serial);
-	pr_info("Phase A + GPIO capture unloaded\n");
+	pr_info("Phase A + B unloaded\n");
 }
 
 module_init(dect_init);
@@ -602,4 +665,4 @@ module_exit(dect_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("openDECTcell contributors");
-MODULE_DESCRIPTION("DECT strap/reset and read-only TLMM PCM diagnostics");
+MODULE_DESCRIPTION("DECT chip control and PCM receive for AVM 7520/7530");

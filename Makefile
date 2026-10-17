@@ -20,11 +20,16 @@ TCBIN   := $(firstword $(wildcard $(SDK)/staging_dir/toolchain-*/bin))
 XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 
 .PHONY: all check cross clean
-all: $(TESTS) $(BUILD)/dect-fwload
+all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap
 
 $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ $(FWLOAD_SRC)
+
+# Host build of dect-pcmcap for offline analysis (-S FILE) of captures.
+$(BUILD)/dect-pcmcap: src/tools/dect-pcmcap.c kernel/include/uapi/opendectcell.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Ikernel/include/uapi -o $@ src/tools/dect-pcmcap.c
 
 # Result: build/dect-fwload.arm (stripped), ready to copy to the box.
 cross: $(FWLOAD_SRC)
@@ -36,6 +41,9 @@ cross: $(FWLOAD_SRC)
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi \
 		-o $(BUILD)/dect-sla.arm src/tools/dect-sla.c
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-sla.arm
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi \
+		-o $(BUILD)/dect-pcmcap.arm src/tools/dect-pcmcap.c
+	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-pcmcap.arm
 
 $(BUILD)/test_fwimage: tests/test_fwimage.c src/fwload/fwimage.c src/fwload/fwimage.h tests/check.h
 	@mkdir -p $(BUILD)

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 ifneq ($(KERNELRELEASE),)
 obj-m += opendectcell.o
-opendectcell-y := opendectcell_ipq40xx.o
+opendectcell-y := opendectcell_ipq40xx.o opendectcell_pcm.o
 ccflags-y += -I$(src)/include/uapi
 else
 KDIR ?= /lib/modules/$(shell uname -r)/build
