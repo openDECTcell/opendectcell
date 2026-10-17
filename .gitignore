@@ -4,3 +4,4 @@ work/
 *.rep/
 __pycache__/
 *.pyc
+firmwares/
