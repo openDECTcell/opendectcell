@@ -57,9 +57,9 @@ Interrupt controller: node `interrupt-controller@b000000`, compatible `qcom,msm-
 
 | Item | Facts | What to do |
 |---|---|---|
-| `GCC_AUDIO_AHB_CLK` (GCC clock id 19, branch register `0x1B010`) | Register reads 0: enable bit 0 clear, but **bit 31 (clock off) clear too**, so the clock is very likely **running** (voted on by hardware) [OBS]. AVM's kernel never enables it explicitly [AVM]. | Hold a reference anyway: GCC node compatible `qcom,gcc-ipq4019`; `of_clk_get_from_provider()` with `args = { 19 }`; `clk_prepare_enable()` before the first ADSS access; balanced disable on unload |
+| `GCC_AUDIO_AHB_CLK` (GCC clock id 19, branch register `0x1B010`) | Register reads 0: enable bit 0 clear, but **bit 31 (clock off) clear too**, so the clock is very likely **running** (voted on by hardware) [OBS]. AVM's kernel never enables it explicitly [AVM]. | **Read the branch register first** (read-only mapping of `0x0181B010`): if bit 31 is clear, the clock runs and the module does not touch it. Only if it is set: GCC node compatible `qcom,gcc-ipq4019`, `of_clk_get_from_provider()` with `args = { 19 }`, `clk_prepare_enable()`, balanced disable later. Taking the reference while it runs on the vote is harmful: `clk_disable_unprepare()` then warns "gcc_audio_ahb_clk status stuck at 'on'" (a kernel `WARN`) because the off bit never sets [OBS] |
 | `GCC_AUDIO_PWM_CLK` (id 20) | off (bit 31 set) [OBS]; not used by the TDM path | leave alone |
-| `GCC_AUDIO_BCR` (reset id 44, register `0x1B008`) | reads 0 = block not in reset [OBS]. AVM pulses it once at probe: assert, wait 20-24 ms, deassert [AVM] `gcc_audio_blk_rst` | **Skip** at first (the block has not been touched since power-on). If bring-up fails, add the pulse via the GCC reset controller |
+| `GCC_AUDIO_BCR` (reset id 44, register `0x1B008`) | reads 0 = block not in reset [OBS]. AVM pulses it once at probe: assert, wait 20-24 ms, deassert [AVM] `gcc_audio_blk_rst` | **Not needed**: receive works without it [OBS] (section 13) |
 
 **Bus-hang rule:** never access `0x0770xxxx` before the GCC audio AHB clock reference is taken. A read of `ADSS_GLB_CHIP_CTRL_I2S` (offset `0x10`) is the first, harmless test access.
 
@@ -203,9 +203,9 @@ Each 125 µs frame = 8 slots × 16-bit words; buffers contain whole frames in ti
 |---|---|---|
 | 1 | GCC clock reference, read CHIP_CTRL_I2S and the AHB CBCRs | reads return without hang; print the values |
 | 2 | Interface enable, B1K | read-back matches |
-| 3 | I2S reset, pad-clock selection | with the STUB running: RXB/RXM CBCR bit 31 = 0; with the chip in reset: 1 |
-| 4 | Global TDM config, stereo slave config, pins 20-23 to audio function | read-back of TDM_CTRL, AUDIO_MODE, CLK_I2S_CTRL, STEREO3 CONFIG |
-| 5 | Enable STEREO3 without DMA | RX sample counter (`0x14`) increases about 8000 × 8 per second (exact unit unknown; any steady increase is the signal) |
+| 3 | I2S reset, pad-clock selection | CBCRs read `0x00000001` or `0x80000001`; the bit clock only shows up after step 4 [OBS] |
+| 4 | Global TDM config, stereo slave config, pins 20-23 to audio function | read-back of TDM_CTRL, AUDIO_MODE, CLK_I2S_CTRL, STEREO3 CONFIG; with the STUB running RXB_CBCR bit 31 = 0 now [OBS] |
+| 5 | Enable STEREO3 without DMA | RX sample counter (`0x14`) moves, then stops at `0x00080008` (FIFO full); MBOX INT_STATUS bit 13 (FIFO overflow) set [OBS] |
 | 6 | DMA prepare and start | interrupts at 1 per buffer period (250/s for 4 ms buffers); overrun counter stays 0 |
 | 7 | Read data, search for `0xAA` mails | gate G2 |
 | 8 | Stop, unload | all restored (section 8 teardown), no warnings |
@@ -214,8 +214,23 @@ Provide a register-dump ioctl that returns the GLB, ADCC (section 6 list), STERE
 
 ## 12. Open questions
 
-- RX data delay 0 or 1 (AVM's DECT driver value unknown).
-- Units of the stereo RX sample counter.
-- Whether receive works without the transmit side running.
-- Whether the GCC audio block reset is needed before first use.
-- Slot of the control mails, byte and bit order (answer from the capture).
+- RX data delay 0 or 1 (AVM's DECT driver value unknown). The capture with 1 shows a clean, stable byte pattern (section 13), but that alone does not prove the alignment. Asked in Q-0001.
+- Slot of the control mails, byte and bit order: not visible yet, because the STUB sends no mails on its own (section 13). Asked in Q-0001.
+- Answered by the hardware (section 13): receive works without the transmit side; the GCC audio block reset is not needed; the RX sample counter counts 32-bit words.
+
+## 13. Observed on hardware (Phase B module, 2026-10-17)
+
+Source: *observed on hardware*, spare 7520, OpenWrt 25.12.5, `kernel/opendectcell_pcm.c` and `dect-pcmcap` (commit 088ebe6), STUB of FRITZ!OS 08.25 running, slots 8, rx_delay 1, 32 frames per block, 4 descriptors.
+
+| Item | Observation |
+|---|---|
+| GCC audio AHB clock | branch register reads `0x00000000`: running on a hardware vote; enabling and disabling it through the clock framework triggers a `WARN` on disable (section 4) |
+| ADSS state after boot | CHIP_CTRL_I2S 0, AUDIO_MODE 0, TDM_CTRL `0x00010001`, all ADCC AHB branches `0x00000001` (on), rx/tx CBCRs `0x00000001`, STEREO3 CONFIG `0x00000102`, MBOX3 DMA_POLICY `0x00008040`, INT_STATUS `0x00000001` |
+| Bit clock into the ADSS | appears only once pins 20-23 are in their audio functions **and** AUDIO_MODE has the TDM receive bits; MCLK branch reads "running" even before |
+| After step 4 | TDM_CTRL `0x06070007`, AUDIO_MODE `0x10000305`, CLK_I2S_CTRL 0, STEREO3 CONFIG `0x00001402`, TLMM 20-22 `0x480a`, 23 `0x480e` |
+| DMA | DMA_POLICY `0x00028080` (SRAM_AC 8), coherent memory at `0x83xxxxxx`, Linux IRQ 70 for GIC SPI 159; **exactly 250 interrupts/s**, one block per interrupt, no empty or multiple completions, no error bits, no sequence gaps over 10 s. Receive works **without the transmit side** |
+| RX sample counter | two identical 16-bit halves per register; about 32,000 per second = **4 per frame**, i.e. it counts 32-bit words. Overrun counter 0 while DMA runs |
+| STUB upload during capture | the receiver keeps running while the chip is in reset (no clocks, no interrupts) and resumes when the chip restarts; first about 16 ms all 0xFF, then the STUB's pattern |
+| Teardown | clean: pins, CBCRs, AUDIO_MODE and CHIP_CTRL back to the boot values, no warnings |
+
+**Frame content** (16 bytes per frame in DMA-buffer order; each 16-bit slot is stored as a little-endian word, so the second byte of a slot is probably the first on the wire): bytes 0-1 `FE FE`, 2-3 `FF FF`, 4-7 `FE`, 8 `08` (briefly `00` after boot), 9 `40`, **10 A-law audio** (0x55/0xD5 at rest, a decaying waveform right after boot), 11 `00`, 12-15 `FF`. Everything except byte 10 is constant. **No 0xAA-framed mail** was found in any slot, byte order, bit order or bit shift, neither from an idle STUB nor across a fresh upload. Working assumption: the control channel is one of the idle 0xFF positions and the STUB only talks after the host has sent a mail (Q-0001).
