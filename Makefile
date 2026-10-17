@@ -33,6 +33,9 @@ cross: $(FWLOAD_SRC)
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Wshadow \
 		-o $(BUILD)/dect-fwload.arm.dbg $(FWLOAD_SRC)
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip -o $(BUILD)/dect-fwload.arm $(BUILD)/dect-fwload.arm.dbg
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi \
+		-o $(BUILD)/dect-sla.arm src/tools/dect-sla.c
+	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-sla.arm
 
 $(BUILD)/test_fwimage: tests/test_fwimage.c src/fwload/fwimage.c src/fwload/fwimage.h tests/check.h
 	@mkdir -p $(BUILD)

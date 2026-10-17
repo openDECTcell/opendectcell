@@ -2,7 +2,7 @@
 /*
  * openDECTcell - DECT reset and boot strap control for the AVM 7520/7530.
  *
- * Phase A only: no firmware loader and no PCM/TDM data path.
+ * Phase A plus read-only GPIO polling diagnostics (no PCM/DMA driver).
  */
 #include <linux/bits.h>
 #include <linux/device.h>
@@ -13,11 +13,15 @@
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/kernel.h>
+#include <linux/ktime.h>
+#include <linux/math64.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/irqflags.h>
+#include <linux/slab.h>
 #include <linux/platform_device.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
@@ -28,6 +32,17 @@
 #define IPQ40XX_GPIO_STRIDE	0x1000
 #define IPQ40XX_MUX_SHIFT	2
 #define IPQ40XX_MUX_MASK	GENMASK(5, 2)
+
+/* Read-only TLMM inputs, as defined in pinctrl-ipq4019.c. */
+#define IPQ40XX_GPIO_IN_OFFSET	0x4
+#define DECT_PCM_GPIO_FIRST	20U
+#define DECT_PCM_GPIO_LAST	27U
+#define DECT_CAL_ROUNDS		2048U
+#define DECT_CAL_EDGES		256U
+#define DECT_CLOCK_TEST_NS	(2ULL * NSEC_PER_MSEC)
+#define DECT_POLL_MAX_ITER	500000U
+/* 1.024 MHz * 8 ms = 8192 observed rising edges at most. */
+#define DECT_CAPTURE_MAX_EDGES	8192U
 
 static struct gpiod_lookup_table fritz7530_gpio_lookup = {
 	.dev_id = "dect0",
@@ -47,6 +62,8 @@ struct dect_board {
 	const char *tlmm_compatible;
 	unsigned int strap_offset;
 	unsigned int uart_mux;
+	unsigned int pcm_gpio_first;
+	unsigned int pcm_gpio_last;
 	struct gpiod_lookup_table *gpio_lookup;
 };
 
@@ -58,6 +75,8 @@ static const struct dect_board dect_boards[] = {
 		.tlmm_compatible = "qcom,ipq4019-pinctrl",
 		.strap_offset = 16,
 		.uart_mux = 1,	/* GPIO16 function 1: blsp_uart0 */
+		.pcm_gpio_first = DECT_PCM_GPIO_FIRST,
+		.pcm_gpio_last = DECT_PCM_GPIO_LAST,
 		.gpio_lookup = &fritz7530_gpio_lookup,
 	},
 };
@@ -68,6 +87,11 @@ struct opendectcell {
 	const struct dect_board *board;
 	struct device *serial;
 	void __iomem *strap_ctl;
+	void __iomem *pcm_regs;
+	void __iomem *dcl_in;
+	void __iomem *fsc_in;
+	void __iomem *di_in;
+	void __iomem *do_in;
 	struct gpio_desc *reset;
 	struct gpio_desc *strap;
 	bool opened;
@@ -183,6 +207,166 @@ static int dect_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
+/*
+ * GPIO capture is deliberately diagnostic only. Reading GPIO_IN does not
+ * claim the pins or change their mux and works independently of ADSS.
+ * readl_relaxed() is used to avoid unnecessary ordering barriers; the four
+ * pins are sampled sequentially, so their values are not simultaneous.
+ *
+ * Calibration is done with interrupts enabled. The actual capture disables
+ * local interrupts for no more than the user-requested (<= 8 ms) interval,
+ * checked after every 64 DCL polls. Because checking itself takes time,
+ * the window can exceed its target by a small amount; no sleeps are used.
+ */
+static void dect_capture_calibrate(struct opendectcell *dw,
+				  struct dect_ioc_capture *c)
+{
+	u64 begin, elapsed, deadline;
+	u32 i, prev, level, edges = 0;
+	u32 polls = 0;
+	u32 sink = 0;
+
+	begin = ktime_get_ns();
+	for (i = 0; i < DECT_CAL_ROUNDS; i++) {
+		sink ^= readl_relaxed(dw->dcl_in);
+		sink ^= readl_relaxed(dw->fsc_in);
+		sink ^= readl_relaxed(dw->di_in);
+		sink ^= readl_relaxed(dw->do_in);
+	}
+	elapsed = ktime_get_ns() - begin;
+	/* Ceiling avoids overstating available performance. */
+	c->ns_per_read = max_t(u32, 1, DIV_ROUND_UP_ULL(elapsed,
+							     DECT_CAL_ROUNDS * 4));
+	/* Keep the result observable without modifying any device register. */
+	barrier();
+	(void)sink;
+
+	prev = readl_relaxed(dw->dcl_in) & 1;
+	begin = ktime_get_ns();
+	deadline = begin + DECT_CLOCK_TEST_NS;
+	while (polls < DECT_POLL_MAX_ITER && edges < DECT_CAL_EDGES) {
+		level = readl_relaxed(dw->dcl_in) & 1;
+		if (!prev && level)
+			edges++;
+		prev = level;
+		if (!(++polls & 63) && ktime_get_ns() >= deadline)
+			break;
+	}
+	elapsed = ktime_get_ns() - begin;
+	if (edges != DECT_CAL_EDGES || !elapsed) {
+		c->flags |= edges ? DECT_CAPTURE_F_TOO_SLOW :
+				    DECT_CAPTURE_F_NO_CLOCK;
+		return;
+	}
+
+	c->dcl_period_ns = max_t(u32, 1,
+					  div_u64(elapsed, DECT_CAL_EDGES));
+	c->observed_clock_hz = div_u64(1000000000ULL,
+						c->dcl_period_ns);
+	c->reads_per_period = c->dcl_period_ns / c->ns_per_read;
+	c->reads_per_half_period = (c->dcl_period_ns / 2) /
+						c->ns_per_read;
+
+	/*
+	 * Sanity check the observed ~1.024 MHz: missing edges in the
+	 * calibration cannot safely be mistaken for a slower real clock.
+	 * Three MMIO reads per half cycle are a minimum, not a guarantee.
+	 */
+	if (c->observed_clock_hz < 900000 ||
+	    c->observed_clock_hz > 1200000 ||
+	    c->reads_per_half_period < 3)
+		c->flags |= DECT_CAPTURE_F_TOO_SLOW;
+}
+
+static void dect_capture_samples(struct opendectcell *dw,
+				 struct dect_ioc_capture *c, u8 *data)
+{
+	unsigned long irqflags;
+	u64 deadline, elapsed, expected;
+	u32 polls = 0, prev, level, samples = 0;
+	u8 value;
+
+	local_irq_save(irqflags);
+	prev = readl_relaxed(dw->dcl_in) & 1;
+	c->start_ns = ktime_get_ns();
+	deadline = c->start_ns + (u64)c->duration_us * NSEC_PER_USEC;
+	while (samples < DECT_CAPTURE_MAX_EDGES) {
+		level = readl_relaxed(dw->dcl_in) & 1;
+		if (!prev && level) {
+			value = 1;
+			value |= (readl_relaxed(dw->fsc_in) & 1) << 1;
+			value |= (readl_relaxed(dw->di_in) & 1) << 2;
+			value |= (readl_relaxed(dw->do_in) & 1) << 3;
+			data[samples++] = value;
+		}
+		prev = level;
+		if (!(++polls & 63) && ktime_get_ns() >= deadline)
+			break;
+	}
+	c->end_ns = ktime_get_ns();
+	local_irq_restore(irqflags);
+	c->sample_count = samples;
+
+	/* Heuristic only: sampled transitions cannot prove continuity. */
+	elapsed = c->end_ns - c->start_ns;
+	expected = div_u64(elapsed * c->observed_clock_hz,
+			   NSEC_PER_SEC);
+	if (expected > 16 && (u64)samples * 10 < expected * 9)
+		c->flags |= DECT_CAPTURE_F_INCOMPLETE;
+}
+
+static long dect_ioctl_capture(struct opendectcell *dw, void __user *argp)
+{
+	struct dect_ioc_capture c;
+	void __user *user_samples;
+	u8 *data;
+	unsigned int i;
+	long ret = 0;
+
+	if (copy_from_user(&c, argp, sizeof(c)))
+		return -EFAULT;
+	if (!c.duration_us || c.duration_us > DECT_CAPTURE_MAX_US ||
+	    c.sample_capacity < DECT_CAPTURE_BUFFER_BYTES ||
+	    !c.samples_ptr ||
+	    (u64)(unsigned long)c.samples_ptr != c.samples_ptr ||
+	    c.reserved0)
+		return -EINVAL;
+	for (i = 0; i < ARRAY_SIZE(c.reserved); i++)
+		if (c.reserved[i])
+			return -EINVAL;
+
+	user_samples = (void __user *)(unsigned long)c.samples_ptr;
+	if (!access_ok(user_samples, c.sample_capacity))
+		return -EFAULT;
+	data = kvzalloc(DECT_CAPTURE_BUFFER_BYTES, GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	c.flags = 0;
+	c.sample_count = 0;
+	c.ns_per_read = 0;
+	c.dcl_period_ns = 0;
+	c.reads_per_period = 0;
+	c.reads_per_half_period = 0;
+	c.observed_clock_hz = 0;
+	c.start_ns = 0;
+	c.end_ns = 0;
+
+	mutex_lock(&dw->lock);
+	dect_capture_calibrate(dw, &c);
+	if (!c.flags)
+		dect_capture_samples(dw, &c, data);
+	mutex_unlock(&dw->lock);
+
+	if (c.sample_count &&
+	    copy_to_user(user_samples, data, c.sample_count))
+		ret = -EFAULT;
+	if (copy_to_user(argp, &c, sizeof(c)))
+		ret = -EFAULT;
+	kvfree(data);
+	return ret;
+}
+
 static long dect_ioctl(struct file *file, unsigned int cmd,
 		       unsigned long arg)
 {
@@ -196,7 +380,8 @@ static long dect_ioctl(struct file *file, unsigned int cmd,
 	case DECT_IOC_INFO:
 		info.version = DECT_IOC_VERSION;
 		info.stage = DECT_STAGE_A;
-		info.features = DECT_FEATURE_RESET | DECT_FEATURE_STRAP;
+		info.features = DECT_FEATURE_RESET | DECT_FEATURE_STRAP |
+			DECT_FEATURE_GPIO_CAPTURE;
 		strscpy(info.board, dw->board->compatible,
 			sizeof(info.board));
 		strscpy(info.transport, dw->board->transport,
@@ -204,6 +389,8 @@ static long dect_ioctl(struct file *file, unsigned int cmd,
 		if (copy_to_user((void __user *)arg, &info, sizeof(info)))
 			return -EFAULT;
 		return 0;
+	case DECT_IOC_CAPTURE:
+		return dect_ioctl_capture(dw, (void __user *)arg);
 	case DECT_IOC_RESET:
 	case DECT_IOC_STRAP:
 		if (copy_from_user(&value, (void __user *)arg,
@@ -279,6 +466,49 @@ static int dect_map_strap_ctl(struct opendectcell *dw)
 	return 0;
 }
 
+static int dect_map_pcm_inputs(struct opendectcell *dw)
+{
+	const struct dect_board *b = dw->board;
+	struct device_node *np;
+	struct resource resource;
+	resource_size_t offset, length;
+	int ret;
+
+	np = of_find_compatible_node(NULL, NULL, b->tlmm_compatible);
+	if (!np)
+		return -ENODEV;
+	ret = of_address_to_resource(np, 0, &resource);
+	of_node_put(np);
+	if (ret)
+		return ret;
+
+	offset = b->pcm_gpio_first * IPQ40XX_GPIO_STRIDE;
+	length = (b->pcm_gpio_last - b->pcm_gpio_first + 1) *
+		 IPQ40XX_GPIO_STRIDE;
+	if (b->pcm_gpio_first > 21 || b->pcm_gpio_last < 27 ||
+	    resource_size(&resource) < offset + length)
+		return -EINVAL;
+
+	/* The pinctrl driver owns this region: map only, never write. */
+	dw->pcm_regs = ioremap(resource.start + offset, length);
+	if (!dw->pcm_regs)
+		return -ENOMEM;
+
+	dw->dcl_in = dw->pcm_regs +
+		(21 - b->pcm_gpio_first) * IPQ40XX_GPIO_STRIDE +
+		IPQ40XX_GPIO_IN_OFFSET;
+	dw->fsc_in = dw->pcm_regs +
+		(22 - b->pcm_gpio_first) * IPQ40XX_GPIO_STRIDE +
+		IPQ40XX_GPIO_IN_OFFSET;
+	dw->di_in = dw->pcm_regs +
+		(23 - b->pcm_gpio_first) * IPQ40XX_GPIO_STRIDE +
+		IPQ40XX_GPIO_IN_OFFSET;
+	dw->do_in = dw->pcm_regs +
+		(27 - b->pcm_gpio_first) * IPQ40XX_GPIO_STRIDE +
+		IPQ40XX_GPIO_IN_OFFSET;
+	return 0;
+}
+
 static int __init dect_init(void)
 {
 	struct device_node *root;
@@ -323,6 +553,12 @@ static int __init dect_init(void)
 		goto err_serial;
 	}
 
+	ret = dect_map_pcm_inputs(&dect);
+	if (ret) {
+		pr_err("cannot map PCM input GPIOs: %d\n", ret);
+		goto err_map;
+	}
+
 	dect.misc.minor = MISC_DYNAMIC_MINOR;
 	dect.misc.name = "dect0";
 	dect.misc.mode = 0600;
@@ -332,13 +568,15 @@ static int __init dect_init(void)
 	ret = misc_register(&dect.misc);
 	if (ret) {
 		gpiod_remove_lookup_table(board->gpio_lookup);
-		goto err_map;
+		goto err_pcm;
 	}
 
-	pr_info("Phase A loaded for %s (GPIO reset and strap only)\n",
+	pr_info("Phase A + GPIO capture loaded for %s\n",
 		board->compatible);
 	return 0;
 
+err_pcm:
+	iounmap(dect.pcm_regs);
 err_map:
 	iounmap(dect.strap_ctl);
 err_serial:
@@ -353,9 +591,10 @@ static void __exit dect_exit(void)
 	dect_close_locked(&dect);
 	mutex_unlock(&dect.lock);
 	gpiod_remove_lookup_table(dect.board->gpio_lookup);
+	iounmap(dect.pcm_regs);
 	iounmap(dect.strap_ctl);
 	put_device(dect.serial);
-	pr_info("Phase A unloaded\n");
+	pr_info("Phase A + GPIO capture unloaded\n");
 }
 
 module_init(dect_init);
@@ -363,4 +602,4 @@ module_exit(dect_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("openDECTcell contributors");
-MODULE_DESCRIPTION("DECT reset and UART boot strap for IPQ4019 FRITZ!Box");
+MODULE_DESCRIPTION("DECT strap/reset and read-only TLMM PCM diagnostics");
