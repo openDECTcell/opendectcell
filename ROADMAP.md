@@ -36,7 +36,7 @@
 - [ ] Optional: stock-firmware observation with Freetz-NG (`/proc` DECT commands, mail logging) to record reference traces
 
 ## M2: Firmware loader → **Gate G1**
-- [ ] `dect-fw-extract`: fetch `dectfw_*.hex` from a user-supplied AVM image (blob policy: never shipped)
+- [ ] `tools/dect-fw-extract.py` (PC, Python stdlib only): extract `dectfw_*.hex` from a user-supplied AVM image, verify SHA-256, print upload instructions
 - [ ] Image builder: Intel HEX → length header, patch area via descriptor at chip address 6, TLV patching, XOR checksum
 - [ ] `kmod-opendectcell-lantiq` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset; no PCM yet
 - [ ] Board profile `boards/avm,fritz7412` with the loader keys (firmware names, mode word, UART)
@@ -85,7 +85,8 @@
 - [ ] Feed with `kmod-opendectcell-lantiq` and the `opendectcell` package (programs plus board profiles; pulls in the right kmod); CI build with the OpenWrt SDK
 - [ ] Board resources: in-module board table first, then an upstream DTS patch for the 7412
 - [ ] procd init script: board detection, profile plus UCI overrides, clear message on unsupported boxes; console/getty handling
-- [ ] LuCI app for non-technical users: status page, firmware set-up, basic settings
+- [ ] Firmware storage in `/etc/opendectcell/firmware/`: SHA-256 check against the profile, kept across upgrades (`keep.d`)
+- [ ] LuCI app for non-technical users: status page, firmware upload, basic settings
 - [ ] Cell mode: tunnel mails (TCP, optional TLS) and audio (UDP, optional SRTP/DTLS) to the controller
 
 ## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
