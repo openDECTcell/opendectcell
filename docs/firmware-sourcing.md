@@ -19,7 +19,7 @@ The per-device **calibration data** is different: it is read at runtime from the
 3. The user uploads the files to the box: with `scp` into `/etc/opendectcell/firmware/`, or later with the upload button in the LuCI app.
 4. On the box, the init script checks the files against `fw_*_sha256` in the board profile (busybox `sha256sum`) and refuses to start with an unknown or wrong build, with a clear message saying which file is expected.
 
-**Requirements for the PC tool:** a single tool in `tools/`, Python 3 standard library only, so it runs unchanged on Linux, macOS and Windows with no extra installs. Messages are written for non-technical users.
+**Requirements for the PC tool:** a single tool in `tools/`, Python 3 standard library only, so it runs unchanged on Linux, macOS and Windows with a plain Python 3 install and no extra packages. (Linux distributions include Python; Windows and macOS users install it from python.org, and the user docs must say so.) Messages are written for non-technical users.
 
 ## 3. Storage on the box and upgrades
 
