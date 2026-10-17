@@ -38,11 +38,13 @@
 ## M2: Firmware loader → **Gate G1**
 - [ ] `tools/dect-fw-extract.py` (PC, Python stdlib only): extract `dectfw_*.hex` from a user-supplied AVM image, verify SHA-256, print upload instructions
 - [x] Image builder: Intel HEX → length header, segments, patch area via descriptor (chip address 0 for `441`), TLV patching, XOR checksum (`src/fwload/fwimage.c`, `docs/stub-image-format.md`)
-- [ ] `kmod-opendectcell-ipq40xx` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset; no PCM yet
+- [ ] `kmod-opendectcell-ipq40xx` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset and boot strap; no PCM yet
 - [ ] Board profile for the 7520/7530 (`boards/<board_name>`, name read on the box) with the loader keys (firmware names, mode word, UART)
-- [ ] `dect-fwload`: UART boot, ROM stage (STX/SOH/len16/XOR/ACK) and second stage (len32/CRC16), retries; chip reset via `/dev/dect0`
-- [ ] Chip simulator plus unit tests against the real `.hex` files
+- [x] `dect-fwload` bring-up version: UART boot, both stages, retries; reset and strap through sysfs GPIO given on the command line (`src/fwload/`, `docs/stub-loader-protocol.md` §7)
+- [ ] `dect-fwload` on `/dev/dect0` and the board profile instead of command-line GPIOs
+- [ ] Unit tests for the upload engine (`loader.c`) against the real `.hex` files; the image builder already has them
 - [ ] **[hw]** Gate G1: STUB boots, with its UART output captured
+  - 2026-10-17, 7520: both upload stages acknowledged with matching checksums; no STUB UART output seen yet (see issue)
 
 ## M3: PCM kernel module → **Gate G2**
 - [ ] IPQ4019 ADSS TDM streaming (port from Qualcomm's GPL QSDK driver): FS 8 kHz, DCL 1.024 MHz, mbox DMA
