@@ -130,6 +130,10 @@ Implemented in `kernel/opendectcell_ipq40xx.c` (Appendix A) and verified on the 
 
 **Goal: "gate G2".** Capture valid control messages ("mails", section 4) that the running STUB sends on the PCM bus, on the real box, and learn the frame layout. Receive only; transmit comes later. Voice, DECT protocol and the userspace daemon are out of scope.
 
+### 7.0 Status (2026-10-17)
+
+The first Phase B answer chose the fallback (7.4) and stated that the main path (7.3) needs Qualcomm's QSDK sources for `qca,ipq4019-tdm`, `qca,ipq4019-mbox`, `qca,ipq4019-pcm-tdm` and `qca,ipq4019-audio-adss` (register definitions and initialisation). The fallback is implemented (`DECT_IOC_CAPTURE`) and tested on the box: **a TLMM register read takes 268 ns, only one read fits in half a DCL period, so polling is too slow** (the module correctly refuses to capture). Its calibration confirmed the DCL at 1.02 MHz from the SoC side. **The main path (7.3) is therefore the only way forward**; it needs those QSDK sources.
+
 ### 7.1 First: a feasibility statement (mandatory)
 
 Start your answer with a short statement (at most 25 lines) of what you **know with confidence** about the IPQ4019 ADSS/TDM/MBOX hardware and Qualcomm's QSDK driver structure (register blocks, DMA descriptor ring format, clock setup, how slave mode is selected, which GPIO functions the PCM pins need), and what you would have to **guess**. Rules:
