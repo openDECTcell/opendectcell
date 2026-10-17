@@ -39,6 +39,8 @@ struct opts {
 	const char *offline;
 	const char *exec_cmd;
 	const char *tx_hex;
+	const char *mail;
+	unsigned int ctrl_slot;
 	struct dect_pcm_config cfg;
 };
 
@@ -57,6 +59,9 @@ static void usage(void)
 		"  -x N     hex-dump the first N frames\n"
 		"  -q       no register dumps\n"
 		"  -T       also run the transmit DMA (drives pin 27)\n"
+		"  -m SRC:DST:PRIM[:HEX]  send one mail in the control slot after the\n"
+		"           DMA starts (implies -T), e.g. -m 0x22:0x02:0xf600\n"
+		"  -l SLOT  control slot for -m and the mail decoder (default 1)\n"
 		"  -P HEX   transmit frame template, slots*2 bytes in DMA-buffer\n"
 		"           order (default all ff)\n"
 		"  -e CMD   at step 6, run CMD (sh -c) while capturing; CMD gets the\n"
@@ -241,6 +246,61 @@ out:
 	free(t);
 }
 
+/*
+ * STUB -> host mails in the control slot, two bytes per frame in buffer
+ * order (docs/stub-pcm-control-channel.md): 0xAA, seq, length L, body of
+ * L + 2 bytes (source task, destination task, primitive, parameters),
+ * 16-bit sum of length and body.
+ */
+static void print_mails(const uint8_t *data, size_t frames,
+			unsigned int slots, unsigned int slot)
+{
+	uint8_t *s = malloc(frames * 2u);
+	size_t f, i = 0, n = frames * 2u;
+	unsigned int count = 0;
+
+	if (!s || slot >= slots) {
+		free(s);
+		return;
+	}
+	for (f = 0; f < frames; f++)
+		memcpy(s + 2u * f, data + (f * slots + slot) * 2u, 2);
+	while (i + 10 <= n) {
+		unsigned int len, sum = 0, want, k;
+		size_t total;
+
+		if (s[i] != 0xaa) {
+			i++;
+			continue;
+		}
+		len = s[i + 2] | (unsigned int)s[i + 3] << 8;
+		total = 4u + len + 2u + 2u;
+		if (len > 0xfb || i + total > n) {
+			i++;
+			continue;
+		}
+		for (k = 2; k < 4 + len + 2; k++)
+			sum += s[i + k];
+		want = s[i + total - 2] | (unsigned int)s[i + total - 1] << 8;
+		if ((sum & 0xffffu) != want) {
+			i++;
+			continue;
+		}
+		printf("  mail at frame %zu: seq %3u len %3u src %02x dst %02x prim %04x",
+		       i / 2u, s[i + 1], len, s[i + 4], s[i + 5],
+		       s[i + 6] | (unsigned int)s[i + 7] << 8);
+		if (len > 2)
+			printf(" par");
+		for (k = 0; k + 2 < len && k < 24; k++)
+			printf(" %02x", s[i + 8 + k]);
+		printf("\n");
+		count++;
+		i += total;
+	}
+	printf("mails in slot %u: %u\n", slot, count);
+	free(s);
+}
+
 static void analyse(const uint8_t *data, size_t bytes, unsigned int slots,
 		    unsigned int hex_frames)
 {
@@ -316,6 +376,8 @@ static int analyse_file(const char *path, const struct opts *o)
 	}
 	fclose(fp);
 	analyse(data, n, o->cfg.slots ? o->cfg.slots : 8u, o->hex_frames);
+	print_mails(data, n / ((o->cfg.slots ? o->cfg.slots : 8u) * 2u),
+		    o->cfg.slots ? o->cfg.slots : 8u, o->ctrl_slot);
 	free(data);
 	return 0;
 }
@@ -389,6 +451,79 @@ static void print_stats(const struct dect_pcm_stats *s)
 	       s->rx_samples_lsb, s->overruns, s->tx_irqs, s->tx_blocks);
 }
 
+/*
+ * Host -> STUB element (docs/stub-pcm-control-channel.md): word count
+ * (n + 5) / 2, sequence, the n mail bytes [L, src, dst, primitive,
+ * parameters] with L = 2 + parameters, 16-bit sum of the mail bytes,
+ * padded with 0xFF; two bytes per frame into the control slot.
+ */
+static int send_mail(int fd, const char *spec, unsigned int slots,
+		     unsigned int slot, unsigned int seq)
+{
+	unsigned int src, dst, prim, v, i, n, sum = 0;
+	uint8_t mail[64], el[80], *frames;
+	const char *par = NULL;
+	size_t fb = slots * 2u, len, nf, k;
+	char *end;
+	ssize_t w;
+
+	errno = 0;
+	src = (unsigned int)strtoul(spec, &end, 0);
+	if (*end != ':')
+		return -1;
+	dst = (unsigned int)strtoul(end + 1, &end, 0);
+	if (*end != ':')
+		return -1;
+	prim = (unsigned int)strtoul(end + 1, &end, 0);
+	if (*end == ':')
+		par = end + 1;
+	else if (*end)
+		return -1;
+	if (src > 0xff || dst > 0xff || prim > 0xffff || slot >= slots)
+		return -1;
+
+	n = 6;
+	mail[2] = (uint8_t)src;
+	mail[3] = (uint8_t)dst;
+	mail[4] = (uint8_t)prim;
+	mail[5] = (uint8_t)(prim >> 8);
+	for (; par && *par && n < sizeof(mail); par += 2) {
+		if (sscanf(par, "%2x", &v) != 1)
+			return -1;
+		mail[n++] = (uint8_t)v;
+	}
+	mail[0] = (uint8_t)(n - 4);
+	mail[1] = 0;
+
+	len = 0;
+	el[len++] = (uint8_t)((n + 5) / 2);
+	el[len++] = (uint8_t)(((n + 5) / 2) >> 8);
+	el[len++] = (uint8_t)seq;
+	el[len++] = (uint8_t)(seq >> 8);
+	for (i = 0; i < n; i++) {
+		el[len++] = mail[i];
+		sum += mail[i];
+	}
+	el[len++] = (uint8_t)sum;
+	el[len++] = (uint8_t)(sum >> 8);
+	if (len & 1)
+		el[len++] = 0xff;
+
+	nf = len / 2;
+	frames = malloc(nf * fb);
+	if (!frames)
+		return -1;
+	memset(frames, 0xff, nf * fb);
+	for (k = 0; k < nf; k++)
+		memcpy(frames + k * fb + slot * 2u, el + 2 * k, 2);
+	w = write(fd, frames, nf * fb);
+	free(frames);
+	printf("sent mail src %02x dst %02x prim %04x (%u bytes) in slot %u: %s\n",
+	       src, dst, prim, n, slot, w == (ssize_t)(nf * fb) ? "ok" :
+	       strerror(errno));
+	return w == (ssize_t)(nf * fb) ? 0 : -1;
+}
+
 static pid_t spawn(const char *cmd, int fd)
 {
 	char num[16];
@@ -431,6 +566,10 @@ static int capture(int fd, const struct opts *o, const struct dect_pcm_config *c
 	}
 	if (o->exec_cmd && (child = spawn(o->exec_cmd, fd)) < 0)
 		goto out;
+	if (o->mail && send_mail(fd, o->mail, c->slots, o->ctrl_slot, 0)) {
+		fprintf(stderr, "-m: bad mail or write failed\n");
+		goto out;
+	}
 	while (got < o->blocks) {
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
 		ssize_t n;
@@ -492,6 +631,7 @@ static int capture(int fd, const struct opts *o, const struct dect_pcm_config *c
 		goto out;
 	}
 	analyse(data, total, c->slots, o->hex_frames);
+	print_mails(data, total / (c->slots * 2u), c->slots, o->ctrl_slot);
 	ret = 0;
 out:
 	if (child > 0 && waitpid(child, &status, 0) == child)
@@ -614,7 +754,8 @@ int main(int argc, char **argv)
 	o.last_step = DECT_PCM_STEP_DMA;
 	o.wait_ms = 1000;
 	o.blocks = 250;
-	while ((c = getopt(argc, argv, "s:kw:c:r:t:f:n:b:o:x:qS:e:TP:h")) != -1) {
+	o.ctrl_slot = 1;
+	while ((c = getopt(argc, argv, "s:kw:c:r:t:f:n:b:o:x:qS:e:TP:m:l:h")) != -1) {
 		switch (c) {
 		case 's':
 			if (parse_uint(optarg, &o.last_step) || !o.last_step ||
@@ -679,6 +820,14 @@ int main(int argc, char **argv)
 			break;
 		case 'P':
 			o.tx_hex = optarg;
+			break;
+		case 'm':
+			o.mail = optarg;
+			o.cfg.flags |= DECT_PCM_CF_TX;
+			break;
+		case 'l':
+			if (parse_uint(optarg, &o.ctrl_slot) || o.ctrl_slot > 15)
+				goto bad;
 			break;
 		default:
 			goto bad;

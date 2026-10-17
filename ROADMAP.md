@@ -47,12 +47,18 @@
   - 2026-10-17, 7520: both upload stages acknowledged with matching checksums; after the upload the chip drives DCL and FSC (`docs/models/7520-DECT-analysis.md` §8.2). The STUB prints nothing on the UART
 
 ## M3: PCM kernel module → **Gate G2**
-- [ ] IPQ4019 ADSS TDM streaming (port from Qualcomm's GPL QSDK driver): FS 8 kHz, DCL 1.024 MHz, mbox DMA
+- [x] IPQ4019 ADSS TDM streaming (port from Qualcomm's GPL QSDK driver): FS 8 kHz, DCL 1.024 MHz, mbox DMA
+  - 2026-10-17: written from `docs/pcm-tdm-ipq4019.md` (not ported); receive and transmit DMA, 10 minutes without gap or overrun
 - [ ] Real-time path (dedicated CPU core or high-priority IRQ/FIQ)
-- [ ] `/dev/dect0` interface: control-slot and voice-slot data, frame-layout configuration; identical for every transport
-- [ ] Capture tool (a "software logic analyser"): dump frames and search for the 0xAA framing
-- [ ] **[hw]** Determine words per frame, control-slot position, voice-slot map and clock master
-- [ ] **[hw]** Gate G2: valid STUB mails captured
+  - so far a plain interrupt at 250/s is enough; revisit with voice
+- [x] `/dev/dect0` interface: control-slot and voice-slot data, frame-layout configuration; identical for every transport
+  - raw frames: `read()` blocks with header, `write()` frame queue, step-wise bring-up ioctls; slot demultiplexing stays in userspace for now
+- [x] Capture tool (a "software logic analyser"): dump frames and search for the 0xAA framing
+  - `src/tools/dect-pcmcap.c` (also sends a mail with `-m` and decodes the answers)
+- [x] **[hw]** Determine words per frame, control-slot position, voice-slot map and clock master
+  - 8 × 16-bit slots, chip is clock master, control slot 1 (2 bytes per frame), slot 4 loop-back, one A-law voice slot seen; full voice map in M4
+- [x] **[hw]** Gate G2: valid STUB mails captured
+  - 2026-10-17, 7520: after the host's contact mail (`0xF600`) the STUB answers and sends periodic status mails, all with valid checksums and consecutive sequence numbers (`docs/stub-pcm-control-channel.md`)
 
 ## M4: Control channel → **Gates G3, G4**
 - [ ] `dect-stubd`: framing, checksum, sequence, idle pattern, resync; big-endian host conversion

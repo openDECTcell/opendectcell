@@ -234,6 +234,8 @@ Source: *observed on hardware*, spare 7520, OpenWrt 25.12.5, `kernel/opendectcel
 | Teardown | clean: pins, CBCRs, AUDIO_MODE and CHIP_CTRL back to the boot values, no warnings |
 | Sustained | **10 minutes, 150,000 blocks**: no sequence gap, no DMA error, overrun counter 0 |
 
+**Gate G2 passed** on 2026-10-17 with transmit running: the control mails use slot 1, two bytes per frame; see `docs/stub-pcm-control-channel.md`. The paragraph below describes the receive-only capture before that.
+
 **Frame content** (16 bytes per frame in DMA-buffer order; each 16-bit slot is stored as a little-endian word, so the second byte of a slot is probably the first on the wire): bytes 0-1 `FE FE`, 2-3 `FF FF`, 4-7 `FE`, 8 `08` (briefly `00` after boot), 9 `40`, **10 A-law audio** (0x55/0xD5 at rest, a decaying waveform right after boot), 11 `00`, 12-15 `FF`. Everything except byte 10 is constant. **No 0xAA-framed mail** was found in any slot, byte order, bit order or bit shift, neither from an idle STUB nor across a fresh upload. Working assumption: the control channel is one of the idle 0xFF positions and the STUB only talks after the host has sent a mail (Q-0001).
 
 ## 14. Transmit side (MBOX0 / STEREO0) [CR A-0002]
