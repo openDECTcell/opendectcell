@@ -28,15 +28,19 @@ After a successful stage 1 the host waits 10 ms; stage 2 starts about 50 ms late
 | No STX within the wait time (about 125 ms per byte, repeated up to 5 times) | Reset the chip and start stage 1 again ("false answer" / "communication failed") |
 | STX again instead of ACK in step 3 | Logged as "STX violation"; after 3 of them, wait for STX again |
 | NAK in step 3 | Stage 1: 2 more bytes follow (error code); stage 2: 4 more bytes follow. Logged, then wait for STX again |
-| Timeout in step 3 | Reset and start over |
+| Timeout in step 3 | Start over |
 | Byte other than ACK/NAK/STX in step 3 | Logged, one attempt used up |
 | During stage-2 data (step 4) the chip sends 0x00 | Ignored |
-| During stage-2 data the chip sends NAK | One more byte follows (error code); reset and start over |
-| During stage-2 data the chip sends anything else | Reset and start over |
-| In step 5 the chip sends NAK instead of the XOR | One more byte follows (error code); reset and start over |
-| XOR mismatch in step 5 | Host sends NAK; reset and start over |
+| During stage-2 data the chip sends NAK | One more byte follows (error code); start over |
+| During stage-2 data the chip sends anything else | Start over |
+| In step 5 the chip sends NAK instead of the XOR | One more byte follows (error code); start over |
+| XOR mismatch in step 5 | Host sends NAK; start over |
 
-**Attempt budget:** stage 1 up to **16** attempts (each starts with a chip reset), stage 2 up to **5**. The caller (`the loader routine`) repeats the whole two-stage upload up to **3** times.
+**"Start over"** means different things per stage:
+- **Stage 1:** a new attempt with a full chip reset (§2).
+- **Stage 2:** no chip reset. The host waits about 50 ms, sets the stage-2 baud rate again and waits for STX.
+
+**Attempt budget:** stage 1 up to **16** attempts, stage 2 up to **5**. If a stage runs out of attempts, the upload fails, and the caller (`the loader routine`) repeats the whole two-stage upload, starting with a chip reset, up to **3** times.
 
 The host also reads incoming bytes after each received control byte with a pause of about 10 ms. The exact timing is probably not critical; our implementation keeps the 125 ms byte timeout.
 
