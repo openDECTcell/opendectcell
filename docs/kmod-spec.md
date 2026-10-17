@@ -5,7 +5,7 @@
 ## 0. How we will work together
 
 - **You cannot compile or test.** Your output goes to an engineer (an AI coding agent) who has the lab: the target box, the OpenWrt SDK and SSH access. They build and test your code and send you compiler errors, kernel logs and test results. So: **prefer APIs you are sure exist in Linux 6.12**, comment every place where you are unsure, and keep the first version small and conservative. A bug in a kernel module can crash or reboot the box (harmless to the flash, recoverable), so favour correctness over cleverness.
-- **Do Phase A first** (section 6), and nothing else, until we confirm Phase A works on the box. Phase B (section 7) is included now so you understand where this is going; do not implement it until asked.
+- **Phase A is done and verified; Phase B (section 7) is the next task, but do not start it until asked.** The existing Phase A source is the starting point for Phase B and will be supplied with the request.
 - **Answer format** (section 9) is strict, because the files are copied out of your answer by a program.
 
 ## 1. Project background
@@ -15,7 +15,7 @@ The project turns used AVM FRITZ!Boxes under OpenWrt into open DECT base station
 Terms: **STUB** = the chip firmware. **Mail** = a control message exchanged with the STUB. **FSC/DCL/MCL** = PCM frame sync, bit clock, master clock. **RFPI** = a DECT base station identity. The STUB is uploaded into the chip's RAM at every power-up over a UART (that part is userspace, section 3); after that, the chip talks to the SoC over the **PCM/TDM bus**.
 
 The kernel module has two jobs:
-- **Phase A:** let userspace reset the chip and control its **boot-mode strap pin**, cleanly, replacing a fragile userspace hack (section 3). This is the task for now.
+- **Phase A:** let userspace reset the chip and control its **boot-mode strap pin**, cleanly, replacing a fragile userspace hack (section 3). **Status: implemented and verified** (see 3.3 and section 6).
 - **Phase B:** the PCM/TDM data path (section 7). Later.
 
 ## 2. Ground rules
@@ -76,14 +76,15 @@ Facts learned doing this (all *observed on the real box*):
 - While the chip runs its firmware afterwards, resetting it again with the strap works again (the ROM comes back).
 - The login process on `ttyMSM0` must be frozen (`kill -STOP`) during uploads; if it is resumed or killed, the port stays hung up until reboot. This is a userspace matter; the module must not interfere with it, but must **not hang up or otherwise break the console**.
 
-### 3.3 Suggested way to restore the UART function (verify against 6.12 headers)
+### 3.3 How the UART function is restored (implemented and verified on the box)
 
-The clean in-kernel equivalent of the `pinmux-select` write, which I believe exists and is exported:
+An earlier version of this brief suggested `pinctrl_force_default()`. **That was wrong:** in Linux 6.12 it is not available to out-of-tree modules (it is not declared in the consumer header; it works on pinctrl controllers, not devices). What the Phase A module does instead, and what is **verified on the box (50 consecutive uploads, clean unload)**:
 
-1. Find the serial device: `bus_find_device_by_name(&platform_bus_type, NULL, "78af000.serial")` (drop the reference with `put_device()` when done).
-2. After releasing GPIO 16 (`gpiod_put`/`gpio_free`), call **`pinctrl_force_default(serial_dev)`** (declared in `<linux/pinctrl/consumer.h>`, `EXPORT_SYMBOL_GPL`). It commits the device's default pinctrl state again, bypassing the "state unchanged" shortcut that makes `pinctrl_select_state()` with the current state a no-op. That should re-apply function `blsp_uart0` on GPIO 16/17.
+- It maps the TLMM control register of GPIO 16 (found through the pin controller's device-tree node, compatible `qcom,ipq4019-pinctrl`, register offset 16 x 0x1000) with `ioremap()` without requesting the region (the pinctrl driver owns it).
+- After releasing the GPIO, it **writes only the function-select field (bits 5:2) of that one register back to 1** (function `blsp_uart0`) and reads it back to verify. It never touches GPIO 17 or other bits.
+- This bypasses the pinctrl core's bookkeeping and its lock, which is acceptable because only this module changes that pin while the device is open.
 
-Things that **do not** work (do not use): `pinctrl_select_state()` to the same state (no-op); registering your own pinctrl mapping that claims function `blsp_uart0` on `gpio16` for a different owner (`-EBUSY`, the serial driver owns it); calling into pinctrl internals (`struct pinctrl_dev` is private). If `pinctrl_force_default()` does not exist or does not work, say so clearly and propose an alternative; explain it, do not guess.
+Things that do not work: `pinctrl_select_state()` to the same state (no-op); a pinctrl mapping that claims `blsp_uart0` on `gpio16` for another owner (`-EBUSY`); calling into pinctrl internals (`struct pinctrl_dev` is private).
 
 How to request the two GPIOs without a device-tree node: use whatever gpiolib API exists in 6.12 for looking up the chip with label `1000000.pinctrl` and the descriptor by hardware offset (e.g. `gpio_device_find_by_label()` and `gpio_device_get_desc()`), or fall back to the legacy global numbers (`512 + 40`, `512 + 16`, they are valid because sysfs GPIO works). The chip base (512) can change between kernels, so prefer the lookup by label.
 

@@ -106,7 +106,9 @@ Source: *observed on hardware*, spare FRITZ!Box 7520, OpenWrt 25.12.5, 2026-10-1
 | Result | Both stages ACKed in a single attempt; the chip's XOR matched the image's |
 | STUB UART output | **None in 60 s** after the upload. This STUB does not print on the UART. Proof of life is the PCM clocks (`7520-DECT-analysis.md` §8.2) |
 
-### Driving the strap from userspace (7520, kernel 6.12)
+### Driving the strap (7520, kernel 6.12)
+
+*Update 2026-10-17: this is now done by the kernel module (`/dev/dect0`, `docs/kmod-spec.md` §3.3). The paragraphs below describe the userspace procedure that was used for bring-up and the facts it uncovered.*
 
 The strap pin is the UART RX pin (GPIO16), which is owned by the serial driver:
 1. Exporting GPIO 528 (= 512 + 16) through `/sys/class/gpio` switches the pin to GPIO function even though the serial driver owns it. Set its direction to `low` before releasing reset.
