@@ -6,7 +6,7 @@
 
 - **You cannot compile or test.** Your output goes to an engineer (an AI coding agent) who has the lab: the target box, the OpenWrt SDK and SSH access. They build and test your code and send you compiler errors, kernel logs and test results. So: **prefer APIs you are sure exist in Linux 6.12**, comment every place where you are unsure, and keep each version small and conservative. A bug in a kernel module can hang or reboot the box (harmless to the flash, recoverable), so favour correctness over cleverness.
 - **Phase A (reset and boot strap) is done and verified**; a read-only polling capture was added and proved too slow. Their source is in **Appendix A** and is the starting point.
-- **Your task is Phase B** (section 7): the PCM/TDM receive path through the SoC's audio hardware. **Qualcomm's original driver sources for that hardware are in Appendix B.** Base every register access on them.
+- **Your task is Phase B** (section 7): the PCM/TDM receive path through the SoC's audio hardware. **Appendix B contains AVM's own GPL driver for exactly this hardware on exactly this box**, including the slave-mode TDM setup AVM uses with this DECT chip. Base every register access on it.
 - **Answer format** (section 9) is strict, because the files are copied out of your answer by a program.
 
 ## 1. Project background
@@ -20,7 +20,7 @@ The kernel module has two jobs: **Phase A** (chip reset and boot-strap control t
 ## 2. Ground rules
 
 - **Licence:** every file `SPDX-License-Identifier: GPL-2.0-only` (module and uapi header). Linux kernel coding style (tabs, 80-ish columns, `checkpatch`-clean as far as you can tell).
-- **Clean room:** write only from this brief and from Linux kernel APIs. Do not reproduce AVM code. Qualcomm's GPL BSP code (QSDK) may be consulted for Phase B; keep its copyright headers. No firmware blobs in any file.
+- **Sources you may use:** this brief, Linux kernel APIs, and the source code in Appendix B: AVM's **published GPL kernel sources** for this box (FRITZ!OS 08.25, from `osp.avm.de`) and the Qualcomm code they contain. Their licences (GPL-2.0+ for AVM's files, a permissive ISC-style notice for the Qualcomm files) allow use in this GPL-2.0-only module; keep their copyright notices in code derived from them. **Never** use AVM's proprietary binaries or anything analysed. No firmware blobs in any file.
 - **Never autoload.** The OpenWrt package must not load the module at boot; loading is a manual `insmod`.
 - **Board matching:** the module must work only on this board and refuse to load elsewhere. The board's device-tree `compatible` contains `avm,fritzbox-7530` (the 7520 and 7530 are the same hardware; OpenWrt calls both `avm,fritzbox-7530`; `/tmp/sysinfo/board_name` shows it). Pins come from a small built-in **board table** (one entry for now). On a non-matching board: `pr_err` with the board name that was seen, return `-ENODEV`, touch nothing.
 - **Userspace never handles GPIO numbers or register addresses** once the module exists; all of that is in the kernel.
@@ -89,11 +89,11 @@ How to request the two GPIOs without a device-tree node: use whatever gpiolib AP
 
 ## 4. Hardware facts for Phase B (PCM/TDM)
 
-Tags: [OBS] observed on the box; [DT] AVM's stock device tree of FRITZ!OS 08.25; [ML] mainline Linux v6.12.94 sources; [QC] Qualcomm's 2016 IPQ4019 ASoC patch series (Appendix B).
+Tags: [OBS] observed on the box; [DT] AVM's stock device tree of FRITZ!OS 08.25; [ML] mainline Linux v6.12.94 sources; [QC] Qualcomm's IPQ4019 audio code (2016 upstream submission; newer copies in Appendix B); [AVM] AVM's GPL kernel sources for FRITZ!OS 08.25 (Appendix B).
 
 ### 4.1 Signals and pins
 
-| GPIO | Signal (our name) | Mux slot | Function name in 6.12 [ML] | Name in Appendix B [QC] |
+| GPIO | Signal (our name) | Mux slot | Function name in 6.12 [ML] | Name in the 2016 Qualcomm patch [QC] |
 |---|---|---|---|---|
 | 20 | MCL, receive group | 2 | `i2s_rx` | `i2s_rx_mclk` |
 | 21 | DCL (bit clock), receive group | 2 | `i2s_rx` | `i2s_rx_bclk` |
@@ -118,26 +118,25 @@ Tags: [OBS] observed on the box; [DT] AVM's stock device tree of FRITZ!OS 08.25;
 | "pcm" (stereo/mbox host) | `0x07704000` (len 0x2000) | [DT] `pcm@7704000` |
 | MBOX DMA | `0x07706000`-`0x0770e000` | [DT] |
 | TDM DMA channels | **tx 0, rx 7; stereo tx port 0, rx port 3** | [DT] node `tdm@0`, compatible `qca,ipq4019-tdm` |
-| ADSS clocks used by TDM | `audio_tx_bclk`, `audio_tx_mclk`, `audio_rx_bclk`, `audio_rx_mclk` from the **ADSS clock controller** (compatible `qcom,adcc-ipq4019` in [QC] patch 2; AVM's tree references the same controller with ids 7, 5, 9, 3) | [DT] [QC] |
+| ADSS clocks used by TDM | `audio_tx_bclk`, `audio_tx_mclk`, `audio_rx_bclk`, `audio_rx_mclk` from the **ADSS clock controller (ADCC)**: compatible `qcom,adcc-ipq4019`, driver `drivers/clk/qcom/adcc-ipq4019.c`, ids in `qca,adcc-ipq4019.h`, both in Appendix B; AVM's tree references ids 7, 5, 9, 3 | [DT] [AVM] |
 | GCC clocks feeding ADSS | `GCC_AUDIO_AHB_CLK` (id 19, enable register 0x1B010 bit 0), `GCC_AUDIO_PWM_CLK` (id 20, enable 0x1B00C bit 0), `AUDIO_CLK_SRC` (id 1, RCG at 0x1B000) | [ML] `include/dt-bindings/clock/qcom,gcc-ipq4019.h`, `drivers/clk/qcom/gcc-ipq4019.c` |
 | ADSS block reset | `GCC_AUDIO_BCR` (reset id 44 = 0x2c, register 0x1B008) | [ML] [DT] (`blk_rst`) |
 | GCC node | compatible `qcom,gcc-ipq4019` at 0x01800000, `#clock-cells = <1>`, `#reset-cells = <1>` | [OBS] |
 | State after boot | GCC 0x1B000 = 0x80000000 (audio RCG root off), 0x1B008 = 0 (**audio block not in reset**), 0x1B00C = 0x80000000 (PWM clock off, not enabled), 0x1B010 = 0 (AHB clock not enabled); the kernel's clock summary shows all three with enable count 0 | [OBS] via `/sys/kernel/debug/regmap/1800000.clock-controller/registers` |
 | Drivers present in OpenWrt | **None** for ADSS, ADCC, MBOX or TDM; no node for them in OpenWrt's device tree; `/proc/iomem` shows no audio region | [OBS] |
 
-**Bus-hang warning:** on Qualcomm SoCs, accessing a peripheral whose interface clock is off hangs the bus (the box freezes). **Enable `GCC_AUDIO_AHB_CLK` (and whatever else [QC] enables first) through the clock framework before touching any ADSS/MBOX/TDM register**, and keep it enabled until the last access. A way to get GCC clocks without a device-tree node: look up the GCC node (`of_find_compatible_node(NULL, NULL, "qcom,gcc-ipq4019")`), build `struct of_phandle_args { .np = gcc, .args_count = 1, .args[0] = 19 }` and call `of_clk_get_from_provider()` (exported GPL in 6.12); verify, and say if you choose differently. The ADSS clock controller (ADCC) has **no driver** in OpenWrt, so its registers must be programmed by your module, following [QC] patch 2 (it shows how the pad clocks `padbclk`/`padmclk` are selected as sources: **this is how slave mode gets its clocks**).
+**Bus-hang warning:** on Qualcomm SoCs, accessing a peripheral whose interface clock is off hangs the bus (the box freezes). **Enable `GCC_AUDIO_AHB_CLK` (and whatever else [QC] enables first) through the clock framework before touching any ADSS/MBOX/TDM register**, and keep it enabled until the last access. A way to get GCC clocks without a device-tree node: look up the GCC node (`of_find_compatible_node(NULL, NULL, "qcom,gcc-ipq4019")`), build `struct of_phandle_args { .np = gcc, .args_count = 1, .args[0] = 19 }` and call `of_clk_get_from_provider()` (exported GPL in 6.12); verify, and say if you choose differently. The ADSS clock controller (ADCC) has **no driver** in OpenWrt, so the module must program the few ADCC registers it needs itself, following `adcc-ipq4019.c` in Appendix B: in slave mode AVM requests the dummy rates 255 (MCLK) and 254 (BCLK), which that driver maps to the **pad inputs** (`padmclk`/`padbclk`) as clock sources. Find in `adcc-ipq4019.c` which register values that selection produces and program exactly those.
 
-### 4.3 Slave mode: what the sources show
+### 4.3 Slave mode: how AVM does it on this box [AVM]
 
-The 2016 driver [QC] always runs the SoC as clock **master**, but the hardware has the switches for slave operation (identifiers from Appendix B):
-- `STEREOn_CONFIG_MASTER` (BIT 8) in the stereo configuration, set by `ipq4019_config_master(ENABLE, ...)`: **clear it for slave**.
-- The "raw master clock" selection: "Val 0: divided audio PLL clock, Val 1: MCLK IN" (comment next to `ipq4019_config_master`).
-- Pin output enables in `ADSS_GLB_CLK_I2S_CTRL_REG` (0x18): `GLB_CLK_I2S_CTRL_RX_BCLK_OE` (bit 27), `..._TX_BCLK_OE` (28), `..._RX_MCLK_OE` (16), `..._TX_MCLK_OE` (17), set by `ipq4019_glb_clk_enable_oe()`: **must stay off in slave mode** (the chip drives these pins).
-- ADCC clock parents `padbclk` and `padmclk` [QC patch 2]: select them as the source of `rxb`/`rxm` clocks for slave operation.
-- TDM framing: `ADSS_GLB_TDM_CTRL_REG` (0x1C) with `RX_CHAN_NUM` (bits 19:16), `RX_SYNC_NUM` (bits 24:20), `RX_DELAY` (bit 26); `GLB_AUDIO_MODE_RECV_TDM` (bit 2); `PCM_CTRL_FRAME_SYNC_LEN`, `PCM_CTRL_PCM_CLK_MODE`; helpers `ipq4019_glb_tdm_ctrl_ch_num/sync_num/delay`, `ipq4019_glb_audio_mode`, `ipq4019_glb_rx_data_port_en`, `ipq4019_glb_rx_framesync_port_en`.
-- MBOX DMA: `ipq4019_mbox_dma_prepare/start/stop`, `ipq4019_mbox_desc_own`, `ipq4019_mbox_get_elapsed_size`, `ipq4019_mbox_fifo_reset`; descriptor ring and interrupt handling in `ipq4019-mbox.c/.h`.
+AVM's stock firmware drives this DECT chip through its kernel API `tdm_if_config_init(slots, rxdelay, txdelay, master)` (in `ipq-avm.c`, calling `tdm_if_adss_config_init()` and `__tdm_if_config_init()` in `ipq-adss-avm.c`, Appendix B). With **`master = 0`** (slave, our case) that code does, in this order:
+1. Clocks: `adss_config_clk(extclk = 1, bclk = 254, mclk = 255)` (the IPQ4019 values; 252 is for IPQ807x). AVM's comment: these dummy rates make the clock framework select the **external pad clock**.
+2. With local interrupts off: `adss_glb_tdm_ctrl_ch_num(slots - 1)`; `adss_glb_clk_enable_oe(master = 0, CAPTURE)` and `(0, PLAYBACK)`, i.e. the **BCLK/MCLK output enables stay off**; `adss_glb_rxtx_data_port_en(1)`; `adss_glb_rxtx_framesync_port_en(1)`; `adss_glb_tdm_mode()`; `adss_config_tdm(DISABLE, master = 0, extclk = 1)` (stereo blocks: MASTER bit clear, **MCK_SEL set**; AVM's comment warns that without MCK_SEL the external clock is "destroyed"; **16-bit data words only**); `adss_glb_tdm_ctrl_sync_num(0, ...)` for both directions; `adss_glb_tdm_ctrl_delay(rxdelay / txdelay, ...)`.
+3. DMA through `tdm_if_dma_init/start/stop/exit` (`ipq-avm.c`, `ipq-adss-avm.c`, `ipq-mbox.c`).
 
-Whether the receiver accepts a **frame-sync pulse one bit wide every 128 clocks** in slave mode, and how the 128 clocks map to channels × bit width, is not documented anywhere we have: the TDM settings must be **parameters**.
+**This answers the previous round's question about `GLB_AUDIO_MODE_I2S3_FS_OE` (bit 8) and `GLB_AUDIO_MODE_I2S3_RXD_OE` (bit 9):** AVM **sets both** in slave mode (`adss_glb_rxtx_framesync_port_en(1)`, `adss_glb_rxtx_data_port_en(1)`; AVM's comment calls them "Frame Sync Port Enable for I2S3 RX"), on this exact box, with this DECT chip driving FSC and DI. They are port enables for the receiver, not the clock output drivers (those are `GLB_CLK_I2S_CTRL_*_OE` and stay off). Follow AVM here.
+
+Parameters for our case: the comment of `tdm_if_adss_config_init()` says **"slots: only 8 tested"** and **"rxdelay/txdelay 1: serial data delay of 1 clock"**. 8 slots × 16 bits = **128 bit clocks per frame**, exactly what we measured. Which `rxdelay`/`txdelay` AVM's (proprietary) DECT driver passes is not known: make them parameters, default `rxdelay = 1`, and allow 0.
 
 ### 4.4 What the data should contain: control mails
 
@@ -176,13 +175,14 @@ Implemented in `kernel/opendectcell_ipq40xx.c` (Appendix A) and verified on the 
 
 ### 7.1 History
 
-A previous round chose a fallback (polling the pins through TLMM input registers, `DECT_IOC_CAPTURE`, still in the module; keep it). It is **proven too slow**: one TLMM register read takes **268 ns**, half a DCL period is about 488 ns. It also asked for Qualcomm's driver sources for the ADSS/MBOX/TDM path: **they are now in Appendix B** (the original 2016 upstream submission, 4 patches, ISC licence / `Dual BSD/GPL`, compatible with this GPL-2.0-only module; keep their copyright notice for any code you derive from them).
+A previous round chose a fallback (polling the pins through TLMM input registers, `DECT_IOC_CAPTURE`, still in the module; keep it). It is **proven too slow**: one TLMM register read takes **268 ns**, half a DCL period is about 488 ns. It also asked for Qualcomm's driver sources. A second round received Qualcomm's 2016 upstream submission, confirmed that the slave-mode switches exist, and stopped (correctly) at one open question: whether the `I2S3_FS_OE`/`I2S3_RXD_OE` bits are safe in slave mode. **Section 4.3 answers it from AVM's code.** Appendix B now contains **AVM's GPL sources for this box** instead of the 2016 patches: newer versions of the same Qualcomm files plus AVM's working slave-mode TDM layer (`ipq-adss-avm.c`, `ipq-avm.c`).
 
 ### 7.2 How to approach it
 
-1. Read Appendix B: patch 1 (device-tree bindings and nodes: register layout of every block), patch 2 (ADSS clock controller: clock sources including the pads), patch 3 (pin functions), patch 4 (ADSS globals, MBOX DMA, TDM PCM driver, stereo blocks, CPU DAI).
-2. **Do not port the ASoC framework parts** (no sound card, no codec, no ALSA PCM). Port only what the receive path needs into the module, as plain kernel code: ADSS global control, the ADCC clock settings for pad input, the stereo/TDM receive configuration in **slave** mode, and one MBOX DMA receive channel (rx channel 7, stereo rx port 3 from section 4.2).
-3. Every register you write must be traceable to Appendix B or this brief; mark each with a comment naming its source (`/* [QC] ipq4019-adss.h ADSS_GLB_TDM_CTRL_REG */`). Where Appendix B does not show a value for slave operation, make it a parameter and say so.
+1. **The reference is AVM's slave path** (section 4.3): `tdm_if_config_init` with `master = 0`, `slots = 8`, then `tdm_if_dma_init/start` for receive. Read `ipq-avm.c`, `ipq-avm.h` and `ipq-adss-avm.c` first, then the Qualcomm files they call (`ipq-adss.c/.h`, `ipq-mbox.c/.h`, `ipq-stereo.c`, `ipq-pcm-tdm.c`), `adcc-ipq4019.c` for the clock sources, and `qcom-ipq4019-audio.dtsi` for the register blocks, MBOX/stereo instances and clock ids.
+2. **Do not port the ASoC framework parts** (no sound card, no codec, no ALSA PCM) and no debug/proc infrastructure. Port only what AVM's slave receive path executes, as plain kernel code inside our module: ADCC register settings for the pad clocks, ADSS global control, stereo configuration, TDM control, one MBOX DMA receive channel.
+3. Every register you write must be traceable to Appendix B; comment each with its source function (e.g. `/* [AVM] __tdm_if_config_init: adss_glb_tdm_ctrl_ch_num */`). Where AVM's code depends on a value from its device tree or the clock framework, resolve it from `qcom-ipq4019-audio.dtsi`, `adcc-ipq4019.c` and section 4.2, and say how.
+4. The DMA direction naming is confusing (the previous round found that capture uses the MBOX "TX" registers in Qualcomm's code): follow exactly what AVM's receive path does.
 
 ### 7.3 Requirements
 
