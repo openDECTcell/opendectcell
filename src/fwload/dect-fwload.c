@@ -292,6 +292,33 @@ static void listen(struct dev *d, unsigned seconds)
 	fprintf(stderr, "received %u bytes from the STUB\n", n);
 }
 
+/*
+ * Factory DECT block (docs/models/7520-DECT-analysis.md §8.3): a 4-byte
+ * header (type 0x02, id 0x01, length as 16-bit big-endian) followed by the
+ * TLV list. Read-only access to the boot-loader partition.
+ */
+static int read_factory(const char *path, off_t offset, uint8_t *buf, size_t *len)
+{
+	uint8_t hdr[4];
+	int fd = open(path, O_RDONLY);
+
+	if (fd < 0)
+		return -errno;
+	if (pread(fd, hdr, sizeof(hdr), offset) != (ssize_t)sizeof(hdr)) {
+		close(fd);
+		return -EIO;
+	}
+	size_t n = (size_t)hdr[2] << 8 | hdr[3];
+	if (hdr[0] != 0x02 || hdr[1] != 0x01 || n == 0 || n > FWI_FACTORY_MAX ||
+	    pread(fd, buf, n, offset + 4) != (ssize_t)n) {
+		close(fd);
+		return -EINVAL;
+	}
+	close(fd);
+	*len = n;
+	return 0;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -336,6 +363,10 @@ int main(int argc, char **argv)
 
 	const char *uart = NULL, *first_path = NULL, *second_path = NULL;
 	unsigned reset_gpio = 0, mode = 0, listen_s = 5;
+	const char *factory_mtd = NULL;
+	off_t factory_off = 0;
+	uint8_t factory[FWI_FACTORY_MAX];
+	size_t factory_len = 0;
 	int have_gpio = 0;
 	struct dev d = { .uart = -1, .gpio_value = -1, .strap_gpio = -1,
 			 .pinctrl_dir = "/sys/kernel/debug/pinctrl/1000000.pinctrl",
@@ -354,6 +385,10 @@ int main(int argc, char **argv)
 			second_path = argv[++i];
 		else if (!strcmp(argv[i], "--mode") && i + 1 < argc)
 			mode = (unsigned)strtoul(argv[++i], NULL, 0);
+		else if (!strcmp(argv[i], "--factory-mtd") && i + 1 < argc)
+			factory_mtd = argv[++i];
+		else if (!strcmp(argv[i], "--factory-offset") && i + 1 < argc)
+			factory_off = (off_t)strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "--listen") && i + 1 < argc)
 			listen_s = (unsigned)strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "-v"))
@@ -381,15 +416,22 @@ int main(int argc, char **argv)
 		fprintf(stderr, "firmware files are not valid Intel HEX\n");
 		return 1;
 	}
-	struct fwi_patch_input in = { .mode = (uint8_t)mode };
+	if (factory_mtd && read_factory(factory_mtd, factory_off, factory, &factory_len)) {
+		fprintf(stderr, "cannot read the factory DECT block from %s\n", factory_mtd);
+		return 1;
+	}
+	struct fwi_patch_input in = { .factory = factory_len ? factory : NULL,
+				      .factory_len = factory_len,
+				      .mode = (uint8_t)mode };
 	struct fwi_patch_report rep;
 	if (fwi_patch(&second, fam, &in, &rep)) {
 		fprintf(stderr, "no patch area in the STUB image\n");
 		return 1;
 	}
-	fprintf(stderr, "images: first %zu bytes, STUB %zu bytes, mode byte 0x%02x "
-			"(%u TLV patched)\n", first.len, second.len, mode & 0xFF,
-		rep.replaced);
+	fprintf(stderr, "images: first %zu bytes, STUB %zu bytes, mode byte 0x%02x; "
+			"factory block %zu bytes; %u TLV patched, %u skipped\n",
+		first.len, second.len, mode & 0xFF, factory_len, rep.replaced,
+		rep.skipped);
 
 	d.uart_path = uart;
 	d.uart = open(uart, O_RDWR | O_NOCTTY | O_NONBLOCK);
