@@ -65,6 +65,9 @@ struct stubd {
 	uint16_t tx_seq;
 	int verbose;
 	int show_params;	/* log parameter bytes (may hold identity data) */
+	const char *xmail[20];	/* extra mails to send once the session is up */
+	unsigned int n_xmail;
+	unsigned int xmail_idx;	/* next extra mail to send (one per loop tick) */
 	struct dect_rx rx;
 	struct dect_session sess;
 };
@@ -117,6 +120,46 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 	if (w != (ssize_t)(nf * fb))
 		return -1;
 	s->tx_seq++;
+	return 0;
+}
+
+/* Parse "SRC:DST:PRIM[:HEX]" and send it as a mail in the control slot. */
+static int send_mail_spec(struct stubd *s, const char *spec)
+{
+	struct dect_mail m;
+	unsigned long src, dst, prim;
+	const char *par = NULL;
+	char *end;
+
+	memset(&m, 0, sizeof(m));
+	src = strtoul(spec, &end, 0);
+	if (*end != ':')
+		return -1;
+	dst = strtoul(end + 1, &end, 0);
+	if (*end != ':')
+		return -1;
+	prim = strtoul(end + 1, &end, 0);
+	if (*end == ':')
+		par = end + 1;
+	else if (*end)
+		return -1;
+	if (src > 0xff || dst > 0xff || prim > 0xffff)
+		return -1;
+	m.src = (uint8_t)src;
+	m.dst = (uint8_t)dst;
+	m.prim = (uint16_t)prim;
+	for (; par && *par; par += 2) {
+		unsigned int v;
+
+		if (sscanf(par, "%2x", &v) != 1 ||
+		    m.param_len >= DECT_MAIL_PARAM_MAX)
+			return -1;
+		m.param[m.param_len++] = (uint8_t)v;
+	}
+	if (send_mail(s, (unsigned int)s->tx_slot, &m))
+		return -1;
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
 	return 0;
 }
 
@@ -333,6 +376,15 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			else if (s->verbose)
 				log_mail(&cm, "tx  ", s->show_params);
 		}
+		/* Once up, send the extra mails in order, one per tick (~100 ms). */
+		if (s->sess.state == DECT_SESS_UP && s->xmail_idx < s->n_xmail) {
+			if (send_mail_spec(s, s->xmail[s->xmail_idx]))
+				fprintf(stderr, "extra mail %u (%s) failed\n",
+					s->xmail_idx, s->xmail[s->xmail_idx]);
+			s->xmail_idx++;
+			if (s->xmail_idx == s->n_xmail)
+				printf("all %u extra mails sent\n", s->n_xmail);
+		}
 		if (run_seconds && now - start >= (uint64_t)run_seconds * 1000u)
 			break;
 	}
@@ -357,7 +409,9 @@ static void usage(void)
 		"  -t SECS  run for SECS seconds then exit (default: until signal)\n"
 		"  -v       log every mail (prim and length; parameters hidden)\n"
 		"  -p       also log parameter bytes (may hold identity data; do\n"
-		"           not share such logs) -- implies -v\n");
+		"           not share such logs) -- implies -v\n"
+		"  -M SRC:DST:PRIM[:HEX]  after contact, send this mail (repeatable,\n"
+		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n");
 }
 
 int main(int argc, char **argv)
@@ -375,7 +429,7 @@ int main(int argc, char **argv)
 	memset(&s, 0, sizeof(s));
 	s.tx_slot = s.rx_slot = -1;
 	memset(&cfg, 0, sizeof(cfg));
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vph")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -384,6 +438,13 @@ int main(int argc, char **argv)
 		case 't': run_seconds = (unsigned int)strtoul(optarg, NULL, 0); break;
 		case 'v': s.verbose = 1; break;
 		case 'p': s.verbose = 1; s.show_params = 1; break;
+		case 'M':
+			if (s.n_xmail >= sizeof(s.xmail) / sizeof(s.xmail[0])) {
+				usage();
+				return 2;
+			}
+			s.xmail[s.n_xmail++] = optarg;
+			break;
 		default: usage(); return 2;
 		}
 	}
