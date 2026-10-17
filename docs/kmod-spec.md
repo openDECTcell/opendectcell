@@ -4,8 +4,8 @@
 
 ## 0. How we will work together
 
-- **You cannot compile or test.** Your output goes to an engineer (an AI coding agent) who has the lab: the target box, the OpenWrt SDK and SSH access. They build and test your code and send you compiler errors, kernel logs and test results. So: **prefer APIs you are sure exist in Linux 6.12**, comment every place where you are unsure, and keep the first version small and conservative. A bug in a kernel module can crash or reboot the box (harmless to the flash, recoverable), so favour correctness over cleverness.
-- **Phase A is done and verified; Phase B (section 7) is the next task, but do not start it until asked.** The existing Phase A source is the starting point for Phase B and will be supplied with the request.
+- **You cannot compile or test.** Your output goes to an engineer (an AI coding agent) who has the lab: the target box, the OpenWrt SDK and SSH access. They build and test your code and send you compiler errors, kernel logs and test results. So: **prefer APIs you are sure exist in Linux 6.12**, comment every place where you are unsure, and keep each version small and conservative. A bug in a kernel module can hang or reboot the box (harmless to the flash, recoverable), so favour correctness over cleverness.
+- **Phase A (reset and boot strap) is done and verified.** Its full source is in Appendix A; it is the starting point. **Your task now is Phase B** (section 7).
 - **Answer format** (section 9) is strict, because the files are copied out of your answer by a program.
 
 ## 1. Project background
@@ -14,9 +14,7 @@ The project turns used AVM FRITZ!Boxes under OpenWrt into open DECT base station
 
 Terms: **STUB** = the chip firmware. **Mail** = a control message exchanged with the STUB. **FSC/DCL/MCL** = PCM frame sync, bit clock, master clock. **RFPI** = a DECT base station identity. The STUB is uploaded into the chip's RAM at every power-up over a UART (that part is userspace, section 3); after that, the chip talks to the SoC over the **PCM/TDM bus**.
 
-The kernel module has two jobs:
-- **Phase A:** let userspace reset the chip and control its **boot-mode strap pin**, cleanly, replacing a fragile userspace hack (section 3). **Status: implemented and verified** (see 3.3 and section 6).
-- **Phase B:** the PCM/TDM data path (section 7). Later.
+The kernel module has two jobs: **Phase A** (chip reset and boot-strap control through `/dev/dect0`, replacing a fragile userspace hack; **done**) and **Phase B** (the PCM/TDM data path; **your task**, section 7).
 
 ## 2. Ground rules
 
@@ -27,7 +25,7 @@ The kernel module has two jobs:
 - **Userspace never handles GPIO numbers or register addresses** once the module exists; all of that is in the kernel.
 - Write the code so that more boards/transports can be added later as new table entries (the same `/dev/dect0` interface for every box).
 
-## 3. The target and the current userspace workaround (what works today)
+## 3. The target, and how the pin handling got to where it is (history and lab facts)
 
 | Item | Value |
 |---|---|
@@ -51,7 +49,7 @@ The kernel module has two jobs:
 
   The sleeps are done by userspace; the module only has to provide the primitives (or optionally the whole sequence atomically, section 5).
 
-### 3.2 What the working userspace hack does (this is what the module must replace)
+### 3.2 What the old userspace hack did (replaced by the Phase A module; kept for the facts it uncovered)
 
 These shell commands are the **proven** sequence on the box (as root):
 
@@ -124,39 +122,53 @@ Safety obligations:
 - Never leave the console UART broken: after any sequence of ioctls and `close`, `ttyMSM0` must work (kernel messages still appear on the serial console, and a process can open it, set baud rates and exchange bytes).
 - No debugfs use in the module.
 
-## 6. Phase A: what to deliver and how it will be tested
+## 6. Phase A (done, for reference)
 
-**Deliverables** (all files complete, section 9 format):
-1. `kernel/opendectcell_ipq40xx.c` — the module (module name `opendectcell`; license, author, description; `MODULE_LICENSE("GPL v2")` to match `GPL-2.0-only`).
-2. `kernel/include/uapi/opendectcell.h` — the userspace header.
-3. `kernel/Makefile` — Kbuild for an out-of-tree module (`obj-m += opendectcell.o`, `opendectcell-y := opendectcell_ipq40xx.o`) plus a small standalone `make KDIR=... ARCH=arm CROSS_COMPILE=...` rule.
-4. `openwrt/package/kmod-opendectcell-ipq40xx/Makefile` — an OpenWrt package definition using `KernelPackage` (`include $(INCLUDE_DIR)/kernel.mk`, depends on `@TARGET_ipq40xx`, `FILES:=...ko`, **no `AUTOLOAD`**), with `Build/Compile` using `$(KERNEL_MAKE)` for an out-of-tree module whose sources are copied from `kernel/`.
-5. A short **test plan** (the acceptance tests below) and a list of **assumptions/uncertain API points**.
+Implemented in `kernel/opendectcell_ipq40xx.c` (Appendix A) and verified on the box: 50 consecutive firmware uploads through `DECT_IOC_RESET`/`DECT_IOC_STRAP` without a failure; refusal to load on a wrong board name; `rmmod` and a second `open` refused while the device is open; clean unload (reset released, GPIO 16 back on the UART function, no GPIO left requested); no kernel warnings. Keep this behaviour intact: **every change you make must leave these ioctls and the cleanup guarantees working.**
 
-**Board table** (one entry, designed to be extended):
+## 7. Phase B: the PCM/TDM receive path (your task)
 
-| Field | Value |
-|---|---|
-| match | device-tree `compatible` contains `avm,fritzbox-7530` (e.g. `of_machine_is_compatible()`) |
-| name | `avm,fritzbox-7530` |
-| reset | GPIO hardware offset 40 on the TLMM chip (`1000000.pinctrl`), active low |
-| strap | GPIO hardware offset 16, active low; shared with UART RX; restore via the serial device `78af000.serial` |
-| transport | `ipq40xx-tdm` (not implemented in Phase A) |
+**Goal: "gate G2".** Capture valid control messages ("mails", section 4) that the running STUB sends on the PCM bus, on the real box, and learn the frame layout. Receive only; transmit comes later. Voice, DECT protocol and the userspace daemon are out of scope.
 
-**Acceptance tests** (run by the engineer on the box; you should make them passable):
-1. `insmod opendectcell.ko`: `/dev/dect0` appears; the kernel log names the matched board. With a deliberately wrong table entry the load fails with a clear message and no GPIO changes.
-2. With the console login frozen and kernel log level lowered, the userspace uploader (which will be rewritten to use your ioctls) runs the sequence of section 3.1 and gets **the ROM's 0x02 byte at 9600 baud on the first attempt**, then uploads the firmware. This must work **50 times in a row**.
-3. After each cycle the UART still works; `/proc/tty/driver/msm_serial` counters look normal; the serial console still prints kernel messages.
-4. `rmmod` with the device open fails; `rmmod` otherwise leaves reset **released**, GPIO 16 back on the UART function, and no GPIO still requested.
-5. No `WARN`, `BUG` or oops in `dmesg`; the box never reboots by itself.
+### 7.1 First: a feasibility statement (mandatory)
 
-## 7. Phase B (later, do not implement now)
+Start your answer with a short statement (at most 25 lines) of what you **know with confidence** about the IPQ4019 ADSS/TDM/MBOX hardware and Qualcomm's QSDK driver structure (register blocks, DMA descriptor ring format, clock setup, how slave mode is selected, which GPIO functions the PCM pins need), and what you would have to **guess**. Rules:
+- **Do not invent register offsets, bit fields or descriptor layouts.** A wrong write to the ADSS block or its clocks can hang the SoC. If you cannot give a solid design for the full path, **say so and deliver the fallback (7.4) instead.** An honest "not enough information" is a good answer; list exactly what you would need (e.g. which QSDK source files and which functions).
+- If you are confident, deliver 7.3.
 
-Goal: the PCM **receive** path first (this proves "gate G2": valid STUB mails are captured), then transmit. Requirements to keep in mind while designing Phase A so it extends cleanly:
-1. Bring up the ADSS TDM receive path as a **slave** of the chip's DCL and FSC (section 4): pin functions, ADSS clocks in external/slave mode, a MBOX DMA ring for receive, frame size a **parameter** (default 16 bytes = 128 clocks) because the exact frame layout is not fully known.
-2. `read()` on `/dev/dect0` returns raw received data in blocks, each with a header (block counter, timestamp); `poll()` supported; overrun counters via a stats ioctl; `write()` for transmit comes second; a configuration ioctl for frame size, word width and pin group.
-3. Sustained operation at 8000 frames per second for at least 10 minutes without overrun.
-4. Open questions the capture will answer: bytes per frame, control-slot position, voice-slot map, bit order, which pin group, whether the mail framing applies in both directions.
+### 7.2 Known facts (repeat of section 4, plus what the stock stack does)
+
+- The chip is the clock master; the SoC is a slave on DCL/FSC. 128 DCL clocks (16 bytes) per 8 kHz frame is the working assumption, not confirmed.
+- The stock stack configures the TDM interface through a kernel API `tdm_if_config_init(...)` with a word width of **8 or 16 bits**, a slot count derived from its link configuration, and a "master" flag, then `tdm_if_dma_init(...)` (derived statically; the 7520's stock device-tree nodes in section 4 are the matching hardware description).
+- The stock driver reports 9 codec slots in total and **4 DECT channels**; the control mails live in one slot.
+- The DECT chip only produces PCM clocks while the STUB runs. To test, the userspace uploader (`dect-fwload`, uses your Phase A ioctls) starts the STUB; the clocks then stay up until the next reset.
+
+### 7.3 Main path: ADSS TDM receive, slave mode
+
+Requirements:
+1. Bring up the ADSS TDM **receive** path as a slave of the chip's DCL and FSC: pin functions for the PCM pins (section 4), ADSS clocks in external/slave mode, a MBOX DMA ring for receive, frame size a **module/ioctl parameter** (default 16 bytes per frame). Use the Phase A board table for the pins.
+2. `read()` on `/dev/dect0` returns raw received data in blocks; each block has a small header (block counter, timestamp, overrun flag). `poll()` supported. A stats ioctl returns frames received, overruns, and the clock state seen by the hardware.
+3. Configuration ioctl: frame size, word width, which of the two pin groups to use (section 4), start/stop of reception.
+4. Keep all Phase A behaviour; stopping reception and unloading must leave the clocks and pins as found (the chip drives them; the SoC must not drive any PCM pin except the data-out pin, and not even that in Phase B).
+5. Sustained operation at 8000 frames per second for at least 10 minutes without overrun.
+
+### 7.4 Fallback: a polling capture (use this if 7.1 says the full path is not safe to write)
+
+A deliberately simple **measurement tool inside the same module**, to learn the frame layout so the real driver can be written afterwards. Not a product feature; keep it small.
+- New ioctl `DECT_IOC_CAPTURE`: for a **bounded window of at most 8 ms**, with local interrupts disabled (use `local_irq_save`/`restore`; never loop longer, the box has a watchdog and RCU), poll the PCM input signals by reading each pin's input-level register in the TLMM block (each GPIO has its own 0x1000-byte register block; the input level is bit 0 of the register at offset 4 within it; the control register at offset 0 holds the function select in bits 5:2: this layout is from the mainline `pinctrl-msm` driver for IPQ4019; Phase A already maps the control register of GPIO 16 the same way). Signals: **DCL = GPIO 21, FSC = GPIO 22, DI = GPIO 23, DO = GPIO 27** (optionally MCL = GPIO 20).
+- Strategy: wait for DCL edges (the bit clock is about 1.024 MHz) and read FSC and DI right after each rising edge. **A read of a device register may take 100-300 ns; the half period of DCL is about 490 ns.** The module must therefore first run a **calibration**: time N back-to-back register reads with `ktime_get_ns()` and report nanoseconds per read, and report in the result how many register reads fit in one DCL period as it measured it. If three reads per half period are not possible, the capture result must be flagged "too slow" and we will stop there (that is a valid, useful result).
+- Result returned to userspace: one byte per DCL clock (bit 0 = DCL, bit 1 = FSC, bit 2 = DI, bit 3 = DO), at least 16 KiB, plus the calibration numbers and the timestamps of window start/end.
+- No DMA, no ADSS access, no clock or mux changes: **read-only on the TLMM input registers.**
+
+### 7.5 Deliverables and tests for Phase B
+
+Deliver the complete changed files (section 9). For the main path also a tiny userspace C capture tool (`src/tools/dect-pcmcap.c`: reads N blocks from `/dev/dect0` into a file and searches the data for the 0xAA mail marker with a valid checksum, printing sequence numbers). For the fallback also a userspace tool `src/tools/dect-sla.c` that calls `DECT_IOC_CAPTURE` and writes the raw samples to a file.
+
+Acceptance (run by the engineer on the box, chip running the STUB):
+1. Phase A tests still pass.
+2. Main path: blocks arrive at 8 kHz frame rate (counter and timestamps consistent); no overrun for 10 minutes; `rmmod` after stopping reception is clean; no `WARN`/`BUG`; the box does not hang. Mails: the capture tool finds `0xAA`-framed mails with correct checksums and increasing sequence numbers (that is gate G2).
+3. Fallback: calibration numbers are reported; if not "too slow", the raw samples show the frame sync pulses 125 microseconds apart and bit patterns on DI.
+4. Questions the capture must let us answer (we will analyse the data offline): bytes per frame, control-slot position, voice-slot map, bit order, whether the mail framing applies in both directions, which pin group carries the signals.
 
 ## 8. Rules for the box (for whoever tests)
 
@@ -166,9 +178,11 @@ Goal: the PCM **receive** path first (this proves "gate G2": valid STUB mails ar
 
 ## 9. Answer format (strict)
 
-1. First, a **short summary** (at most 15 lines) of your design: how you obtain the GPIOs, how you restore the UART function, locking, error handling, and anything you are unsure about.
-2. Then **every file in full**, each introduced by a line exactly of the form
+1. First the **feasibility statement** of 7.1.
+2. Then a **short summary** (at most 15 lines) of your design and what you are unsure about.
+3. Then **every changed or new file in full**, each introduced by a line exactly of the form
    `FILE: path/relative/to/repository/root`
-   followed immediately by one fenced code block with the complete file contents (no ellipses, no "rest unchanged"). Use only these paths: `kernel/opendectcell_ipq40xx.c`, `kernel/include/uapi/opendectcell.h`, `kernel/Makefile`, `openwrt/package/kmod-opendectcell-ipq40xx/Makefile`.
-3. Then the **test plan** and a bullet list **"Assumptions and unverified API points"** (every kernel function or header you were not certain about in 6.12, with the fallback you would try).
-4. If something in this brief is contradictory or missing, say so **before** writing code and ask; do not guess hardware facts.
+   followed immediately by one fenced code block with the complete file contents (no ellipses, no "rest unchanged"). Allowed paths: `kernel/opendectcell_ipq40xx.c`, `kernel/opendectcell_pcm.c` (new, optional), `kernel/include/uapi/opendectcell.h`, `kernel/Makefile`, `src/tools/dect-pcmcap.c`, `src/tools/dect-sla.c`. Do not resend files you did not change.
+4. Then the **test plan** and a bullet list **"Assumptions and unverified API points"** (every kernel function, header, register or bit field you were not certain about, with the fallback you would try).
+5. If something in this brief is contradictory or missing, say so **before** writing code and ask; do not guess hardware facts.
+
