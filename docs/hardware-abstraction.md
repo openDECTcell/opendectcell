@@ -8,7 +8,7 @@ openDECTcell must run on several FRITZ!Box models without per-model builds, and 
 
 **What the user sees:**
 - They install one package, `opendectcell`.
-- They run one firmware set-up step once (see the firmware design, M2).
+- They upload the DECT firmware once, extracted on their PC from an official AVM image (see `firmware-sourcing.md`).
 - Nothing else. They never choose a model, a driver or a pin number.
 
 ## 2. How the models differ
@@ -69,7 +69,7 @@ Two facts drive the design:
 | `fw_family` | STUB family; selects address translation (0 for `441`, 0xF0000 for `488`) | `441` |
 | `fw_firstlevel` | First-level loader file name | `dectfw_firstlevel_441.hex` |
 | `fw_secondlevel` | STUB file name | `dectfw_secondlevel_441.hex` |
-| `fw_secondlevel_sha256` | STUB build our docs are verified against (reference by hash only) | `4fabee65…cfaa6` |
+| `fw_firstlevel_sha256`, `fw_secondlevel_sha256` | Builds our docs are verified against (reference by hash only); checked before loading | `72f8e27a…045f2`, `4fabee65…cfaa6` |
 | `dect_mode` | Mode word: low byte goes into TLV tag 7, bit 8 is the first-level boot flag | `0x119` |
 | `uart` | Firmware-load UART device | `/dev/ttyLTQ0` (*assumed*) |
 | `uart_is_console` | The UART is also the serial console (console must be released) | `1` |
