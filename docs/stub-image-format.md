@@ -58,7 +58,7 @@ The segment address is the record address plus the current extended base: type 0
 1. **Locate the patch area.** For `441`/`488`, a 6-byte descriptor at the family's chip address (0x0 or 0xF0000) holds the patch-area address (32-bit LE) and size (16-bit LE). A chip address is resolved by walking the segments; the whole range must lie inside one segment. On the 7520 STUB: patch area at **0xA0, 53 bytes**.
 2. **Default TLV list.** The patch area already holds a TLV list (tag u8, length u8, value), ended by tag 0. On the 7520 STUB: tags **1 (5 bytes), 2 (2), 3 (1), 4 (1), 6 (1), 7 (1), 10 (1)**.
 3. **Replace, never append.** A TLV is patched only if the area already contains the same tag **with the same length**; its value is overwritten. Unknown tags and length mismatches are skipped (logged).
-4. **Factory TLVs.** The host reads up to **64 bytes** of TLVs from the box's factory DECT configuration (AVM prom config, id 1) and applies each one as in step 3. If that block is missing, only the mode byte is patched. If it is longer than 64 bytes, it is ignored.
+4. **Factory TLVs.** The host reads up to **64 bytes** of TLVs from the box's factory DECT configuration (AVM prom config, id 1) and applies each one as in step 3. On the 7520 this block is in the boot-loader partitions at offset 0x3D000, with a 4-byte header (type 0x02, id 0x01, length BE); see `models/7520-DECT-analysis.md` §8.3. If that block is missing, only the mode byte is patched. If it is longer than 64 bytes, it is ignored.
 5. **RFPI placeholder.** If a factory TLV has tag 1, length 5 and starts with the bytes `30 32 37 30` (ASCII "0270"), it is a placeholder. The host then builds the RFPI from the urlader variable `maca` (MAC address text `xx:xx:xx:xx:xx:xx`), using the hex digits at character positions 10, 12, 13, 15 and 16:
    - value v = 0x70B00000 | (d16 << 3) | (d15 << 7) | (d13 << 11) | (d12 << 15) | ((d10 << 19) & 0x80000)
    - RFPI bytes: `02 70` followed by the low 24 bits of v, most significant byte first
@@ -77,5 +77,5 @@ The segment address is the record address plus the current extended base: type 0
 ## 6. Open questions
 
 - Meaning of the default TLVs 2, 3, 4, 6 and 10 (probably RF calibration).
-- Where the factory DECT config (prom config id 1) lives in flash: urlader or TFFS. Look in the spare box's backup.
+- Where the factory DECT config lives on the 7412 and 7362 SL (on the 7520: boot-loader partitions, offset 0x3D000).
 - Exact `ptest` value that disables patching (the 7412 notes say `dect=cal`).

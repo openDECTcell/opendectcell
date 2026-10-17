@@ -31,7 +31,7 @@
 ## M1: Lab setup on the 7520 **[hw]**
 - [x] Full NAND backup of a box still running AVM firmware: RAM-boot OpenWrt (eva_ramboot + initramfs, no flash writes) and dump every MTD partition (raw incl. OOB, plus plain) via SCP into `work/` (never committed)
 - [x] OpenWrt on the 7520 (no serial console); document the version and the boot log
-- [ ] Locate the factory DECT config block (TLVs incl. RFPI and calibration) in flash; write an extractor
+- [x] Locate the factory DECT config block (TLVs incl. RFPI and calibration) in flash; write an extractor (7520: boot-loader partition offset 0x3D000, read by `dect-fwload --factory-mtd`)
 - [ ] Console strategy (the DECT UART is the console UART): free the UART after boot via package config
 - [ ] Optional: stock-firmware observation with Freetz-NG (`/proc` DECT commands, mail logging) to record reference traces
 
