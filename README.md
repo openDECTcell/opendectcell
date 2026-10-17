@@ -36,6 +36,7 @@ All three boxes run almost the same host DECT stack. For example, 98 % of the `a
 | `docs/7412-spi-tdm-and-loader.md` | 7412 SSC/SPI-TDM setup, STUB patching (TLV, mode byte), control channel |
 | `docs/stub-image-format.md` | STUB upload images: HEX → segmented image, families, TLV patching, checksum |
 | `docs/stub-loader-protocol.md` | UART upload protocol: reset and boot strap, STX/SOH/ACK handshake, XOR check, baud rates, retries |
+| `docs/pcm-tdm-ipq4019.md` | IPQ4019 PCM/TDM receive path (ADSS, ADCC clocks, stereo, MBOX DMA) in slave mode: register reference and bring-up plan for the kernel module |
 | `docs/kmod-spec.md` | Specification of the kernel module `kmod-opendectcell-ipq40xx` (reset/strap, then the PCM data path) for an implementer |
 | `docs/hardware-abstraction.md` | How several models are supported: kernel board table, per-model board profiles, packaging |
 | `docs/firmware-sourcing.md` | How users get the STUB: extract on the PC from an AVM image, upload to the box |
