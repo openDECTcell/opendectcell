@@ -71,6 +71,7 @@ struct fwl_result {
 	int last_error;           /* last protocol error, for logging */
 	uint8_t last_nak_code[4]; /* error bytes after the last NAK */
 	unsigned last_nak_len;
+	int fatal;                /* platform error: do not retry */
 };
 
 /*

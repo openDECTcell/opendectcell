@@ -57,6 +57,31 @@ static void on_signal(int sig)
 	_exit(3);
 }
 
+/* Reopen the tty after a hangup and reapply the line settings. */
+static int dev_set_baud(void *ctx, unsigned baud);
+
+static int uart_reopen_raw(struct dev *d)
+{
+	if (d->uart >= 0)
+		close(d->uart);
+	d->uart = open(d->uart_path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+	if (d->uart < 0)
+		return -errno;
+	fprintf(stderr, "uart: reopened after hangup\n");
+	return 0;
+}
+
+static int uart_reopen(struct dev *d)
+{
+	if (d->uart >= 0)
+		close(d->uart);
+	d->uart = open(d->uart_path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+	if (d->uart < 0)
+		return -errno;
+	fprintf(stderr, "uart: reopened after hangup\n");
+	return dev_set_baud(d, d->baud ? d->baud : 115200);
+}
+
 static int write_file(const char *path, const char *text)
 {
 	int fd = open(path, O_WRONLY);
@@ -81,8 +106,14 @@ static int dev_read_byte(void *ctx, unsigned timeout_ms)
 		return -errno;
 	if (r == 0)
 		return -ETIMEDOUT;
-	if (read(d->uart, &b, 1) != 1)
+	ssize_t n = read(d->uart, &b, 1);
+	if (n != 1) {
+		fprintf(stderr, "uart: read returned %zd, poll events 0x%x\n",
+			n, (unsigned)p.revents);
+		if (!uart_reopen(d))
+			return -ETIMEDOUT; /* treat as "nothing received yet" */
 		return -EIO;
+	}
 	if (d->verbose)
 		fprintf(stderr, "  [%ld] rx 0x%02x\n", now_ms() % 100000, b);
 	return b;
@@ -133,8 +164,12 @@ static int dev_set_baud(void *ctx, unsigned baud)
 	d->baud = baud;
 	if (d->uart < 0)
 		return 0; /* applied when the port is reopened */
-	if (tcgetattr(d->uart, &t))
+	if (tcgetattr(d->uart, &t) && errno == EIO && !uart_reopen_raw(d))
+		(void)0; /* reopened; fall through with the new fd */
+	if (tcgetattr(d->uart, &t)) {
+		fprintf(stderr, "uart: tcgetattr failed: %s\n", strerror(errno));
 		return -errno;
+	}
 	cfmakeraw(&t);
 	t.c_cflag |= CLOCAL | CREAD;
 	t.c_cflag &= ~(unsigned)(CSTOPB | PARENB | CRTSCTS);
@@ -142,8 +177,10 @@ static int dev_set_baud(void *ctx, unsigned baud)
 	t.c_cc[VTIME] = 0;
 	cfsetispeed(&t, s);
 	cfsetospeed(&t, s);
-	if (tcsetattr(d->uart, TCSAFLUSH, &t))
+	if (tcsetattr(d->uart, TCSAFLUSH, &t)) {
+		fprintf(stderr, "uart: tcsetattr failed: %s\n", strerror(errno));
 		return -errno;
+	}
 	fprintf(stderr, "uart: %u baud\n", baud);
 	return 0;
 }
@@ -262,8 +299,41 @@ static void usage(void)
 		"--second FILE.hex [--strap-gpio N] [--mode 0x105] [--listen SECONDS] [-v]\n");
 }
 
+/* Diagnostic: open the port, set it up and report poll events for a while. */
+static int probe(const char *path, unsigned baud, unsigned seconds)
+{
+	struct dev d = { .uart = -1, .gpio_value = -1, .strap_gpio = -1,
+			 .uart_path = path };
+	unsigned bytes = 0;
+
+	d.uart = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK);
+	if (d.uart < 0 || dev_set_baud(&d, baud)) {
+		fprintf(stderr, "probe: open/set baud failed: %s\n", strerror(errno));
+		return 1;
+	}
+	for (unsigned i = 0; i < seconds * 10; i++) {
+		struct pollfd p = { .fd = d.uart, .events = POLLIN };
+		int r = poll(&p, 1, 100);
+		if (r > 0) {
+			uint8_t b[64];
+			ssize_t n = read(d.uart, b, sizeof(b));
+			fprintf(stderr, "probe t=%u00ms: events 0x%x read %zd\n", i,
+				(unsigned)p.revents, n);
+			if (n > 0)
+				bytes += (unsigned)n;
+			if (n <= 0)
+				break;
+		}
+	}
+	fprintf(stderr, "probe: %u bytes received\n", bytes);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
+	if (argc >= 3 && !strcmp(argv[1], "--probe"))
+		return probe(argv[2], argc > 3 ? (unsigned)strtoul(argv[3], NULL, 0) : 115200, 3);
+
 	const char *uart = NULL, *first_path = NULL, *second_path = NULL;
 	unsigned reset_gpio = 0, mode = 0, listen_s = 5;
 	int have_gpio = 0;
@@ -351,6 +421,9 @@ int main(int argc, char **argv)
 	if (r) {
 		fprintf(stderr, "error %d (%s); last NAK code bytes: %u\n", r,
 			strerror(-r), res.last_nak_len);
+		/* leave the pins as we found them */
+		dev_reset(&d, 0);
+		dev_strap(&d, 0);
 		return 1;
 	}
 	listen(&d, listen_s);

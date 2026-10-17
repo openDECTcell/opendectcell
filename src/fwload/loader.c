@@ -191,16 +191,24 @@ static int chip_reset(const struct fwl_io *io, unsigned baud, int slow)
 {
 	int r;
 
-	if (slow && (r = io->strap(io->ctx, 1)))
-		return r;
-	if ((r = io->reset(io->ctx, 1)))
-		return r;
+#define STEP(call, what)                                                  \
+	do {                                                              \
+		if ((r = (call))) {                                       \
+			logf_(io, "reset step '%s' failed (%d)", what, r); \
+			return r;                                         \
+		}                                                         \
+	} while (0)
+
+	if (slow)
+		STEP(io->strap(io->ctx, 1), "strap low");
+	STEP(io->reset(io->ctx, 1), "assert reset");
 	io->sleep_ms(io->ctx, FWL_RESET_HOLD_MS);
-	if ((r = io->set_baud(io->ctx, baud)) || (r = io->reset(io->ctx, 0)))
-		return r;
+	STEP(io->set_baud(io->ctx, baud), "set baud");
+	STEP(io->reset(io->ctx, 0), "release reset");
 	io->sleep_ms(io->ctx, FWL_RESET_SETTLE_MS);
-	if (slow && (r = io->strap(io->ctx, 0)))
-		return r;
+	if (slow)
+		STEP(io->strap(io->ctx, 0), "strap release");
+#undef STEP
 	return 0;
 }
 
@@ -224,8 +232,10 @@ static int stage1(const struct fwl_io *io, const struct fwl_params *p,
 			      res->stage1_slow ? "slow" : "fast",
 			      res->stage1_baud);
 			if ((r = chip_reset(io, res->stage1_baud,
-					    res->stage1_slow)))
+					    res->stage1_slow))) {
+				res->fatal = 1;
 				return r;
+			}
 		}
 		r = fwl_stage(io, img, 2, res);
 		if (!r)
@@ -276,7 +286,7 @@ int fwl_upload(const struct fwl_io *io, const struct fwl_params *p,
 		res->rounds = round;
 		res->stage2_attempts = 0;
 		r = stage1(io, p, first, res);
-		if (r && !is_protocol_error(r))
+		if (r && (res->fatal || !is_protocol_error(r)))
 			return r;
 		if (r) {
 			logf_(io, "stage 1 failed (%d)", r);
