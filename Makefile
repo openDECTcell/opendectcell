@@ -12,9 +12,27 @@ export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
 TESTS := $(BUILD)/test_fwimage
+FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 
-.PHONY: all check clean
-all: $(TESTS)
+# Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
+SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-25.12.5-ipq40xx-*))
+TCBIN   := $(firstword $(wildcard $(SDK)/staging_dir/toolchain-*/bin))
+XCC     := $(TCBIN)/arm-openwrt-linux-gcc
+
+.PHONY: all check cross clean
+all: $(TESTS) $(BUILD)/dect-fwload
+
+$(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $(FWLOAD_SRC)
+
+# Result: build/dect-fwload.arm (stripped), ready to copy to the box.
+cross: $(FWLOAD_SRC)
+	@test -x "$(XCC)" || { echo "OpenWrt SDK not found: set SDK="; exit 1; }
+	@mkdir -p $(BUILD)
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Wshadow \
+		-o $(BUILD)/dect-fwload.arm.dbg $(FWLOAD_SRC)
+	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip -o $(BUILD)/dect-fwload.arm $(BUILD)/dect-fwload.arm.dbg
 
 $(BUILD)/test_fwimage: tests/test_fwimage.c src/fwload/fwimage.c src/fwload/fwimage.h tests/check.h
 	@mkdir -p $(BUILD)
