@@ -11,8 +11,9 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
+LIBDECT_SRC := src/libopendectcell/dect_mail.c
 
 # Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
 SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-25.12.5-ipq40xx-*))
@@ -48,6 +49,10 @@ cross: $(FWLOAD_SRC)
 $(BUILD)/test_fwimage: tests/test_fwimage.c src/fwload/fwimage.c src/fwload/fwimage.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_fwimage.c src/fwload/fwimage.c
+
+$(BUILD)/test_mail: tests/test_mail.c $(LIBDECT_SRC) src/libopendectcell/dect_mail.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_mail.c $(LIBDECT_SRC)
 
 check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done
