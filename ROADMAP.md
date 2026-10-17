@@ -74,6 +74,7 @@
 
 ## M5: MAC bring-up → **Gate G5**
 - [ ] Start/stop of the FP MAC with RFPI; beacon; paging
+  - candidate bring-up sequence in `docs/mac-bringup.md` [CR A-0006]: group A config (radio off) then 0x022C(1) (radio on) then 0x015C/0x0300. Config-corruption risk is nil (AVM EEPROM is host-side only); the real effect is radio emission. RFPI = EEPROM item 0x10, from the STUB's patched-in factory data. Blocker: group A / 0x015C need host config values and a layout not yet known
 - [ ] `dect-probe` skeleton on top of `libopendectcell` (transport and timers injected)
 - [ ] **[hw]** Gate G5: a handset sees the base
 
