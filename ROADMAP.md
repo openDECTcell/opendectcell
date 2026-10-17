@@ -29,7 +29,7 @@
 - [ ] Minimal mail sequences for MAC start, registration and call setup, as used by the stock stack (input for G5–G7)
 
 ## M1: Lab setup on the 7520 **[hw]**
-- [ ] Full NAND backup of a box still running AVM firmware: RAM-boot OpenWrt (eva_ramboot + initramfs, no flash writes) and dump every MTD partition (raw incl. OOB, plus plain) via SCP into `work/` (never committed)
+- [x] Full NAND backup of a box still running AVM firmware: RAM-boot OpenWrt (eva_ramboot + initramfs, no flash writes) and dump every MTD partition (raw incl. OOB, plus plain) via SCP into `work/` (never committed)
 - [ ] OpenWrt on the 7520 (no serial console); document the version and the boot log
 - [ ] Locate the factory DECT config block (TLVs incl. RFPI and calibration) in flash; write an extractor
 - [ ] Console strategy (the DECT UART is the console UART): free the UART after boot via package config
