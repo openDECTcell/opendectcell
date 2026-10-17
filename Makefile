@@ -20,7 +20,8 @@ SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-25.12.5-ipq40xx-*))
 TCBIN   := $(firstword $(wildcard $(SDK)/staging_dir/toolchain-*/bin))
 XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 
-STUBD_SRC := src/stubd/dect-stubd.c $(LIBDECT_SRC)
+# dect-stubd uses only the framing and session modules, not the audio one.
+STUBD_SRC := src/stubd/dect-stubd.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
 .PHONY: all check cross clean
@@ -31,9 +32,9 @@ $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
 	$(CC) $(CFLAGS) -o $@ $(FWLOAD_SRC)
 
 # Host build of dect-pcmcap for offline analysis (-S FILE) of captures.
-$(BUILD)/dect-pcmcap: src/tools/dect-pcmcap.c kernel/include/uapi/opendectcell.h
+$(BUILD)/dect-pcmcap: src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c src/libopendectcell/dect_audio.h kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Ikernel/include/uapi -o $@ src/tools/dect-pcmcap.c
+	$(CC) $(CFLAGS) -Ikernel/include/uapi -Isrc/libopendectcell -o $@ src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
 
 # Host build of dect-stubd: compiles everywhere, runs only on the box.
 $(BUILD)/dect-stubd: $(STUBD_SRC) src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
@@ -50,8 +51,8 @@ cross: $(FWLOAD_SRC)
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi \
 		-o $(BUILD)/dect-sla.arm src/tools/dect-sla.c
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-sla.arm
-	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi \
-		-o $(BUILD)/dect-pcmcap.arm src/tools/dect-pcmcap.c
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi -Isrc/libopendectcell \
+		-o $(BUILD)/dect-pcmcap.arm src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-pcmcap.arm
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror $(STUBD_INC) \
 		-o $(BUILD)/dect-stubd.arm $(STUBD_SRC)

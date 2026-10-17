@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "opendectcell.h"
+#include "dect_audio.h"
 
 #define MAX_SHOW	3
 /* Blocks kept in memory for the analysis (long runs only count). */
@@ -39,7 +40,10 @@ struct opts {
 	const char *offline;
 	const char *exec_cmd;
 	const char *tx_hex;
-	const char *mail;
+	const char *mail[8];
+	unsigned int n_mail;
+	int show_params;
+	int tone;
 	unsigned int ctrl_slot;
 	struct dect_pcm_config cfg;
 };
@@ -59,8 +63,11 @@ static void usage(void)
 		"  -x N     hex-dump the first N frames\n"
 		"  -q       no register dumps\n"
 		"  -T       also run the transmit DMA (drives pin 27)\n"
-		"  -m SRC:DST:PRIM[:HEX]  send one mail in the control slot after the\n"
-		"           DMA starts (implies -T), e.g. -m 0x22:0x02:0xf600\n"
+		"  -m SRC:DST:PRIM[:HEX]  send a mail in the control slot after the\n"
+		"           DMA starts (implies -T), e.g. -m 0x22:0x02:0xf600; repeat\n"
+		"           -m to send several in order (e.g. contact then connect)\n"
+		"  -A       per-slot tone analysis (A-law low byte: RMS and frequency)\n"
+		"  -p       show decoded mail parameter bytes (may hold identity data)\n"
 		"  -l SLOT  control slot for -m and the mail decoder (default 1)\n"
 		"  -P HEX   transmit frame template, slots*2 bytes in DMA-buffer\n"
 		"           order (default all ff)\n"
@@ -253,7 +260,7 @@ out:
  * 16-bit sum of length and body.
  */
 static void print_mails(const uint8_t *data, size_t frames,
-			unsigned int slots, unsigned int slot)
+			unsigned int slots, unsigned int slot, int show_params)
 {
 	uint8_t *s = malloc(frames * 2u);
 	size_t f, i = 0, n = frames * 2u;
@@ -289,10 +296,13 @@ static void print_mails(const uint8_t *data, size_t frames,
 		printf("  mail at frame %zu: seq %3u len %3u src %02x dst %02x prim %04x",
 		       i / 2u, s[i + 1], len, s[i + 4], s[i + 5],
 		       s[i + 6] | (unsigned int)s[i + 7] << 8);
-		if (len > 2)
+		if (len > 2 && !show_params) {
+			printf(" [params hidden]");
+		} else if (len > 2) {
 			printf(" par");
-		for (k = 0; k + 2 < len && k < 24; k++)
-			printf(" %02x", s[i + 8 + k]);
+			for (k = 0; k + 2 < len && k < 24; k++)
+				printf(" %02x", s[i + 8 + k]);
+		}
 		printf("\n");
 		count++;
 		i += total;
@@ -301,8 +311,57 @@ static void print_mails(const uint8_t *data, size_t frames,
 	free(s);
 }
 
+/*
+ * Treat the low byte of each slot's word as an 8-bit A-law sample, decode
+ * it and report energy and the zero-crossing frequency. A constant or idle
+ * slot shows rms ~ 0; a STUB test tone shows a clear frequency.
+ */
+static void tone_report(const uint8_t *data, size_t frames, unsigned int slots)
+{
+	int16_t *a = malloc(frames * sizeof(*a));
+	int16_t *l = malloc(frames * sizeof(*l));
+	unsigned int w;
+	size_t f;
+
+	if (!a || !l) {
+		fprintf(stderr, "tone: out of memory\n");
+		free(a);
+		free(l);
+		return;
+	}
+	/*
+	 * Each slot is tried two ways: as an 8-bit A-law sample in the low
+	 * byte, and as a 16-bit little-endian linear sample. A real tone shows
+	 * a stable frequency and energy in whichever interpretation is right.
+	 */
+	printf("tone (%u Hz) -- alaw(low byte) and lin16(word):\n",
+	       DECT_AUDIO_RATE_HZ);
+	for (w = 0; w < slots; w++) {
+		struct dect_tone_stats sa, sl;
+		unsigned int wmin = 0xffffu, wmax = 0;
+
+		for (f = 0; f < frames; f++) {
+			const uint8_t *p = data + (f * slots + w) * 2u;
+			unsigned int word = p[0] | (unsigned int)p[1] << 8;
+
+			if (word < wmin)
+				wmin = word;
+			if (word > wmax)
+				wmax = word;
+			a[f] = dect_alaw_decode(p[0]);
+			l[f] = (int16_t)word;
+		}
+		dect_tone_analyze(a, frames, DECT_AUDIO_RATE_HZ, &sa);
+		dect_tone_analyze(l, frames, DECT_AUDIO_RATE_HZ, &sl);
+		printf("  slot %u word %04x..%04x | alaw rms %7.1f freq %6.1f | lin16 rms %8.1f freq %6.1f\n",
+		       w, wmin, wmax, sa.rms, sa.freq_hz, sl.rms, sl.freq_hz);
+	}
+	free(a);
+	free(l);
+}
+
 static void analyse(const uint8_t *data, size_t bytes, unsigned int slots,
-		    unsigned int hex_frames)
+		    unsigned int hex_frames, int tone)
 {
 	size_t frame_bytes = slots * 2u, frames = bytes / frame_bytes, f;
 	unsigned int w, i;
@@ -341,6 +400,8 @@ static void analyse(const uint8_t *data, size_t bytes, unsigned int slots,
 		printf("\n");
 	}
 	search(data, frames, slots);
+	if (tone)
+		tone_report(data, frames, slots);
 }
 
 static int analyse_file(const char *path, const struct opts *o)
@@ -375,9 +436,10 @@ static int analyse_file(const char *path, const struct opts *o)
 		n += r;
 	}
 	fclose(fp);
-	analyse(data, n, o->cfg.slots ? o->cfg.slots : 8u, o->hex_frames);
+	analyse(data, n, o->cfg.slots ? o->cfg.slots : 8u, o->hex_frames,
+		o->tone);
 	print_mails(data, n / ((o->cfg.slots ? o->cfg.slots : 8u) * 2u),
-		    o->cfg.slots ? o->cfg.slots : 8u, o->ctrl_slot);
+		    o->cfg.slots ? o->cfg.slots : 8u, o->ctrl_slot, o->show_params);
 	free(data);
 	return 0;
 }
@@ -566,9 +628,13 @@ static int capture(int fd, const struct opts *o, const struct dect_pcm_config *c
 	}
 	if (o->exec_cmd && (child = spawn(o->exec_cmd, fd)) < 0)
 		goto out;
-	if (o->mail && send_mail(fd, o->mail, c->slots, o->ctrl_slot, 0)) {
-		fprintf(stderr, "-m: bad mail or write failed\n");
-		goto out;
+	for (unsigned int mi = 0; mi < o->n_mail; mi++) {
+		if (send_mail(fd, o->mail[mi], c->slots, o->ctrl_slot, mi)) {
+			fprintf(stderr, "-m: bad mail or write failed\n");
+			goto out;
+		}
+		if (mi + 1 < o->n_mail)
+			sleep_ms(100);	/* let the STUB act on the prior mail */
 	}
 	while (got < o->blocks) {
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
@@ -630,8 +696,9 @@ static int capture(int fd, const struct opts *o, const struct dect_pcm_config *c
 		perror(o->out);
 		goto out;
 	}
-	analyse(data, total, c->slots, o->hex_frames);
-	print_mails(data, total / (c->slots * 2u), c->slots, o->ctrl_slot);
+	analyse(data, total, c->slots, o->hex_frames, o->tone);
+	print_mails(data, total / (c->slots * 2u), c->slots, o->ctrl_slot,
+		    o->show_params);
 	ret = 0;
 out:
 	if (child > 0 && waitpid(child, &status, 0) == child)
@@ -755,7 +822,7 @@ int main(int argc, char **argv)
 	o.wait_ms = 1000;
 	o.blocks = 250;
 	o.ctrl_slot = 1;
-	while ((c = getopt(argc, argv, "s:kw:c:r:t:f:n:b:o:x:qS:e:TP:m:l:h")) != -1) {
+	while ((c = getopt(argc, argv, "s:kw:c:r:t:f:n:b:o:x:qS:e:TP:m:Apl:h")) != -1) {
 		switch (c) {
 		case 's':
 			if (parse_uint(optarg, &o.last_step) || !o.last_step ||
@@ -822,8 +889,16 @@ int main(int argc, char **argv)
 			o.tx_hex = optarg;
 			break;
 		case 'm':
-			o.mail = optarg;
+			if (o.n_mail >= sizeof(o.mail) / sizeof(o.mail[0]))
+				goto bad;
+			o.mail[o.n_mail++] = optarg;
 			o.cfg.flags |= DECT_PCM_CF_TX;
+			break;
+		case 'A':
+			o.tone = 1;
+			break;
+		case 'p':
+			o.show_params = 1;
 			break;
 		case 'l':
 			if (parse_uint(optarg, &o.ctrl_slot) || o.ctrl_slot > 15)
