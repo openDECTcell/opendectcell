@@ -12,7 +12,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <math.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +26,10 @@
 
 #include "opendectcell.h"
 #include "dect_audio.h"
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #define MAX_SHOW	3
 /* Blocks kept in memory for the analysis (long runs only count). */
@@ -44,6 +50,8 @@ struct opts {
 	unsigned int n_mail;
 	int show_params;
 	int tone;
+	int gen_slot;		/* -1 = off: transmit a tone in this slot */
+	unsigned int gen_freq;
 	unsigned int ctrl_slot;
 	struct dect_pcm_config cfg;
 };
@@ -67,6 +75,8 @@ static void usage(void)
 		"           DMA starts (implies -T), e.g. -m 0x22:0x02:0xf600; repeat\n"
 		"           -m to send several in order (e.g. contact then connect)\n"
 		"  -A       per-slot tone analysis (A-law low byte: RMS and frequency)\n"
+		"  -G SLOT:FREQ  transmit an A-law sine of FREQ Hz in SLOT while\n"
+		"           capturing (for the dect_loop loopback test; implies -T)\n"
 		"  -p       show decoded mail parameter bytes (may hold identity data)\n"
 		"  -l SLOT  control slot for -m and the mail decoder (default 1)\n"
 		"  -P HEX   transmit frame template, slots*2 bytes in DMA-buffer\n"
@@ -586,6 +596,49 @@ static int send_mail(int fd, const char *spec, unsigned int slots,
 	return w == (ssize_t)(nf * fb) ? 0 : -1;
 }
 
+/*
+ * Child process that transmits a continuous A-law sine of `freq` Hz in one
+ * voice slot (low byte), idle elsewhere, for the dect_loop loopback test.
+ * The parent captures and kills it when done.
+ */
+static pid_t spawn_tone(int fd, unsigned int slots, unsigned int slot,
+			unsigned int freq)
+{
+	pid_t pid;
+
+	fflush(NULL);
+	pid = fork();
+	if (pid == 0) {
+		size_t fb = slots * 2u, batch = 800u;	/* ~0.1 s */
+		uint8_t *frames = malloc(batch * fb);
+		double phase = 0.0;
+		double dp = 2.0 * M_PI * (double)freq / (double)DECT_AUDIO_RATE_HZ;
+		unsigned int i;
+
+		if (!frames)
+			_exit(1);
+		for (;;) {
+			for (i = 0; i < batch; i++) {
+				int16_t s = (int16_t)(20000.0 * sin(phase));
+
+				memset(frames + i * fb, 0xff, fb);
+				frames[i * fb + slot * 2u] = dect_alaw_encode(s);
+				frames[i * fb + slot * 2u + 1u] = 0;
+				phase += dp;
+				if (phase > 2.0 * M_PI)
+					phase -= 2.0 * M_PI;
+			}
+			if (write(fd, frames, batch * fb) != (ssize_t)(batch * fb))
+				break;
+		}
+		free(frames);
+		_exit(0);
+	}
+	if (pid < 0)
+		perror("fork");
+	return pid;
+}
+
 static pid_t spawn(const char *cmd, int fd)
 {
 	char num[16];
@@ -615,7 +668,7 @@ static int capture(int fd, const struct opts *o, const struct dect_pcm_config *c
 	uint64_t first_ts = 0, last_ts = 0;
 	uint32_t next_seq = 0;
 	FILE *out = NULL;
-	pid_t child = -1;
+	pid_t child = -1, tone_child = -1;
 	int ret = 1, status;
 
 	if (!buf || !data) {
@@ -635,6 +688,13 @@ static int capture(int fd, const struct opts *o, const struct dect_pcm_config *c
 		}
 		if (mi + 1 < o->n_mail)
 			sleep_ms(100);	/* let the STUB act on the prior mail */
+	}
+	if (o->gen_slot >= 0) {
+		sleep_ms(100);		/* let the mail frames drain first */
+		tone_child = spawn_tone(fd, c->slots, (unsigned int)o->gen_slot,
+					o->gen_freq);
+		if (tone_child < 0)
+			goto out;
 	}
 	while (got < o->blocks) {
 		struct pollfd pfd = { .fd = fd, .events = POLLIN };
@@ -701,6 +761,10 @@ static int capture(int fd, const struct opts *o, const struct dect_pcm_config *c
 		    o->show_params);
 	ret = 0;
 out:
+	if (tone_child > 0) {
+		kill(tone_child, SIGTERM);
+		waitpid(tone_child, &status, 0);
+	}
 	if (child > 0 && waitpid(child, &status, 0) == child)
 		printf("command exit status %d\n",
 		       WIFEXITED(status) ? WEXITSTATUS(status) : -1);
@@ -822,7 +886,8 @@ int main(int argc, char **argv)
 	o.wait_ms = 1000;
 	o.blocks = 250;
 	o.ctrl_slot = 1;
-	while ((c = getopt(argc, argv, "s:kw:c:r:t:f:n:b:o:x:qS:e:TP:m:Apl:h")) != -1) {
+	o.gen_slot = -1;
+	while ((c = getopt(argc, argv, "s:kw:c:r:t:f:n:b:o:x:qS:e:TP:m:AG:pl:h")) != -1) {
 		switch (c) {
 		case 's':
 			if (parse_uint(optarg, &o.last_step) || !o.last_step ||
@@ -897,6 +962,21 @@ int main(int argc, char **argv)
 		case 'A':
 			o.tone = 1;
 			break;
+		case 'G': {
+			char *end;
+			unsigned long sl = strtoul(optarg, &end, 0);
+			unsigned long fr;
+
+			if (*end != ':')
+				goto bad;
+			fr = strtoul(end + 1, &end, 0);
+			if (*end || sl > 15 || !fr || fr > 4000)
+				goto bad;
+			o.gen_slot = (int)sl;
+			o.gen_freq = (unsigned int)fr;
+			o.cfg.flags |= DECT_PCM_CF_TX;
+			break;
+		}
 		case 'p':
 			o.show_params = 1;
 			break;
