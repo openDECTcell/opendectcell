@@ -36,7 +36,8 @@ First target: FRITZ!Box 7412. See `README.md` and `ROADMAP.md`.
 | `docs/models/` | Per-model analyses (image format, components, GPIOs, boot) |
 | `docs/` | Protocol and interface notes (STUB API, control channel, SPI-TDM, …) |
 | `tools/` | Analysis tools (Python stdlib preferred; `the analysis tooling` for headless scripts) |
-| `kernel/` | Kernel module(s), e.g. the SSC SPI-TDM driver (GPL-2.0) |
+| `kernel/` | Kernel modules, one per OpenWrt target (`kmod-opendectcell-lantiq`, …) with the transport drivers and the board table (GPL-2.0) |
+| `boards/` | Board profiles, one per model, named after OpenWrt's `board_name` (e.g. `avm,fritz7412`); see `docs/hardware-abstraction.md` |
 | `src/` | Userspace C: `libopendectcell` (DECT protocol library), `dect-fwload`, `dect-stubd`, `dect-probe` |
 | `tests/` | Unit tests, chip/STUB simulator, golden traces |
 | `openwrt/` | OpenWrt feed: package Makefiles, init scripts, UCI defaults |
@@ -47,6 +48,7 @@ First target: FRITZ!Box 7412. See `README.md` and `ROADMAP.md`.
 - **Language:** C (C11) for all userspace components and the protocol library. It must build for big-endian MIPS (7412), little-endian ARM and x86-64. The kernel module follows Linux kernel coding style.
 - **Endianness:** STUB fields are little-endian. Always use explicit conversion helpers; never cast structs onto wire buffers.
 - **Licence headers:** kernel code (`kernel/`) uses `SPDX-License-Identifier: GPL-2.0-only`, as usual for the kernel. **Everything else** (userspace, `libopendectcell`, tools, tests) uses `SPDX-License-Identifier: GPL-2.0-or-later`, so that the AGPL-3.0 controller (opendectcell-controller) can link `libopendectcell`. Never add GPL-2.0-only code outside `kernel/`.
+- **No per-model code in userspace.** Model differences go into the kernel board table (pins, PCM interface) or the board profile in `boards/` (everything else). Userspace never handles GPIO numbers or register addresses. See `docs/hardware-abstraction.md`.
 - **`libopendectcell` is shared** by `dect-probe` on the box and by the controller. Keep it free of platform I/O: transport and timers are injected.
 - **Terminology** (use consistently): *STUB* (AVM chip firmware), *mail* (host↔STUB message), *control slot* (PCM slot carrying mails), *cell* (one box with radio), *controller* (central DECT↔SIP gateway), *FP*/*PP* (fixed and portable part), RFPI, IPUI, TPUI, PARK.
 
