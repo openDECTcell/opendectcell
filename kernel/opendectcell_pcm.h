@@ -8,6 +8,7 @@
 #define _OPENDECTCELL_PCM_H
 
 #include <linux/clk.h>
+#include <linux/kfifo.h>
 #include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/poll.h>
@@ -102,6 +103,9 @@ struct dect_pcm {
 	u32 seq;
 	struct dect_pcm_stats st;
 	u8 tx_frame[32];		/* under ring_lock */
+	struct kfifo tx_q;		/* write() frames, under ring_lock */
+	bool tx_q_ready;
+	wait_queue_head_t tx_wq;
 };
 
 int dect_pcm_init(struct dect_pcm *p, const struct dect_pcm_board *board,
@@ -116,6 +120,8 @@ long dect_pcm_ioctl(struct dect_pcm *p, unsigned int cmd, void __user *argp);
 /* Take *p->lock themselves. */
 ssize_t dect_pcm_read(struct dect_pcm *p, char __user *buf, size_t count,
 		      bool nonblock);
+ssize_t dect_pcm_write(struct dect_pcm *p, const char __user *buf,
+		       size_t count, bool nonblock);
 __poll_t dect_pcm_poll(struct dect_pcm *p, struct file *file,
 		       poll_table *wait);
 

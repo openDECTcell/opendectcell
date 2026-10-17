@@ -174,10 +174,17 @@ struct dect_pcm_stats {
 	__u32 overruns;
 	__u32 tx_irqs;			/* transmit MBOX interrupts */
 	__u32 tx_blocks;		/* transmit buffers refilled */
-	__u32 reserved[3];
+	__u32 tx_frames;		/* frames taken from write() */
+	__u32 reserved[2];
 };
 
 /*
+ * write() queues whole transmit frames (slots * 2 bytes each, DMA-buffer
+ * order, the length must be a multiple of that); the transmit refill takes
+ * them in order and uses the frame template below when the queue is empty.
+ * Only with DECT_PCM_CF_TX at step 6, else -ENODATA. The queue holds
+ * 64 KiB (0.5 s of 16-byte frames); blocking unless O_NONBLOCK.
+ *
  * Transmit content: every frame of every transmit buffer is a copy of
  * frame[0 .. slots * 2), in DMA-buffer order (the same order read() shows
  * for receive). Default all 0xFF (idle). Takes effect at the next refill.

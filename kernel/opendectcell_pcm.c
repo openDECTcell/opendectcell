@@ -137,6 +137,7 @@ struct dect_mbox_desc {
 #define PCM_RING_SLOTS		256U	/* about 1 s of 4 ms blocks */
 #define PCM_MAX_BLOCK		4095U
 #define PCM_MAX_DESC		16U
+#define PCM_TX_QUEUE		SZ_64K
 
 static const unsigned int adcc_dump[17] = {
 	0x104, 0x108, 0x10c, 0x124, 0x128, 0x12c,
@@ -450,8 +451,14 @@ static void pcm_tx_fill(struct dect_pcm *p, u8 *buf)
 	unsigned long flags;
 
 	spin_lock_irqsave(&p->ring_lock, flags);
-	for (off = 0; off + frame <= p->block_bytes; off += frame)
+	for (off = 0; off + frame <= p->block_bytes; off += frame) {
+		if (p->tx_q_ready && kfifo_len(&p->tx_q) >= frame &&
+		    kfifo_out(&p->tx_q, buf + off, frame) == frame) {
+			p->st.tx_frames++;
+			continue;
+		}
 		memcpy(buf + off, p->tx_frame, frame);
+	}
 	spin_unlock_irqrestore(&p->ring_lock, flags);
 }
 
@@ -566,6 +573,8 @@ static irqreturn_t pcm_irq(int irq, void *data)
 
 	if (n && !ch->tx)
 		wake_up_interruptible(&p->wq);
+	if (n && ch->tx)
+		wake_up_interruptible(&p->tx_wq);
 	return IRQ_HANDLED;
 }
 
@@ -646,14 +655,19 @@ static void pcm_dma_free(struct dect_pcm_chan *ch)
 static void pcm_ring_free(struct dect_pcm *p)
 {
 	u8 *ring;
+	bool txq;
 
 	spin_lock_irq(&p->ring_lock);
 	ring = p->ring;
 	p->ring = NULL;
 	p->head = 0;
 	p->tail = 0;
+	txq = p->tx_q_ready;
+	p->tx_q_ready = false;
 	spin_unlock_irq(&p->ring_lock);
 	vfree(ring);
+	if (txq)
+		kfifo_free(&p->tx_q);
 }
 
 /* doc §9 "Prepare"; transmit differs in two registers (doc §14) */
@@ -796,6 +810,10 @@ static int pcm_step_dma(struct dect_pcm *p)
 	memset(&p->st, 0, sizeof(p->st));
 
 	if (tx) {
+		ret = kfifo_alloc(&p->tx_q, PCM_TX_QUEUE, GFP_KERNEL);
+		if (ret)
+			goto err_ring;
+		p->tx_q_ready = true;
 		ret = pcm_chan_setup(&p->tx);
 		if (ret)
 			goto err_ring;
@@ -832,6 +850,7 @@ static void pcm_undo_dma(struct dect_pcm *p)
 	pcm_chan_stop(&p->tx);
 	pcm_chan_stop(&p->rx);
 	pcm_ring_free(p);
+	wake_up_interruptible(&p->tx_wq);
 }
 
 void dect_pcm_teardown(struct dect_pcm *p)
@@ -1079,15 +1098,82 @@ ssize_t dect_pcm_read(struct dect_pcm *p, char __user *buf, size_t count,
 	}
 }
 
+static unsigned int pcm_tx_avail(struct dect_pcm *p)
+{
+	unsigned long flags;
+	unsigned int n = 0;
+
+	spin_lock_irqsave(&p->ring_lock, flags);
+	if (p->tx_q_ready)
+		n = kfifo_avail(&p->tx_q);
+	spin_unlock_irqrestore(&p->ring_lock, flags);
+	return n;
+}
+
+static bool pcm_writable(struct dect_pcm *p)
+{
+	return pcm_tx_avail(p) >= p->cfg.slots * 2 ||
+	       READ_ONCE(p->step) != DECT_PCM_STEP_DMA;
+}
+
+ssize_t dect_pcm_write(struct dect_pcm *p, const char __user *buf,
+		       size_t count, bool nonblock)
+{
+	u8 tmp[256];
+	size_t done = 0;
+	unsigned int frame, n;
+	int ret;
+
+	while (done < count) {
+		mutex_lock(p->lock);
+		if (p->step != DECT_PCM_STEP_DMA || !p->tx_q_ready) {
+			mutex_unlock(p->lock);
+			return done ? done : -ENODATA;
+		}
+		frame = p->cfg.slots * 2;
+		if (count % frame) {
+			mutex_unlock(p->lock);
+			return -EINVAL;
+		}
+		n = min_t(size_t, count - done, pcm_tx_avail(p));
+		n = min_t(unsigned int, n, sizeof(tmp) / frame * frame);
+		n -= n % frame;
+		if (n) {
+			if (copy_from_user(tmp, buf + done, n)) {
+				mutex_unlock(p->lock);
+				return done ? done : -EFAULT;
+			}
+			spin_lock_irq(&p->ring_lock);
+			kfifo_in(&p->tx_q, tmp, n);
+			spin_unlock_irq(&p->ring_lock);
+			done += n;
+		}
+		mutex_unlock(p->lock);
+		if (n)
+			continue;
+		if (nonblock)
+			return done ? done : -EAGAIN;
+		ret = wait_event_interruptible(p->tx_wq, pcm_writable(p));
+		if (ret)
+			return done ? done : ret;
+	}
+	return done;
+}
+
 __poll_t dect_pcm_poll(struct dect_pcm *p, struct file *file,
 		       poll_table *wait)
 {
+	__poll_t mask = 0;
+
 	poll_wait(file, &p->wq, wait);
+	poll_wait(file, &p->tx_wq, wait);
 	if (READ_ONCE(p->head) != READ_ONCE(p->tail))
-		return EPOLLIN | EPOLLRDNORM;
+		mask |= EPOLLIN | EPOLLRDNORM;
 	if (READ_ONCE(p->step) != DECT_PCM_STEP_DMA)
-		return EPOLLHUP;
-	return 0;
+		return mask | EPOLLHUP;
+	if (pcm_tx_avail(p) >= p->cfg.slots * 2)
+		mask |= EPOLLOUT | EPOLLWRNORM;
+	return mask;
 }
 
 int dect_pcm_init(struct dect_pcm *p, const struct dect_pcm_board *board,
@@ -1121,6 +1207,7 @@ int dect_pcm_init(struct dect_pcm *p, const struct dect_pcm_board *board,
 	p->tlmm_first = tlmm_first;
 	spin_lock_init(&p->ring_lock);
 	init_waitqueue_head(&p->wq);
+	init_waitqueue_head(&p->tx_wq);
 
 	/* Mapping only; nothing is accessed before step 1. */
 	ret = -ENOMEM;

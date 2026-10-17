@@ -250,6 +250,15 @@ static ssize_t dect_read(struct file *file, char __user *buf, size_t count,
 			     file->f_flags & O_NONBLOCK);
 }
 
+static ssize_t dect_write(struct file *file, const char __user *buf,
+			  size_t count, loff_t *ppos)
+{
+	struct opendectcell *dw = file->private_data;
+
+	return dect_pcm_write(&dw->pcm, buf, count,
+			      file->f_flags & O_NONBLOCK);
+}
+
 static __poll_t dect_poll(struct file *file, poll_table *wait)
 {
 	struct opendectcell *dw = file->private_data;
@@ -494,6 +503,7 @@ static const struct file_operations dect_fops = {
 	.open = dect_open,
 	.release = dect_release,
 	.read = dect_read,
+	.write = dect_write,
 	.poll = dect_poll,
 	.unlocked_ioctl = dect_ioctl,
 };
