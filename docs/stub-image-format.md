@@ -26,7 +26,7 @@ The first-level file name selects the boot speed: `_slow` and `_fast` set differ
 | 2 | N | Data bytes in file order |
 | 2 + N | 1 | XOR of the N data bytes |
 
-The HEX records are concatenated without address information. The loader expects the first record at the family's first-level load address.
+The data is laid out **linearly from the family's first-level load address**, with no address information in the image. Gaps between records (and between the load address and the first record) are filled with zero bytes, so N = end address − load address. The 7520's `dectfw_firstlevel_441_slow.hex` has no gaps: 618 bytes from 0x10080.
 
 ## 3. Second-level (STUB) image (32-bit length, segmented)
 
