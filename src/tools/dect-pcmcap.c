@@ -46,7 +46,7 @@ struct opts {
 	const char *offline;
 	const char *exec_cmd;
 	const char *tx_hex;
-	const char *mail[8];
+	const char *mail[16];
 	unsigned int n_mail;
 	int show_params;
 	int tone;
