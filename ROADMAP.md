@@ -38,10 +38,10 @@
 ## M2: Firmware loader → **Gate G1**
 - [ ] `tools/dect-fw-extract.py` (PC, Python stdlib only): extract `dectfw_*.hex` from a user-supplied AVM image, verify SHA-256, print upload instructions
 - [x] Image builder: Intel HEX → length header, segments, patch area via descriptor (chip address 0 for `441`), TLV patching, XOR checksum (`src/fwload/fwimage.c`, `docs/stub-image-format.md`)
-- [ ] `kmod-opendectcell-ipq40xx` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset and boot strap; no PCM yet
+- [x] `kmod-opendectcell-ipq40xx` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset and boot strap; no PCM yet (`kernel/`, verified 2026-10-17: 50 consecutive uploads, clean unload)
 - [ ] Board profile for the 7520/7530 (`boards/<board_name>`, name read on the box) with the loader keys (firmware names, mode word, UART)
 - [x] `dect-fwload` bring-up version: UART boot, both stages, retries; reset and strap through sysfs GPIO given on the command line (`src/fwload/`, `docs/stub-loader-protocol.md` §7)
-- [ ] `dect-fwload` on `/dev/dect0` and the board profile instead of command-line GPIOs
+- [x] `dect-fwload` on `/dev/dect0` instead of command-line GPIOs (the board profile is a separate item)
 - [ ] Unit tests for the upload engine (`loader.c`) against the real `.hex` files; the image builder already has them
 - [x] **[hw]** Gate G1: STUB boots, with the PCM clocks present
   - 2026-10-17, 7520: both upload stages acknowledged with matching checksums; after the upload the chip drives DCL and FSC (`docs/models/7520-DECT-analysis.md` §8.2). The STUB prints nothing on the UART
