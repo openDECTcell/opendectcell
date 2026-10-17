@@ -21,6 +21,7 @@
 - [x] Headless the analysis tooling pipeline for local analysis
 - [x] Control-channel framing (0xAA marker, sequence, length, 16-bit sum)
 - [x] 7412 SSC/SPI-TDM register setup, STUB patch mechanism (TLV, tag 1 = RFPI, tag 7 = mode byte)
+- [x] Hardware abstraction for several models: kernel board table plus per-model board profiles (`docs/hardware-abstraction.md`)
 - [ ] Complete mail header layout (source/destination task, primitive, length)
 - [ ] Primitive-ID catalogue host↔STUB (`docs/stub-api.md`)
 - [ ] STUB (CR16C) analysis: meaning of mode byte tag 7; channel configuration
@@ -37,14 +38,16 @@
 ## M2: Firmware loader → **Gate G1**
 - [ ] `dect-fw-extract`: fetch `dectfw_*.hex` from a user-supplied AVM image (blob policy: never shipped)
 - [ ] Image builder: Intel HEX → length header, patch area via descriptor at chip address 6, TLV patching, XOR checksum
-- [ ] `dect-fwload`: UART boot, ROM stage (STX/SOH/len16/XOR/ACK) and second stage (len32/CRC16), retries; reset via GPIO33
+- [ ] `kmod-opendectcell-lantiq` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset; no PCM yet
+- [ ] Board profile `boards/avm,fritz7412` with the loader keys (firmware names, mode word, UART)
+- [ ] `dect-fwload`: UART boot, ROM stage (STX/SOH/len16/XOR/ACK) and second stage (len32/CRC16), retries; chip reset via `/dev/dect0`
 - [ ] Chip simulator plus unit tests against the real `.hex` files
 - [ ] **[hw]** Gate G1: STUB boots, with its UART output captured
 
 ## M3: SPI-TDM kernel module → **Gate G2**
 - [ ] SSC slave-mode streaming: 32-bit words, MSB first, clock polarity 1; RX/TX FIFOs, then DMA
 - [ ] Real-time path (dedicated VPE or high-priority IRQ); frame sync on GPIO9, clock enable GPIO7
-- [ ] Character-device interface for control-slot and voice-slot data
+- [ ] `/dev/dect0` interface: control-slot and voice-slot data, frame-layout configuration; identical for every transport
 - [ ] Capture tool (a "software logic analyser"): dump frames and search for the 0xAA framing
 - [ ] **[hw]** Determine words per frame, control-slot position, voice-slot map and clock master
 - [ ] **[hw]** Gate G2: valid STUB mails captured
@@ -79,9 +82,10 @@
 - [ ] Golden-trace regression tests in CI
 
 ## M9: OpenWrt integration
-- [ ] Feed with `kmod-opendectcell-ssc`, `dect-fwload`, `dect-stubd`, `dect-probe`; CI build with the OpenWrt SDK
+- [ ] Feed with `kmod-opendectcell-lantiq` and the `opendectcell` package (programs plus board profiles; pulls in the right kmod); CI build with the OpenWrt SDK
 - [ ] Board resources: in-module board table first, then an upstream DTS patch for the 7412
-- [ ] UCI configuration; console/getty handling
+- [ ] procd init script: board detection, profile plus UCI overrides, clear message on unsupported boxes; console/getty handling
+- [ ] LuCI app for non-technical users: status page, firmware set-up, basic settings
 - [ ] Cell mode: tunnel mails (TCP, optional TLS) and audio (UDP, optional SRTP/DTLS) to the controller
 
 ## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
