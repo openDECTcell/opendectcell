@@ -1,6 +1,6 @@
 # STUB upload protocol over the UART
 
-Status: *derived statically* from `the first-stage loader.ko` of FRITZ!OS 08.25 on the FRITZ!Box 7520 (function `the vendor's loader`, source file name `the vendor's loader.c`), 2026-10-17. Partly confirmed by the loader's log on a running 7520 (`7520-DECT-analysis.md` §8: "slow" boot mode, upload of the STUB in about 6 s). These notes describe behaviour in our own words; they contain no AVM code. Image formats: `stub-image-format.md`.
+Status: *derived statically*, then **confirmed on hardware** (§8) from `the first-stage loader.ko` of FRITZ!OS 08.25 on the FRITZ!Box 7520 (function `the vendor's loader`, source file name `the vendor's loader.c`), 2026-10-17. Partly confirmed by the loader's log on a running 7520 (`7520-DECT-analysis.md` §8: "slow" boot mode, upload of the STUB in about 6 s). These notes describe behaviour in our own words; they contain no AVM code. Image formats: `stub-image-format.md`.
 
 The host uploads two images in two **stages**, over the same UART:
 1. **Stage 1:** the chip's ROM boot loader receives the **first-level image**.
@@ -32,7 +32,7 @@ After a successful stage 1 the host waits 10 ms; stage 2 starts about 50 ms late
 | Byte other than ACK/NAK/STX in step 3 | Logged, one attempt used up |
 | During stage-2 data (step 4) the chip sends 0x00 | Ignored |
 | During stage-2 data the chip sends NAK | One more byte follows (error code); start over |
-| During stage-2 data the chip sends anything else | Start over |
+| During stage-2 data the chip sends anything else | Start over. **Only between data bytes:** the chip's checksum answer arrives right after the last byte and must not be treated as an error (§7) |
 | In step 5 the chip sends NAK instead of the XOR | One more byte follows (error code); start over |
 | XOR mismatch in step 5 | Host sends NAK; start over |
 
@@ -93,8 +93,29 @@ The `DCX81` family uses a different start: the chip sends the text `HELLO DCX81`
 
 `7520-DECT-analysis.md` §4 says stage 2 "answers with a 16-bit CRC". The code compares **one byte** (the XOR) in both stages; "crc" in the log messages refers to that byte.
 
-## 7. Open questions
+## 7. Observed on hardware
 
-- Whether the 7520's chip boots in "fast" mode without the strap (it would save the pin juggling). Test on hardware.
+Source: *observed on hardware*, spare FRITZ!Box 7520, OpenWrt 25.12.5, 2026-10-17, with `dect-fwload` driving `/dev/ttyMSM0`, reset GPIO40 and the strap on GPIO16. STUB and first-level files unmodified from FRITZ!OS 08.25 (hashes in `7520-DECT-analysis.md`); only the mode byte (tag 7 = 0x05) was patched.
+
+| Observation | Detail |
+|---|---|
+| **The strap is required** | Without it, 3 rounds × 16 stage-1 attempts (fast and slow) produced **no byte at all** from the chip. So the chip does not answer in "fast" mode without the strap |
+| Stage 1 with the strap | The ROM answered with STX **on the first slow attempt** (9600 baud) in all four runs, and returned the correct XOR (0x2B for the 621-byte first-level image) |
+| Stage 2 | After about 150 ms the first-level loader sent STX at **115200 baud** (`_slow` file name). SOH and the 4-byte length were ACKed; the 54,119 data bytes took about 4.7 s |
+| **Chip's checksum answer** | The chip sends its XOR **immediately after the last data byte**. A host that waits for the transmission to finish before reading will find it already queued. The "other byte during data" rule (§1) therefore applies only *between* data bytes, never after the last one. (A first version of our engine got this wrong: it treated the chip's correct checksum, 0xC2, as an error.) |
+| Result | Both stages ACKed in a single attempt; the chip's XOR matched the image's |
+| STUB UART output | **None in 10 s** after the upload. The STUB probably talks only over the PCM bus. Not yet explained |
+
+### Driving the strap from userspace (7520, kernel 6.12)
+
+The strap pin is the UART RX pin (GPIO16), which is owned by the serial driver:
+1. Exporting GPIO 528 (= 512 + 16) through `/sys/class/gpio` switches the pin to GPIO function even though the serial driver owns it. Set its direction to `low` before releasing reset.
+2. After the reset, unexport it. **The pin stays a GPIO and the UART receives nothing.** The UART function is restored by writing `gpio16 blsp_uart0` (group first, then function) to `/sys/kernel/debug/pinctrl/1000000.pinctrl/pinmux-select`.
+3. **Do not unbind and rebind the serial driver to restore the pin: it reboots the box**, because this UART is the kernel console.
+
+Before the upload the login on this UART has to be stopped. Its `askfirst` process is respawned by init when killed, so it was frozen with SIGSTOP and resumed afterwards; the kernel's console log level was set to 1 during the test.
+
+## 8. Open questions
+
 - Meaning of the NAK error codes (2 or 4 bytes in step 3, 1 byte elsewhere).
 - The UART line format (8N1 assumed).
