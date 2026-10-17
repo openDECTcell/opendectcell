@@ -279,8 +279,8 @@ static int read_factory(const char *path, off_t offset, uint8_t *buf, size_t *le
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: dect-fwload --uart DEV --dect-dev /dev/dect0 --first FILE.hex "
-		"--second FILE.hex [--factory-mtd DEV --factory-offset N]\n"
+		"usage: dect-fwload --uart DEV {--dect-dev /dev/dect0 | --dect-fd N} "
+		"--first FILE.hex --second FILE.hex [--factory-mtd DEV --factory-offset N]\n"
 		"                   [--mode 0x105] [--listen SECONDS] [-v]\n"
 		"       dect-fwload --probe DEV [BAUD]\n");
 }
@@ -322,6 +322,7 @@ int main(int argc, char **argv)
 	const char *uart = NULL, *first_path = NULL, *second_path = NULL;
 	unsigned mode = 0, listen_s = 5;
 	const char *factory_mtd = NULL, *dect_dev = NULL;
+	int dect_fd_arg = -1;	/* inherited, e.g. from dect-pcmcap -e */
 	off_t factory_off = 0;
 	uint8_t factory[FWI_FACTORY_MAX];
 	size_t factory_len = 0;
@@ -332,6 +333,8 @@ int main(int argc, char **argv)
 			uart = argv[++i];
 		else if (!strcmp(argv[i], "--dect-dev") && i + 1 < argc)
 			dect_dev = argv[++i];
+		else if (!strcmp(argv[i], "--dect-fd") && i + 1 < argc)
+			dect_fd_arg = (int)strtol(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "--first") && i + 1 < argc)
 			first_path = argv[++i];
 		else if (!strcmp(argv[i], "--second") && i + 1 < argc)
@@ -351,7 +354,7 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	}
-	if (!uart || !dect_dev || !first_path || !second_path) {
+	if (!uart || !dect_dev == (dect_fd_arg < 0) || !first_path || !second_path) {
 		usage();
 		return 2;
 	}
@@ -392,7 +395,11 @@ int main(int argc, char **argv)
 		fprintf(stderr, "cannot open %s: %s\n", uart, strerror(errno));
 		return 1;
 	}
-	d.dect_fd = open(dect_dev, O_RDWR);
+	if (dect_fd_arg >= 0 && fcntl(dect_fd_arg, F_GETFD) < 0) {
+		fprintf(stderr, "--dect-fd %d: %s\n", dect_fd_arg, strerror(errno));
+		return 1;
+	}
+	d.dect_fd = dect_fd_arg >= 0 ? dect_fd_arg : open(dect_dev, O_RDWR);
 	if (d.dect_fd < 0) {
 		fprintf(stderr, "cannot open %s: %s (is the opendectcell module loaded?)\n",
 			dect_dev, strerror(errno));
