@@ -29,6 +29,7 @@ Status: **derived statically** from the FRITZ!OS 06.88 modules on 2026-10-16 (th
 - **Second-level image (STUB):**
   - The image starts with a **4-byte big-endian payload length**, followed by the payload. A **one-byte XOR checksum** of the payload follows it, and the host recomputes it after patching.
   - Chip address **0x0006** holds a 6-byte descriptor: a 32-bit LE address and a 16-bit LE maximum length of the **patch area**.
+    **Correction (2026-10-17):** the 08.25 code on the 7520 reads this 6-byte descriptor at chip address **0x0**, not 0x0006; see `stub-image-format.md` §5.
   - Address translation: chip address 0 for the `441` firmware family, 0xF0000 for the `488` family.
 - **Patch content:** a **TLV list** (tag u8, length u8, value) written into the patch area:
   - The TLVs come from AVM's per-device factory configuration (`get_wlan_dect_config(1, …)`, up to 0x84 bytes). They likely include per-unit RF calibration in addition to identity. → **On OpenWrt this block must be read from the box's flash**, like Wi-Fi calibration data.

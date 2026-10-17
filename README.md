@@ -34,6 +34,7 @@ All three boxes run almost the same host DECT stack. For example, 98 % of the `a
 | `docs/models/` | Per-model DECT analyses (image format, components, GPIO map, boot protocol) |
 | `docs/stub-pcm-control-channel.md` | Host↔STUB mail framing on the PCM bus |
 | `docs/7412-spi-tdm-and-loader.md` | 7412 SSC/SPI-TDM setup, STUB patching (TLV, mode byte), control channel |
+| `docs/stub-image-format.md` | STUB upload images: HEX → segmented image, families, TLV patching, checksum |
 | `docs/hardware-abstraction.md` | How several models are supported: kernel board table, per-model board profiles, packaging |
 | `docs/firmware-sourcing.md` | How users get the STUB: extract on the PC from an AVM image, upload to the box |
 | `tools/avm_nand_sqfs.py` | Reader for AVM's Lantiq NAND `filesystem.image` (BE SquashFS, sector-index headers, gaps, circular layout) |
