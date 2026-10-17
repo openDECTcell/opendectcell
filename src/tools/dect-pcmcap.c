@@ -38,6 +38,7 @@ struct opts {
 	const char *out;
 	const char *offline;
 	const char *exec_cmd;
+	const char *tx_hex;
 	struct dect_pcm_config cfg;
 };
 
@@ -55,6 +56,9 @@ static void usage(void)
 		"  -o FILE  write the raw payload to FILE\n"
 		"  -x N     hex-dump the first N frames\n"
 		"  -q       no register dumps\n"
+		"  -T       also run the transmit DMA (drives pin 27)\n"
+		"  -P HEX   transmit frame template, slots*2 bytes in DMA-buffer\n"
+		"           order (default all ff)\n"
 		"  -e CMD   at step 6, run CMD (sh -c) while capturing; CMD gets the\n"
 		"           open device as $DECT_FD (e.g. dect-fwload --dect-fd $DECT_FD)\n"
 		"  -S FILE  offline: analyse a raw payload FILE (no device)\n");
@@ -378,11 +382,11 @@ static void print_stats(const struct dect_pcm_stats *s)
 	printf("  stats: irqs %" PRIu64 " blocks %" PRIu64 " dropped %" PRIu64
 	       " multi %" PRIu64 " empty %" PRIu64 " errors %" PRIu64
 	       " (last %#x) int_status %#x\n"
-	       "         rx samples %08x:%08x overruns %u\n",
+	       "         rx samples %08x:%08x overruns %u tx irqs %u blocks %u\n",
 	       (uint64_t)s->irqs, (uint64_t)s->blocks, (uint64_t)s->dropped,
 	       (uint64_t)s->multi, (uint64_t)s->empty, (uint64_t)s->errors,
 	       s->last_error_status, s->int_status, s->rx_samples_msb,
-	       s->rx_samples_lsb, s->overruns);
+	       s->rx_samples_lsb, s->overruns, s->tx_irqs, s->tx_blocks);
 }
 
 static pid_t spawn(const char *cmd, int fd)
@@ -500,6 +504,31 @@ out:
 	return ret;
 }
 
+static int set_tx_frame(int fd, const char *hex, unsigned int slots)
+{
+	struct dect_pcm_tx_frame f;
+	unsigned int i, v;
+
+	memset(&f, 0, sizeof(f));
+	f.len = slots * 2u;
+	if (strlen(hex) != f.len * 2u) {
+		fprintf(stderr, "-P needs %u hex digits\n", f.len * 2u);
+		return -1;
+	}
+	for (i = 0; i < f.len; i++) {
+		if (sscanf(hex + 2u * i, "%2x", &v) != 1) {
+			fprintf(stderr, "-P: bad hex\n");
+			return -1;
+		}
+		f.frame[i] = (uint8_t)v;
+	}
+	if (ioctl(fd, DECT_IOC_PCM_TX_FRAME, &f)) {
+		perror("PCM_TX_FRAME");
+		return -1;
+	}
+	return 0;
+}
+
 static int run_device(const struct opts *o)
 {
 	struct dect_ioc_info info;
@@ -524,9 +553,11 @@ static int run_device(const struct opts *o)
 		perror("PCM_CONFIG");
 		goto out;
 	}
-	printf("config: slots %u rx_delay %u tx_delay %u frames %u desc %u\n",
+	printf("config: slots %u rx_delay %u tx_delay %u frames %u desc %u%s\n",
 	       cfg.slots, cfg.rx_delay, cfg.tx_delay, cfg.frames_per_block,
-	       cfg.n_desc);
+	       cfg.n_desc, (cfg.flags & DECT_PCM_CF_TX) ? " tx" : "");
+	if (o->tx_hex && set_tx_frame(fd, o->tx_hex, cfg.slots))
+		goto out;
 
 	for (step = 1; step <= o->last_step; step++) {
 		if (step == DECT_PCM_STEP_STEREO && o->skip_stereo)
@@ -583,7 +614,7 @@ int main(int argc, char **argv)
 	o.last_step = DECT_PCM_STEP_DMA;
 	o.wait_ms = 1000;
 	o.blocks = 250;
-	while ((c = getopt(argc, argv, "s:kw:c:r:t:f:n:b:o:x:qS:e:h")) != -1) {
+	while ((c = getopt(argc, argv, "s:kw:c:r:t:f:n:b:o:x:qS:e:TP:h")) != -1) {
 		switch (c) {
 		case 's':
 			if (parse_uint(optarg, &o.last_step) || !o.last_step ||
@@ -642,6 +673,12 @@ int main(int argc, char **argv)
 			break;
 		case 'e':
 			o.exec_cmd = optarg;
+			break;
+		case 'T':
+			o.cfg.flags |= DECT_PCM_CF_TX;
+			break;
+		case 'P':
+			o.tx_hex = optarg;
 			break;
 		default:
 			goto bad;

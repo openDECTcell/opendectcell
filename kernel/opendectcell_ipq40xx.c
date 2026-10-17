@@ -62,20 +62,26 @@ static const struct dect_pcm_pin fritz7530_pcm_pins[] = {
 	{ 20, 2 }, { 21, 2 }, { 22, 2 }, { 23, 3 },
 };
 
+/* GPIO 25, 26 transmit DCL and FSC (inputs), 27 DO (output); 24 MCL stays. */
+static const struct dect_pcm_pin fritz7530_pcm_tx_pins[] = {
+	{ 25, 3 }, { 26, 3 }, { 27, 3, true },
+};
+
 /* docs/pcm-tdm-ipq4019.md sections 2-4 */
 static const struct dect_pcm_board fritz7530_pcm = {
 	.adss_base = 0x07700000,
 	.adss_size = 0x300,
-	.mbox_base = 0x0770e000,	/* MBOX3 */
-	.stereo_base = 0x0770f000,	/* STEREO3 */
+	.rx = { 0x0770e000, 0x0770f000, 159 },	/* MBOX3, STEREO3, SPI */
+	.tx = { 0x07708000, 0x07709000, 156 },	/* MBOX0, STEREO0, SPI */
 	.gcc_compatible = "qcom,gcc-ipq4019",
 	.gcc_ahb_clk = 19,		/* GCC_AUDIO_AHB_CLK */
 	.gcc_ahb_cbcr = 0x01800000 + 0x1b010,
 	.gic_compatible = "qcom,msm-qgic2",
-	.irq_spi = 159,
 	.irq_type = 4,			/* IRQ_TYPE_LEVEL_HIGH */
 	.pins = fritz7530_pcm_pins,
 	.n_pins = ARRAY_SIZE(fritz7530_pcm_pins),
+	.tx_pins = fritz7530_pcm_tx_pins,
+	.n_tx_pins = ARRAY_SIZE(fritz7530_pcm_tx_pins),
 };
 
 struct dect_board {
@@ -439,6 +445,7 @@ static long dect_ioctl(struct file *file, unsigned int cmd,
 	case DECT_IOC_PCM_STEP:
 	case DECT_IOC_PCM_REGS:
 	case DECT_IOC_PCM_STATS:
+	case DECT_IOC_PCM_TX_FRAME:
 		mutex_lock(&dw->lock);
 		ret = dect_pcm_ioctl(&dw->pcm, cmd, (void __user *)arg);
 		mutex_unlock(&dw->lock);

@@ -121,6 +121,8 @@ struct dect_pcm_config {
 /* Input flag: rx_delay = 0 was meant literally (0 means default otherwise). */
 #define DECT_PCM_CF_RX_DELAY_SET	(1U << 0)
 #define DECT_PCM_CF_TX_DELAY_SET	(1U << 1)
+/* Also run the transmit DMA (pin 27 driven); see DECT_IOC_PCM_TX_FRAME. */
+#define DECT_PCM_CF_TX			(1U << 2)
 
 /*
  * Register dump, read back from the hardware. valid tells which groups were
@@ -170,7 +172,20 @@ struct dect_pcm_stats {
 	__u32 rx_samples_lsb;		/* live stereo counters (step >= 4) */
 	__u32 rx_samples_msb;
 	__u32 overruns;
-	__u32 reserved[5];
+	__u32 tx_irqs;			/* transmit MBOX interrupts */
+	__u32 tx_blocks;		/* transmit buffers refilled */
+	__u32 reserved[3];
+};
+
+/*
+ * Transmit content: every frame of every transmit buffer is a copy of
+ * frame[0 .. slots * 2), in DMA-buffer order (the same order read() shows
+ * for receive). Default all 0xFF (idle). Takes effect at the next refill.
+ */
+struct dect_pcm_tx_frame {
+	__u32 len;			/* must be slots * 2 */
+	__u32 reserved;
+	__u8 frame[32];
 };
 
 /*
@@ -197,5 +212,6 @@ struct dect_pcm_block {
 #define DECT_IOC_PCM_STEP   _IOW(DECT_IOC_MAGIC, 0x11, __u32)
 #define DECT_IOC_PCM_REGS   _IOR(DECT_IOC_MAGIC, 0x12, struct dect_pcm_regs)
 #define DECT_IOC_PCM_STATS  _IOR(DECT_IOC_MAGIC, 0x13, struct dect_pcm_stats)
+#define DECT_IOC_PCM_TX_FRAME _IOW(DECT_IOC_MAGIC, 0x14, struct dect_pcm_tx_frame)
 
 #endif /* _UAPI_OPENDECTCELL_H */

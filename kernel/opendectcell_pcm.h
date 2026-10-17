@@ -20,22 +20,46 @@
 struct dect_pcm_pin {
 	unsigned int gpio;
 	unsigned int func;
+	bool output;			/* TLMM output enable */
+};
+
+/* One DMA direction: an MBOX, its stereo block and its interrupt. */
+struct dect_pcm_dir {
+	phys_addr_t mbox_base;
+	phys_addr_t stereo_base;
+	u32 irq_spi;
 };
 
 /* Board facts for the PCM path, all physical addresses (doc section 3). */
 struct dect_pcm_board {
 	phys_addr_t adss_base;		/* ADSS global + ADCC registers */
 	size_t adss_size;
-	phys_addr_t mbox_base;		/* receive MBOX */
-	phys_addr_t stereo_base;	/* receive stereo block */
+	struct dect_pcm_dir rx;		/* MBOX3 / STEREO3 */
+	struct dect_pcm_dir tx;		/* MBOX0 / STEREO0 */
 	const char *gcc_compatible;
 	u32 gcc_ahb_clk;		/* GCC_AUDIO_AHB_CLK id */
 	phys_addr_t gcc_ahb_cbcr;	/* its branch register, read only */
 	const char *gic_compatible;
-	u32 irq_spi;
 	u32 irq_type;
 	const struct dect_pcm_pin *pins;	/* set while receiving */
 	unsigned int n_pins;
+	const struct dect_pcm_pin *tx_pins;	/* set while transmitting */
+	unsigned int n_tx_pins;
+};
+
+struct dect_pcm;
+
+struct dect_pcm_chan {
+	struct dect_pcm *p;
+	bool tx;
+	u32 irq_spi;
+	void __iomem *mbox;
+	void __iomem *stereo;
+	int irq;
+	void *dma_cpu;
+	dma_addr_t dma_addr;
+	size_t dma_size;
+	unsigned int next_desc;
 };
 
 struct dect_pcm {
@@ -52,23 +76,20 @@ struct dect_pcm {
 	struct clk *ahb_clk;		/* only if we had to enable it */
 	void __iomem *gcc_ahb_cbcr;
 	void __iomem *adss;
-	void __iomem *mbox;
-	void __iomem *stereo;
+	struct dect_pcm_chan rx;
+	struct dect_pcm_chan tx;
 
 	/* What step 2 changed, so that teardown restores it. */
 	u32 ahb_cbcr_set;
 	bool b1k_set;
-	u32 pin_saved[8];
+	u32 pin_saved[4];
+	u32 tx_pin_saved[4];
+	bool tx_configured;		/* step 4 set up transmit too */
 
-	/* DMA ring (step 6) */
-	int irq;
-	void *dma_cpu;
-	dma_addr_t dma_addr;
-	size_t dma_size;
+	/* DMA ring layout (step 6), the same for both directions */
 	unsigned int desc_stride;
 	unsigned int buf_stride;
 	unsigned int buf_offset;
-	unsigned int next_desc;
 
 	/* Blocks for read(), filled by the interrupt handler */
 	spinlock_t ring_lock;
@@ -80,6 +101,7 @@ struct dect_pcm {
 	bool drop_pending;
 	u32 seq;
 	struct dect_pcm_stats st;
+	u8 tx_frame[32];		/* under ring_lock */
 };
 
 int dect_pcm_init(struct dect_pcm *p, const struct dect_pcm_board *board,

@@ -29,6 +29,7 @@
 /* TLMM pin control (doc §2) */
 #define TLMM_STRIDE		0x1000
 #define TLMM_MUX		GENMASK(5, 2)
+#define TLMM_OE			BIT(9)
 
 /* ADSS global registers (doc §5) */
 #define GLB_CHIP_CTRL_I2S	0x10
@@ -48,6 +49,8 @@
 #define  MODE_XMIT_TDM		BIT(0)
 #define  MODE_RECV_TDM		BIT(2)
 #define  MODE_PORT_EN_ALL	GENMASK(9, 4)
+#define  MODE_I2S0_TXD_OE	GENMASK(6, 4)
+#define  MODE_I2S0_FS_OE	BIT(7)
 #define  MODE_I2S3_FS_OE	BIT(8)
 #define  MODE_I2S3_RXD_OE	BIT(9)
 #define  MODE_B1K		BIT(28)
@@ -92,8 +95,11 @@
 #define MBOX_DMA_POLICY		0x10
 #define  POL_SW_RESET		BIT(31)
 #define  POL_TX_INT_TYPE	BIT(17)
+#define  POL_RX_INT_TYPE	BIT(16)
 #define  POL_SRAM_AC		GENMASK(15, 12)
 #define  POL_TX_FIFO_THRESH	GENMASK(7, 4)
+#define MBOX_RX_DESC_BASE	0x18	/* used for transmit */
+#define MBOX_RX_CONTROL		0x1c	/* used for transmit */
 #define MBOX_TX_DESC_BASE	0x20
 #define MBOX_TX_CONTROL		0x24
 #define  CTRL_STOP		BIT(0)
@@ -193,6 +199,10 @@ static int pcm_step_clock(struct dect_pcm *p)
 	struct clk *clk;
 	u32 cbcr;
 	int ret;
+
+	spin_lock_irq(&p->ring_lock);
+	memset(&p->st, 0, sizeof(p->st));
+	spin_unlock_irq(&p->ring_lock);
 
 	cbcr = readl(p->gcc_ahb_cbcr);
 	if (!(cbcr & CBCR_OFF)) {
@@ -314,14 +324,53 @@ static void pcm_undo_padclk(struct dect_pcm *p)
 		writel(0, p->adss + adcc_cbcr[i]);
 }
 
-/* Step 4 (doc §8 steps 6-7, §7 stereo slave configuration, §2 pins). */
+/* Stereo slave configuration (doc §7); ENABLE comes with the DMA. */
+static void pcm_stereo_slave(void __iomem *stereo)
+{
+	u32 v = readl(stereo + ST_CONFIG);
+
+	v &= ~(ST_MASTER | ST_ENABLE | ST_DATA_WORD_SIZE | ST_I2S_WORD_32 |
+	       ST_MIC_WORD_32 | ST_MCK_SEL);
+	/* 16-bit words; MCK_SEL keeps the external clock usable. */
+	v |= FIELD_PREP(ST_DATA_WORD_SIZE, 1) | ST_MCK_SEL;
+	writel(v, stereo + ST_CONFIG);
+}
+
+/* Pins to their audio function; the old value is kept for the restore. */
+static void pcm_pins_set(struct dect_pcm *p, const struct dect_pcm_pin *pins,
+			 unsigned int n, u32 *saved)
+{
+	unsigned int i;
+
+	for (i = 0; i < n; i++) {
+		void __iomem *ctl = pcm_pin_ctl(p, pins[i].gpio);
+
+		saved[i] = readl(ctl);
+		reg_rmw(ctl, TLMM_MUX | TLMM_OE,
+			FIELD_PREP(TLMM_MUX, pins[i].func) |
+			(pins[i].output ? TLMM_OE : 0));
+	}
+}
+
+static void pcm_pins_restore(struct dect_pcm *p,
+			     const struct dect_pcm_pin *pins, unsigned int n,
+			     const u32 *saved)
+{
+	unsigned int i;
+
+	/* Reverse order: the output pin is released first. */
+	for (i = n; i-- > 0;)
+		reg_rmw(pcm_pin_ctl(p, pins[i].gpio), TLMM_MUX | TLMM_OE,
+			saved[i] & (TLMM_MUX | TLMM_OE));
+}
+
+/* Step 4 (doc §8 steps 6-7, §7, §2 pins; transmit: §14). */
 static int pcm_step_tdm(struct dect_pcm *p)
 {
 	const struct dect_pcm_board *b = p->board;
+	bool tx = p->cfg.flags & DECT_PCM_CF_TX;
 	u32 chan = p->cfg.slots - 1;
 	unsigned long flags;
-	unsigned int i;
-	u32 v;
 
 	local_irq_save(flags);
 	reg_rmw(p->adss + GLB_TDM_CTRL, TDM_TX_CHAN_NUM | TDM_RX_CHAN_NUM,
@@ -331,14 +380,15 @@ static int pcm_step_tdm(struct dect_pcm *p)
 	reg_rmw(p->adss + GLB_CLK_I2S_CTRL, GLB_CLK_OE_ALL, 0);
 	/* Receiver port enables for FSC and DI (not clock drivers). */
 	reg_rmw(p->adss + GLB_AUDIO_MODE, 0, MODE_I2S3_RXD_OE | MODE_I2S3_FS_OE);
+	/* Transmit port enables (doc §14), only when transmitting. */
+	if (tx)
+		reg_rmw(p->adss + GLB_AUDIO_MODE, 0,
+			MODE_I2S0_TXD_OE | MODE_I2S0_FS_OE);
 	reg_rmw(p->adss + GLB_AUDIO_MODE, 0, MODE_XMIT_TDM | MODE_RECV_TDM);
 
-	v = readl(p->stereo + ST_CONFIG);
-	v &= ~(ST_MASTER | ST_ENABLE | ST_DATA_WORD_SIZE | ST_I2S_WORD_32 |
-	       ST_MIC_WORD_32 | ST_MCK_SEL);
-	/* 16-bit words; MCK_SEL keeps the external clock usable. */
-	v |= FIELD_PREP(ST_DATA_WORD_SIZE, 1) | ST_MCK_SEL;
-	writel(v, p->stereo + ST_CONFIG);
+	pcm_stereo_slave(p->rx.stereo);
+	if (tx)
+		pcm_stereo_slave(p->tx.stereo);
 
 	reg_rmw(p->adss + GLB_TDM_CTRL,
 		TDM_RX_SYNC_NUM | TDM_TX_SYNC_NUM | TDM_RX_DELAY | TDM_TX_DELAY,
@@ -346,16 +396,18 @@ static int pcm_step_tdm(struct dect_pcm *p)
 		(p->cfg.tx_delay ? TDM_TX_DELAY : 0));
 	local_irq_restore(flags);
 
-	for (i = 0; i < b->n_pins; i++) {
-		void __iomem *ctl = pcm_pin_ctl(p, b->pins[i].gpio);
-
-		p->pin_saved[i] = readl(ctl);
-		reg_rmw(ctl, TLMM_MUX, FIELD_PREP(TLMM_MUX, b->pins[i].func));
-	}
+	pcm_pins_set(p, b->pins, b->n_pins, p->pin_saved);
+	if (tx)
+		pcm_pins_set(p, b->tx_pins, b->n_tx_pins, p->tx_pin_saved);
+	p->tx_configured = tx;
+	usleep_range(1000, 2000);
 
 	pr_info("pcm 4: TDM_CTRL %08x AUDIO_MODE %08x CLK_I2S_CTRL %08x ST_CONFIG %08x\n",
 		readl(p->adss + GLB_TDM_CTRL), readl(p->adss + GLB_AUDIO_MODE),
-		readl(p->adss + GLB_CLK_I2S_CTRL), readl(p->stereo + ST_CONFIG));
+		readl(p->adss + GLB_CLK_I2S_CTRL), readl(p->rx.stereo + ST_CONFIG));
+	pr_info("pcm 4: RXB_CBCR %08x TXB_CBCR %08x%s\n",
+		readl(p->adss + ADCC_RXB_CBCR), readl(p->adss + ADCC_TXB_CBCR),
+		tx ? ", transmit configured" : "");
 	return 0;
 }
 
@@ -363,35 +415,55 @@ static int pcm_step_tdm(struct dect_pcm *p)
 static void pcm_undo_tdm(struct dect_pcm *p)
 {
 	const struct dect_pcm_board *b = p->board;
-	unsigned int i;
 
-	reg_rmw(p->stereo + ST_CONFIG, ST_ENABLE | ST_MASTER, 0);
+	reg_rmw(p->rx.stereo + ST_CONFIG, ST_ENABLE | ST_MASTER, 0);
+	if (p->tx_configured)
+		reg_rmw(p->tx.stereo + ST_CONFIG, ST_ENABLE | ST_MASTER, 0);
 	reg_rmw(p->adss + GLB_TDM_CTRL, TDM_TX_CHAN_NUM | TDM_RX_CHAN_NUM, 0);
 	reg_rmw(p->adss + GLB_CLK_I2S_CTRL, GLB_CLK_OE_ALL, 0);
 	/* Port enables (doc §8); TDM mode bits too, as OpenWrt booted. */
 	reg_rmw(p->adss + GLB_AUDIO_MODE,
 		MODE_PORT_EN_ALL | MODE_XMIT_TDM | MODE_RECV_TDM, 0);
 
-	for (i = 0; i < b->n_pins; i++)
-		reg_rmw(pcm_pin_ctl(p, b->pins[i].gpio), TLMM_MUX,
-			p->pin_saved[i] & TLMM_MUX);
+	if (p->tx_configured)
+		pcm_pins_restore(p, b->tx_pins, b->n_tx_pins, p->tx_pin_saved);
+	pcm_pins_restore(p, b->pins, b->n_pins, p->pin_saved);
+	p->tx_configured = false;
 }
 
 /* Step 5 (doc §11): receiver on without DMA; the sample counter runs. */
 static int pcm_step_stereo(struct dect_pcm *p)
 {
-	reg_rmw(p->stereo + ST_CONFIG, 0, ST_ENABLE);
+	reg_rmw(p->rx.stereo + ST_CONFIG, 0, ST_ENABLE);
 	return 0;
 }
 
 static void pcm_undo_stereo(struct dect_pcm *p)
 {
-	reg_rmw(p->stereo + ST_CONFIG, ST_ENABLE, 0);
+	reg_rmw(p->rx.stereo + ST_CONFIG, ST_ENABLE, 0);
 }
 
-static struct dect_mbox_desc *pcm_desc(struct dect_pcm *p, unsigned int i)
+/* Fill a transmit buffer with copies of the frame template. */
+static void pcm_tx_fill(struct dect_pcm *p, u8 *buf)
 {
-	return p->dma_cpu + i * p->desc_stride;
+	unsigned int frame = p->cfg.slots * 2, off;
+	unsigned long flags;
+
+	spin_lock_irqsave(&p->ring_lock, flags);
+	for (off = 0; off + frame <= p->block_bytes; off += frame)
+		memcpy(buf + off, p->tx_frame, frame);
+	spin_unlock_irqrestore(&p->ring_lock, flags);
+}
+
+static struct dect_mbox_desc *pcm_desc(struct dect_pcm_chan *ch,
+					unsigned int i)
+{
+	return ch->dma_cpu + i * ch->p->desc_stride;
+}
+
+static void *pcm_buf(struct dect_pcm_chan *ch, unsigned int i)
+{
+	return ch->dma_cpu + ch->p->buf_offset + i * ch->p->buf_stride;
 }
 
 static void pcm_deliver(struct dect_pcm *p, unsigned int idx, u32 ctrl,
@@ -420,34 +492,43 @@ static void pcm_deliver(struct dect_pcm *p, unsigned int idx, u32 ctrl,
 	hdr->ts_ns = ts;
 	hdr->desc = idx;
 	hdr->desc_ctrl = ctrl;
-	memcpy(slot + sizeof(*hdr),
-	       p->dma_cpu + p->buf_offset + idx * p->buf_stride,
-	       p->block_bytes);
+	memcpy(slot + sizeof(*hdr), pcm_buf(&p->rx, idx), p->block_bytes);
 	p->drop_pending = false;
 	p->head = next;
 	spin_unlock(&p->ring_lock);
 }
 
+/* Interrupt-complete bit of a direction (doc §9 naming trap). */
+static u32 pcm_chan_int(struct dect_pcm_chan *ch)
+{
+	return ch->tx ? INT_RX_DMA_COMPLETE : INT_TX_DMA_COMPLETE;
+}
+
 /* doc §9 "Interrupt": acknowledge, then hand back every completed block. */
 static irqreturn_t pcm_irq(int irq, void *data)
 {
-	struct dect_pcm *p = data;
+	struct dect_pcm_chan *ch = data;
+	struct dect_pcm *p = ch->p;
 	u32 status, ctrl, rearm;
 	unsigned int n;
 	u64 ts;
 
-	status = readl(p->mbox + MBOX_INT_STATUS);
+	status = readl(ch->mbox + MBOX_INT_STATUS);
 	if (!(status & INT_KNOWN))
 		return IRQ_NONE;
 	ts = ktime_get_ns();
 	/* Inverted acknowledge: bits written as 0 are cleared. */
-	writel(status & ~INT_KNOWN, p->mbox + MBOX_INT_STATUS);
+	writel(status & ~INT_KNOWN, ch->mbox + MBOX_INT_STATUS);
 
 	spin_lock(&p->ring_lock);
-	p->st.irqs++;
-	if (status & INT_ERRORS) {
-		p->st.errors++;
-		p->st.last_error_status = status;
+	if (ch->tx) {
+		p->st.tx_irqs++;
+	} else {
+		p->st.irqs++;
+		if (status & INT_ERRORS) {
+			p->st.errors++;
+			p->st.last_error_status = status;
+		}
 	}
 	spin_unlock(&p->ring_lock);
 
@@ -457,36 +538,43 @@ static irqreturn_t pcm_irq(int irq, void *data)
 	rearm = DESC_OWN | DESC_EI | FIELD_PREP(DESC_SIZE, p->block_bytes) |
 		FIELD_PREP(DESC_LEN, p->block_bytes);
 	for (n = 0; n < p->cfg.n_desc; n++) {
-		struct dect_mbox_desc *d = pcm_desc(p, p->next_desc);
+		struct dect_mbox_desc *d = pcm_desc(ch, ch->next_desc);
 
 		ctrl = le32_to_cpu(READ_ONCE(d->ctrl));
 		if (ctrl & DESC_OWN)
 			break;
 		dma_rmb();
-		pcm_deliver(p, p->next_desc, ctrl, ts);
+		if (ch->tx)
+			pcm_tx_fill(p, pcm_buf(ch, ch->next_desc));
+		else
+			pcm_deliver(p, ch->next_desc, ctrl, ts);
+		wmb();	/* buffer contents before handing it back */
 		WRITE_ONCE(d->ctrl, cpu_to_le32(rearm));
-		p->next_desc = (p->next_desc + 1) % p->cfg.n_desc;
+		ch->next_desc = (ch->next_desc + 1) % p->cfg.n_desc;
 	}
 	wmb();	/* descriptors back to the hardware */
 
 	spin_lock(&p->ring_lock);
-	if (!n)
+	if (ch->tx) {
+		p->st.tx_blocks += n;
+	} else if (!n) {
 		p->st.empty++;
-	else if (n > 1)
+	} else if (n > 1) {
 		p->st.multi++;
+	}
 	spin_unlock(&p->ring_lock);
 
-	if (n)
+	if (n && !ch->tx)
 		wake_up_interruptible(&p->wq);
 	return IRQ_HANDLED;
 }
 
-static int pcm_map_irq(struct dect_pcm *p)
+static int pcm_map_irq(struct dect_pcm *p, u32 spi)
 {
 	const struct dect_pcm_board *b = p->board;
 	struct of_phandle_args args = {
 		.args_count = 3,
-		.args = { 0 /* SPI */, b->irq_spi, b->irq_type },
+		.args = { 0 /* SPI */, spi, b->irq_type },
 	};
 	unsigned int irq;
 
@@ -498,9 +586,10 @@ static int pcm_map_irq(struct dect_pcm *p)
 	return irq ? irq : -EINVAL;
 }
 
-/* Allocate the ring: n descriptors, each with its own buffer. */
-static int pcm_dma_alloc(struct dect_pcm *p)
+/* Allocate a ring: n descriptors, each with its own buffer. */
+static int pcm_dma_alloc(struct dect_pcm_chan *ch)
 {
+	struct dect_pcm *p = ch->p;
 	struct device *dev = &p->dma_pdev->dev;
 	unsigned int i, n = p->cfg.n_desc;
 	dma_addr_t end;
@@ -508,30 +597,32 @@ static int pcm_dma_alloc(struct dect_pcm *p)
 	p->desc_stride = ALIGN(sizeof(struct dect_mbox_desc), L1_CACHE_BYTES);
 	p->buf_stride = ALIGN(p->block_bytes, L1_CACHE_BYTES);
 	p->buf_offset = n * p->desc_stride;
-	p->dma_size = p->buf_offset + n * p->buf_stride;
-	p->dma_cpu = dma_alloc_coherent(dev, p->dma_size, &p->dma_addr,
-					GFP_KERNEL);
-	if (!p->dma_cpu)
+	ch->dma_size = p->buf_offset + n * p->buf_stride;
+	ch->dma_cpu = dma_alloc_coherent(dev, ch->dma_size, &ch->dma_addr,
+					 GFP_KERNEL);
+	if (!ch->dma_cpu)
 		return -ENOMEM;
 
 	/* The MBOX takes 28-bit addresses; the top nibble goes to SRAM_AC. */
-	end = p->dma_addr + p->dma_size - 1;
-	if ((p->dma_addr >> 28) != (end >> 28) || (u64)end > U32_MAX) {
+	end = ch->dma_addr + ch->dma_size - 1;
+	if ((ch->dma_addr >> 28) != (end >> 28) || (u64)end > U32_MAX) {
 		pr_err("DMA memory %pad+%zx crosses a 256 MiB window\n",
-		       &p->dma_addr, p->dma_size);
-		dma_free_coherent(dev, p->dma_size, p->dma_cpu, p->dma_addr);
-		p->dma_cpu = NULL;
+		       &ch->dma_addr, ch->dma_size);
+		dma_free_coherent(dev, ch->dma_size, ch->dma_cpu, ch->dma_addr);
+		ch->dma_cpu = NULL;
 		return -ENOMEM;
 	}
 
-	memset(p->dma_cpu, 0, p->dma_size);
+	memset(ch->dma_cpu, 0, ch->dma_size);
 	for (i = 0; i < n; i++) {
-		struct dect_mbox_desc *d = pcm_desc(p, i);
-		dma_addr_t buf = p->dma_addr + p->buf_offset + i * p->buf_stride;
-		dma_addr_t next = p->dma_addr + ((i + 1) % n) * p->desc_stride;
+		struct dect_mbox_desc *d = pcm_desc(ch, i);
+		dma_addr_t buf = ch->dma_addr + p->buf_offset + i * p->buf_stride;
+		dma_addr_t next = ch->dma_addr + ((i + 1) % n) * p->desc_stride;
 
-		memset(p->dma_cpu + p->buf_offset + i * p->buf_stride, 0xee,
-		       p->buf_stride);
+		if (ch->tx)
+			pcm_tx_fill(p, pcm_buf(ch, i));
+		else
+			memset(pcm_buf(ch, i), 0xee, p->buf_stride);
 		d->buf = cpu_to_le32((u32)buf & DMA_ADDR_MASK);
 		d->next = cpu_to_le32((u32)next & DMA_ADDR_MASK);
 		d->ctrl = cpu_to_le32(DESC_OWN | DESC_EI |
@@ -539,15 +630,17 @@ static int pcm_dma_alloc(struct dect_pcm *p)
 				      FIELD_PREP(DESC_LEN, p->block_bytes));
 	}
 	wmb();	/* ring complete before the hardware sees its address */
-	p->next_desc = 0;
+	ch->next_desc = 0;
 	return 0;
 }
 
-static void pcm_dma_free(struct dect_pcm *p)
+static void pcm_dma_free(struct dect_pcm_chan *ch)
 {
-	dma_free_coherent(&p->dma_pdev->dev, p->dma_size, p->dma_cpu,
-			  p->dma_addr);
-	p->dma_cpu = NULL;
+	if (!ch->dma_cpu)
+		return;
+	dma_free_coherent(&ch->p->dma_pdev->dev, ch->dma_size, ch->dma_cpu,
+			  ch->dma_addr);
+	ch->dma_cpu = NULL;
 }
 
 static void pcm_ring_free(struct dect_pcm *p)
@@ -563,34 +656,132 @@ static void pcm_ring_free(struct dect_pcm *p)
 	vfree(ring);
 }
 
-/* doc §9 "Prepare" */
-static void pcm_dma_prepare(struct dect_pcm *p)
+/* doc §9 "Prepare"; transmit differs in two registers (doc §14) */
+static void pcm_dma_prepare(struct dect_pcm_chan *ch)
 {
 	unsigned int off;
 
-	reg_rmw(p->mbox + MBOX_DMA_POLICY, 0, POL_SW_RESET);
+	reg_rmw(ch->mbox + MBOX_DMA_POLICY, 0, POL_SW_RESET);
 	usleep_range(4000, 5000);
-	reg_rmw(p->mbox + MBOX_DMA_POLICY, POL_SW_RESET, 0);
+	reg_rmw(ch->mbox + MBOX_DMA_POLICY, POL_SW_RESET, 0);
 
-	reg_rmw(p->stereo + ST_CONFIG, ST_ENABLE, 0);
+	reg_rmw(ch->stereo + ST_CONFIG, ST_ENABLE, 0);
 	for (off = ST_TX_SAMPLES_LSB; off <= ST_RX_COMPLETE; off += 4)
-		writel(0, p->stereo + off);
-	reg_rmw(p->stereo + ST_CONFIG, 0, ST_RESET | ST_MIC_RESET);
+		writel(0, ch->stereo + off);
+	reg_rmw(ch->stereo + ST_CONFIG, 0, ST_RESET | ST_MIC_RESET);
 	usleep_range(5000, 6000);
-	writel(FIFO_RESET_ALL, p->mbox + MBOX_FIFO_RESET);
-	reg_rmw(p->stereo + ST_CONFIG, ST_RESET | ST_MIC_RESET, 0);
+	writel(FIFO_RESET_ALL, ch->mbox + MBOX_FIFO_RESET);
+	reg_rmw(ch->stereo + ST_CONFIG, ST_RESET | ST_MIC_RESET, 0);
 
-	reg_rmw(p->mbox + MBOX_DMA_POLICY, POL_SRAM_AC | POL_TX_FIFO_THRESH,
-		POL_TX_INT_TYPE |
-		FIELD_PREP(POL_SRAM_AC, (u32)(p->dma_addr >> 28)) |
+	reg_rmw(ch->mbox + MBOX_DMA_POLICY, POL_SRAM_AC | POL_TX_FIFO_THRESH,
+		(ch->tx ? POL_RX_INT_TYPE : POL_TX_INT_TYPE) |
+		FIELD_PREP(POL_SRAM_AC, (u32)(ch->dma_addr >> 28)) |
 		FIELD_PREP(POL_TX_FIFO_THRESH, 8));
-	writel((u32)p->dma_addr & DMA_ADDR_MASK, p->mbox + MBOX_TX_DESC_BASE);
+	writel((u32)ch->dma_addr & DMA_ADDR_MASK,
+	       ch->mbox + (ch->tx ? MBOX_RX_DESC_BASE : MBOX_TX_DESC_BASE));
+}
+
+static void pcm_chan_release(struct dect_pcm_chan *ch)
+{
+	if (ch->irq > 0) {
+		free_irq(ch->irq, ch);
+		irq_dispose_mapping(ch->irq);
+	}
+	ch->irq = 0;
+	pcm_dma_free(ch);
+}
+
+/* Ring, interrupt and prepare for one direction; not started yet. */
+static int pcm_chan_setup(struct dect_pcm_chan *ch)
+{
+	int irq, ret;
+
+	ret = pcm_dma_alloc(ch);
+	if (ret)
+		return ret;
+	irq = pcm_map_irq(ch->p, ch->irq_spi);
+	if (irq < 0) {
+		pcm_dma_free(ch);
+		return irq;
+	}
+
+	/* Quiet MBOX before the handler can run. */
+	reg_rmw(ch->mbox + MBOX_INT_ENABLE, pcm_chan_int(ch), 0);
+	pcm_dma_prepare(ch);
+
+	ret = request_irq(irq, pcm_irq, 0,
+			  ch->tx ? "opendectcell-pcm-tx" : "opendectcell-pcm-rx", ch);
+	if (ret) {
+		irq_dispose_mapping(irq);
+		pcm_dma_free(ch);
+		return ret;
+	}
+	ch->irq = irq;
+	return 0;
+}
+
+/* doc §9 "Start" */
+static void pcm_chan_start(struct dect_pcm_chan *ch)
+{
+	reg_rmw(ch->mbox + MBOX_INT_ENABLE, 0, pcm_chan_int(ch));
+	writel(CTRL_START, ch->mbox + (ch->tx ? MBOX_RX_CONTROL :
+						MBOX_TX_CONTROL));
+	reg_rmw(ch->stereo + ST_CONFIG, 0, ST_ENABLE);
+}
+
+/* doc §9 "Stop", then free the interrupt and the memory */
+static void pcm_chan_stop(struct dect_pcm_chan *ch)
+{
+	if (!ch->dma_cpu)
+		return;
+	reg_rmw(ch->mbox + MBOX_INT_ENABLE, pcm_chan_int(ch), 0);
+	writel(CTRL_STOP, ch->mbox + (ch->tx ? MBOX_RX_CONTROL :
+					       MBOX_TX_CONTROL));
+	usleep_range(10000, 12000);
+	reg_rmw(ch->stereo + ST_CONFIG, ST_ENABLE, 0);
+	pcm_chan_release(ch);
+}
+
+/*
+ * doc §14 start order: transmit first, wait for its first completion,
+ * 125 us, then receive, all with local interrupts off. AVM's wait has no
+ * timeout; ours gives up after 20 ms (the first completion is due after
+ * about 3.2 ms).
+ */
+static int pcm_start_both(struct dect_pcm *p)
+{
+	unsigned long flags;
+	unsigned int us;
+	u32 status = 0;
+
+	local_irq_save(flags);
+	pcm_chan_start(&p->tx);
+	for (us = 0; us < 20000; us++) {
+		status = readl(p->tx.mbox + MBOX_INT_STATUS);
+		if (status & INT_RX_DMA_COMPLETE)
+			break;
+		udelay(1);
+	}
+	if (!(status & INT_RX_DMA_COMPLETE)) {
+		local_irq_restore(flags);
+		pr_err("pcm 6: no transmit completion (INT_STATUS %08x)\n",
+		       status);
+		return -ETIMEDOUT;
+	}
+	/* Inverted acknowledge of everything read. */
+	writel(status & ~status, p->tx.mbox + MBOX_INT_STATUS);
+	udelay(125);
+	pcm_chan_start(&p->rx);
+	local_irq_restore(flags);
+	pr_info("pcm 6: first transmit completion after about %u us\n", us);
+	return 0;
 }
 
 /* Step 6 (doc §9 "Prepare" and "Start"). */
 static int pcm_step_dma(struct dect_pcm *p)
 {
-	int irq, ret;
+	bool tx = p->cfg.flags & DECT_PCM_CF_TX;
+	int ret;
 
 	p->slot_bytes = ALIGN(sizeof(struct dect_pcm_block) + p->block_bytes,
 			      8);
@@ -604,56 +795,42 @@ static int pcm_step_dma(struct dect_pcm *p)
 	p->drop_pending = false;
 	memset(&p->st, 0, sizeof(p->st));
 
-	ret = pcm_dma_alloc(p);
-	if (ret)
-		goto err_ring;
-
-	irq = pcm_map_irq(p);
-	if (irq < 0) {
-		ret = irq;
-		goto err_dma;
+	if (tx) {
+		ret = pcm_chan_setup(&p->tx);
+		if (ret)
+			goto err_ring;
 	}
-	p->irq = irq;
-
-	/* Quiet MBOX before the handler can run. */
-	reg_rmw(p->mbox + MBOX_INT_ENABLE, INT_TX_DMA_COMPLETE, 0);
-	pcm_dma_prepare(p);
-
-	ret = request_irq(p->irq, pcm_irq, 0, "opendectcell-pcm", p);
+	ret = pcm_chan_setup(&p->rx);
 	if (ret)
-		goto err_irq;
+		goto err_tx;
 
-	reg_rmw(p->mbox + MBOX_INT_ENABLE, 0, INT_TX_DMA_COMPLETE);
-	writel(CTRL_START, p->mbox + MBOX_TX_CONTROL);
-	reg_rmw(p->stereo + ST_CONFIG, 0, ST_ENABLE);
+	if (tx) {
+		ret = pcm_start_both(p);
+		if (ret)
+			goto err_rx;
+	} else {
+		pcm_chan_start(&p->rx);
+	}
 
-	pr_info("pcm 6: DMA at %pad, %u x %u bytes, irq %d, POLICY %08x\n",
-		&p->dma_addr, p->cfg.n_desc, p->block_bytes, p->irq,
-		readl(p->mbox + MBOX_DMA_POLICY));
+	pr_info("pcm 6: DMA rx at %pad, %u x %u bytes, irq %d, POLICY %08x%s\n",
+		&p->rx.dma_addr, p->cfg.n_desc, p->block_bytes, p->rx.irq,
+		readl(p->rx.mbox + MBOX_DMA_POLICY), tx ? ", tx on" : "");
 	return 0;
 
-err_irq:
-	irq_dispose_mapping(p->irq);
-	p->irq = 0;
-err_dma:
-	pcm_dma_free(p);
+err_rx:
+	pcm_chan_release(&p->rx);
+err_tx:
+	pcm_chan_stop(&p->tx);
 err_ring:
 	pcm_ring_free(p);
 	return ret;
 }
 
-/* doc §9 "Stop" */
 static void pcm_undo_dma(struct dect_pcm *p)
 {
-	reg_rmw(p->mbox + MBOX_INT_ENABLE, INT_TX_DMA_COMPLETE, 0);
-	writel(CTRL_STOP, p->mbox + MBOX_TX_CONTROL);
-	usleep_range(10000, 12000);
-	reg_rmw(p->stereo + ST_CONFIG, ST_ENABLE, 0);
-
-	free_irq(p->irq, p);
-	irq_dispose_mapping(p->irq);
-	p->irq = 0;
-	pcm_dma_free(p);
+	/* Transmit first (doc §14). */
+	pcm_chan_stop(&p->tx);
+	pcm_chan_stop(&p->rx);
 	pcm_ring_free(p);
 }
 
@@ -710,7 +887,7 @@ static int pcm_step(struct dect_pcm *p, u32 target)
 static int pcm_config(struct dect_pcm *p, struct dect_pcm_config *c)
 {
 	u32 flags = c->flags & (DECT_PCM_CF_RX_DELAY_SET |
-				DECT_PCM_CF_TX_DELAY_SET);
+				DECT_PCM_CF_TX_DELAY_SET | DECT_PCM_CF_TX);
 	unsigned int i;
 
 	if (p->step != DECT_PCM_STEP_OFF)
@@ -742,6 +919,16 @@ static int pcm_config(struct dect_pcm *p, struct dect_pcm_config *c)
 	return 0;
 }
 
+static int pcm_set_tx_frame(struct dect_pcm *p, struct dect_pcm_tx_frame *f)
+{
+	if (f->len != p->cfg.slots * 2 || f->reserved)
+		return -EINVAL;
+	spin_lock_irq(&p->ring_lock);
+	memcpy(p->tx_frame, f->frame, f->len);
+	spin_unlock_irq(&p->ring_lock);
+	return 0;
+}
+
 static void pcm_regs(struct dect_pcm *p, struct dect_pcm_regs *r)
 {
 	static const unsigned int glb[5] = {
@@ -770,12 +957,12 @@ static void pcm_regs(struct dect_pcm *p, struct dect_pcm_regs *r)
 	if (cbcr_running(readl(p->adss + ADCC_AHB_I2S3_CBCR))) {
 		r->valid |= DECT_PCM_REGS_STEREO;
 		for (i = 0; i < ARRAY_SIZE(r->stereo); i++)
-			r->stereo[i] = readl(p->stereo + 4 * i);
+			r->stereo[i] = readl(p->rx.stereo + 4 * i);
 	}
 	if (cbcr_running(readl(p->adss + ADCC_AHB_MBOX3_CBCR))) {
 		r->valid |= DECT_PCM_REGS_MBOX;
 		for (i = 0; i < ARRAY_SIZE(mbox_dump); i++)
-			r->mbox[i] = readl(p->mbox + mbox_dump[i]);
+			r->mbox[i] = readl(p->rx.mbox + mbox_dump[i]);
 	}
 }
 
@@ -788,12 +975,12 @@ static void pcm_stats(struct dect_pcm *p, struct dect_pcm_stats *s)
 	s->step = p->step;
 	s->block_bytes = p->block_bytes;
 	if (p->step >= DECT_PCM_STEP_TDM) {
-		s->rx_samples_lsb = readl(p->stereo + ST_RX_SAMPLES_LSB);
-		s->rx_samples_msb = readl(p->stereo + ST_RX_SAMPLES_MSB);
-		s->overruns = readl(p->stereo + ST_OVERRUN);
+		s->rx_samples_lsb = readl(p->rx.stereo + ST_RX_SAMPLES_LSB);
+		s->rx_samples_msb = readl(p->rx.stereo + ST_RX_SAMPLES_MSB);
+		s->overruns = readl(p->rx.stereo + ST_OVERRUN);
 	}
 	if (p->step >= DECT_PCM_STEP_DMA)
-		s->int_status = readl(p->mbox + MBOX_INT_STATUS);
+		s->int_status = readl(p->rx.mbox + MBOX_INT_STATUS);
 }
 
 long dect_pcm_ioctl(struct dect_pcm *p, unsigned int cmd, void __user *argp)
@@ -802,6 +989,7 @@ long dect_pcm_ioctl(struct dect_pcm *p, unsigned int cmd, void __user *argp)
 		struct dect_pcm_config cfg;
 		struct dect_pcm_regs regs;
 		struct dect_pcm_stats stats;
+		struct dect_pcm_tx_frame txf;
 	} u;
 	u32 step;
 	long ret;
@@ -827,6 +1015,10 @@ long dect_pcm_ioctl(struct dect_pcm *p, unsigned int cmd, void __user *argp)
 		pcm_stats(p, &u.stats);
 		return copy_to_user(argp, &u.stats, sizeof(u.stats)) ?
 			-EFAULT : 0;
+	case DECT_IOC_PCM_TX_FRAME:
+		if (copy_from_user(&u.txf, argp, sizeof(u.txf)))
+			return -EFAULT;
+		return pcm_set_tx_frame(p, &u.txf);
 	}
 	return -ENOTTY;
 }
@@ -911,11 +1103,16 @@ int dect_pcm_init(struct dect_pcm *p, const struct dect_pcm_board *board,
 	unsigned int i;
 	int ret;
 
-	if (board->n_pins > ARRAY_SIZE(p->pin_saved))
+	if (board->n_pins > ARRAY_SIZE(p->pin_saved) ||
+	    board->n_tx_pins > ARRAY_SIZE(p->tx_pin_saved))
 		return -EINVAL;
 	for (i = 0; i < board->n_pins; i++)
 		if (board->pins[i].gpio < tlmm_first ||
 		    board->pins[i].gpio >= tlmm_first + 8)
+			return -EINVAL;
+	for (i = 0; i < board->n_tx_pins; i++)
+		if (board->tx_pins[i].gpio < tlmm_first ||
+		    board->tx_pins[i].gpio >= tlmm_first + 8)
 			return -EINVAL;
 
 	p->board = board;
@@ -929,10 +1126,19 @@ int dect_pcm_init(struct dect_pcm *p, const struct dect_pcm_board *board,
 	ret = -ENOMEM;
 	p->gcc_ahb_cbcr = ioremap(board->gcc_ahb_cbcr, sizeof(u32));
 	p->adss = ioremap(board->adss_base, board->adss_size);
-	p->mbox = ioremap(board->mbox_base, SZ_4K);
-	p->stereo = ioremap(board->stereo_base, SZ_4K);
-	if (!p->gcc_ahb_cbcr || !p->adss || !p->mbox || !p->stereo)
+	p->rx.mbox = ioremap(board->rx.mbox_base, SZ_4K);
+	p->rx.stereo = ioremap(board->rx.stereo_base, SZ_4K);
+	p->tx.mbox = ioremap(board->tx.mbox_base, SZ_4K);
+	p->tx.stereo = ioremap(board->tx.stereo_base, SZ_4K);
+	if (!p->gcc_ahb_cbcr || !p->adss || !p->rx.mbox || !p->rx.stereo ||
+	    !p->tx.mbox || !p->tx.stereo)
 		goto err;
+	p->rx.p = p;
+	p->rx.irq_spi = board->rx.irq_spi;
+	p->tx.p = p;
+	p->tx.tx = true;
+	p->tx.irq_spi = board->tx.irq_spi;
+	memset(p->tx_frame, 0xff, sizeof(p->tx_frame));
 
 	p->dma_pdev = platform_device_register_full(&pdi);
 	if (IS_ERR(p->dma_pdev)) {
@@ -949,10 +1155,14 @@ int dect_pcm_init(struct dect_pcm *p, const struct dect_pcm_board *board,
 err_pdev:
 	platform_device_unregister(p->dma_pdev);
 err:
-	if (p->stereo)
-		iounmap(p->stereo);
-	if (p->mbox)
-		iounmap(p->mbox);
+	if (p->tx.stereo)
+		iounmap(p->tx.stereo);
+	if (p->tx.mbox)
+		iounmap(p->tx.mbox);
+	if (p->rx.stereo)
+		iounmap(p->rx.stereo);
+	if (p->rx.mbox)
+		iounmap(p->rx.mbox);
 	if (p->adss)
 		iounmap(p->adss);
 	if (p->gcc_ahb_cbcr)
@@ -964,8 +1174,10 @@ err:
 void dect_pcm_exit(struct dect_pcm *p)
 {
 	platform_device_unregister(p->dma_pdev);
-	iounmap(p->stereo);
-	iounmap(p->mbox);
+	iounmap(p->tx.stereo);
+	iounmap(p->tx.mbox);
+	iounmap(p->rx.stereo);
+	iounmap(p->rx.mbox);
 	iounmap(p->adss);
 	iounmap(p->gcc_ahb_cbcr);
 }
