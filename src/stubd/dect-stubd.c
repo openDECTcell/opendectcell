@@ -64,16 +64,26 @@ struct stubd {
 	int rx_slot;		/* -1 = unknown */
 	uint16_t tx_seq;
 	int verbose;
+	int show_params;	/* log parameter bytes (may hold identity data) */
 	struct dect_rx rx;
 	struct dect_session sess;
 };
 
-static void log_mail(const struct dect_mail *m, const char *dir)
+/*
+ * Log a mail. Parameter bytes are hidden by default: the 0xF601/0xF602
+ * answers carry box identity (RFPI-like) data that must not leak into
+ * shared logs or issues. Pass -p to show them for local debugging only.
+ */
+static void log_mail(const struct dect_mail *m, const char *dir, int show_params)
 {
 	unsigned int i;
 
 	printf("%s src %02x dst %02x prim %04x len %u", dir, m->src, m->dst,
 	       m->prim, m->param_len);
+	if (!show_params) {
+		printf("%s\n", m->param_len ? " [params hidden]" : "");
+		return;
+	}
 	for (i = 0; i < m->param_len && i < 24u; i++)
 		printf(" %02x", m->param[i]);
 	if (m->param_len > 24u)
@@ -307,7 +317,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				now = mono_ms();
 				while (dect_rx_pull(&s->rx, &m)) {
 					if (s->verbose)
-						log_mail(&m, "rx  ");
+						log_mail(&m, "rx  ", s->show_params);
 					dect_session_rx(&s->sess, &m, now);
 				}
 			}
@@ -321,7 +331,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			if (send_mail(s, (unsigned int)s->tx_slot, &cm))
 				fprintf(stderr, "contact send failed\n");
 			else if (s->verbose)
-				log_mail(&cm, "tx  ");
+				log_mail(&cm, "tx  ", s->show_params);
 		}
 		if (run_seconds && now - start >= (uint64_t)run_seconds * 1000u)
 			break;
@@ -345,7 +355,9 @@ static void usage(void)
 		"  -T SLOT  transmit control slot (skip probing)\n"
 		"  -R SLOT  receive control slot (skip probing)\n"
 		"  -t SECS  run for SECS seconds then exit (default: until signal)\n"
-		"  -v       log every mail\n");
+		"  -v       log every mail (prim and length; parameters hidden)\n"
+		"  -p       also log parameter bytes (may hold identity data; do\n"
+		"           not share such logs) -- implies -v\n");
 }
 
 int main(int argc, char **argv)
@@ -363,7 +375,7 @@ int main(int argc, char **argv)
 	memset(&s, 0, sizeof(s));
 	s.tx_slot = s.rx_slot = -1;
 	memset(&cfg, 0, sizeof(cfg));
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vh")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vph")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -371,6 +383,7 @@ int main(int argc, char **argv)
 		case 'R': s.rx_slot = (int)strtol(optarg, NULL, 0); break;
 		case 't': run_seconds = (unsigned int)strtoul(optarg, NULL, 0); break;
 		case 'v': s.verbose = 1; break;
+		case 'p': s.verbose = 1; s.show_params = 1; break;
 		default: usage(); return 2;
 		}
 	}
