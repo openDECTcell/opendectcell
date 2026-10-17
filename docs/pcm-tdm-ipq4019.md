@@ -232,5 +232,31 @@ Source: *observed on hardware*, spare 7520, OpenWrt 25.12.5, `kernel/opendectcel
 | RX sample counter | two identical 16-bit halves per register; about 32,000 per second = **4 per frame**, i.e. it counts 32-bit words. Overrun counter 0 while DMA runs |
 | STUB upload during capture | the receiver keeps running while the chip is in reset (no clocks, no interrupts) and resumes when the chip restarts; first about 16 ms all 0xFF, then the STUB's pattern |
 | Teardown | clean: pins, CBCRs, AUDIO_MODE and CHIP_CTRL back to the boot values, no warnings |
+| Sustained | **10 minutes, 150,000 blocks**: no sequence gap, no DMA error, overrun counter 0 |
 
 **Frame content** (16 bytes per frame in DMA-buffer order; each 16-bit slot is stored as a little-endian word, so the second byte of a slot is probably the first on the wire): bytes 0-1 `FE FE`, 2-3 `FF FF`, 4-7 `FE`, 8 `08` (briefly `00` after boot), 9 `40`, **10 A-law audio** (0x55/0xD5 at rest, a decaying waveform right after boot), 11 `00`, 12-15 `FF`. Everything except byte 10 is constant. **No 0xAA-framed mail** was found in any slot, byte order, bit order or bit shift, neither from an idle STUB nor across a fresh upload. Working assumption: the control channel is one of the idle 0xFF positions and the STUB only talks after the host has sent a mail (Q-0001).
+
+## 14. Transmit side (MBOX0 / STEREO0) [CR A-0002]
+
+*Derived statically* by the the hardware-analysis step from AVM's GPL source (FRITZ!OS 08.25, 7520: `ipq-adss-avm.c`, `ipq-mbox.h`, `qcom-ipq4019-audio.dtsi`, the HW247 board table, `avm_gpio.c`). Transmit = MBOX0 `0x07708000` (GIC SPI 156) + STEREO0 `0x07709000`.
+
+**Registers.** The naming trap again, the other way round: transmit uses the MBOX **RX** registers.
+
+| Item | Receive (MBOX3) | Transmit (MBOX0) |
+|---|---|---|
+| DMA_POLICY interrupt-type bit | 17 TX_INT_TYPE | **16 RX_INT_TYPE** |
+| DMA_POLICY SRAM_AC, TX_FIFO_THRESHOLD | upper address nibble, 8 | the same (no other threshold field) |
+| Descriptor base | `0x20` | **`0x18`** |
+| Control (bit 1 START, bit 0 STOP) | `0x24` | **`0x1C`** |
+| INT_ENABLE / INT_STATUS complete bit | 6 | **10** |
+| FIFO_RESET | `0x5` | `0x5` |
+
+- **Prepare, start, stop:** the same sequences as section 9, with the table's registers. STEREO0 gets the same slave configuration as STEREO3 (section 7), done in the same call; ENABLE is set at start.
+- **Descriptors:** the same fields. On a completion, the CPU refills the buffer just sent, then sets OWN = 1. AVM fills only the first completed descriptor per interrupt; the others resend their old content ("missed interrupt").
+- **Initial content:** AVM's buffers start zeroed; the idle 0xFF comes from the caller's fill. We fill 0xFF from the start (the transmit idle in `stub-pcm-control-channel.md`).
+- **Global:** in slave mode AVM also sets AUDIO_MODE **bits 6:4** (I2S0_TXD_OE) and **bit 7** (I2S0_FS_OE), together with bits 9 and 8; the clock output enables stay 0; TDM_CTRL TX_CHAN_NUM = slots − 1, TX_SYNC_NUM = 0, TX_DELAY = txdelay. ADCC: TXB/TXM pad clocks as in section 6.
+- **Pins** (HW247 board table): 24, 25, 26 inputs, function 3; **27 output, function 3, TLMM OE bit 9 set**. AVM's helper writes only the function field and bit 9 (no pull, no drive). The control module's strings name the DCL/FSC/DI/DO entries but not the MCL ones, so it probably muxes **25 and 26** but not 24.
+
+**Start order** [CR A-0002] `tdm_if_adss_dma_start`: prepare transmit, prepare receive, local interrupts off, start transmit, **busy-poll MBOX0 INT_STATUS until bit 10 is set** (then acknowledge everything read), wait 125 µs, start receive, interrupts on. The FIFO takes about 800 µs of data at start, so the first transmit completion comes after about 3.2 ms; the 125 µs delay makes both directions complete at nearly the same time. **AVM's poll has no timeout; ours must have one** (it spins with interrupts off). AVM also repeats the whole section 8 configuration right before this start (a workaround); ours does not at first. Stop: **transmit first**, then receive. AVM requests both interrupts (unless `only_rxirq`, value used by the control module unknown).
+
+**Hardware check** (*observed*, section 13): with pins 24-26 left as GPIO, TXB_CBCR reads `0x80000001` (no bit clock), so the transmitter needs at least 25/26 in function 3.
