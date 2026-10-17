@@ -2,15 +2,13 @@
 /*
  * dect-fwload: upload the STUB to the DECT chip over a UART.
  *
- * Bring-up version for gate G1: reset goes through the sysfs GPIO
- * interface and the UART is a plain tty. This deliberately takes the
- * GPIO number on the command line; it is replaced by /dev/dect0 and the
- * board profile (docs/hardware-abstraction.md) once the kernel module
- * exists. The boot-mode strap is not available from userspace, so the
- * "slow" stage-1 attempts run without it.
+ * Chip reset and the boot-mode strap go through /dev/dect0 (the kernel
+ * module, docs/kmod-spec.md); the UART is a plain tty. No GPIO numbers
+ * or pin-controller details are handled here.
  */
 #define _DEFAULT_SOURCE 1
 
+#include "../../kernel/include/uapi/opendectcell.h"
 #include "fwimage.h"
 #include "loader.h"
 
@@ -18,6 +16,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,18 +26,15 @@
 
 struct dev {
 	int uart;
-	int gpio_value;
+	int dect_fd;             /* /dev/dect0 */
 	int verbose;
 	unsigned baud;
 	const char *uart_path;
-	int strap_gpio;          /* sysfs number of the UART RX pin, or -1 */
-	const char *pinctrl_dir; /* debugfs directory of the pin controller */
-	const char *pinmux_uart; /* "group function" that restores the UART */
 };
 
-/* Reset line to release if we are interrupted (a held reset would leave
- * the chip dead until the next run). */
-static int release_fd = -1;
+/* Released if we are interrupted: a held reset would leave the chip dead
+ * until the next run. (The module also releases it when the fd closes.) */
+static int release_dect_fd = -1;
 
 static long now_ms(void)
 {
@@ -51,8 +47,12 @@ static long now_ms(void)
 static void on_signal(int sig)
 {
 	(void)sig;
-	if (release_fd >= 0 && write(release_fd, "1", 1) < 0) {
-		/* nothing more to do */
+	if (release_dect_fd >= 0) {
+		__u32 v = 0;
+
+		if (ioctl(release_dect_fd, DECT_IOC_RESET, &v) < 0) {
+			/* nothing more to do */
+		}
 	}
 	_exit(3);
 }
@@ -80,19 +80,6 @@ static int uart_reopen(struct dev *d)
 		return -errno;
 	fprintf(stderr, "uart: reopened after hangup\n");
 	return dev_set_baud(d, d->baud ? d->baud : 115200);
-}
-
-static int write_file(const char *path, const char *text)
-{
-	int fd = open(path, O_WRONLY);
-	int r = 0;
-
-	if (fd < 0)
-		return -errno;
-	if (write(fd, text, strlen(text)) < 0)
-		r = -errno;
-	close(fd);
-	return r;
 }
 
 static int dev_read_byte(void *ctx, unsigned timeout_ms)
@@ -189,8 +176,9 @@ static int dev_reset(void *ctx, int asserted)
 {
 	struct dev *d = ctx;
 
-	/* asserted = reset line driven low */
-	if (pwrite(d->gpio_value, asserted ? "0" : "1", 1, 0) != 1)
+	__u32 v = asserted ? 1u : 0u;
+
+	if (ioctl(d->dect_fd, DECT_IOC_RESET, &v) < 0)
 		return -errno;
 	if (!asserted)
 		tcflush(d->uart, TCIFLUSH);
@@ -198,29 +186,15 @@ static int dev_reset(void *ctx, int asserted)
 }
 
 /*
- * Boot-mode strap: the chip samples the UART RX pin during reset.
- * Exporting the pin as a GPIO switches it away from the UART; releasing
- * it does not switch it back, so the UART function is restored through
- * the pinctrl debug file "pinmux-select". (Unbinding the serial driver
- * instead crashes the box: this UART is the kernel console.)
+ * Boot-mode strap: the chip samples the UART RX pin during reset. The
+ * module drives it low and, on release, gives the pin back to the UART.
  */
 static int dev_strap(void *ctx, int low)
 {
 	struct dev *d = ctx;
-	char path[160], buf[16];
+	__u32 v = low ? 1u : 0u;
 
-	if (d->strap_gpio < 0)
-		return 0;
-	snprintf(buf, sizeof(buf), "%d", d->strap_gpio);
-	if (low) {
-		write_file("/sys/class/gpio/export", buf);
-		snprintf(path, sizeof(path), "/sys/class/gpio/gpio%d/direction",
-			 d->strap_gpio);
-		return write_file(path, "low");
-	}
-	write_file("/sys/class/gpio/unexport", buf);
-	snprintf(path, sizeof(path), "%s/pinmux-select", d->pinctrl_dir);
-	return write_file(path, d->pinmux_uart);
+	return ioctl(d->dect_fd, DECT_IOC_STRAP, &v) < 0 ? -errno : 0;
 }
 
 static void dev_sleep(void *ctx, unsigned ms)
@@ -254,23 +228,6 @@ static char *slurp(const char *path, size_t *len)
 	fclose(f);
 	*len = (size_t)n;
 	return p;
-}
-
-/* Export a sysfs GPIO as an output, held in "released" (high). */
-static int gpio_open(unsigned num)
-{
-	char path[64], buf[16];
-
-	snprintf(path, sizeof(path), "/sys/class/gpio/gpio%u", num);
-	if (access(path, F_OK)) {
-		snprintf(buf, sizeof(buf), "%u", num);
-		write_file("/sys/class/gpio/export", buf);
-	}
-	snprintf(path, sizeof(path), "/sys/class/gpio/gpio%u/direction", num);
-	if (write_file(path, "high"))
-		return -1;
-	snprintf(path, sizeof(path), "/sys/class/gpio/gpio%u/value", num);
-	return open(path, O_WRONLY);
 }
 
 /* After the upload: show what the STUB prints on the UART. */
@@ -322,15 +279,16 @@ static int read_factory(const char *path, off_t offset, uint8_t *buf, size_t *le
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: dect-fwload --uart DEV --reset-gpio N --first FILE.hex "
-		"--second FILE.hex [--strap-gpio N] [--mode 0x105] [--listen SECONDS] [-v]\n");
+		"usage: dect-fwload --uart DEV --dect-dev /dev/dect0 --first FILE.hex "
+		"--second FILE.hex [--factory-mtd DEV --factory-offset N]\n"
+		"                   [--mode 0x105] [--listen SECONDS] [-v]\n"
+		"       dect-fwload --probe DEV [BAUD]\n");
 }
 
 /* Diagnostic: open the port, set it up and report poll events for a while. */
 static int probe(const char *path, unsigned baud, unsigned seconds)
 {
-	struct dev d = { .uart = -1, .gpio_value = -1, .strap_gpio = -1,
-			 .uart_path = path };
+	struct dev d = { .uart = -1, .dect_fd = -1, .uart_path = path };
 	unsigned bytes = 0;
 
 	d.uart = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK);
@@ -362,23 +320,18 @@ int main(int argc, char **argv)
 		return probe(argv[2], argc > 3 ? (unsigned)strtoul(argv[3], NULL, 0) : 115200, 3);
 
 	const char *uart = NULL, *first_path = NULL, *second_path = NULL;
-	unsigned reset_gpio = 0, mode = 0, listen_s = 5;
-	const char *factory_mtd = NULL;
+	unsigned mode = 0, listen_s = 5;
+	const char *factory_mtd = NULL, *dect_dev = NULL;
 	off_t factory_off = 0;
 	uint8_t factory[FWI_FACTORY_MAX];
 	size_t factory_len = 0;
-	int have_gpio = 0;
-	struct dev d = { .uart = -1, .gpio_value = -1, .strap_gpio = -1,
-			 .pinctrl_dir = "/sys/kernel/debug/pinctrl/1000000.pinctrl",
-			 .pinmux_uart = "gpio16 blsp_uart0" };
+	struct dev d = { .uart = -1, .dect_fd = -1 };
 
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--uart") && i + 1 < argc)
 			uart = argv[++i];
-		else if (!strcmp(argv[i], "--reset-gpio") && i + 1 < argc)
-			reset_gpio = (unsigned)strtoul(argv[++i], NULL, 0), have_gpio = 1;
-		else if (!strcmp(argv[i], "--strap-gpio") && i + 1 < argc)
-			d.strap_gpio = (int)strtol(argv[++i], NULL, 0);
+		else if (!strcmp(argv[i], "--dect-dev") && i + 1 < argc)
+			dect_dev = argv[++i];
 		else if (!strcmp(argv[i], "--first") && i + 1 < argc)
 			first_path = argv[++i];
 		else if (!strcmp(argv[i], "--second") && i + 1 < argc)
@@ -398,7 +351,7 @@ int main(int argc, char **argv)
 			return 2;
 		}
 	}
-	if (!uart || !have_gpio || !first_path || !second_path) {
+	if (!uart || !dect_dev || !first_path || !second_path) {
 		usage();
 		return 2;
 	}
@@ -435,25 +388,28 @@ int main(int argc, char **argv)
 
 	d.uart_path = uart;
 	d.uart = open(uart, O_RDWR | O_NOCTTY | O_NONBLOCK);
-	d.gpio_value = gpio_open(reset_gpio);
-	release_fd = d.gpio_value;
+	if (d.uart < 0) {
+		fprintf(stderr, "cannot open %s: %s\n", uart, strerror(errno));
+		return 1;
+	}
+	d.dect_fd = open(dect_dev, O_RDWR);
+	if (d.dect_fd < 0) {
+		fprintf(stderr, "cannot open %s: %s (is the opendectcell module loaded?)\n",
+			dect_dev, strerror(errno));
+		return 1;
+	}
+	release_dect_fd = d.dect_fd;
 	signal(SIGPIPE, on_signal);
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
-	if (d.uart < 0 || d.gpio_value < 0) {
-		fprintf(stderr, "cannot open uart or reset gpio: %s\n", strerror(errno));
-		return 1;
-	}
 
 	struct fwl_io io = { .ctx = &d, .read_byte = dev_read_byte,
 			     .poll_byte = dev_poll_byte, .write = dev_write,
 			     .set_baud = dev_set_baud, .reset = dev_reset,
 			     .strap = dev_strap, .sleep_ms = dev_sleep,
 			     .log = dev_log };
-	/* With a strap pin the stock order applies (slow first, bit 8 set);
-	 * without one, fast attempts come first. */
-	struct fwl_params p = { .mode_word = (mode & 0xFFu) |
-					     (d.strap_gpio >= 0 ? 0x100u : 0),
+	/* Bit 8 set: the stock order, "slow" (strap low) attempts first. */
+	struct fwl_params p = { .mode_word = (mode & 0xFFu) | 0x100u,
 				.stage2_baud = fwl_stage2_baud(first_path) };
 	struct fwl_result res;
 
