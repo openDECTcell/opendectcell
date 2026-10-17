@@ -67,8 +67,10 @@
   - liveness done (0xFFF1 tracked, re-contact on silence); explicit version/capability request mails still to add
 - [x] **[hw]** Gate G3: request/answer loop works
   - 2026-10-17, 7520: `dect-stubd` found the control slot (tx 1, rx 1), one 0xF600 contact got 0xF601 + 0xF602, then periodic 0xFFF1/0xF618; 14 mails in 30 s with 0 seq gaps / csum / framing errors / resyncs; session stayed UP (`docs/stub-pcm-control-channel.md`)
-- [ ] Audio test: test tone and loopback commands; capture of voice slots
+- [~] Audio test: test tone and loopback commands; capture of voice slots
+  - 2026-10-17: voice slots captured and the sample format found (8-bit A-law in the slot's low byte); the GenDSP connect/loop mails from [CR A-0004] work. **Loop-back works on a contact-only bench** (dect_loop channel 1/2/3 = buffer slot 0/3/2): a transmitted A-law tone returns in the mapped receive slot, frequency tracking the transmit. The STUB's own **test tone (channel 15) stays silent without the MAC** — it routes to a slot but generates nothing (A-0005; likely needs MAC/DSP active)
 - [ ] **[hw]** Gate G4: test tone received in a voice slot
+  - loop-back half proven 2026-10-17 (`docs/stub-pcm-control-channel.md`); the literal STUB test tone needs minimal MAC bring-up (M5) or a trigger not yet known
 
 ## M5: MAC bring-up → **Gate G5**
 - [ ] Start/stop of the FP MAC with RFPI; beacon; paging
