@@ -6,10 +6,10 @@ This file keeps work consistent across sessions and agents. Read it completely b
 
 openDECTcell turns used AVM FRITZ!Boxes into open DECT base stations under OpenWrt.
 - **On the chip:** the Dialog SC144xx DECT chip runs AVM's unchanged "STUB" firmware, which handles the radio, the MAC and codec conversion. The STUB is uploaded at runtime.
-- **On the box, our code:** the firmware loader, a kernel module for the PCM/TDM link (on the 7412: the VR9 SSC in SPI-slave mode), the control-channel daemon, and the DECT protocol library (DLC/NWK, in C).
+- **On the box, our code:** the firmware loader, a kernel module for the PCM/TDM link (on the 7520: the IPQ4019 ADSS TDM block; on the 7412: the VR9 SSC in SPI-slave mode), the control-channel daemon, and the DECT protocol library (DLC/NWK, in C).
 - **On a server:** the separate repository **opendectcell-controller** turns DECT into SIP. It is not a PBX.
 
-First target: FRITZ!Box 7412. See `README.md` and `ROADMAP.md`.
+First target: FRITZ!Box 7520 (since 2026-10-17; previously the 7412). See `README.md` and `ROADMAP.md`.
 
 ## 2. Clean-room and blob rules (non-negotiable)
 

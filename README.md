@@ -15,9 +15,9 @@
 
 | Box | SoC | DECT PCM bus | Status |
 |---|---|---|---|
-| **FRITZ!Box 7412** (first target) | Lantiq VRX220 (MIPS 34Kc, 2 VPEs), 128 MB RAM / 128 MB NAND | VR9 **SSC in SPI-slave "SPI-TDM" mode** | Analysed ([docs/models/7412-DECT-analysis.md](docs/models/7412-DECT-analysis.md)) |
+| **FRITZ!Box 7520 / 7530** (first target) | Qualcomm IPQ4019 (4× ARM Cortex-A7), 256 MB RAM / 128 MB NAND, DECT chip SC14448 | IPQ40xx ADSS TDM | Analysed, first observations on a running box ([docs/models/7520-DECT-analysis.md](docs/models/7520-DECT-analysis.md)) |
+| FRITZ!Box 7412 | Lantiq VRX220 (MIPS 34Kc, 2 VPEs), 128 MB RAM / 128 MB NAND | VR9 **SSC in SPI-slave "SPI-TDM" mode** | Analysed ([docs/models/7412-DECT-analysis.md](docs/models/7412-DECT-analysis.md)) |
 | FRITZ!Box 7362 SL | Lantiq VR9 | VR9 TDM | Analysed ([docs/models/7362SL-DECT-analysis.md](docs/models/7362SL-DECT-analysis.md)) |
-| FRITZ!Box 7520 / 7530 | Qualcomm IPQ4019 | IPQ40xx ADSS TDM | Analysed ([docs/models/7520-DECT-analysis.md](docs/models/7520-DECT-analysis.md)) |
 
 All three boxes run almost the same host DECT stack. For example, 98 % of the `avm_dect` functions are shared between the 7412 and the 7362 SL. Findings therefore transfer between models.
 
