@@ -238,6 +238,18 @@ Source: *observed on hardware*, spare 7520, OpenWrt 25.12.5, `kernel/opendectcel
 
 **Frame content** (16 bytes per frame in DMA-buffer order; each 16-bit slot is stored as a little-endian word, so the second byte of a slot is probably the first on the wire): bytes 0-1 `FE FE`, 2-3 `FF FF`, 4-7 `FE`, 8 `08` (briefly `00` after boot), 9 `40`, **10 A-law audio** (0x55/0xD5 at rest, a decaying waveform right after boot), 11 `00`, 12-15 `FF`. Everything except byte 10 is constant. **No 0xAA-framed mail** was found in any slot, byte order, bit order or bit shift, neither from an idle STUB nor across a fresh upload. Working assumption: the control channel is one of the idle 0xFF positions and the STUB only talks after the host has sent a mail (Q-0001).
 
+**Rest slot map (observed on hardware, 2026-10-17, gate G4 pre-work).** Passive receive capture (`dect-pcmcap -s 6 -k -q -b 500`, host sending nothing), spare 7520, STUB of FRITZ!OS 08.25, after a prior contact session. The 8 × 16-bit slots in DMA-buffer order (same rotation as above, control at slot 1):
+
+| Buffer slot | Word at rest | Role |
+|---|---|---|
+| 0, 2, 3 | `0xFEFE` | unused-voice fill (`0xFEFE` is the STUB's fill, [CR A-0003]) |
+| 1 | `0xFFFF` | control slot (host idle → `0xFFFF`) |
+| 4 | `0x4008` | sync / loop-back slot |
+| 5 | `0x0055` | **voice slot**: A-law silence `0x55` in the **low byte**, high byte `0x00` |
+| 6, 7 | `0xFFFF` | idle |
+
+So the A-law sample sits in the low byte of the 16-bit slot word, and buffer slot 5 is a live voice slot at rest. Which of slots 0/2/3/5 become active voice channels, and how a slot maps to a STUB audio channel (the test tone is channel 15), is Q-0004 — needed to command the tone for gate G4. 250 blocks/s, 0 sequence gaps, 0 overruns.
+
 ## 14. Transmit side (MBOX0 / STEREO0) [CR A-0002]
 
 *Derived statically* by the the hardware-analysis step from AVM's GPL source (FRITZ!OS 08.25, 7520: `ipq-adss-avm.c`, `ipq-mbox.h`, `qcom-ipq4019-audio.dtsi`, the HW247 board table, `avm_gpio.c`). Transmit = MBOX0 `0x07708000` (GIC SPI 156) + STEREO0 `0x07709000`.
