@@ -23,4 +23,19 @@
 #define DECT_PRIM_BUILD_STAMP	0xFFF2u	/* ASCII STUB build stamp (observed) */
 #define DECT_PRIM_F618		0xF618u	/* follows a status mail (observed) */
 
+/*
+ * 0xFFF1 is a shared debug/status primitive selected by a sub-command byte
+ * (the first parameter). STUB->host status uses sub-command 4; host->STUB
+ * GenDSP audio uses the sub-commands below [CR A-0004].
+ */
+#define DECT_PRIM_GENDSP	0xFFF1u	/* host->STUB GenDSP debug (= 0xFFF1) */
+#define DECT_SUB_CONNECT	0x0Au	/* params: chn_dst, chn_src */
+#define DECT_SUB_LOOP		0x09u	/* params: 32-bit LE channel (1..3 on, 0 off) */
+#define DECT_SUB_STATUS		0x04u	/* STUB->host periodic status */
+
+/* GenDSP audio channels [CR A-0004] (also 7520 analysis). */
+#define DECT_AUDIO_CHN_PCM0	4u	/* PCM pass-through channels 4..6 */
+#define DECT_AUDIO_CHN_SILENCE	12u
+#define DECT_AUDIO_CHN_TESTTONE	15u
+
 #endif /* OPENDECTCELL_DECT_PROTO_H */
