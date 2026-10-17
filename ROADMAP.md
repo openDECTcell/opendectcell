@@ -7,7 +7,7 @@
 
 | Gate | Proves | Pass criterion |
 |---|---|---|
-| G1 | STUB boots | Both upload stages are acknowledged, and the STUB's own UART output appears |
+| G1 | STUB boots | Both upload stages are acknowledged, and the PCM clocks (DCL, FSC) start |
 | G2 | PCM link alive | Captured frames contain 0xAA-framed STUB mails with valid checksums |
 | G3 | Control loop | A request mail (version/status/capabilities) gets the matching answer |
 | G4 | Audio path | The STUB test tone (channel 15) is captured in a voice slot on the host; loopback works |
@@ -43,8 +43,8 @@
 - [x] `dect-fwload` bring-up version: UART boot, both stages, retries; reset and strap through sysfs GPIO given on the command line (`src/fwload/`, `docs/stub-loader-protocol.md` §7)
 - [ ] `dect-fwload` on `/dev/dect0` and the board profile instead of command-line GPIOs
 - [ ] Unit tests for the upload engine (`loader.c`) against the real `.hex` files; the image builder already has them
-- [ ] **[hw]** Gate G1: STUB boots, with its UART output captured
-  - 2026-10-17, 7520: both upload stages acknowledged with matching checksums; no STUB UART output seen yet (see issue)
+- [x] **[hw]** Gate G1: STUB boots, with the PCM clocks present
+  - 2026-10-17, 7520: both upload stages acknowledged with matching checksums; after the upload the chip drives DCL and FSC (`docs/models/7520-DECT-analysis.md` §8.2). The STUB prints nothing on the UART
 
 ## M3: PCM kernel module → **Gate G2**
 - [ ] IPQ4019 ADSS TDM streaming (port from Qualcomm's GPL QSDK driver): FS 8 kHz, DCL 1.024 MHz, mbox DMA

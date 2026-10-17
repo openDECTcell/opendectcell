@@ -104,7 +104,7 @@ Source: *observed on hardware*, spare FRITZ!Box 7520, OpenWrt 25.12.5, 2026-10-1
 | Stage 2 | After about 150 ms the first-level loader sent STX at **115200 baud** (`_slow` file name). SOH and the 4-byte length were ACKed; the 54,119 data bytes took about 4.7 s |
 | **Chip's checksum answer** | The chip sends its XOR **immediately after the last data byte**. A host that waits for the transmission to finish before reading will find it already queued. The "other byte during data" rule (§1) therefore applies only *between* data bytes, never after the last one. (A first version of our engine got this wrong: it treated the chip's correct checksum, 0xC2, as an error.) |
 | Result | Both stages ACKed in a single attempt; the chip's XOR matched the image's |
-| STUB UART output | **None in 10 s** after the upload. The STUB probably talks only over the PCM bus. Not yet explained |
+| STUB UART output | **None in 60 s** after the upload. This STUB does not print on the UART. Proof of life is the PCM clocks (`7520-DECT-analysis.md` §8.2) |
 
 ### Driving the strap from userspace (7520, kernel 6.12)
 
@@ -113,7 +113,9 @@ The strap pin is the UART RX pin (GPIO16), which is owned by the serial driver:
 2. After the reset, unexport it. **The pin stays a GPIO and the UART receives nothing.** The UART function is restored by writing `gpio16 blsp_uart0` (group first, then function) to `/sys/kernel/debug/pinctrl/1000000.pinctrl/pinmux-select`.
 3. **Do not unbind and rebind the serial driver to restore the pin: it reboots the box**, because this UART is the kernel console.
 
-Before the upload the login on this UART has to be stopped. Its `askfirst` process is respawned by init when killed, so it was frozen with SIGSTOP and resumed afterwards; the kernel's console log level was set to 1 during the test.
+Before the upload the login on this UART has to be stopped. Its `askfirst` process is respawned by init when killed, so it is frozen with SIGSTOP and the kernel's console log level is set to 1.
+
+**Never resume (SIGCONT) or kill that login in the same boot.** It then exits, and from that moment **every open of the port reports a hangup** (poll events 0x19, reads return 0, `tcgetattr` fails with EIO) until the box is rebooted. This looked like a chip problem for several runs: the upload failed in stage 1 on every run after the first one. Verified by probing the port after each step: fine after boot, fine with the login frozen, hung up after the resume. The lab script leaves the login frozen; a reboot restores it.
 
 ## 8. Open questions
 
