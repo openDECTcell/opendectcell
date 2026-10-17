@@ -49,6 +49,7 @@ First target: FRITZ!Box 7520 (since 2026-10-17; previously the 7412). See `READM
 - **Endianness:** STUB fields are little-endian. Always use explicit conversion helpers; never cast structs onto wire buffers.
 - **Licence headers:** kernel code (`kernel/`) uses `SPDX-License-Identifier: GPL-2.0-only`, as usual for the kernel. **Everything else** (userspace, `libopendectcell`, tools, tests) uses `SPDX-License-Identifier: GPL-2.0-or-later`, so that the AGPL-3.0 controller (opendectcell-controller) can link `libopendectcell`. Never add GPL-2.0-only code outside `kernel/`.
 - **No per-model code in userspace.** Model differences go into the kernel board table (pins, PCM interface) or the board profile in `boards/` (everything else). Userspace never handles GPIO numbers or register addresses. See `docs/hardware-abstraction.md`.
+  **Bring-up exception (2026-10-17):** until the kernel module with `/dev/dect0` exists, `dect-fwload` takes the reset and strap GPIO numbers on its command line (sysfs GPIO). The exception ends with issue "dect-fwload on /dev/dect0 and the board profile"; no other component may take GPIO numbers.
 - **`libopendectcell` is shared** by `dect-probe` on the box and by the controller. Keep it free of platform I/O: transport and timers are injected.
 - **Terminology** (use consistently): *STUB* (AVM chip firmware), *mail* (host↔STUB message), *control slot* (PCM slot carrying mails), *cell* (one box with radio), *controller* (central DECT↔SIP gateway), *FP*/*PP* (fixed and portable part), RFPI, IPUI, TPUI, PARK.
 
