@@ -11,9 +11,9 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
-LIBDECT_SRC := src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c
+LIBDECT_SRC := src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c src/libopendectcell/dect_audio.c
 
 # Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
 SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-25.12.5-ipq40xx-*))
@@ -65,9 +65,13 @@ $(BUILD)/test_mail: tests/test_mail.c src/libopendectcell/dect_mail.c src/libope
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_mail.c src/libopendectcell/dect_mail.c
 
-$(BUILD)/test_session: tests/test_session.c $(LIBDECT_SRC) src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h src/libopendectcell/dect_mail.h tests/check.h
+$(BUILD)/test_session: tests/test_session.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h src/libopendectcell/dect_mail.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_session.c $(LIBDECT_SRC)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_session.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c
+
+$(BUILD)/test_audio: tests/test_audio.c src/libopendectcell/dect_audio.c src/libopendectcell/dect_audio.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_audio.c src/libopendectcell/dect_audio.c -lm
 
 check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done
