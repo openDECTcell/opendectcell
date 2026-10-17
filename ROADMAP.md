@@ -37,7 +37,7 @@
 
 ## M2: Firmware loader → **Gate G1**
 - [ ] `tools/dect-fw-extract.py` (PC, Python stdlib only): extract `dectfw_*.hex` from a user-supplied AVM image, verify SHA-256, print upload instructions
-- [ ] Image builder: Intel HEX → length header, patch area via descriptor at chip address 6, TLV patching, XOR checksum
+- [x] Image builder: Intel HEX → length header, segments, patch area via descriptor (chip address 0 for `441`), TLV patching, XOR checksum (`src/fwload/fwimage.c`, `docs/stub-image-format.md`)
 - [ ] `kmod-opendectcell-ipq40xx` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset; no PCM yet
 - [ ] Board profile for the 7520/7530 (`boards/<board_name>`, name read on the box) with the loader keys (firmware names, mode word, UART)
 - [ ] `dect-fwload`: UART boot, ROM stage (STX/SOH/len16/XOR/ACK) and second stage (len32/CRC16), retries; chip reset via `/dev/dect0`
