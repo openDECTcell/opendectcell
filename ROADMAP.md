@@ -1,6 +1,6 @@
 # Roadmap
 
-**First target:** FRITZ!Box 7412. The 7362 SL and 7520/7530 follow with the same stack.
+**First target:** FRITZ!Box 7520 (identical hardware to the 7530; OpenWrt image `avm_fritzbox-7530`). Decided 2026-10-17 because a 7520 is available and the 7412 is not. The 7412 and 7362 SL follow with the same stack.
 
 - Each milestone (`## M…`) maps to a GitHub milestone, and each checkbox to an issue. Items marked **[hw]** need a real box.
 - **Gates G1–G7 are go/no-go points on real hardware.** Work that depends on a gate starts only after the gate has passed (see `AGENTS.md` §6). The controller (separate repo `opendectcell-controller`) is designed in parallel but **implemented only after G7**.
@@ -21,16 +21,16 @@
 - [x] Headless the analysis tooling pipeline for local analysis
 - [x] Control-channel framing (0xAA marker, sequence, length, 16-bit sum)
 - [x] 7412 SSC/SPI-TDM register setup, STUB patch mechanism (TLV, tag 1 = RFPI, tag 7 = mode byte)
+- [x] Stock-firmware observation on a 7520 via the FRITZ!OS support data: PCM timing, STUB patching, channel count, chip SC14448 (`docs/models/7520-DECT-analysis.md` §8)
 - [x] Hardware abstraction for several models: kernel board table plus per-model board profiles (`docs/hardware-abstraction.md`)
 - [ ] Complete mail header layout (source/destination task, primitive, length)
 - [ ] Primitive-ID catalogue host↔STUB (`docs/stub-api.md`)
 - [ ] STUB (CR16C) analysis: meaning of mode byte tag 7; channel configuration
 - [ ] Minimal mail sequences for MAC start, registration and call setup, as used by the stock stack (input for G5–G7)
 
-## M1: Lab setup on the 7412 **[hw]**
+## M1: Lab setup on the 7520 **[hw]**
 - [ ] Full NAND backup of a box still running AVM firmware: RAM-boot OpenWrt (eva_ramboot + initramfs, no flash writes) and dump every MTD partition (raw incl. OOB, plus plain) via SCP into `work/` (never committed)
-- [ ] OpenWrt on the 7412 with serial console access; document the boot log
-- [ ] PCB check: DECT chip marking, what hangs off GPIO10/12 ("PCM-link flash" lines)
+- [ ] OpenWrt on the 7520 (no serial console); document the version and the boot log
 - [ ] Locate the factory DECT config block (TLVs incl. RFPI and calibration) in flash; write an extractor
 - [ ] Console strategy (the DECT UART is the console UART): free the UART after boot via package config
 - [ ] Optional: stock-firmware observation with Freetz-NG (`/proc` DECT commands, mail logging) to record reference traces
@@ -38,15 +38,15 @@
 ## M2: Firmware loader → **Gate G1**
 - [ ] `tools/dect-fw-extract.py` (PC, Python stdlib only): extract `dectfw_*.hex` from a user-supplied AVM image, verify SHA-256, print upload instructions
 - [ ] Image builder: Intel HEX → length header, patch area via descriptor at chip address 6, TLV patching, XOR checksum
-- [ ] `kmod-opendectcell-lantiq` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset; no PCM yet
-- [ ] Board profile `boards/avm,fritz7412` with the loader keys (firmware names, mode word, UART)
+- [ ] `kmod-opendectcell-ipq40xx` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset; no PCM yet
+- [ ] Board profile for the 7520/7530 (`boards/<board_name>`, name read on the box) with the loader keys (firmware names, mode word, UART)
 - [ ] `dect-fwload`: UART boot, ROM stage (STX/SOH/len16/XOR/ACK) and second stage (len32/CRC16), retries; chip reset via `/dev/dect0`
 - [ ] Chip simulator plus unit tests against the real `.hex` files
 - [ ] **[hw]** Gate G1: STUB boots, with its UART output captured
 
-## M3: SPI-TDM kernel module → **Gate G2**
-- [ ] SSC slave-mode streaming: 32-bit words, MSB first, clock polarity 1; RX/TX FIFOs, then DMA
-- [ ] Real-time path (dedicated VPE or high-priority IRQ); frame sync on GPIO9, clock enable GPIO7
+## M3: PCM kernel module → **Gate G2**
+- [ ] IPQ4019 ADSS TDM streaming (port from Qualcomm's GPL QSDK driver): FS 8 kHz, DCL 1.024 MHz, mbox DMA
+- [ ] Real-time path (dedicated CPU core or high-priority IRQ/FIQ)
 - [ ] `/dev/dect0` interface: control-slot and voice-slot data, frame-layout configuration; identical for every transport
 - [ ] Capture tool (a "software logic analyser"): dump frames and search for the 0xAA framing
 - [ ] **[hw]** Determine words per frame, control-slot position, voice-slot map and clock master
@@ -82,8 +82,8 @@
 - [ ] Golden-trace regression tests in CI
 
 ## M9: OpenWrt integration
-- [ ] Feed with `kmod-opendectcell-lantiq` and the `opendectcell` package (programs plus board profiles; pulls in the right kmod); CI build with the OpenWrt SDK
-- [ ] Board resources: in-module board table first, then an upstream DTS patch for the 7412
+- [ ] Feed with `kmod-opendectcell-ipq40xx` and the `opendectcell` package (programs plus board profiles; pulls in the right kmod); CI build with the OpenWrt SDK
+- [ ] Board resources: in-module board table first, then an upstream DTS patch for the 7520/7530
 - [ ] procd init script: board detection, profile plus UCI overrides, clear message on unsupported boxes; console/getty handling
 - [ ] Firmware storage in `/etc/opendectcell/firmware/`: SHA-256 check against the profile, kept across upgrades (`keep.d`)
 - [ ] LuCI app for non-technical users: status page, firmware upload, basic settings
@@ -100,5 +100,6 @@
 - [ ] Capacity per cell (about 3 calls); verify against the mode byte
 
 ## Later
-- [ ] Port to the 7362 SL (VR9 TDM) and the 7520/7530 (IPQ40xx ADSS TDM)
+- [ ] Port to the 7412 (VR9 SSC in SPI-slave mode, `kmod-opendectcell-lantiq`) and the 7362 SL (VR9 TDM)
+- [ ] 7412 PCB check: what hangs off GPIO10/12 ("PCM-link flash" lines)
 - [ ] ULE, SUOTA: out of scope for now
