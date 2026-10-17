@@ -61,9 +61,12 @@
   - 2026-10-17, 7520: after the host's contact mail (`0xF600`) the STUB answers and sends periodic status mails, all with valid checksums and consecutive sequence numbers (`docs/stub-pcm-control-channel.md`)
 
 ## M4: Control channel → **Gates G3, G4**
-- [ ] `dect-stubd`: framing, checksum, sequence, idle pattern, resync; big-endian host conversion
-- [ ] STUB status/liveness and version/capability requests
-- [ ] **[hw]** Gate G3: request/answer loop works
+- [x] `dect-stubd`: framing, checksum, sequence, idle pattern, resync; big-endian host conversion
+  - 2026-10-17: `src/libopendectcell/` (framing codec + session state machine, PC unit tests) and `src/stubd/dect-stubd.c` (slot probe + decode/session loop). Endian-clean (byte-wise LE)
+- [~] STUB status/liveness and version/capability requests
+  - liveness done (0xFFF1 tracked, re-contact on silence); explicit version/capability request mails still to add
+- [x] **[hw]** Gate G3: request/answer loop works
+  - 2026-10-17, 7520: `dect-stubd` found the control slot (tx 1, rx 1), one 0xF600 contact got 0xF601 + 0xF602, then periodic 0xFFF1/0xF618; 14 mails in 30 s with 0 seq gaps / csum / framing errors / resyncs; session stayed UP (`docs/stub-pcm-control-channel.md`)
 - [ ] Audio test: test tone and loopback commands; capture of voice slots
 - [ ] **[hw]** Gate G4: test tone received in a voice slot
 
