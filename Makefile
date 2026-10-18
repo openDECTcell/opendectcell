@@ -11,7 +11,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 LIBDECT_SRC := src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c src/libopendectcell/dect_audio.c
 
@@ -81,6 +81,10 @@ $(BUILD)/test_cs: tests/test_cs.c src/libopendectcell/dect_cs.c src/libopendectc
 $(BUILD)/test_lc: tests/test_lc.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lc.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_lc.c src/libopendectcell/dect_lc.c
+
+$(BUILD)/test_lapc: tests/test_lapc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_lapc.h src/libopendectcell/dect_lc.c src/libopendectcell/dect_lc.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_lapc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_lc.c
 
 check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done
