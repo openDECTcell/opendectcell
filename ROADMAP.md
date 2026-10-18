@@ -79,10 +79,15 @@
 - [x] **[hw]** Gate G5: a handset sees the base — FRITZ!Fon C4 listed the base ("Basis 3") and attempted registration
 
 ## M6: Minimal registration → **Gate G6**
-- [x] `libopendectcell`: `dect_cs` STUB-facing C-plane transport — decode inbound `0x0203` Cs segments, encode outbound `0x0244`+`0x0202` [CR COMMAND_SET §6.4/§8.2]. The STUB runs only radio/MAC; DLC/NWK/MM/auth all run on the host [CR COMMAND_SET line 68]. PC-tested.
-- [ ] `libopendectcell`: `dect_dlc` LAPC/Lc DLC minimum (ETSI EN 300 175-4) — reassemble Cs segments into LAPC frames, acknowledged (SABM/UA + I/RR) C-plane
-- [ ] `libopendectcell`: `dect_mm` MM access rights with PIN, identity, authentication (DSAA), key storage (EN 300 175-5/-7)
-- [ ] **[hw]** Gate G6: a GAP handset registers
+All host-side modules below are built and PC-unit-tested (golden vectors / loopback). Sources are PUBLIC (ETSI EN 300 175-4/-5/-7, EN 300 444, E. Tews DSAA thesis, osmocom libdect as cross-check only — no code copied; GPL-2.0-or-later so the AGPL controller can link libopendectcell). The STUB runs only radio/MAC; DLC/NWK/MM/auth all run on the host [CR COMMAND_SET line 68].
+- [x] `dect_cs` STUB-facing C-plane transport — inbound `0x0203`, outbound `0x0244`+`0x0202` [CR COMMAND_SET §6.4/§8.2]
+- [x] `dect_lc` Lc layer — Cs reassembly/segmentation + ISO 8073 checksum (Annex B vectors); LSIG=0 during registration
+- [x] `dect_lapc` LAPC class-A acknowledged link — I/RR, mod-2/window-1, segmentation + reassembly (loopback-tested); the ACK the handset waited for at G5
+- [x] `dect_nwk` S-format header + variable-length IE codec
+- [x] `dect_dsaa` DSAA + A11/A12/A21/A22 + B1/B2 + PIN→AC — verified against ETSI EN 300 175-7 Annex K
+- [x] `dect_mm` MM registration FSM — access rights + authentication (correct/​wrong PIN tested); FIXED-IDENTITY/PARK from RFPI is the hardware-iteration point
+- [x] `dect-stubd -g` wires the stack over the STUB (auto bring-up, RFPI capture, C-plane routing, radio parked on exit); host + ARM builds clean
+- [ ] **[hw]** Gate G6: a GAP handset registers (ready to test: `dect-stubd -g -P <pin>`)
 
 ## M7: Minimal call → **Gate G7**
 - [ ] `libopendectcell`: CC setup/alert/connect/release, connection-to-voice-slot binding
