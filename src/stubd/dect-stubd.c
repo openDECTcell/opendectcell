@@ -36,6 +36,10 @@
 #include "dect_mail.h"
 #include "dect_session.h"
 #include "dect_proto.h"
+#include "dect_cs.h"
+#include "dect_lc.h"
+#include "dect_lapc.h"
+#include "dect_mm.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
 #define PROBE_BLOCKS	40u
@@ -70,6 +74,20 @@ struct stubd {
 	unsigned int xmail_idx;	/* next extra mail to send (one per loop tick) */
 	struct dect_rx rx;
 	struct dect_session sess;
+
+	/* GAP registration (-g): the host-side C-plane stack per connection. */
+	int do_register;
+	const char *pin;	/* registration PIN / AC */
+	int rand_fd;		/* /dev/urandom, -1 if unavailable */
+	uint8_t rfpi[DECT_MM_RFPI_LEN];
+	int have_rfpi;
+	struct reg_ctx {
+		int active;
+		uint8_t handle;
+		struct dect_lc_rx lc;
+		struct dect_lapc lapc;
+		struct dect_mm mm;
+	} reg;
 };
 
 /*
@@ -312,6 +330,130 @@ static void tear_down(struct stubd *s)
 		perror("PCM_STEP 0");
 }
 
+/* ---- GAP registration: drive the host C-plane stack over the STUB ---- */
+
+/* Fill buf with n random bytes (urandom, with a weak clock fallback). */
+static void gen_rand(struct stubd *s, uint8_t *buf, size_t n)
+{
+	if (s->rand_fd >= 0 && read(s->rand_fd, buf, n) == (ssize_t)n)
+		return;
+	{
+		uint64_t x = mono_ms() * 0x9E3779B97F4A7C15ull;
+		size_t i;
+
+		for (i = 0; i < n; i++) {
+			x ^= x >> 29; x *= 0xBF58476D1CE4E5B9ull; x ^= x >> 32;
+			buf[i] = (uint8_t)x;
+		}
+	}
+}
+
+/* Wrap a LAPC frame in an Lc Cs frame and send it (APPEND_CONNECTION_DATA +
+ * TRIGGER_SIGNALLING). LSIG = 0: the PP has no assigned PMID during registration. */
+static void send_cplane(struct stubd *s, uint8_t handle,
+			const uint8_t *lapc, size_t lapc_len)
+{
+	uint8_t cs[DECT_LC_FRAME_MAX];
+	struct dect_mail m;
+	size_t flen = dect_lc_build(lapc, lapc_len, 0, cs, sizeof(cs));
+
+	if (flen == 0)
+		return;
+	if (dect_cs_append_mail(&m, DECT_TASK_PCM, handle, cs, flen) == 0)
+		send_mail(s, (unsigned int)s->tx_slot, &m);
+	dect_cs_trigger_mail(&m, DECT_TASK_PCM, handle);
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+}
+
+/* Flush any LAPC frames the FSM wants to transmit. */
+static void pump_lapc(struct stubd *s)
+{
+	uint8_t frame[DECT_LC_LAPC_MAX];
+	size_t n;
+
+	while ((n = dect_lapc_poll_tx(&s->reg.lapc, frame, sizeof(frame))) > 0)
+		send_cplane(s, s->reg.handle, frame, n);
+}
+
+static void reg_start(struct stubd *s, uint8_t handle)
+{
+	struct dect_mm_cfg mcfg;
+
+	memset(&mcfg, 0, sizeof(mcfg));
+	if (s->pin)
+		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
+	mcfg.authenticate = 1;
+	if (s->have_rfpi)
+		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
+
+	s->reg.active = 1;
+	s->reg.handle = handle;
+	dect_lc_rx_init(&s->reg.lc, 0);
+	dect_lapc_init(&s->reg.lapc, 0);
+	dect_mm_init(&s->reg.mm, &mcfg);
+	printf("reg: connection up (handle %u), C-plane armed\n", handle);
+}
+
+/* Feed one 0x0203 signalling segment up the stack; send any responses. */
+static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now)
+{
+	struct dect_cs_seg seg;
+	uint8_t lapcbuf[DECT_LC_LAPC_MAX], nwk[DECT_LAPC_MSG_MAX];
+	struct dect_lapc_frame f;
+	int lapc_len, nwk_len;
+
+	if (dect_cs_decode_segment(m, &seg) < 0)
+		return;
+	lapc_len = dect_lc_rx_fragment(&s->reg.lc, seg.data, lapcbuf, sizeof(lapcbuf));
+	if (lapc_len <= 0)
+		return;
+	if (dect_lapc_parse(lapcbuf, (size_t)lapc_len, &f) < 0)
+		return;
+	nwk_len = dect_lapc_rx(&s->reg.lapc, &f, now, nwk, sizeof(nwk));
+	pump_lapc(s);				/* at least the LAPC ack */
+	if (nwk_len > 0) {
+		uint8_t rand_f[8], mmsg[DECT_LAPC_MSG_MAX];
+		size_t mlen;
+
+		gen_rand(s, rand_f, sizeof(rand_f));
+		dect_mm_rx(&s->reg.mm, nwk, (size_t)nwk_len, rand_f);
+		mlen = dect_mm_poll(&s->reg.mm, mmsg, sizeof(mmsg));
+		if (mlen > 0 && dect_lapc_send(&s->reg.lapc, mmsg, mlen, now) == 0)
+			pump_lapc(s);
+		if (s->reg.mm.state == DECT_MM_REGISTERED)
+			printf("reg: handset registered\n");
+		else if (s->reg.mm.state == DECT_MM_FAILED)
+			printf("reg: registration rejected\n");
+	}
+}
+
+/* Route a received mail into the registration stack (when -g). */
+static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t now)
+{
+	switch (m->prim) {
+	case DECT_PRIM_CONTACT_ACK1:	/* 0xF601 carries the base RFPI */
+		if (!s->have_rfpi && m->param_len >= DECT_MM_RFPI_LEN) {
+			memcpy(s->rfpi, m->param, DECT_MM_RFPI_LEN);
+			s->have_rfpi = 1;
+		}
+		break;
+	case DECT_PRIM_CONN_UP:
+		reg_start(s, m->param_len ? m->param[0] : 0);
+		break;
+	case DECT_PRIM_CONN_DOWN:
+		if (s->reg.active)
+			printf("reg: connection released\n");
+		s->reg.active = 0;
+		break;
+	case DECT_PRIM_SIGNALLING:
+		if (s->reg.active)
+			reg_segment(s, m, now);
+		break;
+	default:
+		break;
+	}
+}
+
 /* Main loop: decode mails, drive the session, (re)send the contact. */
 static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 {
@@ -362,6 +504,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 					if (s->verbose)
 						log_mail(&m, "rx  ", s->show_params);
 					dect_session_rx(&s->sess, &m, now);
+					if (s->do_register)
+						handle_reg_mail(s, &m, now);
 				}
 			}
 		}
@@ -384,6 +528,11 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			s->xmail_idx++;
 			if (s->xmail_idx == s->n_xmail)
 				printf("all %u extra mails sent\n", s->n_xmail);
+		}
+		/* Drive LAPC retransmission timers for the registration link. */
+		if (s->do_register && s->reg.active) {
+			dect_lapc_tick(&s->reg.lapc, now);
+			pump_lapc(s);
 		}
 		if (run_seconds && now - start >= (uint64_t)run_seconds * 1000u)
 			break;
@@ -411,7 +560,11 @@ static void usage(void)
 		"  -p       also log parameter bytes (may hold identity data; do\n"
 		"           not share such logs) -- implies -v\n"
 		"  -M SRC:DST:PRIM[:HEX]  after contact, send this mail (repeatable,\n"
-		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n");
+		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n"
+		"  -g       GAP registration mode: bring up the radio + open\n"
+		"           registration, then run the host C-plane stack so a\n"
+		"           handset can register (parks the radio on exit)\n"
+		"  -P PIN   registration PIN / AC (default 0000; used with -g)\n");
 }
 
 int main(int argc, char **argv)
@@ -428,8 +581,9 @@ int main(int argc, char **argv)
 
 	memset(&s, 0, sizeof(s));
 	s.tx_slot = s.rx_slot = -1;
+	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:h")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -445,8 +599,17 @@ int main(int argc, char **argv)
 			}
 			s.xmail[s.n_xmail++] = optarg;
 			break;
+		case 'g': s.do_register = 1; break;
+		case 'P': s.pin = optarg; break;
 		default: usage(); return 2;
 		}
+	}
+
+	/* -g auto-sends the MAC bring-up (radio on, open registration) unless the
+	 * caller supplied its own -M mails. [CR COMMAND_SET §6.1/§6.2] */
+	if (s.do_register && s.n_xmail == 0) {
+		s.xmail[s.n_xmail++] = "22:02:015b:01";	/* radio/beacon on */
+		s.xmail[s.n_xmail++] = "22:02:022b:41";	/* 'A': open registration */
 	}
 	if (optind != argc) {
 		usage();
@@ -479,8 +642,20 @@ int main(int argc, char **argv)
 		fprintf(stderr, "slot out of range\n");
 		goto out;
 	}
+	if (s.do_register)
+		s.rand_fd = open("/dev/urandom", O_RDONLY);
 	ret = run_loop(&s, fpb, run_seconds);
+
+	/* Park the radio so the base does not keep beaconing with registration
+	 * open after we exit. [CR COMMAND_SET §6.2/§6.1] */
+	if (s.do_register && s.tx_slot >= 0) {
+		send_mail_spec(&s, "22:02:022c:01");	/* close registration */
+		send_mail_spec(&s, "22:02:015b:00");	/* radio off */
+		printf("reg: radio parked\n");
+	}
 out:
+	if (s.rand_fd >= 0)
+		close(s.rand_fd);
 	tear_down(&s);
 	close(s.fd);
 	return ret;
