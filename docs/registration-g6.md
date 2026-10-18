@@ -177,3 +177,47 @@ op 1, state byte}) → `0x020A` (task 2: {index 1..6, 16-byte record, 1 byte}).
 **Next-session order:** fix KEY-ALLOCATE (RS 16 bytes, ALLOCATION-TYPE `02 88`),
 retry the C4, watch for the PIN prompt; then wire AUTHENTICATION-REPLY /
 ACCESS-RIGHTS-ACCEPT and the `0x0247`+`0x020A` store.
+
+## G6 ACHIEVED — a FRITZ!Fon C4 registers (2026-10-18)
+
+The C4 registered successfully and shows "connected to Basis 3". The full,
+hardware-verified MM sequence (identities redacted) is:
+
+```
+C4 → FP  05 44  ACCESS-RIGHTS-REQUEST   (AUTH-TYPE proposes DSAA2, algo 02)
+FP → C4  05 42  KEY-ALLOCATE            ALLOCATION-TYPE 01 88, RAND 0C 08, RS 0E 08
+C4 → FP  85 40  AUTHENTICATION-REQUEST  (AUTH-TYPE algo 01, RAND_P, RES1)
+FP → C4  05 41  AUTHENTICATION-REPLY    (RES2)                 -- RES1 verified, DSAA1
+FP → C4  85 45  ACCESS-RIGHTS-ACCEPT    (PORTABLE-IDENTITY, FIXED-IDENTITY=PARK)
+C4 → FP  05 54  LOCATE-REQUEST          (IPUI, PARK, LOCATION-AREA, caps)
+FP → C4  85 55  LOCATE-ACCEPT           05 05 A0 94 <TPUI> + 07 01 64
+C4 → FP  05 5d  TEMPORARY-IDENTITY-ASSIGN-ACK                  -- registration complete
+```
+
+**Corrections to the pre-hardware assumptions above:**
+
+- **It is DSAA1, not DSAA2.** The C4 *proposes* DSAA2 (AUTH-TYPE algo `02`) but
+  accepts a DSAA1 KEY-ALLOCATE and then authenticates with DSAA1 (its
+  AUTHENTICATION-REQUEST comes back with algo `01`). So ALLOCATION-TYPE is
+  `01 88` and RS is **8 bytes** (`0E 08`), *not* `02 88` / 16-byte RS. Our
+  existing DSAA1 crypto verifies RES1 and produces RES2. [hardware]
+- **The decisive fix was the transaction F-bit.** KEY-ALLOCATE and
+  AUTHENTICATION-REPLY are FT-*initiated* (`05 ..`, F=0); ACCESS-RIGHTS-ACCEPT and
+  LOCATE-ACCEPT are responders (`85 ..`, F=1). KEY-ALLOCATE as `85 42` was
+  LAPC-acked but ignored at MM; `05 42` made the C4 proceed. [CR A-0022, hardware]
+- **RS must be a fresh random seed** (was zeros).
+- **LOCATE-ACCEPT must assign a TPUI** via PORTABLE-IDENTITY
+  (`05 05 A0 94 {0, 0x11, slot}`) plus LOCATION-AREA; a LOCATION-AREA-only reply
+  drew `05 5f` (ASSIGN-REJECT). [CR A-0023, hardware]
+- No PIN prompt appears when the base PIN is the C4 factory default `0000`.
+
+**Still open (stability / persistence, not basic registration):**
+
+- After registration the C4 repeatedly re-connects and re-LOCATEs. We do **not**
+  yet write the chip subscription store (`0x0247` then `0x020A`, per A-0023/A-0012)
+  nor `0xF605`, so the base does not persist the handset for idle standby and
+  paging. The 16-byte `0x020A` record layout is not yet known (must not be
+  zero-filled). This is the next task for a stable, call-capable registration.
+- Class-A (modulus-2) reassembly garbles the C4's retransmitted ~72-byte
+  multi-segment LOCATE-REQUEST; harmless once the C4 is satisfied, but worth
+  hardening [CR A-0023 Q5].

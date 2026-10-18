@@ -188,6 +188,16 @@ static void test_locate(void)
 	rx_la = dect_nwk_find_ie(ies, ies_len, DECT_IE_LOCATION_AREA, &rx_la_len);
 	CHECK(rx_la != NULL && rx_la_len == 1);
 	CHECK_EQ(rx_la[0], 0x64);
+	/* Must assign a TPUI via PORTABLE-IDENTITY (type A0, 20-bit) [CR A-0023]. */
+	{
+		const uint8_t *pid;
+		size_t pid_len;
+		const uint8_t want_tpui[5] = { 0xA0, 0x94, 0x00, 0x11, 0x01 };
+
+		pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
+		CHECK(pid != NULL && pid_len == 5);
+		CHECK_EQ(memcmp(pid, want_tpui, 5), 0);
+	}
 }
 
 int main(void)

@@ -172,12 +172,24 @@ static void send_access_reject(struct dect_mm *mm)
 /*
  * FP -> PP LOCATE-ACCEPT: confirm location registration. After ACCESS-RIGHTS-
  * ACCEPT the C4 immediately runs location registration (sends LOCATE-REQUEST)
- * and will not report success until it is accepted. We echo the PP's
- * LOCATION-AREA, which is the only mandatory IE (EN 300 175-5 §7.4.5 / GAP).
- * LOCATE-REQUEST is PP-initiated, so the FP replies as RESPONDER (F=1).
+ * and will not report success until it is accepted. LOCATE-ACCEPT must carry a
+ * PORTABLE-IDENTITY assigning an individual TPUI plus the LOCATION-AREA; both are
+ * mandatory (EN 300 175-5 §6.3.6.17) and a LOCATION-AREA-only reply draws a
+ * TEMPORARY-IDENTITY-ASSIGN-REJECT [CR A-0023]. LOCATE-REQUEST is PP-initiated,
+ * so the FP replies as RESPONDER (F=1).
+ *
+ * TPUI encoding [CR A-0023]: PORTABLE-IDENTITY type TPUI (A0), 20-bit length
+ * (94), then a 20-bit value. AVM's ordinary six-slot allocation packs the value
+ * as {nibble 0, 0x11, slot(1..6)}. We enrol one handset, in slot 1.
  */
+#define TPUI_ID_TYPE	0xA0u	/* PORTABLE-IDENTITY octet 3: identity type TPUI */
+#define TPUI_ID_LEN	0x94u	/* octet 3a: ext + 20-bit identity length */
+#define TPUI_PREFIX	0x11u	/* AVM fixed prefix byte of the 20-bit TPUI */
+#define REG_SLOT	1u	/* subscriber slot for the (single) handset */
+
 static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_len)
 {
+	uint8_t tpui[5] = { TPUI_ID_TYPE, TPUI_ID_LEN, 0x00, TPUI_PREFIX, REG_SLOT };
 	unsigned idx;
 	uint8_t *b = txq_slot(mm, &idx);
 	size_t off;
@@ -185,6 +197,8 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	if (!b)
 		return;
 	off = hdr(mm, b, DECT_TI_RESPONDER, DECT_MM_LOCATE_ACCEPT);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_PORTABLE_IDENTITY,
+			      tpui, sizeof(tpui));
 	if (la && la_len)
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_LOCATION_AREA, la, la_len);
