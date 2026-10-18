@@ -11,6 +11,8 @@
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
 #define DECT_TASK_CONTACT_DST	0x02u	/* contact destination task [CR A-0003] */
+#define DECT_TASK_CPLANE	0x03u	/* C-plane / DLC events [CR COMMAND_SET §8.2] */
+#define DECT_TASK_AUDIO		0x10u	/* audio manager events [CR COMMAND_SET §8.4] */
 #define DECT_TASK_PCM		0x22u	/* PCM task, host side (observed; 7520 analysis) */
 #define DECT_TASK_PCM_REMOTE	0x23u	/* PCM task, remote side (observed) */
 #define DECT_TASK_MAC_INT	0x26u	/* MAC_INTERRUPT_TASK (7520 analysis) */
@@ -55,7 +57,26 @@
 #define DECT_PRIM_CONN_UP	0x0200u	/* CONNECTION_ESTABLISHED (dst 0x03) */
 #define DECT_PRIM_CONN_DOWN	0x0201u	/* CONNECTION_RELEASED (dst 0x03) */
 #define DECT_PRIM_SIGNALLING	0x0203u	/* 5-byte NWK/Cs signalling segment (dst 0x03) */
+#define DECT_PRIM_CONN_PARAM	0x0243u	/* CONNECTION_PARAMETER (dst 0x03) [CR §8.2] */
+#define DECT_PRIM_AUDIO_STATE	0x0242u	/* audio channel state (dst 0x10) [CR §8.4] */
 #define DECT_PRIM_ACCESS_EVENT	0xF604u	/* HANDSET_ACCESS_EVENT (short-form access) */
 #define DECT_PRIM_ACCESS_CHAL	0x0E0Du	/* ACCESS_CHALLENGE_DATA (dst 0x05) */
+
+/*
+ * Host -> STUB C-plane / connection commands (destination task 0x02),
+ * [CR COMMAND_SET §6.4]. The STUB runs only the radio/MAC; DLC, NWK, MM and
+ * authentication all run here on the host [CR COMMAND_SET line 68]. Outbound
+ * C-plane signalling is appended to the per-connection buffer with 0x0244 and
+ * then flushed to air with 0x0202.
+ */
+#define DECT_PRIM_TRIGGER_SIG	0x0202u	/* TRIGGER_SIGNALLING: flush pending C-plane */
+#define DECT_PRIM_APPEND_DATA	0x0244u	/* APPEND_CONNECTION_DATA: {handle,n,data[n]} */
+#define DECT_PRIM_SEND_ACKED	0x015Cu	/* SEND_ACKED_DATA: 40-byte B-field, by tag */
+#define DECT_PRIM_ACKED_CONFIRM	0x015Du	/* ACKED_DATA_CONFIRM reply (task 0x14) */
+#define DECT_PRIM_RELEASE_CONN	0x017Au	/* RELEASE_CONNECTION: {handle, reason} */
+#define DECT_PRIM_ASSIGN_AUDIO	0x0230u	/* ASSIGN_AUDIO_CHANNEL: {handle, chan_flags} */
+
+/* APPEND_CONNECTION_DATA: per-connection buffer size, data dropped if it won't fit. */
+#define DECT_APPEND_BUF_MAX	205u	/* [CR COMMAND_SET §6.4] */
 
 #endif /* OPENDECTCELL_DECT_PROTO_H */
