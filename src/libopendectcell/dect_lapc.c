@@ -123,3 +123,201 @@ size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr,
 	out[2] = (uint8_t)LI_N;				/* LI = 0, M = 0, N = 1 */
 	return 3;
 }
+
+/* ---- class-A acknowledged-link state machine ---- */
+
+#define DEFAULT_RETRY_MS	1000u	/* retransmit an unacked I-frame */
+#define CR_CMD			1u	/* FT commands (our I-frames) */
+#define CR_RSP			0u	/* FT responses (our RR/UA) */
+#define SEG_MAX			DECT_LC_INFO_MAX	/* info octets per I-frame */
+
+void dect_lapc_init(struct dect_lapc *l, uint32_t retry_ms)
+{
+	memset(l, 0, sizeof(*l));
+	l->retry_ms = retry_ms ? retry_ms : DEFAULT_RETRY_MS;
+	l->nlf_pending = 1;	/* first I-frame of the link sets NLF */
+}
+
+/* Enqueue a built LAPC frame of len octets for transmission. */
+static void txq_push(struct dect_lapc *l, const uint8_t *buf, size_t len)
+{
+	unsigned slot;
+
+	if (l->txq_count >= DECT_LAPC_TXQ || len == 0 || len > DECT_LC_LAPC_MAX)
+		return;		/* drop silently if the caller polls too rarely */
+	slot = (l->txq_head + l->txq_count) % DECT_LAPC_TXQ;
+	memcpy(l->txq[slot].buf, buf, len);
+	l->txq[slot].len = len;
+	l->txq_count++;
+}
+
+static void queue_rr(struct dect_lapc *l, uint8_t pf)
+{
+	uint8_t rr[3];
+	size_t n = dect_lapc_build_rr(rr, sizeof(rr), CR_RSP, l->vr, pf);
+
+	txq_push(l, rr, n);
+	l->stats.tx_rr++;
+}
+
+/* Queue a UA response (control 0x63, no information field). */
+static void queue_ua(struct dect_lapc *l, uint8_t pf)
+{
+	uint8_t frame[3];
+
+	frame[0] = build_addr(CR_RSP, 0, DECT_LAPC_SAPI_CO, DECT_LAPC_LLN_A);
+	frame[1] = (uint8_t)(0x63u | (pf ? CTRL_PF : 0u));
+	frame[2] = (uint8_t)LI_N;
+	txq_push(l, frame, 3);
+}
+
+/* Queue the current outstanding I-frame (first send or retransmit). */
+static void queue_cur_i(struct dect_lapc *l, uint64_t now_ms)
+{
+	txq_push(l, l->cur_i, l->cur_i_len);
+	l->last_tx_ms = now_ms;
+	l->stats.tx_i++;
+}
+
+/* If the window is open and the message has more to send, build the next I-frame. */
+static void pump_tx(struct dect_lapc *l, uint64_t now_ms)
+{
+	size_t seg;
+
+	if (l->outstanding || l->txmsg_off >= l->txmsg_len)
+		return;
+
+	seg = l->txmsg_len - l->txmsg_off;
+	if (seg > SEG_MAX)
+		seg = SEG_MAX;
+
+	l->cur_i_len = dect_lapc_build_i(l->cur_i, sizeof(l->cur_i), CR_CMD,
+					 l->nlf_pending, l->vs, l->vr, 1,
+					 l->txmsg_off + seg < l->txmsg_len,
+					 &l->txmsg[l->txmsg_off], seg);
+	l->nlf_pending = 0;
+	l->txmsg_off += seg;
+	l->vs ^= 1u;			/* mod-2 send sequence */
+	l->outstanding = 1;
+	queue_cur_i(l, now_ms);
+}
+
+int dect_lapc_send(struct dect_lapc *l, const uint8_t *msg, size_t len,
+		   uint64_t now_ms)
+{
+	if (l->outstanding || l->txmsg_off < l->txmsg_len)
+		return -1;		/* window 1: one message at a time */
+	if (len == 0 || len > sizeof(l->txmsg))
+		return -1;
+
+	memcpy(l->txmsg, msg, len);
+	l->txmsg_len = len;
+	l->txmsg_off = 0;
+	pump_tx(l, now_ms);
+	return 0;
+}
+
+/* Process the N(R) carried by any frame: has it acknowledged our I-frame? */
+static void handle_ack(struct dect_lapc *l, uint8_t nr, uint64_t now_ms)
+{
+	if (!l->outstanding)
+		return;
+	/* The outstanding frame had N(S) = va; it is acked once N(R) = vs (= va^1). */
+	if (nr == l->vs) {
+		l->va = nr;
+		l->outstanding = 0;
+		if (l->txmsg_off >= l->txmsg_len && l->txmsg_len) {
+			l->txmsg_len = 0;	/* message fully sent and acked */
+			l->txmsg_off = 0;
+			l->stats.msgs_tx++;
+		}
+		pump_tx(l, now_ms);		/* next segment, if any */
+	}
+}
+
+int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
+		 uint64_t now_ms, uint8_t *out, size_t out_cap)
+{
+	int msg_len = 0;
+
+	l->established = 1;
+	if (f->nlf)
+		l->vr = 0;		/* new link: discard the old receive state */
+
+	switch (f->type) {
+	case DECT_LAPC_SABM:
+		l->vs = l->va = l->vr = 0;
+		l->outstanding = 0;
+		l->rxmsg_len = 0;
+		queue_ua(l, f->pf);
+		return 0;
+
+	case DECT_LAPC_DISC:
+		queue_ua(l, f->pf);
+		l->established = 0;
+		return 0;
+
+	case DECT_LAPC_RR:
+	case DECT_LAPC_RNR:
+	case DECT_LAPC_REJ:
+		handle_ack(l, f->nr, now_ms);
+		if (f->type == DECT_LAPC_REJ && l->outstanding)
+			queue_cur_i(l, now_ms);	/* explicit retransmit request */
+		return 0;
+
+	case DECT_LAPC_I:
+		handle_ack(l, f->nr, now_ms);	/* I-frames also carry N(R) */
+		if (f->ns == l->vr) {		/* in sequence */
+			if (f->info_len) {
+				if (l->rxmsg_len + f->info_len > sizeof(l->rxmsg)) {
+					l->rxmsg_len = 0;	/* overflow: drop */
+				} else {
+					memcpy(&l->rxmsg[l->rxmsg_len], f->info,
+					       f->info_len);
+					l->rxmsg_len += f->info_len;
+				}
+			}
+			l->vr ^= 1u;
+			l->stats.rx_i++;
+			queue_rr(l, f->pf);
+			if (!f->more) {		/* complete NWK message */
+				if (out_cap >= l->rxmsg_len) {
+					memcpy(out, l->rxmsg, l->rxmsg_len);
+					msg_len = (int)l->rxmsg_len;
+					l->stats.msgs_rx++;
+				}
+				l->rxmsg_len = 0;
+			}
+		} else {			/* duplicate / out of sequence */
+			l->stats.rx_dup++;
+			queue_rr(l, f->pf);	/* re-acknowledge what we have */
+		}
+		return msg_len;
+
+	default:
+		return 0;
+	}
+}
+
+void dect_lapc_tick(struct dect_lapc *l, uint64_t now_ms)
+{
+	if (l->outstanding && now_ms - l->last_tx_ms >= l->retry_ms) {
+		l->stats.retransmits++;
+		queue_cur_i(l, now_ms);
+	}
+}
+
+size_t dect_lapc_poll_tx(struct dect_lapc *l, uint8_t *out, size_t out_cap)
+{
+	size_t len;
+
+	if (l->txq_count == 0)
+		return 0;
+	len = l->txq[l->txq_head].len;
+	if (out_cap < len)
+		return 0;
+	memcpy(out, l->txq[l->txq_head].buf, len);
+	l->txq_head = (l->txq_head + 1) % DECT_LAPC_TXQ;
+	l->txq_count--;
+	return len;
+}

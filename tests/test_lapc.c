@@ -132,6 +132,125 @@ static void test_lapc_over_lc(void)
 	CHECK_EQ(memcmp(f.info, info, 4), 0);
 }
 
+/* Feed a received I-frame; the FSM accepts it, delivers the message, and acks. */
+static void test_fsm_rx_single(void)
+{
+	struct dect_lapc l;
+	uint8_t info[3] = { 0x11, 0x22, 0x33 };
+	uint8_t frame[DECT_LC_LAPC_MAX], out[DECT_LAPC_MSG_MAX], tx[DECT_LC_LAPC_MAX];
+	struct dect_lapc_frame f;
+	size_t n;
+	int r;
+
+	dect_lapc_init(&l, 0);
+	/* PP command I-frame, NLF set, ns=0, no more. */
+	n = dect_lapc_build_i(frame, sizeof(frame), 0, 1, 0, 0, 1, 0, info, sizeof(info));
+	CHECK_EQ(dect_lapc_parse(frame, n, &f), 0);
+	r = dect_lapc_rx(&l, &f, 100, out, sizeof(out));
+	CHECK_EQ(r, 3);
+	CHECK_EQ(memcmp(out, info, 3), 0);
+	CHECK_EQ(l.stats.msgs_rx, 1);
+	CHECK_EQ(l.vr, 1);			/* receive state advanced */
+
+	/* An RR ack with N(R)=1 was queued. */
+	n = dect_lapc_poll_tx(&l, tx, sizeof(tx));
+	CHECK_EQ(n, 3);
+	CHECK_EQ(dect_lapc_parse(tx, n, &f), 0);
+	CHECK_EQ(f.type, DECT_LAPC_RR);
+	CHECK_EQ(f.nr, 1);
+	CHECK_EQ(dect_lapc_poll_tx(&l, tx, sizeof(tx)), 0);	/* nothing more */
+}
+
+/* Send a short message; it goes out as one I-frame and completes on the ack. */
+static void test_fsm_tx_short(void)
+{
+	struct dect_lapc l;
+	uint8_t msg[10], tx[DECT_LC_LAPC_MAX], rr[8];
+	struct dect_lapc_frame f;
+	size_t n;
+
+	memset(msg, 0x5A, sizeof(msg));
+	dect_lapc_init(&l, 0);
+	CHECK_EQ(dect_lapc_send(&l, msg, sizeof(msg), 0), 0);
+	CHECK_EQ(dect_lapc_send(&l, msg, sizeof(msg), 0), -1);	/* window 1: busy */
+
+	n = dect_lapc_poll_tx(&l, tx, sizeof(tx));
+	CHECK(n > 0);
+	CHECK_EQ(dect_lapc_parse(tx, n, &f), 0);
+	CHECK_EQ(f.type, DECT_LAPC_I);
+	CHECK_EQ(f.ns, 0); CHECK_EQ(f.more, 0); CHECK_EQ(f.info_len, 10);
+	CHECK_EQ(l.outstanding, 1);
+
+	/* Peer acks with RR N(R)=1. */
+	n = dect_lapc_build_rr(rr, sizeof(rr), 1, 1, 0);
+	CHECK_EQ(dect_lapc_parse(rr, n, &f), 0);
+	dect_lapc_rx(&l, &f, 50, NULL, 0);
+	CHECK_EQ(l.outstanding, 0);
+	CHECK_EQ(l.stats.msgs_tx, 1);
+}
+
+/* No ack within retry_ms triggers a retransmission. */
+static void test_fsm_retransmit(void)
+{
+	struct dect_lapc l;
+	uint8_t msg[4] = { 1, 2, 3, 4 }, tx[DECT_LC_LAPC_MAX];
+
+	dect_lapc_init(&l, 1000);
+	dect_lapc_send(&l, msg, sizeof(msg), 0);
+	CHECK(dect_lapc_poll_tx(&l, tx, sizeof(tx)) > 0);	/* first send */
+	dect_lapc_tick(&l, 999);
+	CHECK_EQ(l.stats.retransmits, 0);
+	dect_lapc_tick(&l, 1000);
+	CHECK_EQ(l.stats.retransmits, 1);
+	CHECK(dect_lapc_poll_tx(&l, tx, sizeof(tx)) > 0);	/* retransmitted */
+}
+
+/* Drain one endpoint's TX queue into the other; return a delivered message len. */
+static int shuttle(struct dect_lapc *from, struct dect_lapc *to, uint64_t t,
+		   uint8_t *out, size_t out_cap)
+{
+	uint8_t tx[DECT_LC_LAPC_MAX];
+	struct dect_lapc_frame f;
+	size_t n;
+	int delivered = 0;
+
+	while ((n = dect_lapc_poll_tx(from, tx, sizeof(tx))) > 0) {
+		if (dect_lapc_parse(tx, n, &f) == 0) {
+			int r = dect_lapc_rx(to, &f, t, out, out_cap);
+			if (r > 0)
+				delivered = r;
+		}
+	}
+	return delivered;
+}
+
+/* Full loopback: a multi-segment message is segmented, acked and reassembled. */
+static void test_fsm_loopback_segmented(void)
+{
+	struct dect_lapc a, b;
+	uint8_t msg[150], out[DECT_LAPC_MSG_MAX];
+	int got = 0, i;
+
+	for (i = 0; i < (int)sizeof(msg); i++)
+		msg[i] = (uint8_t)(i * 7 + 1);
+
+	dect_lapc_init(&a, 0);
+	dect_lapc_init(&b, 0);
+	CHECK_EQ(dect_lapc_send(&a, msg, sizeof(msg), 0), 0);
+
+	/* 150 bytes = 3 segments (63+63+24); shuttle until B has the whole message. */
+	for (i = 0; i < 10 && !got; i++) {
+		int r = shuttle(&a, &b, (uint64_t)i, out, sizeof(out));
+		if (r > 0)
+			got = r;
+		shuttle(&b, &a, (uint64_t)i, NULL, 0);	/* carry acks back */
+	}
+	CHECK_EQ(got, (int)sizeof(msg));
+	CHECK_EQ(memcmp(out, msg, sizeof(msg)), 0);
+	CHECK_EQ(a.stats.msgs_tx, 1);
+	CHECK_EQ(b.stats.msgs_rx, 1);
+}
+
 int main(void)
 {
 	test_parse_types();
@@ -140,5 +259,9 @@ int main(void)
 	test_build_i_roundtrip();
 	test_build_rr_roundtrip();
 	test_lapc_over_lc();
+	test_fsm_rx_single();
+	test_fsm_tx_short();
+	test_fsm_retransmit();
+	test_fsm_loopback_segmented();
 	return CHECK_DONE();
 }

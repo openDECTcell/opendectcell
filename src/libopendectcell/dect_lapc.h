@@ -83,4 +83,84 @@ size_t dect_lapc_build_i(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
 size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr,
 			  uint8_t nr, uint8_t pf);
 
+/*
+ * Class-A acknowledged-link state machine (§7.5, §7.11).
+ *
+ * Class A uses modulus 2 and a window of one outstanding I-frame. The link is
+ * established implicitly: GAP registration begins with the PP sending an
+ * I-frame (NLF set), so no explicit SABM is required, though SABM/DISC are
+ * accepted. A NWK message longer than one I-frame's 63-octet information field
+ * is segmented with the M (more) bit and reassembled here.
+ *
+ * Injected transport and clock, like dect_session: feed received frames and a
+ * monotonic clock in, pull LAPC frames to transmit out. No I/O. Each outbound
+ * frame is a bare LAPC frame; wrap it with dect_lc_build() and send it with
+ * dect_cs_append_mail()/dect_cs_trigger_mail().
+ */
+#define DECT_LAPC_MSG_MAX	256u	/* largest NWK message either way */
+#define DECT_LAPC_TXQ		4u	/* pending outbound frames */
+
+struct dect_lapc_stats {
+	uint32_t rx_i;			/* in-sequence I-frames accepted */
+	uint32_t rx_dup;		/* out-of-sequence I-frames (re-acked) */
+	uint32_t tx_i;			/* I-frames queued (incl. retransmits) */
+	uint32_t tx_rr;			/* RR acks queued */
+	uint32_t retransmits;
+	uint32_t msgs_rx;		/* complete NWK messages reassembled */
+	uint32_t msgs_tx;		/* NWK messages fully sent and acked */
+};
+
+struct dect_lapc {
+	uint8_t  established;
+	uint8_t  vs, va, vr;		/* send / ack / receive state (mod 2) */
+
+	/* Outbound NWK message under segmentation (window 1: one at a time). */
+	uint8_t  txmsg[DECT_LAPC_MSG_MAX];
+	size_t   txmsg_len, txmsg_off;
+	uint8_t  nlf_pending;		/* set NLF on the next I-frame we send */
+	uint8_t  outstanding;		/* an I-frame is awaiting acknowledgement */
+	uint8_t  cur_i[DECT_LC_LAPC_MAX];
+	size_t   cur_i_len;
+	uint64_t last_tx_ms;
+	uint32_t retry_ms;
+
+	/* Inbound NWK message under reassembly. */
+	uint8_t  rxmsg[DECT_LAPC_MSG_MAX];
+	size_t   rxmsg_len;
+
+	/* Outbound frame queue. */
+	struct { uint8_t buf[DECT_LC_LAPC_MAX]; size_t len; } txq[DECT_LAPC_TXQ];
+	unsigned txq_head, txq_count;
+
+	struct dect_lapc_stats stats;
+};
+
+/* retry_ms of 0 takes a built-in default. */
+void dect_lapc_init(struct dect_lapc *l, uint32_t retry_ms);
+
+/*
+ * Submit a NWK message for acknowledged transmission. Returns 0, or -1 if a
+ * message is still in flight (window 1) or msg is too large. The first
+ * segment is queued immediately.
+ */
+int dect_lapc_send(struct dect_lapc *l, const uint8_t *msg, size_t len,
+		   uint64_t now_ms);
+
+/*
+ * Feed a received, parsed LAPC frame. When a complete NWK message has been
+ * reassembled, copies it into out and returns its length (> 0); otherwise
+ * returns 0. Acknowledgements and the next segment are queued as needed.
+ */
+int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
+		 uint64_t now_ms, uint8_t *out, size_t out_cap);
+
+/* Advance the clock: retransmit an unacknowledged I-frame after retry_ms. */
+void dect_lapc_tick(struct dect_lapc *l, uint64_t now_ms);
+
+/*
+ * Pull the next LAPC frame to transmit into out. Returns its length, or 0 if
+ * the queue is empty. Call repeatedly until it returns 0.
+ */
+size_t dect_lapc_poll_tx(struct dect_lapc *l, uint8_t *out, size_t out_cap);
+
 #endif /* OPENDECTCELL_DECT_LAPC_H */
