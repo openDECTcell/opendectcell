@@ -41,6 +41,9 @@
 #define DECT_MM_ACCESS_RIGHTS_ACCEPT	0x45u
 #define DECT_MM_ACCESS_RIGHTS_REJECT	0x47u
 #define DECT_MM_CIPHER_REQUEST		0x4Cu
+#define DECT_MM_LOCATE_REQUEST		0x54u
+#define DECT_MM_LOCATE_ACCEPT		0x55u
+#define DECT_MM_LOCATE_REJECT		0x57u
 
 /* Variable-length IE identifiers (§7.6). */
 #define DECT_IE_INFO_TYPE		0x01u

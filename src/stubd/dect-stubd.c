@@ -433,10 +433,19 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		printf("reg: nwk_len=%d\n", nwk_len);
 	pump_lapc(s);				/* at least the LAPC ack */
 	if (nwk_len > 0) {
-		uint8_t rand_f[8];
+		uint8_t rand_f[8], rs[16];
 
+		if (s->verbose) {		/* local only: carries IPUI, never commit */
+			int i;
+
+			printf("reg: nwk in  <-- ");
+			for (i = 0; i < nwk_len; i++)
+				printf("%02x ", nwk[i]);
+			printf("\n");
+		}
 		gen_rand(s, rand_f, sizeof(rand_f));
-		dect_mm_rx(&s->reg.mm, nwk, (size_t)nwk_len, rand_f);
+		gen_rand(s, rs, sizeof(rs));
+		dect_mm_rx(&s->reg.mm, nwk, (size_t)nwk_len, rand_f, rs);
 	}
 
 	/* Drain the MM output queue into LAPC, one message per free window. The
@@ -447,6 +456,14 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 
 		while (!s->reg.lapc.outstanding &&
 		       (mlen = dect_mm_poll(&s->reg.mm, mmsg, sizeof(mmsg))) > 0) {
+			if (s->verbose) {
+				size_t i;
+
+				printf("reg: nwk out --> ");
+				for (i = 0; i < mlen; i++)
+					printf("%02x ", mmsg[i]);
+				printf("\n");
+			}
 			if (dect_lapc_send(&s->reg.lapc, mmsg, mlen, now) != 0)
 				break;
 			pump_lapc(s);

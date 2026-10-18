@@ -55,6 +55,8 @@ struct dect_mm_stats {
 	uint32_t auth_fail;
 	uint32_t accepted;
 	uint32_t rejected;
+	uint32_t locate_req;	/* PP LOCATE-REQUEST seen */
+	uint32_t located;	/* LOCATE-ACCEPT sent */
 };
 
 struct dect_mm {
@@ -63,7 +65,13 @@ struct dect_mm {
 
 	uint8_t ti_value;			/* transaction from the PP */
 	uint8_t rand_f[8];			/* our challenge (RAND_F) */
-	uint8_t rs[8];				/* random seed (RS) */
+	/*
+	 * Random seed (RS). AVM's mode-2 KEY-ALLOCATE carries a 16-octet RS IE
+	 * (0E 10) [CR A-0011 Q1], so the whole buffer goes on the wire. DSAA1
+	 * authentication (A11/A21) consumes only the first 8 octets; RS is still
+	 * all-zero here, so wire form and crypto input stay consistent.
+	 */
+	uint8_t rs[16];				/* random seed (RS) */
 	uint8_t port_id[DECT_MM_PORTID_MAX];	/* PP PORTABLE-IDENTITY contents */
 	size_t  port_id_len;
 
@@ -79,11 +87,12 @@ void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg);
 
 /*
  * Feed a decoded NWK message (the LAPC I-frame payload). rand_f supplies the
- * 64-bit challenge RAND_F used when a KEY-ALLOCATE is produced (ignored
- * otherwise). Any responses are queued; pull them with dect_mm_poll().
+ * 64-bit challenge RAND_F and rs the 128-bit random seed RS used when a
+ * KEY-ALLOCATE is produced (ignored otherwise); both must be freshly random on
+ * hardware. Any responses are queued; pull them with dect_mm_poll().
  */
 void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
-		const uint8_t rand_f[8]);
+		const uint8_t rand_f[8], const uint8_t rs[16]);
 
 /* Pull a pending outbound NWK message. Returns its length, or 0 if none. */
 size_t dect_mm_poll(struct dect_mm *mm, uint8_t *out, size_t cap);

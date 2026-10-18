@@ -21,9 +21,22 @@
 #include <string.h>
 
 /* ALLOCATION-TYPE / FIXED-IDENTITY constants (EN 300 175-5 §7.7). */
-#define AUTH_ALG_DSAA		0x01u
-#define ALLOC_KEY_NUM		1u	/* UAK number to allocate */
-#define ALLOC_CODE_NUM		1u	/* authentication-code number */
+/*
+ * ALLOCATION-TYPE payload for KEY-ALLOCATE. The first octet is the
+ * authentication-algorithm identifier (0x01 = DSAA, 0x02 = DSAA2), the second a
+ * packed (UAK number | authentication-code number).
+ *
+ * The C4 *proposes* DSAA2 (0x02) in its ACCESS-RIGHTS-REQUEST, but GAP mandates
+ * DSAA1 support and the handset is documented as interoperable with third-party
+ * (often DSAA1-only) bases. We select DSAA1 (0x01) here because our crypto
+ * (dect_dsaa) implements it and is test-verified; if the C4 accepts a DSAA1
+ * KEY-ALLOCATE it will compute RES1 with DSAA1 and registration can complete.
+ * This matches AVM's shorter "non-mode-2" 26-byte KEY-ALLOCATE variant
+ * (8-byte RS) [CR A-0011 Q1]. If the C4 refuses DSAA1, DSAA2 must be added.
+ */
+#define ALLOC_TYPE_ALG		0x01u	/* DSAA1 (0x02 = DSAA2, not yet implemented) */
+#define ALLOC_TYPE_FLAGS	0x88u
+#define KEY_ALLOC_RS_LEN	8u	/* DSAA1 RS = 64 bits (0E 08) */
 #define FIXED_ID_TYPE_PARK	0x20u
 #define OCTET_GROUP_END		0x80u
 #define ARC_A_LEN		36u	/* class-A ARI length in bits */
@@ -59,31 +72,38 @@ static void txq_commit(struct dect_mm *mm, unsigned idx, size_t len)
 	mm->out_count++;
 }
 
-static size_t hdr(const struct dect_mm *mm, uint8_t *buf, uint8_t msg_type)
+/*
+ * Build the NWK S-format header. ti_flag selects the transaction direction:
+ * KEY-ALLOCATE and AUTHENTICATION-REPLY belong to the FT-initiated key-allocation
+ * transaction, so the FP is the ORIGINATOR there (F=0, header 05 ..) [CR A-0022
+ * "Critical correction", ETSI EN 300 175-5 §7.3 / EN 300 444 §8.45.9]. The
+ * ACCESS-RIGHTS-ACCEPT/REJECT close the PP-initiated access-rights transaction,
+ * so there the FP is the RESPONDER (F=1, header 85 ..).
+ */
+static size_t hdr(const struct dect_mm *mm, uint8_t *buf, uint8_t ti_flag,
+		  uint8_t msg_type)
 {
 	return dect_nwk_build_hdr(buf, DECT_LAPC_MSG_MAX, DECT_PD_MM,
-				  DECT_TI_RESPONDER, mm->ti_value, msg_type);
+				  ti_flag, mm->ti_value, msg_type);
 }
 
 /* FP -> PP KEY-ALLOCATE: ALLOCATION-TYPE (DSAA), RAND (RAND_F), RS. */
 static void send_key_allocate(struct dect_mm *mm)
 {
-	uint8_t alloc[2] = {
-		AUTH_ALG_DSAA, (uint8_t)((ALLOC_KEY_NUM << 4) | ALLOC_CODE_NUM),
-	};
+	uint8_t alloc[2] = { ALLOC_TYPE_ALG, ALLOC_TYPE_FLAGS };
 	unsigned idx;
 	uint8_t *b = txq_slot(mm, &idx);
 	size_t off;
 
 	if (!b)
 		return;
-	off = hdr(mm, b, DECT_MM_KEY_ALLOCATE);
+	off = hdr(mm, b, DECT_TI_ORIGINATOR, DECT_MM_KEY_ALLOCATE);
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_ALLOCATION_TYPE,
 			      alloc, sizeof(alloc));
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_RAND,
 			      mm->rand_f, sizeof(mm->rand_f));
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_RS,
-			      mm->rs, sizeof(mm->rs));
+			      mm->rs, KEY_ALLOC_RS_LEN);
 	txq_commit(mm, idx, off);
 	mm->state = DECT_MM_WAIT_AUTH;
 	mm->stats.key_alloc_sent++;
@@ -98,7 +118,7 @@ static void send_auth_reply(struct dect_mm *mm, const uint8_t res2[4])
 
 	if (!b)
 		return;
-	off = hdr(mm, b, DECT_MM_AUTHENTICATION_REPLY);
+	off = hdr(mm, b, DECT_TI_ORIGINATOR, DECT_MM_AUTHENTICATION_REPLY);
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_RES, res2, 4);
 	txq_commit(mm, idx, off);
 }
@@ -117,7 +137,7 @@ static void send_access_accept(struct dect_mm *mm)
 
 	if (!b)
 		return;
-	off = hdr(mm, b, DECT_MM_ACCESS_RIGHTS_ACCEPT);
+	off = hdr(mm, b, DECT_TI_RESPONDER, DECT_MM_ACCESS_RIGHTS_ACCEPT);
 	if (mm->port_id_len)
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_PORTABLE_IDENTITY,
@@ -141,12 +161,46 @@ static void send_access_reject(struct dect_mm *mm)
 
 	if (!b)
 		return;
-	off = hdr(mm, b, DECT_MM_ACCESS_RIGHTS_REJECT);
+	off = hdr(mm, b, DECT_TI_RESPONDER, DECT_MM_ACCESS_RIGHTS_REJECT);
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_REJECT_REASON,
 			      reason, sizeof(reason));
 	txq_commit(mm, idx, off);
 	mm->state = DECT_MM_FAILED;
 	mm->stats.rejected++;
+}
+
+/*
+ * FP -> PP LOCATE-ACCEPT: confirm location registration. After ACCESS-RIGHTS-
+ * ACCEPT the C4 immediately runs location registration (sends LOCATE-REQUEST)
+ * and will not report success until it is accepted. We echo the PP's
+ * LOCATION-AREA, which is the only mandatory IE (EN 300 175-5 §7.4.5 / GAP).
+ * LOCATE-REQUEST is PP-initiated, so the FP replies as RESPONDER (F=1).
+ */
+static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_len)
+{
+	unsigned idx;
+	uint8_t *b = txq_slot(mm, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = hdr(mm, b, DECT_TI_RESPONDER, DECT_MM_LOCATE_ACCEPT);
+	if (la && la_len)
+		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+				      DECT_IE_LOCATION_AREA, la, la_len);
+	txq_commit(mm, idx, off);
+	mm->stats.located++;
+}
+
+static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
+			      size_t ies_len)
+{
+	const uint8_t *la;
+	size_t la_len;
+
+	mm->stats.locate_req++;
+	la = dect_nwk_find_ie(ies, ies_len, DECT_IE_LOCATION_AREA, &la_len);
+	send_locate_accept(mm, la, la_len);
 }
 
 static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
@@ -208,7 +262,7 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 }
 
 void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
-		const uint8_t rand_f[8])
+		const uint8_t rand_f[8], const uint8_t rs[16])
 {
 	struct dect_nwk_hdr h;
 	const uint8_t *ies;
@@ -221,12 +275,18 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 	case DECT_MM_ACCESS_RIGHTS_REQUEST:
 		mm->ti_value = h.ti_value;
 		memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
-		memset(mm->rs, 0, sizeof(mm->rs));	/* RS = 0 for now */
+		/* RS is a fresh 16-byte random seed supplied by the caller; a zero
+		 * seed is not AVM-equivalent and the C4 may reject it [CR A-0022]. */
+		memcpy(mm->rs, rs, sizeof(mm->rs));
 		on_access_rights_request(mm, ies, ies_len);
 		break;
 	case DECT_MM_AUTHENTICATION_REQUEST:
 		if (mm->state == DECT_MM_WAIT_AUTH)
 			on_auth_request(mm, ies, ies_len);
+		break;
+	case DECT_MM_LOCATE_REQUEST:
+		mm->ti_value = h.ti_value;	/* new PP-initiated transaction */
+		on_locate_request(mm, ies, ies_len);
 		break;
 	default:
 		break;

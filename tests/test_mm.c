@@ -65,7 +65,8 @@ static void test_register_ok(void)
 	struct dect_mm mm;
 	uint8_t rand_f[8] = { 0xde, 0xad, 0xbe, 0xef, 0x12, 0x34, 0x56, 0x78 };
 	uint8_t rand_p[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
-	uint8_t rs[8] = { 0 };
+	uint8_t rs[8] = { 0 };		/* DSAA1 seed (first 8 of rs16) */
+	uint8_t rs16[16] = { 0 };	/* 16-byte RS handed to the FSM */
 	uint8_t buf[256], out[256];
 	struct dect_nwk_hdr h;
 	const uint8_t *ies, *ka_rand;
@@ -75,19 +76,33 @@ static void test_register_ok(void)
 
 	/* ACCESS-RIGHTS-REQUEST -> KEY-ALLOCATE (carrying RAND_F). */
 	n = pp_access_request(buf, sizeof(buf), 2);
-	dect_mm_rx(&mm, buf, n, rand_f);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK(n > 0);
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_KEY_ALLOCATE);
 	CHECK_EQ(mm.state, DECT_MM_WAIT_AUTH);
 	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	/* KEY-ALLOCATE opens an FT-initiated transaction: F=0 [CR A-0022]. */
+	CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
 	ka_rand = dect_nwk_find_ie(ies, ies_len, DECT_IE_RAND, &ka_rand_len);
 	CHECK(ka_rand != NULL && ka_rand_len == 8);
 	CHECK_EQ(memcmp(ka_rand, rand_f, 8), 0);
+	/* KEY-ALLOCATE must match AVM's mode-2 wire form [CR A-0011]. */
+	{
+		const uint8_t *at, *rsie;
+		size_t at_len, rsie_len;
+		const uint8_t want_at[2] = { 0x01, 0x88 };	/* DSAA1 */
+
+		at = dect_nwk_find_ie(ies, ies_len, DECT_IE_ALLOCATION_TYPE, &at_len);
+		CHECK(at != NULL && at_len == 2);
+		CHECK_EQ(memcmp(at, want_at, 2), 0);
+		rsie = dect_nwk_find_ie(ies, ies_len, DECT_IE_RS, &rsie_len);
+		CHECK(rsie != NULL && rsie_len == 8);
+	}
 
 	/* PP AUTHENTICATION-REQUEST -> AUTHENTICATION-REPLY then ACCESS-RIGHTS-ACCEPT. */
 	n = pp_auth_request(buf, sizeof(buf), 2, "1234", rand_f, rs, rand_p, 0);
-	dect_mm_rx(&mm, buf, n, rand_f);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	CHECK_EQ(mm.stats.auth_ok, 1);
 
 	n = dect_mm_poll(&mm, out, sizeof(out));
@@ -103,6 +118,8 @@ static void test_register_ok(void)
 		dect_dsaa_a21(k, rs, uak);
 		dect_dsaa_a22(uak, rand_p, want);
 		dect_nwk_parse(out, n, &h, &ies, &ies_len);
+		/* AUTH-REPLY stays in the FT-initiated transaction: F=0 [CR A-0022]. */
+		CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
 		res2 = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res2_len);
 		CHECK(res2 != NULL && res2_len == 4);
 		CHECK_EQ(memcmp(res2, want, 4), 0);
@@ -110,6 +127,9 @@ static void test_register_ok(void)
 
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_ACCEPT);
+	/* ACCESS-RIGHTS-ACCEPT closes the PP-initiated transaction: F=1 [CR A-0022]. */
+	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	CHECK_EQ(h.ti_flag, DECT_TI_RESPONDER);
 	CHECK_EQ(mm.state, DECT_MM_REGISTERED);
 	CHECK_EQ(mm.stats.accepted, 1);
 }
@@ -121,27 +141,59 @@ static void test_register_bad_pin(void)
 	struct dect_mm mm;
 	uint8_t rand_f[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
 	uint8_t rand_p[8] = { 9, 9, 9, 9, 9, 9, 9, 9 };
-	uint8_t rs[8] = { 0 };
+	uint8_t rs[8] = { 0 };		/* DSAA1 seed (first 8 of rs16) */
+	uint8_t rs16[16] = { 0 };	/* 16-byte RS handed to the FSM */
 	uint8_t buf[256], out[256];
 	size_t n;
 
 	dect_mm_init(&mm, &cfg);
 	n = pp_access_request(buf, sizeof(buf), 1);
-	dect_mm_rx(&mm, buf, n, rand_f);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	dect_mm_poll(&mm, out, sizeof(out));	/* KEY-ALLOCATE */
 
 	/* PP computes RES1 from the wrong PIN "9999". */
 	n = pp_auth_request(buf, sizeof(buf), 1, "9999", rand_f, rs, rand_p, 0);
-	dect_mm_rx(&mm, buf, n, rand_f);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
 	CHECK_EQ(mm.state, DECT_MM_FAILED);
 	CHECK_EQ(mm.stats.auth_fail, 1);
 }
 
+/* After registration the PP runs location registration; we must LOCATE-ACCEPT. */
+static void test_locate(void)
+{
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1 };
+	struct dect_mm mm;
+	uint8_t la[1] = { 0x64 };	/* LOCATION-AREA, LAL=36 bits */
+	uint8_t buf[64], out[64];
+	struct dect_nwk_hdr h;
+	const uint8_t *ies, *rx_la;
+	size_t n, ies_len, rx_la_len;
+
+	dect_mm_init(&mm, &cfg);
+
+	/* PP LOCATE-REQUEST (PP-initiated: F=0) carrying a LOCATION-AREA. */
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_LOCATION_AREA, la, sizeof(la));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+	CHECK_EQ(mm.stats.located, 1);
+	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	/* LOCATE-ACCEPT closes the PP-initiated transaction: F=1. */
+	CHECK_EQ(h.ti_flag, DECT_TI_RESPONDER);
+	rx_la = dect_nwk_find_ie(ies, ies_len, DECT_IE_LOCATION_AREA, &rx_la_len);
+	CHECK(rx_la != NULL && rx_la_len == 1);
+	CHECK_EQ(rx_la[0], 0x64);
+}
+
 int main(void)
 {
 	test_register_ok();
 	test_register_bad_pin();
+	test_locate();
 	return CHECK_DONE();
 }
