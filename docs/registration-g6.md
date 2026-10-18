@@ -47,15 +47,26 @@ This matches COMMAND_SET §8.2 `{handle,0x01,data[5],00,00,tag[3],handle}` plus 
 2-byte trailer. The **5-byte `data` is one Cs segment**; reassemble consecutive
 segments into an LAPC frame (ETSI EN 300 175-4), whose I-field is the NWK message.
 
-## The G6 build (next session)
+## The G6 build
 
-Architecture — three new `libopendectcell` modules, injected transport + clock so they
+Architecture — new `libopendectcell` modules, injected transport + clock so they
 unit-test on the PC like the M4 modules (`dect_mail`/`dect_session`):
 
+0. **`dect_cs` (STUB-facing C-plane transport).** ✅ Built 2026-10-18
+   (`src/libopendectcell/dect_cs.{c,h}`, PC-tested). Decodes inbound `0x0203` into
+   `{handle, tag, 5-byte Cs segment}`; encodes outbound C-plane as `0x0244`
+   APPEND_CONNECTION_DATA (per-connection buffer, ≤205 B) + `0x0202`
+   TRIGGER_SIGNALLING [CR COMMAND_SET §6.4/§8.2]. **Outbound path confirmed:**
+   C-plane signalling goes through `0x0244`/`0x0202`, *not* `0x015C`
+   SEND_ACKED_DATA — the latter is 40-byte **B-field** reliable data addressed
+   by tag [CR COMMAND_SET §6.4]. The STUB segments the appended byte stream into
+   Cs over the air; inbound it hands us one 5-byte segment per `0x0203`, so
+   reassembly is the host's job (next module).
+
 1. **`dect_dlc` (LAPC, C-plane, acknowledged).** Reassemble inbound Cs segments
-   into LAPC frames; generate acknowledgements and outbound frames; segment
-   outbound NWK messages into Cs. ETSI EN 300 175-4. Reference: kernel
-   `net/dect/dlc_*`, osmocom `libdect` DLC.
+   (from `dect_cs`) into LAPC frames; generate acknowledgements and outbound
+   frames; produce the outbound byte stream for `dect_cs_append_mail`. ETSI
+   EN 300 175-4. Reference: kernel `net/dect/dlc_*`, osmocom `libdect` DLC.
 2. **`dect_mm` (NWK Mobility Management registration FSM).** Drive
    `ACCESS-RIGHTS-REQUEST` → `AUTHENTICATION-REQUEST` (RAND/RS) →
    `AUTHENTICATION-REPLY` (RES) → `ACCESS-RIGHTS-ACCEPT`. ETSI EN 300 175-5.

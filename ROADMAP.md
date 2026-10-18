@@ -79,8 +79,9 @@
 - [x] **[hw]** Gate G5: a handset sees the base — FRITZ!Fon C4 listed the base ("Basis 3") and attempted registration
 
 ## M6: Minimal registration → **Gate G6**
-- [ ] `libopendectcell`: LAPC/Lc DLC minimum (ETSI EN 300 175-4)
-- [ ] `libopendectcell`: MM access rights with PIN, identity, authentication (DSAA), key storage
+- [x] `libopendectcell`: `dect_cs` STUB-facing C-plane transport — decode inbound `0x0203` Cs segments, encode outbound `0x0244`+`0x0202` [CR COMMAND_SET §6.4/§8.2]. The STUB runs only radio/MAC; DLC/NWK/MM/auth all run on the host [CR COMMAND_SET line 68]. PC-tested.
+- [ ] `libopendectcell`: `dect_dlc` LAPC/Lc DLC minimum (ETSI EN 300 175-4) — reassemble Cs segments into LAPC frames, acknowledged (SABM/UA + I/RR) C-plane
+- [ ] `libopendectcell`: `dect_mm` MM access rights with PIN, identity, authentication (DSAA), key storage (EN 300 175-5/-7)
 - [ ] **[hw]** Gate G6: a GAP handset registers
 
 ## M7: Minimal call → **Gate G7**
