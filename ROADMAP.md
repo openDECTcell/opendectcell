@@ -87,7 +87,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [x] `dect_dsaa` DSAA + A11/A12/A21/A22 + B1/B2 + PIN→AC — verified against ETSI EN 300 175-7 Annex K
 - [x] `dect_mm` MM registration FSM — access rights + authentication (correct/​wrong PIN tested); FIXED-IDENTITY/PARK from RFPI is the hardware-iteration point
 - [x] `dect-stubd -g` wires the stack over the STUB (auto bring-up, RFPI capture, C-plane routing, radio parked on exit); host + ARM builds clean
-- [ ] **[hw]** Gate G6: a GAP handset registers (ready to test: `dect-stubd -g -P <pin>`)
+- [~] **[hw]** Gate G6: a GAP handset registers — **DLC proven on hardware** (FRITZ!Fon C4): the link establishes, the C4 sends its full ACCESS-RIGHTS-REQUEST and acks our replies. **Open:** the MM exchange doesn't complete (no PIN prompt) — see `docs/registration-g6.md` "Hardware progress". Key hardware fix: never send `0x0202` after a C-plane reply (it is AVM's abnormal-release primitive).
 
 ## M7: Minimal call → **Gate G7**
 - [ ] `libopendectcell`: CC setup/alert/connect/release, connection-to-voice-slot binding

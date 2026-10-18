@@ -86,3 +86,52 @@ A background research pass (public DECT FP registration flow + DSAA + the exact
 LAPC/Cs framing, from ETSI + kernel `net/dect` + osmocom `libdect`) was started
 this session to serve as the implementation spec; re-run it if its report was not
 saved. Then: implement 1→3, unit-test on PC, drive on hardware, retry the C4.
+
+## Hardware progress (2026-10-18, FRITZ!Fon C4)
+
+The whole stack is built and PC-tested (`dect_cs`/`dect_lc`/`dect_lapc`/`dect_nwk`/
+`dect_dsaa`/`dect_mm`), wired into `dect-stubd -g -P <pin>`. Driven against a real
+C4 with instrumented traces. Protocol framing bytes below are safe; handset
+identity (IPUI, tag, RFPI) is redacted and must never be committed.
+
+**Solved — the DLC link now works end to end:**
+- The STUB reports the incoming connection as `0x0200` → `0x0243` → `0x0242`,
+  then delivers the handset's Cs signalling as `0x0203` segments.
+- The handset opens the link with an **empty LAPC I-frame on LLN=2** (a class-B
+  request, `a1 00 01` + Lc checksum). We **refuse class B → class A (LLN 1)** and
+  confirm establishment with an RR carrying **NLF set and N(R)=1** (`91 21`).
+- **Critical fix:** do **not** send `0x0202` after a C-plane reply — in AVM's host
+  driver `0x0202` is the *abnormal link release* primitive, and sending it dropped
+  the connection after ~40 ms [CR AVM/Q-0010 analysis]. Reply with `0x0244` only.
+  With that, the connection stays up (60 s+).
+- Our own I-frames use **NLF clear + P/F=0** (class A, EN 300 175-4 §9.2.1.1).
+- Result: the C4 sends its **full ACCESS-RIGHTS-REQUEST** (MM msg `0x44`, a 49-byte
+  NWK message with PORTABLE-IDENTITY etc., reassembled from 11 Cs segments) and
+  **acknowledges our replies** (`13 21` = RR N(R)=1, a PT response).
+
+**Open — the MM exchange does not complete (no PIN prompt):**
+- We have tried replying to ACCESS-RIGHTS-REQUEST with **AUTHENTICATION-REQUEST**
+  (`0x40`) and with **KEY-ALLOCATE** (`0x42`). In both cases the handset
+  **LAPC-acks** our I-frame but sends **no MM response** and shows **no PIN
+  prompt**, then times out ("Anmeldung gescheitert").
+- So it is an MM-content / transaction-level issue, not DLC. Leads for next
+  session:
+  1. **Transaction identifier.** The request uses TV=0, F=0 (originator). We reply
+     TV=0, F=1 (responder). KEY-ALLOCATE may need to be a *new* FP-initiated
+     transaction (own TV, F=0) rather than a response in the PP's transaction.
+  2. **Decode the captured 49-byte ACCESS-RIGHTS-REQUEST** fully (it is in the
+     `-p` trace) — especially its AUTH-TYPE IE (observed content `02 48 00`;
+     `0x48` = key type AC + IPUI/PARK flag, but octet 3 = `0x02`, not DSAA `0x01`)
+     and any SETUP/TERMINAL-CAPABILITY / IWU IEs — to match the exact algorithm
+     id, key/code numbers and IE set the C4 expects.
+  3. Try replying with **ACCESS-RIGHTS-ACCEPT directly** (PIN-less GAP accept) as
+     an A/B test, to see whether the C4 registers without authentication.
+  4. Get the **exact AVM MM response** (message type, IEs, TI handling) after
+     ACCESS-RIGHTS-REQUEST via the an external review/hardware-analysis route (the clean-room
+     Q-0010 was blocked by the safety filter; the user relayed the DLC answer as
+     `the clean-room record/Q-0010_AVM_Analyse.md`, which did not fully trace the MM
+     sequence — ask specifically for it).
+- The crypto is ready and Annex-K-verified; `dect_mm` implements the
+  key-allocation flow (ACCESS-RIGHTS-REQUEST → KEY-ALLOCATE → PP
+  AUTHENTICATION-REQUEST → AUTHENTICATION-REPLY → ACCESS-RIGHTS-ACCEPT) and the
+  daemon drains its message queue one per free LAPC window.
