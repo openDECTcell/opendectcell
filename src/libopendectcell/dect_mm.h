@@ -34,10 +34,12 @@
 
 enum dect_mm_state {
 	DECT_MM_IDLE,
-	DECT_MM_WAIT_AUTH_REPLY,
+	DECT_MM_WAIT_AUTH,	/* KEY-ALLOCATE sent, awaiting the PP's AUTH-REQUEST */
 	DECT_MM_REGISTERED,
 	DECT_MM_FAILED,
 };
+
+#define DECT_MM_TXQ	3u		/* pending outbound NWK messages */
 
 struct dect_mm_cfg {
 	char    pin[DECT_MM_PIN_MAX];		/* decimal PIN (AC); "" = default */
@@ -47,7 +49,8 @@ struct dect_mm_cfg {
 
 struct dect_mm_stats {
 	uint32_t access_req;
-	uint32_t auth_sent;
+	uint32_t key_alloc_sent;
+	uint32_t auth_req;	/* PP AUTHENTICATION-REQUEST seen */
 	uint32_t auth_ok;
 	uint32_t auth_fail;
 	uint32_t accepted;
@@ -59,13 +62,15 @@ struct dect_mm {
 	enum dect_mm_state state;
 
 	uint8_t ti_value;			/* transaction from the PP */
-	uint8_t rand_f[8];			/* challenge we issued */
-	uint8_t rs[8];				/* random seed (0 for now) */
+	uint8_t rand_f[8];			/* our challenge (RAND_F) */
+	uint8_t rs[8];				/* random seed (RS) */
 	uint8_t port_id[DECT_MM_PORTID_MAX];	/* PP PORTABLE-IDENTITY contents */
 	size_t  port_id_len;
 
-	uint8_t out[DECT_LAPC_MSG_MAX];
-	size_t  out_len;			/* a pending outbound NWK message */
+	/* FIFO of outbound NWK messages (e.g. AUTH-REPLY then ACCESS-RIGHTS-ACCEPT). */
+	uint8_t  out[DECT_MM_TXQ][DECT_LAPC_MSG_MAX];
+	size_t   out_len[DECT_MM_TXQ];
+	unsigned out_head, out_count;
 
 	struct dect_mm_stats stats;
 };
@@ -74,8 +79,8 @@ void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg);
 
 /*
  * Feed a decoded NWK message (the LAPC I-frame payload). rand_f supplies the
- * 64-bit challenge used if an AUTHENTICATION-REQUEST is produced (ignored
- * otherwise). Any response is queued; pull it with dect_mm_poll().
+ * 64-bit challenge RAND_F used when a KEY-ALLOCATE is produced (ignored
+ * otherwise). Any responses are queued; pull them with dect_mm_poll().
  */
 void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		const uint8_t rand_f[8]);

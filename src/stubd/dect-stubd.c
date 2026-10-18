@@ -350,8 +350,13 @@ static void gen_rand(struct stubd *s, uint8_t *buf, size_t n)
 	}
 }
 
-/* Wrap a LAPC frame in an Lc Cs frame and send it (APPEND_CONNECTION_DATA +
- * TRIGGER_SIGNALLING). LSIG = 0: the PP has no assigned PMID during registration. */
+/*
+ * Wrap a LAPC frame in an Lc Cs frame and send it via APPEND_CONNECTION_DATA
+ * (0x0244) only. AVM's host driver transmits C-plane replies this way and does
+ * NOT follow with 0x0202; in AVM's code 0x0202 is sent on an abnormal link
+ * release, which matches the ~40 ms connection drop we saw when we triggered it
+ * [CR AVM]. LSIG = 0: the PP has no assigned PMID during registration.
+ */
 static void send_cplane(struct stubd *s, uint8_t handle,
 			const uint8_t *lapc, size_t lapc_len)
 {
@@ -363,8 +368,6 @@ static void send_cplane(struct stubd *s, uint8_t handle,
 		return;
 	if (dect_cs_append_mail(&m, DECT_TASK_PCM, handle, cs, flen) == 0)
 		send_mail(s, (unsigned int)s->tx_slot, &m);
-	dect_cs_trigger_mail(&m, DECT_TASK_PCM, handle);
-	send_mail(s, (unsigned int)s->tx_slot, &m);
 }
 
 /* Flush any LAPC frames the FSM wants to transmit. */
@@ -430,19 +433,30 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		printf("reg: nwk_len=%d\n", nwk_len);
 	pump_lapc(s);				/* at least the LAPC ack */
 	if (nwk_len > 0) {
-		uint8_t rand_f[8], mmsg[DECT_LAPC_MSG_MAX];
-		size_t mlen;
+		uint8_t rand_f[8];
 
 		gen_rand(s, rand_f, sizeof(rand_f));
 		dect_mm_rx(&s->reg.mm, nwk, (size_t)nwk_len, rand_f);
-		mlen = dect_mm_poll(&s->reg.mm, mmsg, sizeof(mmsg));
-		if (mlen > 0 && dect_lapc_send(&s->reg.lapc, mmsg, mlen, now) == 0)
-			pump_lapc(s);
-		if (s->reg.mm.state == DECT_MM_REGISTERED)
-			printf("reg: handset registered\n");
-		else if (s->reg.mm.state == DECT_MM_FAILED)
-			printf("reg: registration rejected\n");
 	}
+
+	/* Drain the MM output queue into LAPC, one message per free window. The
+	 * next message goes out when the handset acknowledges the previous one. */
+	{
+		uint8_t mmsg[DECT_LAPC_MSG_MAX];
+		size_t mlen;
+
+		while (!s->reg.lapc.outstanding &&
+		       (mlen = dect_mm_poll(&s->reg.mm, mmsg, sizeof(mmsg))) > 0) {
+			if (dect_lapc_send(&s->reg.lapc, mmsg, mlen, now) != 0)
+				break;
+			pump_lapc(s);
+		}
+	}
+
+	if (s->reg.mm.state == DECT_MM_REGISTERED)
+		printf("reg: handset registered\n");
+	else if (s->reg.mm.state == DECT_MM_FAILED)
+		printf("reg: registration rejected\n");
 }
 
 /* Route a received mail into the registration stack (when -g). */

@@ -206,8 +206,9 @@ static void pump_tx(struct dect_lapc *l, uint64_t now_ms)
 	if (seg > SEG_MAX)
 		seg = SEG_MAX;
 
+	/* Class A: P/F must be 0 in all transmitted frames (EN 300 175-4 §9.2.1.1). */
 	l->cur_i_len = dect_lapc_build_i(l->cur_i, sizeof(l->cur_i), CR_CMD,
-					 l->nlf_pending, l->lln, l->vs, l->vr, 1,
+					 l->nlf_pending, l->lln, l->vs, l->vr, 0,
 					 l->txmsg_off + seg < l->txmsg_len,
 					 &l->txmsg[l->txmsg_off], seg);
 	l->nlf_pending = 0;
@@ -257,21 +258,15 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 
 	l->established = 1;
 	/*
-	 * A PT frame with an assignable LLN (2..6) requests class B operation
-	 * (EN 300 175-4 §9.2.2.2). The FRITZ!Fon releases the link if class B is
-	 * refused, so accept it: mirror the chosen LLN and switch to modulus 8
-	 * (§9.2.4.3.1). Otherwise stay class A on LLN 1.
+	 * The PT opens the link on an assignable LLN (a class-B request,
+	 * EN 300 175-4 §9.2.2.2). AVM's FP refuses class B for an unassigned
+	 * subscriber and answers on class A (LLN 1), so do the same [CR AVM].
 	 */
+	l->lln = DECT_LAPC_LLN_A;
+	l->modulus = 2;
 	if (f->nlf) {
-		if (f->lln >= 2u && f->lln <= 6u) {
-			l->lln = f->lln;
-			l->modulus = 8;
-			l->nlf_pending = 0;	/* PT established; our frames are subsequent */
-		} else {
-			l->lln = DECT_LAPC_LLN_A;
-			l->modulus = 2;
-		}
 		l->vr = 0;		/* new link: discard the old receive state */
+		l->nlf_pending = 0;	/* PT established the link; our frames are subsequent */
 	}
 
 	switch (f->type) {
@@ -297,25 +292,24 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 
 	case DECT_LAPC_I:
 		handle_ack(l, f->nr, now_ms);	/* I-frames also carry N(R) */
+		/*
+		 * Every in-sequence I-frame (including the empty establishment frame)
+		 * advances V(R) and is acknowledged with RR N(R)=V(R); the NLF bit is
+		 * mirrored so the establishment response carries it (EN 300 175-4
+		 * §9.2.3.1). The empty establishment frame carries no NWK data, so
+		 * nothing is delivered for it.
+		 */
 		if (f->ns == l->vr) {		/* in sequence */
-			if (f->info_len) {
-				if (l->rxmsg_len + f->info_len > sizeof(l->rxmsg)) {
-					l->rxmsg_len = 0;	/* overflow: drop */
-				} else {
-					memcpy(&l->rxmsg[l->rxmsg_len], f->info,
-					       f->info_len);
-					l->rxmsg_len += f->info_len;
-				}
+			if (l->rxmsg_len + f->info_len > sizeof(l->rxmsg))
+				l->rxmsg_len = 0;	/* overflow: drop */
+			else if (f->info_len) {
+				memcpy(&l->rxmsg[l->rxmsg_len], f->info, f->info_len);
+				l->rxmsg_len += f->info_len;
 			}
 			l->vr = seq_inc(l, l->vr);
 			l->stats.rx_i++;
-			/*
-			 * The class-B accept RR must carry F=1 (an F=0 RR is
-			 * ignored by the originator, §9.2.4.2) and NLF set.
-			 */
-			queue_rr(l, f->nlf,
-				 (l->modulus == 8 && f->nlf) ? 1u : f->pf);
-			if (!f->more) {		/* complete NWK message */
+			queue_rr(l, f->nlf, f->pf);
+			if (!f->more && l->rxmsg_len) {		/* complete NWK message */
 				if (out_cap >= l->rxmsg_len) {
 					memcpy(out, l->rxmsg, l->rxmsg_len);
 					msg_len = (int)l->rxmsg_len;
