@@ -76,12 +76,12 @@ int dect_lapc_parse(const uint8_t *buf, size_t lapc_len, struct dect_lapc_frame 
  * or 0 on a bad length. Wrap the result with dect_lc_build() before sending.
  */
 size_t dect_lapc_build_i(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
-			 uint8_t ns, uint8_t nr, uint8_t pf, uint8_t more,
-			 const uint8_t *info, size_t info_len);
+			 uint8_t lln, uint8_t ns, uint8_t nr, uint8_t pf,
+			 uint8_t more, const uint8_t *info, size_t info_len);
 
 /* Build a supervisory RR frame (no information field). Returns 3, or 0 on error. */
 size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr,
-			  uint8_t nr, uint8_t pf);
+			  uint8_t lln, uint8_t nr, uint8_t pf);
 
 /*
  * Class-A acknowledged-link state machine (§7.5, §7.11).
@@ -112,6 +112,7 @@ struct dect_lapc_stats {
 
 struct dect_lapc {
 	uint8_t  established;
+	uint8_t  lln;			/* logical link number (adopted from the peer) */
 	uint8_t  vs, va, vr;		/* send / ack / receive state (mod 2) */
 
 	/* Outbound NWK message under segmentation (window 1: one at a time). */

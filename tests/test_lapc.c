@@ -83,7 +83,8 @@ static void test_build_i_roundtrip(void)
 	struct dect_lapc_frame f;
 	size_t n;
 
-	n = dect_lapc_build_i(out, sizeof(out), 1, 1, 0, 1, 0, 1, info, sizeof(info));
+	n = dect_lapc_build_i(out, sizeof(out), 1, 1, DECT_LAPC_LLN_A, 0, 1, 0, 1,
+			      info, sizeof(info));
 	CHECK_EQ(n, 6);
 	CHECK_EQ(out[0], 0x93);		/* cr=1, nlf=1, class A, sapi 0 */
 	CHECK_EQ(dect_lapc_parse(out, n, &f), 0);
@@ -100,7 +101,7 @@ static void test_build_rr_roundtrip(void)
 	struct dect_lapc_frame f;
 	size_t n;
 
-	n = dect_lapc_build_rr(out, sizeof(out), 0, 1, 1);
+	n = dect_lapc_build_rr(out, sizeof(out), 0, DECT_LAPC_LLN_A, 1, 1);
 	CHECK_EQ(n, 3);
 	CHECK_EQ(out[0], 0x11);		/* cr=0 response */
 	CHECK_EQ(dect_lapc_parse(out, n, &f), 0);
@@ -118,7 +119,8 @@ static void test_lapc_over_lc(void)
 	size_t n, flen, off;
 	int r = 0;
 
-	n = dect_lapc_build_i(lapc, sizeof(lapc), 1, 0, 0, 0, 0, 0, info, sizeof(info));
+	n = dect_lapc_build_i(lapc, sizeof(lapc), 1, 0, DECT_LAPC_LLN_A, 0, 0, 0, 0,
+			      info, sizeof(info));
 	flen = dect_lc_build(lapc, n, 0, cs, sizeof(cs));
 	CHECK(flen > 0);
 
@@ -144,7 +146,8 @@ static void test_fsm_rx_single(void)
 
 	dect_lapc_init(&l, 0);
 	/* PP command I-frame, NLF set, ns=0, no more. */
-	n = dect_lapc_build_i(frame, sizeof(frame), 0, 1, 0, 0, 1, 0, info, sizeof(info));
+	n = dect_lapc_build_i(frame, sizeof(frame), 0, 1, DECT_LAPC_LLN_A, 0, 0, 1, 0,
+			      info, sizeof(info));
 	CHECK_EQ(dect_lapc_parse(frame, n, &f), 0);
 	r = dect_lapc_rx(&l, &f, 100, out, sizeof(out));
 	CHECK_EQ(r, 3);
@@ -182,7 +185,7 @@ static void test_fsm_tx_short(void)
 	CHECK_EQ(l.outstanding, 1);
 
 	/* Peer acks with RR N(R)=1. */
-	n = dect_lapc_build_rr(rr, sizeof(rr), 1, 1, 0);
+	n = dect_lapc_build_rr(rr, sizeof(rr), 1, DECT_LAPC_LLN_A, 1, 0);
 	CHECK_EQ(dect_lapc_parse(rr, n, &f), 0);
 	dect_lapc_rx(&l, &f, 50, NULL, 0);
 	CHECK_EQ(l.outstanding, 0);

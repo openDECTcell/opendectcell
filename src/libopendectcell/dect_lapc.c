@@ -94,13 +94,13 @@ static uint8_t build_addr(uint8_t cr, uint8_t nlf, uint8_t sapi, uint8_t lln)
 }
 
 size_t dect_lapc_build_i(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
-			 uint8_t ns, uint8_t nr, uint8_t pf, uint8_t more,
-			 const uint8_t *info, size_t info_len)
+			 uint8_t lln, uint8_t ns, uint8_t nr, uint8_t pf,
+			 uint8_t more, const uint8_t *info, size_t info_len)
 {
 	if (info_len > DECT_LC_INFO_MAX || out_cap < 3 + info_len)
 		return 0;
 
-	out[0] = build_addr(cr, nlf, DECT_LAPC_SAPI_CO, DECT_LAPC_LLN_A);
+	out[0] = build_addr(cr, nlf, DECT_LAPC_SAPI_CO, lln);
 	out[1] = (uint8_t)(((nr & 0x07u) << CTRL_NR_SH) |
 			   (pf ? CTRL_PF : 0u) |
 			   ((ns & 0x07u) << CTRL_NS_SH));	/* bit1 = 0 => I */
@@ -112,12 +112,12 @@ size_t dect_lapc_build_i(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
 }
 
 size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr,
-			  uint8_t nr, uint8_t pf)
+			  uint8_t lln, uint8_t nr, uint8_t pf)
 {
 	if (out_cap < 3)
 		return 0;
 
-	out[0] = build_addr(cr, 0, DECT_LAPC_SAPI_CO, DECT_LAPC_LLN_A);
+	out[0] = build_addr(cr, 0, DECT_LAPC_SAPI_CO, lln);
 	out[1] = (uint8_t)(((nr & 0x07u) << CTRL_NR_SH) |
 			   (pf ? CTRL_PF : 0u) | 0x01u);	/* bits2-1 = 01, SS = 00 */
 	out[2] = (uint8_t)LI_N;				/* LI = 0, M = 0, N = 1 */
@@ -135,6 +135,7 @@ void dect_lapc_init(struct dect_lapc *l, uint32_t retry_ms)
 {
 	memset(l, 0, sizeof(*l));
 	l->retry_ms = retry_ms ? retry_ms : DEFAULT_RETRY_MS;
+	l->lln = DECT_LAPC_LLN_A;	/* until the peer's first frame sets it */
 	l->nlf_pending = 1;	/* first I-frame of the link sets NLF */
 }
 
@@ -154,7 +155,7 @@ static void txq_push(struct dect_lapc *l, const uint8_t *buf, size_t len)
 static void queue_rr(struct dect_lapc *l, uint8_t pf)
 {
 	uint8_t rr[3];
-	size_t n = dect_lapc_build_rr(rr, sizeof(rr), CR_RSP, l->vr, pf);
+	size_t n = dect_lapc_build_rr(rr, sizeof(rr), CR_RSP, l->lln, l->vr, pf);
 
 	txq_push(l, rr, n);
 	l->stats.tx_rr++;
@@ -165,7 +166,7 @@ static void queue_ua(struct dect_lapc *l, uint8_t pf)
 {
 	uint8_t frame[3];
 
-	frame[0] = build_addr(CR_RSP, 0, DECT_LAPC_SAPI_CO, DECT_LAPC_LLN_A);
+	frame[0] = build_addr(CR_RSP, 0, DECT_LAPC_SAPI_CO, l->lln);
 	frame[1] = (uint8_t)(0x63u | (pf ? CTRL_PF : 0u));
 	frame[2] = (uint8_t)LI_N;
 	txq_push(l, frame, 3);
@@ -192,7 +193,7 @@ static void pump_tx(struct dect_lapc *l, uint64_t now_ms)
 		seg = SEG_MAX;
 
 	l->cur_i_len = dect_lapc_build_i(l->cur_i, sizeof(l->cur_i), CR_CMD,
-					 l->nlf_pending, l->vs, l->vr, 1,
+					 l->nlf_pending, l->lln, l->vs, l->vr, 1,
 					 l->txmsg_off + seg < l->txmsg_len,
 					 &l->txmsg[l->txmsg_off], seg);
 	l->nlf_pending = 0;
@@ -241,6 +242,7 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	int msg_len = 0;
 
 	l->established = 1;
+	l->lln = f->lln;		/* respond on the peer's logical link */
 	if (f->nlf)
 		l->vr = 0;		/* new link: discard the old receive state */
 

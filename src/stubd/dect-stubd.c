@@ -46,6 +46,7 @@
 #define POLL_MS		100
 
 static volatile sig_atomic_t stop;
+static uint64_t g_start;		/* for relative timestamps in the log */
 
 static void on_signal(int sig)
 {
@@ -99,7 +100,8 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
 {
 	unsigned int i;
 
-	printf("%s src %02x dst %02x prim %04x len %u", dir, m->src, m->dst,
+	printf("[%5llu] %s src %02x dst %02x prim %04x len %u",
+	       (unsigned long long)(mono_ms() - g_start), dir, m->src, m->dst,
 	       m->prim, m->param_len);
 	if (!show_params) {
 		printf("%s\n", m->param_len ? " [params hidden]" : "");
@@ -371,8 +373,13 @@ static void pump_lapc(struct stubd *s)
 	uint8_t frame[DECT_LC_LAPC_MAX];
 	size_t n;
 
-	while ((n = dect_lapc_poll_tx(&s->reg.lapc, frame, sizeof(frame))) > 0)
+	while ((n = dect_lapc_poll_tx(&s->reg.lapc, frame, sizeof(frame))) > 0) {
+		if (s->verbose)
+			printf("[%5llu] reg: tx cplane %zu bytes (addr %02x ctrl %02x)\n",
+			       (unsigned long long)(mono_ms() - g_start), n,
+			       frame[0], frame[1]);
 		send_cplane(s, s->reg.handle, frame, n);
+	}
 }
 
 static void reg_start(struct stubd *s, uint8_t handle)
@@ -405,11 +412,22 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	if (dect_cs_decode_segment(m, &seg) < 0)
 		return;
 	lapc_len = dect_lc_rx_fragment(&s->reg.lc, seg.data, lapcbuf, sizeof(lapcbuf));
+	if (s->verbose)
+		printf("reg: cs in %02x %02x %02x (addr/ctrl/li), lc_rc=%d\n",
+		       seg.data[0], seg.data[1], seg.data[2], lapc_len);
 	if (lapc_len <= 0)
 		return;
-	if (dect_lapc_parse(lapcbuf, (size_t)lapc_len, &f) < 0)
+	if (dect_lapc_parse(lapcbuf, (size_t)lapc_len, &f) < 0) {
+		if (s->verbose)
+			printf("reg: lapc parse failed (len %d)\n", lapc_len);
 		return;
+	}
+	if (s->verbose)
+		printf("reg: lapc type=%d ns=%u nr=%u more=%u infolen=%zu\n",
+		       f.type, f.ns, f.nr, f.more, f.info_len);
 	nwk_len = dect_lapc_rx(&s->reg.lapc, &f, now, nwk, sizeof(nwk));
+	if (s->verbose)
+		printf("reg: nwk_len=%d\n", nwk_len);
 	pump_lapc(s);				/* at least the LAPC ack */
 	if (nwk_len > 0) {
 		uint8_t rand_f[8], mmsg[DECT_LAPC_MSG_MAX];
@@ -464,6 +482,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 
 	if (!buf)
 		return -1;
+	g_start = start;
 	while (!stop) {
 		struct pollfd pfd = { .fd = s->fd, .events = POLLIN };
 		uint64_t now;
@@ -608,8 +627,9 @@ int main(int argc, char **argv)
 	/* -g auto-sends the MAC bring-up (radio on, open registration) unless the
 	 * caller supplied its own -M mails. [CR COMMAND_SET §6.1/§6.2] */
 	if (s.do_register && s.n_xmail == 0) {
-		s.xmail[s.n_xmail++] = "22:02:015b:01";	/* radio/beacon on */
-		s.xmail[s.n_xmail++] = "22:02:022b:41";	/* 'A': open registration */
+		/* src/dst/prim parse with base 0, so hex needs the 0x prefix. */
+		s.xmail[s.n_xmail++] = "0x22:0x02:0x015b:01";	/* radio/beacon on */
+		s.xmail[s.n_xmail++] = "0x22:0x02:0x022b:41";	/* 'A': open reg */
 	}
 	if (optind != argc) {
 		usage();
@@ -649,8 +669,8 @@ int main(int argc, char **argv)
 	/* Park the radio so the base does not keep beaconing with registration
 	 * open after we exit. [CR COMMAND_SET §6.2/§6.1] */
 	if (s.do_register && s.tx_slot >= 0) {
-		send_mail_spec(&s, "22:02:022c:01");	/* close registration */
-		send_mail_spec(&s, "22:02:015b:00");	/* radio off */
+		send_mail_spec(&s, "0x22:0x02:0x022c:01");	/* close registration */
+		send_mail_spec(&s, "0x22:0x02:0x015b:00");	/* radio off */
 		printf("reg: radio parked\n");
 	}
 out:
