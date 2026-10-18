@@ -111,13 +111,13 @@ size_t dect_lapc_build_i(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
 	return 3 + info_len;
 }
 
-size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr,
+size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
 			  uint8_t lln, uint8_t nr, uint8_t pf)
 {
 	if (out_cap < 3)
 		return 0;
 
-	out[0] = build_addr(cr, 0, DECT_LAPC_SAPI_CO, lln);
+	out[0] = build_addr(cr, nlf, DECT_LAPC_SAPI_CO, lln);
 	out[1] = (uint8_t)(((nr & 0x07u) << CTRL_NR_SH) |
 			   (pf ? CTRL_PF : 0u) | 0x01u);	/* bits2-1 = 01, SS = 00 */
 	out[2] = (uint8_t)LI_N;				/* LI = 0, M = 0, N = 1 */
@@ -136,7 +136,14 @@ void dect_lapc_init(struct dect_lapc *l, uint32_t retry_ms)
 	memset(l, 0, sizeof(*l));
 	l->retry_ms = retry_ms ? retry_ms : DEFAULT_RETRY_MS;
 	l->lln = DECT_LAPC_LLN_A;	/* until the peer's first frame sets it */
+	l->modulus = 2;			/* class A until a class-B request is accepted */
 	l->nlf_pending = 1;	/* first I-frame of the link sets NLF */
+}
+
+/* Advance a sequence variable modulo the link's modulus (2 = A, 8 = B). */
+static uint8_t seq_inc(const struct dect_lapc *l, uint8_t v)
+{
+	return (uint8_t)((v + 1u) % l->modulus);
 }
 
 /* Enqueue a built LAPC frame of len octets for transmission. */
@@ -152,10 +159,17 @@ static void txq_push(struct dect_lapc *l, const uint8_t *buf, size_t len)
 	l->txq_count++;
 }
 
-static void queue_rr(struct dect_lapc *l, uint8_t pf)
+/*
+ * Queue an RR. nlf must be set on the response to the peer's establishment
+ * frame (EN 300 175-4 §9.2.3.1: the initiator only confirms establishment on an
+ * RR with NLF set) and cleared afterwards. We always answer on the class-A LLN,
+ * which refuses any class-B request (§9.2.2.2) and keeps the link class A.
+ */
+static void queue_rr(struct dect_lapc *l, uint8_t nlf, uint8_t pf)
 {
 	uint8_t rr[3];
-	size_t n = dect_lapc_build_rr(rr, sizeof(rr), CR_RSP, l->lln, l->vr, pf);
+	size_t n = dect_lapc_build_rr(rr, sizeof(rr), CR_RSP, nlf,
+				      l->lln, l->vr, pf);
 
 	txq_push(l, rr, n);
 	l->stats.tx_rr++;
@@ -198,7 +212,7 @@ static void pump_tx(struct dect_lapc *l, uint64_t now_ms)
 					 &l->txmsg[l->txmsg_off], seg);
 	l->nlf_pending = 0;
 	l->txmsg_off += seg;
-	l->vs ^= 1u;			/* mod-2 send sequence */
+	l->vs = seq_inc(l, l->vs);
 	l->outstanding = 1;
 	queue_cur_i(l, now_ms);
 }
@@ -242,9 +256,23 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	int msg_len = 0;
 
 	l->established = 1;
-	l->lln = f->lln;		/* respond on the peer's logical link */
-	if (f->nlf)
+	/*
+	 * A PT frame with an assignable LLN (2..6) requests class B operation
+	 * (EN 300 175-4 §9.2.2.2). The FRITZ!Fon releases the link if class B is
+	 * refused, so accept it: mirror the chosen LLN and switch to modulus 8
+	 * (§9.2.4.3.1). Otherwise stay class A on LLN 1.
+	 */
+	if (f->nlf) {
+		if (f->lln >= 2u && f->lln <= 6u) {
+			l->lln = f->lln;
+			l->modulus = 8;
+			l->nlf_pending = 0;	/* PT established; our frames are subsequent */
+		} else {
+			l->lln = DECT_LAPC_LLN_A;
+			l->modulus = 2;
+		}
 		l->vr = 0;		/* new link: discard the old receive state */
+	}
 
 	switch (f->type) {
 	case DECT_LAPC_SABM:
@@ -279,9 +307,14 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 					l->rxmsg_len += f->info_len;
 				}
 			}
-			l->vr ^= 1u;
+			l->vr = seq_inc(l, l->vr);
 			l->stats.rx_i++;
-			queue_rr(l, f->pf);
+			/*
+			 * The class-B accept RR must carry F=1 (an F=0 RR is
+			 * ignored by the originator, §9.2.4.2) and NLF set.
+			 */
+			queue_rr(l, f->nlf,
+				 (l->modulus == 8 && f->nlf) ? 1u : f->pf);
 			if (!f->more) {		/* complete NWK message */
 				if (out_cap >= l->rxmsg_len) {
 					memcpy(out, l->rxmsg, l->rxmsg_len);
@@ -292,7 +325,7 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 			}
 		} else {			/* duplicate / out of sequence */
 			l->stats.rx_dup++;
-			queue_rr(l, f->pf);	/* re-acknowledge what we have */
+			queue_rr(l, f->nlf, f->pf);	/* re-acknowledge */
 		}
 		return msg_len;
 

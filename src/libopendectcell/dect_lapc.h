@@ -80,7 +80,7 @@ size_t dect_lapc_build_i(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
 			 uint8_t more, const uint8_t *info, size_t info_len);
 
 /* Build a supervisory RR frame (no information field). Returns 3, or 0 on error. */
-size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr,
+size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
 			  uint8_t lln, uint8_t nr, uint8_t pf);
 
 /*
@@ -113,7 +113,8 @@ struct dect_lapc_stats {
 struct dect_lapc {
 	uint8_t  established;
 	uint8_t  lln;			/* logical link number (adopted from the peer) */
-	uint8_t  vs, va, vr;		/* send / ack / receive state (mod 2) */
+	uint8_t  modulus;		/* 2 = class A, 8 = class B */
+	uint8_t  vs, va, vr;		/* send / ack / receive state (mod `modulus`) */
 
 	/* Outbound NWK message under segmentation (window 1: one at a time). */
 	uint8_t  txmsg[DECT_LAPC_MSG_MAX];

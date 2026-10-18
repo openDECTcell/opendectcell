@@ -101,9 +101,9 @@ static void test_build_rr_roundtrip(void)
 	struct dect_lapc_frame f;
 	size_t n;
 
-	n = dect_lapc_build_rr(out, sizeof(out), 0, DECT_LAPC_LLN_A, 1, 1);
+	n = dect_lapc_build_rr(out, sizeof(out), 0, 0, DECT_LAPC_LLN_A, 1, 1);
 	CHECK_EQ(n, 3);
-	CHECK_EQ(out[0], 0x11);		/* cr=0 response */
+	CHECK_EQ(out[0], 0x11);		/* cr=0 response, nlf=0 */
 	CHECK_EQ(dect_lapc_parse(out, n, &f), 0);
 	CHECK_EQ(f.type, DECT_LAPC_RR);
 	CHECK_EQ(f.nr, 1); CHECK_EQ(f.pf, 1);
@@ -185,7 +185,7 @@ static void test_fsm_tx_short(void)
 	CHECK_EQ(l.outstanding, 1);
 
 	/* Peer acks with RR N(R)=1. */
-	n = dect_lapc_build_rr(rr, sizeof(rr), 1, DECT_LAPC_LLN_A, 1, 0);
+	n = dect_lapc_build_rr(rr, sizeof(rr), 1, 0, DECT_LAPC_LLN_A, 1, 0);
 	CHECK_EQ(dect_lapc_parse(rr, n, &f), 0);
 	dect_lapc_rx(&l, &f, 50, NULL, 0);
 	CHECK_EQ(l.outstanding, 0);
