@@ -26,7 +26,7 @@
 - [ ] Complete mail header layout (source/destination task, primitive, length)
 - [ ] Primitive-ID catalogue host↔STUB (`docs/stub-api.md`)
 - [ ] STUB (CR16C) analysis: meaning of mode byte tag 7; channel configuration
-- [ ] Minimal mail sequences for MAC start, registration and call setup, as used by the stock stack (input for G5–G7)
+- [x] Minimal mail sequence for MAC start (G5): `0x015B:01` + `0x022B:41` [CR COMMAND_SET]. Registration/call-setup sequences (G6/G7) still to establish from COMMAND_SET §6.2-§6.4 + ETSI
 
 ## M1: Lab setup on the 7520 **[hw]**
 - [x] Full NAND backup of a box still running AVM firmware: RAM-boot OpenWrt (eva_ramboot + initramfs, no flash writes) and dump every MTD partition (raw incl. OOB, plus plain) via SCP into `work/` (never committed)
@@ -72,11 +72,11 @@
 - [ ] **[hw]** Gate G4: test tone received in a voice slot
   - loop-back half proven 2026-10-17 (`docs/stub-pcm-control-channel.md`); the literal STUB test tone needs minimal MAC bring-up (M5) or a trigger not yet known
 
-## M5: MAC bring-up → **Gate G5**
-- [ ] Start/stop of the FP MAC with RFPI; beacon; paging
-  - candidate bring-up sequence in `docs/mac-bringup.md` [CR A-0006]: group A config (radio off) then 0x022C(1) (radio on) then 0x015C/0x0300. Config-corruption risk is nil (AVM EEPROM is host-side only); the real effect is radio emission. RFPI = EEPROM item 0x10, from the STUB's patched-in factory data. Blocker: group A / 0x015C need host config values and a layout not yet known
+## M5: MAC bring-up → **Gate G5**  ✅ PASSED 2026-10-18
+- [x] Start/stop of the FP MAC with RFPI; beacon; paging
+  - **Real sequence (verified):** `0x015B:01` (radio/beacon on) then `0x022B:41` (`'A'` = open registration, sets capability a44); park with `0x022C:01` + `0x015B:00`. See `docs/mac-bringup.md` top section [CR COMMAND_SET §6.1/§6.2]. The STUB picks the carrier itself and emits identity from its patched-in factory RFPI; no `0x015C` cell config is involved (the earlier A-0006 "group A/B" reading was wrong). Driven today with `dect-stubd -M`.
 - [ ] `dect-probe` skeleton on top of `libopendectcell` (transport and timers injected)
-- [ ] **[hw]** Gate G5: a handset sees the base
+- [x] **[hw]** Gate G5: a handset sees the base — FRITZ!Fon C4 listed the base ("Basis 3") and attempted registration
 
 ## M6: Minimal registration → **Gate G6**
 - [ ] `libopendectcell`: LAPC/Lc DLC minimum (ETSI EN 300 175-4)

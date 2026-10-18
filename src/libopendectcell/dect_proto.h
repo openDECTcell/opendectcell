@@ -38,4 +38,24 @@
 #define DECT_AUDIO_CHN_SILENCE	12u
 #define DECT_AUDIO_CHN_TESTTONE	15u
 
+/*
+ * MAC / radio control and registration, destination task 0x02.
+ * Sources: clean-room firmware spec [CR COMMAND_SET] (reconstructed from the
+ * SC14441 STUB images, §6.1/§6.2); each verified on hardware 2026-10-18 (G5).
+ */
+#define DECT_PRIM_RADIO_ON_OFF	0x015Bu	/* 1 param: 1 = radio/beacon on, 0 = off */
+#define DECT_RADIO_ON		0x01u
+#define DECT_RADIO_OFF		0x00u
+#define DECT_PRIM_OPEN_REG	0x022Bu	/* data[0]='A' (0x41) sets a44, opens reg */
+#define DECT_OPEN_REG_A		0x41u	/* 'A': "access rights requests supported" */
+#define DECT_PRIM_CLOSE_REG	0x022Cu	/* 1 param: !=0 clears a44 (closes reg) */
+
+/* STUB -> host MAC/connection events seen during a handset access (task varies). */
+#define DECT_PRIM_RADIO_STATUS	0xF623u	/* periodic while radio on [CR COMMAND_SET §8.1] */
+#define DECT_PRIM_CONN_UP	0x0200u	/* CONNECTION_ESTABLISHED (dst 0x03) */
+#define DECT_PRIM_CONN_DOWN	0x0201u	/* CONNECTION_RELEASED (dst 0x03) */
+#define DECT_PRIM_SIGNALLING	0x0203u	/* 5-byte NWK/Cs signalling segment (dst 0x03) */
+#define DECT_PRIM_ACCESS_EVENT	0xF604u	/* HANDSET_ACCESS_EVENT (short-form access) */
+#define DECT_PRIM_ACCESS_CHAL	0x0E0Du	/* ACCESS_CHALLENGE_DATA (dst 0x05) */
+
 #endif /* OPENDECTCELL_DECT_PROTO_H */
