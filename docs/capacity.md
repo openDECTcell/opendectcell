@@ -74,6 +74,36 @@ larger than assumed. This costs one test card and settles the premise.
    stations under the controller, not from one SC14441. Multi-cell is already the
    committed architecture (ROADMAP M11).
 
+## Host-driver confirmations (A-0013 / A-0014)
+
+Analysis of AVM's host driver (`avm_dect.ko`, 7520) sharpens the picture:
+
+- **The "439" ceiling is a TPUI namespace, not a handset count.** The boot log's
+  `avmTpui 16/390, etsiTpui 406/40` means two TPUI number ranges (AVM 16..405,
+  ETSI 406..445); these explain the `0xF602` fields and the `0x196..0x1BD` special
+  range. They do not bound simultaneous subscriptions, which stays six.
+  [CR A-0013 F2]
+- **Extended/ULE accounts are a real second mechanism** (16-bit TPUI +
+  `0x015F` ADMIT_HANDSET admission from persisted extended records), separate from
+  the six `0xF605`/`0x020A` on-chip GAP slots. But `a stock account routine`
+  returning `6` is an account-*class* code, **not** a 7th subscription slot, and
+  nothing here shows an ordinary GAP voice handset using the ULE path. So >6
+  ordinary GAP handsets is still not demonstrated; host-side virtualisation
+  (option 3) remains the lever. [CR A-0014 F1/F2, A-0012 F2]
+- **Concurrent voice is likely below six.** The host reports `DECT=4` logical
+  DECT codec/channel resources (`PCM-link`), and the TDM timing (`FS 8000 Hz`,
+  CLK ~1.026 MHz) confirms 8×16-bit PCM frames. Six connection contexts ≠ six
+  simultaneous voice paths; measure `PCM-link` allocation before claiming a number.
+  [CR A-0013 F6]
+- **Chip-identity caveat:** the 7520 boots the `_441` STUB image, but the filename
+  does not prove SC14441 silicon — some reports identify the 7520/7530 DECT chip
+  as **SC14448**. Treat "SC14441" in our docs as the firmware family, not a
+  confirmed part number. [CR A-0013 F1]
+- **DSAA2/AES is present in the host** (`a stock key routine` → AES; `ExtSecurity=1`,
+  `AVMULEAES=1`, `CATIQ20SUPPORT=1`). A future controller should keep
+  authentication/key-negotiation capability independent of on-air cipher state.
+  [CR A-0013 F7, A-0014 F7]
+
 ## Open questions
 
 - Is `0xF604` (unknown-handset access) delivered to the host early enough, and

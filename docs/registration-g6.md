@@ -135,3 +135,45 @@ identity (IPUI, tag, RFPI) is redacted and must never be committed.
   key-allocation flow (ACCESS-RIGHTS-REQUEST → KEY-ALLOCATE → PP
   AUTHENTICATION-REQUEST → AUTHENTICATION-REPLY → ACCESS-RIGHTS-ACCEPT) and the
   daemon drains its message queue one per free LAPC window.
+
+## AVM host-side MM facts to match (from A-0011/A-0012/A-0014) — not yet coded
+
+These are host-driver (`avm_dect.ko`) facts to align our `dect_mm` with. All are
+clean-room answers; cite `[CR A-00NN]`. No identity bytes here.
+
+**Choosing KEY-ALLOCATE vs AUTHENTICATION-REQUEST.** On ACCESS-RIGHTS-REQUEST
+(`0x44`) AVM reads the AUTH-TYPE IE's first payload octet (the "mode"); it accepts
+`0x01` and `0x02`. Mode `0x02` → the FP sends **KEY-ALLOCATE** (`0x42`) first;
+other modes → an authentication path. The C4's request carried mode `0x02`, so
+KEY-ALLOCATE-first is correct for it. [CR A-0012 F1] (AVM routes this via an
+internal host mail `0x0F9C` to task 5 — that is host-internal, **never** sent to
+the STUB.)
+
+**KEY-ALLOCATE exact bytes (mode 2), 34 NWK bytes** — our current frame differs:
+| IE | AVM | ours now | fix |
+|---|---|---|---|
+| ALLOCATION-TYPE | `0B 02 02 88` | `0B 02 01 11` | payload → `02 88` |
+| RAND | `0C 08` + 8 | `0C 08` + 8 | ok |
+| RS | `0E 10` + **16** | `0E 08` + 8 | **RS must be 16 bytes** |
+[CR A-0011, A-0012 F5]. AUTHENTICATION-REQUEST's AUTH-TYPE uses a constant 2nd
+byte `0x18` and `0A 03`/`0A 05` variants [CR A-0011].
+
+**ACCESS-RIGHTS-ACCEPT (what we already build correctly).** `85 45 | 05 07 80 A8
+<5 id bytes> | 06 07 A0 A5 <5 RFPI bytes>`; FIXED-IDENTITY is PARK type with the
+RFPI copied verbatim — **no `>>1` transform** [CR A-0011, A-0012]. Transaction
+octet: incoming `0x05` → reply `0x85` (same TV, responder F-bit) [CR A-0011/A-0012].
+
+**Validation is stateful and IE-dependent.** AVM's `0x44` handler inspects
+PORTABLE-IDENTITY (`0x05`), AUTH-TYPE (`0x0A`), FIXED-IDENTITY (`0x06`) and
+`0x63`/`0x77`/`0x78`/`0x7B`/`0x7C`; a syntactically valid LAPC I-frame can still
+be rejected silently at MM. A LAPC RR is **not** MM acceptance. [CR A-0012 F5]
+
+**Storing the subscription after ACCESS-RIGHTS-ACCEPT.** On enrol AVM calls, in
+host order, `0x45` ACCESS-RIGHTS-ACCEPT → then `0x0247` (task 2: {slot 1-based,
+op 1, state byte}) → `0x020A` (task 2: {index 1..6, 16-byte record, 1 byte}).
+[CR A-0012 F3] The `0xF605` sub-op 2 producer layout is {`F605` LE, sub-op 2,
+`00`, index 0..5, 5-byte identity, 4-byte aux, 1 flag} = 15 bytes [CR A-0013 F3].
+
+**Next-session order:** fix KEY-ALLOCATE (RS 16 bytes, ALLOCATION-TYPE `02 88`),
+retry the C4, watch for the PIN prompt; then wire AUTHENTICATION-REPLY /
+ACCESS-RIGHTS-ACCEPT and the `0x0247`+`0x020A` store.
