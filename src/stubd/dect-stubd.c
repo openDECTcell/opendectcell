@@ -402,9 +402,25 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 
 			if (w < s->slots && w != (unsigned int)s->tx_slot) {
 				const uint8_t *src = rx + (f * s->slots + w) * 2u;
+				uint16_t v = (uint16_t)(src[0] | (src[1] << 8));
 
-				fr[w * 2u] = src[0];
-				fr[w * 2u + 1u] = src[1];
+				/*
+				 * Only echo real bearer data. A lane that is
+				 * routed but has nothing on it reads 0x0000, and
+				 * an unrouted one reads the 0xFEFE idle fill;
+				 * feeding either back means handing the chip's
+				 * downlink a stream of zeros or fill bytes while
+				 * its own path is still coming up. v20 did that
+				 * and its lane, which had started to come alive,
+				 * went flat within the first second -- where v22,
+				 * whose lane came up at once and echoed valid
+				 * coded words from the start, worked. Until there
+				 * is something real to send, send the filler.
+				 */
+				if (v != 0x0000u && v != 0xFEFEu) {
+					fr[w * 2u] = src[0];
+					fr[w * 2u + 1u] = src[1];
+				}
 			}
 		}
 		tx_tone(s, fr);
