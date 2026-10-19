@@ -1290,8 +1290,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.bind_ms = now;
 		s->reg.status_ms = 0;
 		s->reg.have_counters = 0;
-		s->reg.sweep_idx = 0;
-		s->reg.sweep_ms = 0;
+		/*
+		 * Source 0 leaves the destination disconnected (measured with
+		 * the radio off), so it carries no information during a call and
+		 * only drops whatever route the bind installed. Start at 1.
+		 */
+		s->reg.sweep_idx = 1;
+		s->reg.sweep_ms = now;	/* let the call settle for one step */
 		s->reg.sweep_done = 0;
 		send_audio_bind(s, s->reg.handle);
 		s->reg.call_bound = 1;
@@ -1359,9 +1364,25 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			s->have_rfpi = 1;
 		}
 		break;
-	case DECT_PRIM_CONN_UP:
-		reg_start(s, m->param_len ? m->param[0] : 0);
+	case DECT_PRIM_CONN_UP: {
+		uint8_t h = m->param_len ? m->param[0] : 0;
+
+		/*
+		 * The chip can repeat connection-up for a handle that is already
+		 * up -- observed in v18, ~150 ms after a call had bound, which
+		 * re-armed the C-plane and dropped the call state underneath a
+		 * live call. Treat a repeat for the same handle as a no-op while
+		 * that handle's call is bound; a different handle, or an idle
+		 * one, still starts a fresh link.
+		 */
+		if (s->reg.active && s->reg.call_bound && h == s->reg.handle) {
+			printf("reg: connection up (handle %u) repeated while "
+			       "a call is bound -- keeping call state\n", h);
+			break;
+		}
+		reg_start(s, h);
 		break;
+	}
 	case DECT_PRIM_CONN_DOWN:
 		if (s->reg.active)
 			printf("reg: connection released\n");
@@ -1625,7 +1646,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		klen = eq ? (size_t)(eq - key) : (size_t)(spec - key);
 		if (eq) {
 			v = strtoul(eq + 1, &end, 0);
-			if (end != spec && !(klen == 3 && !memcmp(key, "dsp", 3)))
+			/* "dsp" and "dspsweep" carry a ':' in their value. */
+			if (end != spec &&
+			    !(klen == 3 && !memcmp(key, "dsp", 3)) &&
+			    !(klen == 8 && !memcmp(key, "dspsweep", 8)))
 				return -1;
 		}
 		if (!eq && klen == 4 && !memcmp(key, "f626", 4))
