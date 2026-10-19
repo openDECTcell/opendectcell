@@ -211,13 +211,27 @@ C4 → FP  05 5d  TEMPORARY-IDENTITY-ASSIGN-ACK                  -- registration
   drew `05 5f` (ASSIGN-REJECT). [CR A-0023, hardware]
 - No PIN prompt appears when the base PIN is the C4 factory default `0000`.
 
-**Still open (stability / persistence, not basic registration):**
+**Subscription persistence (done).** After LOCATE-ACCEPT the daemon installs the
+handset in the chip the way AVM does [CR A-0026]: `0x0247 {slot, op=1, status}`
+then `0x020A {slot, UAK[16], extra}` to STUB task 2, then **closes registration**
+with `0x022C 01` (AVM opens registration with `0x022B 'A'` and closes it
+afterwards, COMMAND_SET §6.2/§9.7). The key finding: the 16-byte `0x020A` record
+is **the UAK itself** (the 128-bit `A21(K,RS)` the key-allocation procedure
+agrees on), not a packed identity — so we keep that UAK from the authentication
+step and write it verbatim. `0xF605`/`0x015F`/`0x017C` are **not** on the
+ordinary voice-handset path and are not sent. The `status`/`extra` security-mode
+bytes have no documented enumeration [CR A-0026]; we send `0x00` and will revisit
+if G7 paging needs a specific value.
 
-- After registration the C4 repeatedly re-connects and re-LOCATEs. We do **not**
-  yet write the chip subscription store (`0x0247` then `0x020A`, per A-0023/A-0012)
-  nor `0xF605`, so the base does not persist the handset for idle standby and
-  paging. The 16-byte `0x020A` record layout is not yet known (must not be
-  zero-filled). This is the next task for a stable, call-capable registration.
-- Class-A (modulus-2) reassembly garbles the C4's retransmitted ~72-byte
-  multi-segment LOCATE-REQUEST; harmless once the C4 is satisfied, but worth
-  hardening [CR A-0023 Q5].
+**Result — G6 finished.** A factory-reset FRITZ!Fon C4 enrolls and holds stable
+standby: its home screen shows the base name and full signal with no errors, and
+the chip keeps beaconing autonomously even after the daemon exits. The handset
+can originate a dial, but the call drops after ~3 s with no audio, and no time is
+shown — i.e. the remaining connect/release activity is the handset attempting
+**normal operation** (time/service fetch, call origination), which needs call
+control and the PCM audio path. That is **G7**, not registration.
+
+**Reassembly hardening (done).** Class-A (modulus-2) reassembly cleared its
+partial buffer only implicitly; it now drops any partial NWK message on a
+new-link I-frame (NLF) or DISC, so a link restart mid-message cannot prepend
+stale bytes [CR A-0023 Q5].
