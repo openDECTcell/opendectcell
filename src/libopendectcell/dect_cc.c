@@ -91,6 +91,19 @@ int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len
 	return 0;
 }
 
+/* Copy an identity IE's contents out of a received message, if it is there. */
+static void learn_id(const uint8_t *ies, size_t ies_len, uint8_t id,
+		     uint8_t *dst, size_t *dst_len)
+{
+	size_t n;
+	const uint8_t *p = dect_nwk_find_ie(ies, ies_len, id, &n);
+
+	if (!p || n == 0 || n > DECT_CC_ID_MAX)
+		return;
+	memcpy(dst, p, n);
+	*dst_len = n;
+}
+
 static void on_setup(struct dect_cc *cc)
 {
 	cc->stats.setup++;
@@ -134,6 +147,10 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;
+			learn_id(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+				 cc->peer_port_id, &cc->peer_port_id_len);
+			learn_id(ies, ies_len, DECT_IE_FIXED_IDENTITY,
+				 cc->peer_fixed_id, &cc->peer_fixed_id_len);
 			on_setup(cc);
 		}
 		break;

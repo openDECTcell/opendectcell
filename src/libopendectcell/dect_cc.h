@@ -43,6 +43,7 @@ enum dect_cc_state {
 };
 
 #define DECT_CC_TXQ	3u		/* pending outbound NWK messages */
+#define DECT_CC_ID_MAX	20u		/* PORTABLE-/FIXED-IDENTITY contents */
 
 struct dect_cc_stats {
 	uint32_t setup;		/* CC-SETUP received */
@@ -56,6 +57,19 @@ struct dect_cc {
 	uint8_t ti_value;		/* transaction value from the PP's SETUP */
 	uint8_t ti_flag;		/* our side of the transaction */
 	uint8_t incoming;		/* 1 = we originated towards the PP */
+
+	/*
+	 * Identities seen in a CC-SETUP the handset sent us. An FP-originated
+	 * SETUP has to carry both, and their encodings (identity type, bit
+	 * length, padding) are fiddly enough that copying what the handset
+	 * itself puts on the wire beats deriving them. The daemon persists
+	 * these with the subscription so an incoming call does not depend on
+	 * the handset having called first this session.
+	 */
+	uint8_t peer_port_id[DECT_CC_ID_MAX];
+	size_t  peer_port_id_len;
+	uint8_t peer_fixed_id[DECT_CC_ID_MAX];
+	size_t  peer_fixed_id_len;
 
 	/* FIFO of outbound NWK messages (e.g. CALL-PROC then CONNECT). */
 	uint8_t  out[DECT_CC_TXQ][DECT_LAPC_MSG_MAX];

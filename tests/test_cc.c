@@ -192,8 +192,38 @@ static void test_alerting_ignored_when_responder(void)
 	CHECK_EQ(cc.stats.alerting, 0u);
 }
 
+/*
+ * A SETUP from the handset carries both identities an FP-originated SETUP
+ * needs; we keep them so a call towards the handset needs no guesswork.
+ */
+static void test_learns_identities_from_setup(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0xde, 0xad, 0x00, 0x02 };
+	static const uint8_t fixed_id[] = { 0xa0, 0xa5, 0xde, 0xad, 0x00, 0x00, 0xb8 };
+	struct dect_cc cc;
+	uint8_t msg[64];
+	size_t off;
+
+	dect_cc_init(&cc);
+	off = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+				 DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+	off = dect_nwk_put_ie(msg, sizeof(msg), off, DECT_IE_PORTABLE_IDENTITY,
+			      port_id, sizeof(port_id));
+	off = dect_nwk_put_ie(msg, sizeof(msg), off, DECT_IE_FIXED_IDENTITY,
+			      fixed_id, sizeof(fixed_id));
+	off = dect_nwk_put_fixed_ie(msg, sizeof(msg), off,
+				    DECT_IE_BASIC_SERVICE, 0x88);
+	dect_cc_rx(&cc, msg, off);
+
+	CHECK_EQ(cc.peer_port_id_len, sizeof(port_id));
+	CHECK_EQ(memcmp(cc.peer_port_id, port_id, sizeof(port_id)), 0);
+	CHECK_EQ(cc.peer_fixed_id_len, sizeof(fixed_id));
+	CHECK_EQ(memcmp(cc.peer_fixed_id, fixed_id, sizeof(fixed_id)), 0);
+}
+
 int main(void)
 {
+	test_learns_identities_from_setup();
 	test_outgoing_call_to_handset();
 	test_alerting_ignored_when_responder();
 	test_incoming_setup();

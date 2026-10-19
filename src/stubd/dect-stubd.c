@@ -94,6 +94,13 @@ struct stubd {
 	uint8_t uak[DECT_MM_UAK_LEN];
 	int uak_valid;
 	const char *sub_path;	/* host-side subscription store (holds the UAK) */
+	/* Identities for an FP-originated SETUP, learned and persisted. */
+	uint8_t     cc_port_id[DECT_CC_ID_MAX];
+	size_t      cc_port_id_len;
+	uint8_t     cc_fixed_id[DECT_CC_ID_MAX];
+	size_t      cc_fixed_id_len;
+	int         ring_paged;		/* 0x0300 sent, awaiting the link */
+	int         ring_pending;	/* send CC-SETUP when a link comes up */
 	int sub_restored;	/* stored subscription already pushed to the chip */
 	/*
 	 * Experimental chip cipher-enable (0x0208). Its field layout is only
@@ -227,6 +234,12 @@ struct stubd {
 		 * glitch the handset plays might be ours. A file plays the same
 		 * every time.
 		 */
+		/*
+		 * ring=MS: MS ms after the radio is up, call the handset.
+		 * Page it with 0x0300, then send an FP-originated CC-SETUP on
+		 * the link it brings up. Milestone B; see docs/call-g7.md.
+		 */
+		unsigned ring_ms;
 		const char *play_path;
 		uint8_t  *play;
 		size_t    play_len;
@@ -730,13 +743,28 @@ static void send_cplane(struct stubd *s, uint8_t handle,
  * created 0600 and must never leave the box.
  */
 #define SUB_MAGIC	0x44535531u	/* "DSU1" */
+#define SUB_MAGIC2	0x44535532u	/* "DSU2": adds the identities below */
 
+/*
+ * Version 2 adds the two identity IEs an FP-originated SETUP must carry, so a
+ * call *to* the handset does not depend on the handset having called us first
+ * in this session. They are copied verbatim from a CC-SETUP the handset sent:
+ * their encodings (identity type, bit length, octet padding) are easy to get
+ * wrong and the handset puts the authoritative form on the wire.
+ *
+ * A version 1 file still loads; it simply has no identities, and they are
+ * learned and saved the first time the handset places a call.
+ */
 struct sub_record {
 	uint32_t magic;
 	uint8_t  slot;
 	uint8_t  uak[DECT_MM_UAK_LEN];
 	uint8_t  port_id_len;
 	uint8_t  port_id[DECT_MM_PORTID_MAX];
+	uint8_t  cc_port_id_len;
+	uint8_t  cc_port_id[DECT_CC_ID_MAX];
+	uint8_t  cc_fixed_id_len;
+	uint8_t  cc_fixed_id[DECT_CC_ID_MAX];
 };
 
 static void sub_save(struct stubd *s)
@@ -750,8 +778,13 @@ static void sub_save(struct stubd *s)
 	r.magic = SUB_MAGIC;
 	r.slot = DECT_MM_REG_SLOT;
 	memcpy(r.uak, s->uak, DECT_MM_UAK_LEN);
+	r.magic = SUB_MAGIC2;
 	r.port_id_len = (uint8_t)s->reg.mm.port_id_len;
 	memcpy(r.port_id, s->reg.mm.port_id, sizeof(r.port_id));
+	r.cc_port_id_len = (uint8_t)s->cc_port_id_len;
+	memcpy(r.cc_port_id, s->cc_port_id, sizeof(r.cc_port_id));
+	r.cc_fixed_id_len = (uint8_t)s->cc_fixed_id_len;
+	memcpy(r.cc_fixed_id, s->cc_fixed_id, sizeof(r.cc_fixed_id));
 
 	fd = open(s->sub_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
 	if (fd < 0) {
@@ -779,13 +812,22 @@ static int sub_load(struct stubd *s)
 		return 0;
 	n = read(fd, &r, sizeof(r));
 	close(fd);
-	if (n != (ssize_t)sizeof(r) || r.magic != SUB_MAGIC ||
+	if (n != (ssize_t)sizeof(r) ||
+	    (r.magic != SUB_MAGIC && r.magic != SUB_MAGIC2) ||
 	    r.port_id_len > DECT_MM_PORTID_MAX)
 		return 0;
 	memcpy(s->uak, r.uak, DECT_MM_UAK_LEN);
 	s->uak_valid = 1;
-	printf("sub: restored subscription for slot %u from %s\n",
-	       r.slot, s->sub_path);
+	if (r.magic == SUB_MAGIC2 && r.cc_port_id_len <= DECT_CC_ID_MAX &&
+	    r.cc_fixed_id_len <= DECT_CC_ID_MAX) {
+		memcpy(s->cc_port_id, r.cc_port_id, sizeof(s->cc_port_id));
+		s->cc_port_id_len = r.cc_port_id_len;
+		memcpy(s->cc_fixed_id, r.cc_fixed_id, sizeof(s->cc_fixed_id));
+		s->cc_fixed_id_len = r.cc_fixed_id_len;
+	}
+	printf("sub: restored subscription for slot %u from %s%s\n",
+	       r.slot, s->sub_path,
+	       s->cc_fixed_id_len ? " (with call identities)" : "");
 	return 1;
 }
 
@@ -1045,6 +1087,38 @@ static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
+}
+
+/*
+ * Page the handset so it brings up a link we can send a CC-SETUP on.
+ *
+ * 0x0300 carries {page info, TPUI high, TPUI low}: the last two are the low
+ * 16 bits of the TPUI we assigned at registration, which our LOCATE-ACCEPT
+ * packs as {0, 0x11, slot} -- so 0x11 and the slot. The page info byte is
+ * 0x0C for a CC page and 0x2C when the SETUP will carry <<BASIC-SERVICE>>
+ * with service 8, i.e. wideband, which is what this handset uses
+ * [CR the hardware-analysis notes §6; COMMAND_SET §6.3].
+ */
+#define RING_PAGE_INFO	0x2Cu		/* CC page, wideband SETUP to follow */
+#define RING_BASIC_SVC	0x88u		/* normal call class, wideband speech */
+
+static void send_page(struct stubd *s)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0300u;
+	m.param[0] = RING_PAGE_INFO;
+	m.param[1] = 0x11u;			/* TPUI prefix AVM uses */
+	m.param[2] = DECT_MM_REG_SLOT;		/* the handset's slot */
+	m.param_len = 3;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	printf("ring: paged the handset (0x0300 {%02x 11 %02x})\n",
+	       RING_PAGE_INFO, DECT_MM_REG_SLOT);
 }
 
 /* Ask the chip to move this call's bearer (see audio_cfg.handover_ms). */
@@ -1373,6 +1447,25 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		if (dect_nwk_parse(nwk, (size_t)nwk_len, &h, &ies, &ies_len) == 0 &&
 		    h.pd == DECT_PD_CC) {
 			dect_cc_rx(&s->reg.cc, nwk, (size_t)nwk_len);
+			/*
+			 * A call the handset places carries the two identities
+			 * an FP-originated SETUP needs, in the handset's own
+			 * encoding. Keep the first pair we see and persist it,
+			 * so calling the handset later needs no guesswork about
+			 * identity types, bit lengths or padding.
+			 */
+			if (!s->cc_fixed_id_len && s->reg.cc.peer_fixed_id_len) {
+				memcpy(s->cc_port_id, s->reg.cc.peer_port_id,
+				       sizeof(s->cc_port_id));
+				s->cc_port_id_len = s->reg.cc.peer_port_id_len;
+				memcpy(s->cc_fixed_id, s->reg.cc.peer_fixed_id,
+				       sizeof(s->cc_fixed_id));
+				s->cc_fixed_id_len = s->reg.cc.peer_fixed_id_len;
+				printf("call: learned the identities for calling "
+				       "the handset (%zu + %zu bytes), saving\n",
+				       s->cc_port_id_len, s->cc_fixed_id_len);
+				sub_save(s);
+			}
 		} else {
 			uint8_t rand_f[8], rs[16];
 
@@ -1529,6 +1622,16 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * Only the assignment is sent. 0x022D stays behind the call, as
 		 * its 0x0242 handler is gated on a bound call.
 		 */
+		if (s->ring_pending) {
+			s->ring_pending = 0;
+			if (dect_cc_setup(&s->reg.cc, s->cc_port_id,
+					  s->cc_port_id_len, s->cc_fixed_id,
+					  s->cc_fixed_id_len, RING_BASIC_SVC))
+				printf("ring: CC-SETUP could not be queued\n");
+			else
+				printf("ring: CC-SETUP queued -- the handset "
+				       "should ring\n");
+		}
 		if (s->audio.bind_early) {
 			printf("call: bindearly: assigning the audio channel "
 			       "on handle %u before any call\n", h);
@@ -1730,6 +1833,19 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
 			send_handover(s, now);
+			if (s->audio.ring_ms && !s->ring_paged &&
+			    s->sess.state == DECT_SESS_UP &&
+			    now - g_start >= s->audio.ring_ms) {
+				s->ring_paged = 1;
+				if (!s->cc_fixed_id_len)
+					printf("ring: no stored call identities "
+					       "-- let the handset place one call "
+					       "first, then retry\n");
+				else {
+					s->ring_pending = 1;
+					send_page(s);
+				}
+			}
 			dsp_sweep(s, now);
 		}
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
@@ -1841,6 +1957,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->bind_early = 1;
 		else if (klen == 8 && !memcmp(key, "handover", 8))
 			a->handover_ms = (unsigned)v;
+		else if (klen == 4 && !memcmp(key, "ring", 4))
+			a->ring_ms = (unsigned)v;
 		else if (klen == 4 && !memcmp(key, "play", 4)) {
 			/* value is a path, not a number: take it verbatim */
 			size_t n = (size_t)(spec - (eq + 1));
@@ -1998,6 +2116,8 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           ring=MS calls the handset MS ms after start-up: page\n"
+		"           (0x0300) then an FP-originated CC-SETUP\n"
 		"           play=FILE transmits a raw G.722 stream (8000 bytes/s) to\n"
 		"           the handset while a call is up, looping -- a clean\n"
 		"           downlink source, unlike the loopback\n"
