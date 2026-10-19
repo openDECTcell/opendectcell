@@ -34,11 +34,20 @@
 #define DECT_MM_UAK_LEN		16u	/* allocated long-term key (128-bit) */
 #define DECT_MM_REG_SLOT	1u	/* chip subscription slot for the handset */
 
+#define DECT_MM_DCK_LEN		8u	/* derived cipher key (64-bit) */
+
 enum dect_mm_state {
 	DECT_MM_IDLE,
 	DECT_MM_WAIT_AUTH,	/* KEY-ALLOCATE sent, awaiting the PP's AUTH-REQUEST */
 	DECT_MM_REGISTERED,
 	DECT_MM_FAILED,
+};
+
+enum dect_mm_cipher_state {
+	DECT_MM_CIPHER_NONE,
+	DECT_MM_CIPHER_WAIT_REPLY,	/* AUTHENTICATION-REQUEST sent to the PP */
+	DECT_MM_CIPHER_READY,		/* DCK derived, CIPHER-REQUEST sent */
+	DECT_MM_CIPHER_FAILED,
 };
 
 #define DECT_MM_TXQ	3u		/* pending outbound NWK messages */
@@ -85,6 +94,15 @@ struct dect_mm {
 	uint8_t uak[DECT_MM_UAK_LEN];
 	uint8_t subscribed;			/* 1 = authenticated, uak valid */
 
+	/*
+	 * Call-time ciphering: the FP authenticates the PP with the stored UAK to
+	 * derive the DCK, then starts DSC. Separate from the registration FSM so it
+	 * can run on a later (call) connection. rand_f/rs above carry the challenge.
+	 */
+	enum dect_mm_cipher_state cipher_state;
+	uint8_t cipher_uak[DECT_MM_UAK_LEN];	/* key for the call-time auth */
+	uint8_t dck[DECT_MM_DCK_LEN];		/* derived cipher key (valid when READY) */
+
 	/* FIFO of outbound NWK messages (e.g. AUTH-REPLY then ACCESS-RIGHTS-ACCEPT). */
 	uint8_t  out[DECT_MM_TXQ][DECT_LAPC_MSG_MAX];
 	size_t   out_len[DECT_MM_TXQ];
@@ -103,6 +121,20 @@ void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg);
  */
 void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		const uint8_t rand_f[8], const uint8_t rs[16]);
+
+/*
+ * Start call-time ciphering (FP-initiated): authenticate the PP with the stored
+ * UAK and a fresh RAND_F/RS, so both sides derive the DCK. Queues an
+ * AUTHENTICATION-REQUEST; when the PP's AUTHENTICATION-REPLY arrives via
+ * dect_mm_rx() and its RES verifies, the DCK is stored and a CIPHER-REQUEST is
+ * queued. (The AUTH-TYPE and CIPHER-INFO IE contents are provisional pending
+ * [CR Q-0015].)
+ */
+void dect_mm_start_cipher(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN],
+			  const uint8_t rand_f[8], const uint8_t rs[16]);
+
+/* When ciphering is READY, copy the 8-byte DCK out and return 1; else 0. */
+int dect_mm_cipher_dck(const struct dect_mm *mm, uint8_t dck[DECT_MM_DCK_LEN]);
 
 /* Pull a pending outbound NWK message. Returns its length, or 0 if none. */
 size_t dect_mm_poll(struct dect_mm *mm, uint8_t *out, size_t cap);

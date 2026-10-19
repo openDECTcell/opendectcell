@@ -217,6 +217,93 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 	send_locate_accept(mm, la, la_len);
 }
 
+/*
+ * Call-time ciphering (FP-initiated authentication + CIPHER-REQUEST). The IE
+ * contents below are provisional and to be confirmed against AVM [CR Q-0015].
+ */
+#define AUTH_TYPE_CIPHER { 0x01u, 0x18u, 0x10u }	/* DSAA1, UAK #8, flags (TBD) */
+#define CIPHER_INFO_DSC  { 0x81u, 0x01u }		/* Y, DSC; DCK (TBD) */
+
+/* FP -> PP AUTHENTICATION-REQUEST: challenge the PP with RAND_F/RS (K = UAK). */
+static void send_auth_request_fp(struct dect_mm *mm)
+{
+	uint8_t at[3] = AUTH_TYPE_CIPHER;
+	unsigned idx;
+	uint8_t *b = txq_slot(mm, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = hdr(mm, b, DECT_TI_ORIGINATOR, DECT_MM_AUTHENTICATION_REQUEST);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_AUTH_TYPE, at, sizeof(at));
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_RAND,
+			      mm->rand_f, sizeof(mm->rand_f));
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_RS,
+			      mm->rs, KEY_ALLOC_RS_LEN);
+	txq_commit(mm, idx, off);
+}
+
+/* FP -> PP CIPHER-REQUEST: ask the PP to start DSC with the derived DCK. */
+static void send_cipher_request(struct dect_mm *mm)
+{
+	uint8_t ci[2] = CIPHER_INFO_DSC;
+	unsigned idx;
+	uint8_t *b = txq_slot(mm, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = hdr(mm, b, DECT_TI_ORIGINATOR, DECT_MM_CIPHER_REQUEST);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_CIPHER_INFO, ci, sizeof(ci));
+	txq_commit(mm, idx, off);
+}
+
+/*
+ * The PP's AUTHENTICATION-REPLY (to our call-time challenge) carries RES. Verify
+ * it against A12(A11(UAK,RS),RAND_F), keep the DCK (middle 8 bytes of A12), and
+ * ask the PP to start ciphering.
+ */
+static void on_auth_reply_cipher(struct dect_mm *mm, const uint8_t *ies,
+				 size_t ies_len)
+{
+	const uint8_t *res;
+	size_t res_len;
+	uint8_t ks[DECT_AUTH_KEY_LEN], dck[DECT_CIPHER_KEY_LEN], xres[4];
+
+	res = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res_len);
+	if (!res || res_len != 4) {
+		mm->cipher_state = DECT_MM_CIPHER_FAILED;
+		return;
+	}
+	dect_dsaa_a11(mm->cipher_uak, mm->rs, ks);
+	dect_dsaa_a12(ks, mm->rand_f, dck, xres);
+	if (memcmp(res, xres, 4) != 0) {
+		mm->cipher_state = DECT_MM_CIPHER_FAILED;
+		return;
+	}
+	memcpy(mm->dck, dck, DECT_MM_DCK_LEN);
+	mm->cipher_state = DECT_MM_CIPHER_READY;
+	send_cipher_request(mm);
+}
+
+void dect_mm_start_cipher(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN],
+			  const uint8_t rand_f[8], const uint8_t rs[16])
+{
+	memcpy(mm->cipher_uak, uak, DECT_MM_UAK_LEN);
+	memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
+	memcpy(mm->rs, rs, sizeof(mm->rs));
+	mm->cipher_state = DECT_MM_CIPHER_WAIT_REPLY;
+	send_auth_request_fp(mm);
+}
+
+int dect_mm_cipher_dck(const struct dect_mm *mm, uint8_t dck[DECT_MM_DCK_LEN])
+{
+	if (mm->cipher_state != DECT_MM_CIPHER_READY)
+		return 0;
+	memcpy(dck, mm->dck, DECT_MM_DCK_LEN);
+	return 1;
+}
+
 static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 				     size_t ies_len)
 {
@@ -305,6 +392,10 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 	case DECT_MM_AUTHENTICATION_REQUEST:
 		if (mm->state == DECT_MM_WAIT_AUTH)
 			on_auth_request(mm, ies, ies_len);
+		break;
+	case DECT_MM_AUTHENTICATION_REPLY:
+		if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY)
+			on_auth_reply_cipher(mm, ies, ies_len);
 		break;
 	case DECT_MM_LOCATE_REQUEST:
 		mm->ti_value = h.ti_value;	/* new PP-initiated transaction */

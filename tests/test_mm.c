@@ -203,10 +203,55 @@ static void test_locate(void)
 	}
 }
 
+/*
+ * Call-time ciphering: the FP challenges the PP with the UAK, derives the DCK
+ * from the PP's reply, and asks it to start DSC.
+ */
+static void test_cipher(void)
+{
+	struct dect_mm_cfg cfg = { .authenticate = 1 };
+	struct dect_mm mm;
+	uint8_t uak[16] = { 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+			    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f };
+	uint8_t rand_f[8] = { 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x01, 0x02 };
+	uint8_t rs[16] = { 0 };
+	uint8_t buf[64], out[64], got_dck[8];
+	struct dect_nwk_hdr h;
+	const uint8_t *ies;
+	size_t n, ies_len;
+	uint8_t ks[16], want_dck[8], res[4];
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_start_cipher(&mm, uak, rand_f, rs);
+
+	/* AUTHENTICATION-REQUEST goes out, FP-originated (F=0). */
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REQUEST);
+	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
+
+	/* PP computes RES = A12(A11(UAK,RS),RAND_F) and replies (F=1). */
+	dect_dsaa_a11(uak, rs, ks);
+	dect_dsaa_a12(ks, rand_f, want_dck, res);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_RESPONDER,
+			       0, DECT_MM_AUTHENTICATION_REPLY);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RES, res, 4);
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+
+	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_READY);
+	CHECK_EQ(dect_mm_cipher_dck(&mm, got_dck), 1);
+	CHECK_EQ(memcmp(got_dck, want_dck, 8), 0);
+
+	/* And a CIPHER-REQUEST is queued. */
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_CIPHER_REQUEST);
+}
+
 int main(void)
 {
 	test_register_ok();
 	test_register_bad_pin();
 	test_locate();
+	test_cipher();
 	return CHECK_DONE();
 }
