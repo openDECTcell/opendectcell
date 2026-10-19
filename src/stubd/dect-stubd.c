@@ -199,6 +199,23 @@ struct stubd {
 		 */
 		int      bind_early;
 		int      loopback;	/* echo the received bearer word back */
+		/*
+		 * handover=MS: MS ms after the audio bind, ask the chip to move
+		 * the call's bearer.
+		 *
+		 * Audio has only ever flowed in runs where the chip
+		 * re-established the connection *after* the channel was
+		 * assigned -- a repeated 0x0200 plus a 0x0243 parameter change.
+		 * We cannot assign early enough to catch the first
+		 * establishment (v23: bindearly produced no repeat and no
+		 * audio), so instead provoke a second one. `0x016A {link}` is
+		 * a stock handover hook, a hook for forcing a bearer
+		 * handover [CR the hardware-analysis notes §4, §5 2.5;
+		 * the hardware-analysis notes §5 0x2fea]. Our own COMMAND_SET §6.4 guessed
+		 * this id was a frame-credit counter; the stock daemon's
+		 * primitive-name table corrects that.
+		 */
+		unsigned handover_ms;
 	} audio;
 	const char *voice_path;
 	FILE       *voice_fp;
@@ -213,6 +230,7 @@ struct stubd {
 		uint64_t status_ms;	/* when the last 0xF624 poll went out */
 		uint16_t counter[10];	/* previous 0xF625 counters, for deltas */
 		int have_counters;
+		int handover_sent;	/* -a handover fired for this call */
 		unsigned sweep_idx;	/* next GenDSP source for -a dspsweep */
 		uint64_t sweep_ms;	/* when the current source was routed */
 		int sweep_done;
@@ -995,6 +1013,31 @@ static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
 		log_mail(&m, "tx M", s->show_params);
 }
 
+/* Ask the chip to move this call's bearer (see audio_cfg.handover_ms). */
+static void send_handover(struct stubd *s, uint64_t now)
+{
+	struct dect_mail m;
+
+	if (!s->audio.handover_ms || s->reg.handover_sent ||
+	    !s->reg.call_bound || !s->reg.active)
+		return;
+	if (now - s->reg.bind_ms < s->audio.handover_ms)
+		return;
+	s->reg.handover_sent = 1;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x016Au;		/* MAC trigger handover */
+	m.param[0] = s->reg.handle;
+	m.param_len = 1;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	printf("call: handover: asked the chip to move the bearer "
+	       "(0x016A on handle %u)\n", s->reg.handle);
+}
+
 /*
  * Walk the GenDSP source numbers into one destination during a live call, one
  * per interval, so a single call covers the whole source range: the daemon
@@ -1352,6 +1395,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * the radio off), so it carries no information during a call and
 		 * only drops whatever route the bind installed. Start at 1.
 		 */
+		s->reg.handover_sent = 0;
 		s->reg.sweep_idx = 1;
 		s->reg.sweep_ms = now;	/* let the call settle for one step */
 		s->reg.sweep_done = 0;
@@ -1438,6 +1482,25 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			break;
 		}
 		reg_start(s, h);
+		/*
+		 * -a bindearly: assign the audio channel now, on the bare link,
+		 * rather than waiting for a call to connect. The evidence says
+		 * the chip wires its audio route when a connection is
+		 * established, using the channel assignment that exists at that
+		 * moment: the runs where audio flowed are exactly the ones where
+		 * the chip re-established the connection *after* our bind. On a
+		 * link that is already assigned, the next establishment should
+		 * wire it without needing that second chance.
+		 *
+		 * Only the assignment is sent. 0x022D stays behind the call, as
+		 * its 0x0242 handler is gated on a bound call.
+		 */
+		if (s->audio.bind_early) {
+			printf("call: bindearly: assigning the audio channel "
+			       "on handle %u before any call\n", h);
+			s->reg.bind_ms = now;
+			send_audio_bind(s, h);
+		}
 		break;
 	}
 	case DECT_PRIM_CONN_DOWN:
@@ -1632,6 +1695,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
+			send_handover(s, now);
 			dsp_sweep(s, now);
 		}
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
@@ -1719,6 +1783,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->cap_all = 1;
 		else if (!eq && klen == 8 && !memcmp(key, "loopback", 8))
 			a->loopback = 1;
+		else if (!eq && klen == 9 && !memcmp(key, "bindearly", 9))
+			a->bind_early = 1;
+		else if (klen == 8 && !memcmp(key, "handover", 8))
+			a->handover_ms = (unsigned)v;
 		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
 			a->tone_high = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "tone16", 6))
@@ -1865,6 +1933,11 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           handover=MS asks the chip to move the call's bearer MS ms\n"
+		"           after the bind (0x016A), which is the event that has\n"
+		"           accompanied every run where audio flowed\n"
+		"           bindearly assigns the audio channel when the chip reports a\n"
+		"           connection, not when a call connects\n"
 		"           loopback echoes the received bearer word (toneword)\n"
 		"           straight back to the handset, byte for byte -- the\n"
 		"           lane carries coded G.722, so this needs no encoder\n"
