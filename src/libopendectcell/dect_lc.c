@@ -147,14 +147,21 @@ int dect_lc_rx_fragment(struct dect_lc_rx *rx, const uint8_t seg[DECT_LC_FRAG_LE
 		return 0;		/* need more fragments */
 
 	/*
-	 * A full frame is buffered. Lock the link signature, or learn it from the
-	 * opening (single-fragment, empty) establishment frame: a registered PP
-	 * signs with LSIG = low 16 bits of its PMID, not 0. Only the establishment
-	 * frame teaches the LSIG; a later data frame that fails is a real error.
+	 * A full frame is buffered. Lock the link signature, or learn it from
+	 * the first frame of the link: a registered PP signs with LSIG = low 16
+	 * bits of its PMID, not 0. Once learned it is locked, so a later frame
+	 * that fails is a real error rather than a chance to re-derive.
+	 *
+	 * The first frame is not always the short establishment frame. When the
+	 * FP pages a handset, the handset opens the link with its page response,
+	 * which is a full multi-fragment message — so restricting the lesson to
+	 * single-fragment frames made every incoming call fail here, and kept
+	 * failing on each retransmission. derive_lsig() solves for the signature
+	 * from the frame itself and does not care how long it is.
 	 */
 	if (checksum_ok(rx->buf, rx->flen, rx->lsig)) {
 		rx->lsig_locked = 1;
-	} else if (!rx->lsig_locked && rx->flen == DECT_LC_FRAG_LEN) {
+	} else if (!rx->lsig_locked) {
 		rx->lsig = derive_lsig(rx->buf, rx->flen);
 		rx->lsig_locked = 1;
 	} else {

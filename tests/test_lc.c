@@ -69,7 +69,16 @@ static void test_build_reassemble_roundtrip(void)
 	CHECK_EQ(memcmp(out, lapc, sizeof(lapc)), 0);
 }
 
-/* A corrupted frame is dropped on the checksum, and reassembly resynchronises. */
+/*
+ * A corrupted frame is dropped on the checksum once the link signature is
+ * locked, and reassembly resynchronises.
+ *
+ * The signature cannot be checked on the *first* frame of a link, because the
+ * PP signs with the low 16 bits of its PMID and that is what the first frame
+ * teaches us -- so a checksum failure there carries no information and the
+ * frame is taken at face value. This test therefore locks the signature with
+ * one good frame before corrupting the next.
+ */
 static void test_reassemble_bad_checksum(void)
 {
 	uint8_t lapc[5] = { 0x13, 0x00, 0x09, 0xAA, 0xBB };
@@ -81,17 +90,56 @@ static void test_reassemble_bad_checksum(void)
 
 	flen = dect_lc_build(lapc, sizeof(lapc), 0, frame, sizeof(frame));
 	CHECK_EQ(flen, 10);
-	frame[3] ^= 0x01;		/* flip one info bit */
 
 	dect_lc_rx_init(&rx, 0);
+	dect_lc_rx_fragment(&rx, &frame[0], out, sizeof(out));
+	r1 = dect_lc_rx_fragment(&rx, &frame[5], out, sizeof(out));
+	CHECK_EQ(r1, 5);		/* good frame: signature now locked */
+	CHECK_EQ(rx.lsig_locked, 1);
+
+	frame[3] ^= 0x01;		/* flip one info bit */
 	r1 = dect_lc_rx_fragment(&rx, &frame[0], out, sizeof(out));
 	r2 = dect_lc_rx_fragment(&rx, &frame[5], out, sizeof(out));
 	CHECK_EQ(r1, 0);		/* first fragment: more needed */
 	CHECK_EQ(r2, -1);		/* checksum fails on the complete frame */
 	CHECK_EQ(rx.stats.csum_errors, 1);
-	CHECK_EQ(rx.stats.frames, 0);
+	CHECK_EQ(rx.stats.frames, 1);	/* only the good one */
 	CHECK_EQ(rx.len, 0);		/* resynchronised */
 	CHECK_EQ(rx.flen, 0);
+}
+
+/*
+ * A link may open with a multi-fragment frame, not the short establishment
+ * frame: when the FP pages a handset, the handset's page response is a full
+ * message. The signature must be learned from it just the same -- getting
+ * this wrong made every incoming call fail, on every retransmission.
+ */
+static void test_first_frame_multi_fragment(void)
+{
+	uint8_t lapc[23];
+	uint8_t frame[DECT_LC_FRAME_MAX];
+	uint8_t out[DECT_LC_LAPC_MAX];
+	struct dect_lc_rx rx;
+	size_t flen, i;
+	int r = 0;
+
+	/* A 20-octet information field, as a page response carries. */
+	lapc[0] = 0x91;			/* an address the PP signs, not 0x11 */
+	lapc[1] = 0x00;
+	lapc[2] = (uint8_t)((20u << 2) | 1u);
+	for (i = 3; i < sizeof(lapc); i++)
+		lapc[i] = (uint8_t)i;
+
+	flen = dect_lc_build(lapc, sizeof(lapc), 0x1234, frame, sizeof(frame));
+	CHECK_EQ(flen, 25);
+
+	dect_lc_rx_init(&rx, 0);	/* signature unknown, as on a new link */
+	for (i = 0; i < flen; i += DECT_LC_FRAG_LEN)
+		r = dect_lc_rx_fragment(&rx, &frame[i], out, sizeof(out));
+	CHECK_EQ(r, (int)sizeof(lapc));
+	CHECK_EQ(rx.lsig, 0x1234);
+	CHECK_EQ(memcmp(out, lapc, sizeof(lapc)), 0);
+	CHECK_EQ(rx.stats.csum_errors, 0);
 }
 
 /* A minimum (empty info) frame round-trips as a single 5-octet fragment. */
@@ -155,6 +203,7 @@ int main(void)
 	test_flen();
 	test_build_reassemble_roundtrip();
 	test_reassemble_bad_checksum();
+	test_first_frame_multi_fragment();
 	test_empty_info();
 	test_lsig_autolearn();
 	return CHECK_DONE();

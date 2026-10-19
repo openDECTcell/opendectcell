@@ -1487,11 +1487,19 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	if (s->verbose)
 		printf("reg: cs in %02x %02x %02x (addr/ctrl/li), lc_rc=%d\n",
 		       seg.data[0], seg.data[1], seg.data[2], lapc_len);
-	if (lapc_len <= 0)
+	/*
+	 * A segment we cannot use must not stop our own queued messages: an
+	 * incoming call queues the CC-SETUP before the handset's first frame
+	 * arrives, and returning here left it sitting in the queue for ever.
+	 */
+	if (lapc_len <= 0) {
+		drain_nwk(s, now);
 		return;
+	}
 	if (dect_lapc_parse(lapcbuf, (size_t)lapc_len, &f) < 0) {
 		if (s->verbose)
 			printf("reg: lapc parse failed (len %d)\n", lapc_len);
+		drain_nwk(s, now);
 		return;
 	}
 	if (s->verbose)
