@@ -184,6 +184,8 @@ struct stubd {
 		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
 		uint64_t bind_ms;	/* when 0x0230 went out, for the fallback */
 		uint64_t status_ms;	/* when the last 0xF624 poll went out */
+		uint16_t counter[10];	/* previous 0xF625 counters, for deltas */
+		int have_counters;
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
 		uint8_t handle;
@@ -903,22 +905,66 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 		log_mail(&m, "tx M", s->show_params);
 }
 
-/* Decode the 0xF625 answer; param[0..1] repeat the request, status from [2]. */
-static void report_conn_status(const struct dect_mail *m)
+/*
+ * Decode the 0xF625 answer. The ten RSSI bytes are the anchor that fixes the
+ * offsets: they sit at the same place in the chip's DECT-status answer
+ * 0xF623, and the whole record is 45 bytes [CR the hardware-analysis notes
+ * §5 4.4]:
+ *
+ *   [0]        link handle      [1]        the selector we asked with
+ *   [2]        MAC slot         [3]        RF carrier
+ *   [5]        codec / bearer slot type (0 = full slot, 1..3 = long slot)
+ *   [6..0x0F]  ten RSSI bytes, one per carrier
+ *   [0x10..]   ten u16 counters [0x28..] u32 BER
+ *
+ * The counters are named in the host's own column order for this record
+ * [CR the hardware-analysis notes §5 4.4]: duration, received B-field frames,
+ * then the error and handover counters. *(order inferred from that header)*
+ *
+ * The B-field frame counter is the one that matters: it separates "a bearer
+ * exists" from "voice frames are actually arriving", which is the distinction
+ * A-0038 §5 names as the crucial missing stage. Deltas are what count, so we
+ * print the change since the previous poll.
+ */
+static const char *const conn_counter_name[10] = {
+	"dur", "rxbframe", "q1err", "q2err", "slideerr",
+	"syncerr", "handover", "acrc", "xcrc", "zcrc"
+};
+
+static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 {
-	const uint8_t *st = m->param + 2;
-	unsigned n = m->param_len > 2u ? (unsigned)m->param_len - 2u : 0u;
+	const uint8_t *p = m->param;
+	unsigned n = m->param_len;
+	uint16_t c[10];
+	uint32_t ber;
+	unsigned i;
 
 	if (n < 6u) {
 		printf("call: status: short 0xF625 (%u bytes)\n", n);
 		return;
 	}
-	printf("call: status: mac slot %u carrier %u codec/slottype 0x%02x (%s) "
-	       "linktype %u state 0x%02x\n",
-	       st[0], st[1], st[3],
-	       st[3] == 0u ? "full slot, G.726" :
-	       (st[3] <= 3u ? "long slot, wideband" : "unknown"),
-	       st[4], st[5]);
+	printf("call: status: mac slot %u carrier %u codec/slottype 0x%02x (%s)",
+	       p[2], p[3], p[5],
+	       p[5] == 0u ? "full slot, G.726" :
+	       (p[5] <= 3u ? "long slot, wideband" : "unknown"));
+	if (n < 0x2Cu) {
+		printf(" -- no counters (%u bytes)\n", n);
+		return;
+	}
+	for (i = 0; i < 10u; i++)
+		c[i] = (uint16_t)(p[0x10u + 2u * i] | (p[0x11u + 2u * i] << 8));
+	ber = (uint32_t)p[0x28] | ((uint32_t)p[0x29] << 8) |
+	      ((uint32_t)p[0x2A] << 16) | ((uint32_t)p[0x2B] << 24);
+
+	printf("\ncall: status: counters");
+	for (i = 0; i < 10u; i++) {
+		int d = (int)c[i] - (int)s->reg.counter[i];
+		printf(" %s=%u%+d", conn_counter_name[i], c[i],
+		       s->reg.have_counters ? d : 0);
+	}
+	printf(" ber=%u\n", ber);
+	memcpy(s->reg.counter, c, sizeof(c));
+	s->reg.have_counters = 1;
 }
 
 /*
@@ -1166,6 +1212,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	     s->reg.cc.state == DECT_CC_ST_ACTIVE)) {
 		s->reg.audio_connected = 0;
 		s->reg.bind_ms = now;
+		s->reg.status_ms = 0;
+		s->reg.have_counters = 0;
 		send_audio_bind(s, s->reg.handle);
 		s->reg.call_bound = 1;
 		memset(s->vs_changes, 0, sizeof(s->vs_changes));
@@ -1268,7 +1316,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		break;
 	case 0xF625:
 		if (s->reg.call_bound)
-			report_conn_status(m);
+			report_conn_status(s, m);
 		break;
 	default:
 		break;
