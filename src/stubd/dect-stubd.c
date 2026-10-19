@@ -84,6 +84,7 @@ struct stubd {
 	int have_rfpi;
 	struct reg_ctx {
 		int active;
+		int persisted;		/* chip subscription written this connection */
 		uint8_t handle;
 		struct dect_lc_rx lc;
 		struct dect_lapc lapc;
@@ -370,6 +371,44 @@ static void send_cplane(struct stubd *s, uint8_t handle,
 		send_mail(s, (unsigned int)s->tx_slot, &m);
 }
 
+/*
+ * Persist the just-enrolled handset in the chip so it holds standby and is
+ * reachable: 0x0247 {slot, op=1, status} then 0x020A {slot, UAK[16], extra},
+ * to STUB task 0x02, in that order, after LOCATE-ACCEPT [CR A-0026]. The 16-byte
+ * 0x020A record is the allocated UAK. The `status`/`extra` security-mode bytes
+ * have no known enumeration [CR A-0026]; we send 0x00 and validate on hardware.
+ * 0xF605 / 0x015F / 0x017C are intentionally NOT sent (not on AVM's ordinary
+ * voice-handset path).
+ */
+static void send_subscription(struct stubd *s)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0247u;
+	m.param[0] = DECT_MM_REG_SLOT;	/* slot */
+	m.param[1] = 0x01u;		/* op: install/refresh */
+	m.param[2] = 0x00u;		/* status (unknown enumeration) */
+	m.param_len = 3;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x020Au;
+	m.param[0] = DECT_MM_REG_SLOT;	/* slot */
+	memcpy(&m.param[1], s->reg.mm.uak, DECT_MM_UAK_LEN);	/* 16-byte credential */
+	m.param[1 + DECT_MM_UAK_LEN] = 0x00u;			/* extra (unknown) */
+	m.param_len = (uint16_t)(2 + DECT_MM_UAK_LEN);
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)			/* params carry the UAK: -p is local only */
+		log_mail(&m, "tx M", s->show_params);
+}
+
 /* Flush any LAPC frames the FSM wants to transmit. */
 static void pump_lapc(struct stubd *s)
 {
@@ -397,6 +436,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
 
 	s->reg.active = 1;
+	s->reg.persisted = 0;
 	s->reg.handle = handle;
 	dect_lc_rx_init(&s->reg.lc, 0);
 	dect_lapc_init(&s->reg.lapc, 0);
@@ -468,6 +508,25 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 				break;
 			pump_lapc(s);
 		}
+	}
+
+	/*
+	 * Once the handset is authenticated (UAK valid) and we have answered its
+	 * LOCATE-REQUEST, install the subscription in the chip, once per connection.
+	 */
+	if (!s->reg.persisted && s->reg.mm.subscribed && s->reg.mm.stats.located) {
+		send_subscription(s);
+		/*
+		 * Close registration once the handset is enrolled. AVM's documented
+		 * sequence opens registration (0x022B 'A') and closes it afterwards
+		 * with 0x022C 01, which clears the a44 "registration open" capability
+		 * [CR COMMAND_SET §6.2/§9.7]. Leaving it open keeps the base
+		 * advertising open enrolment and the handset re-attaching.
+		 */
+		send_mail_spec(s, "0x22:0x02:0x022c:01");
+		s->reg.persisted = 1;
+		printf("reg: subscription persisted + registration closed (slot %u)\n",
+		       DECT_MM_REG_SLOT);
 	}
 
 	if (s->reg.mm.state == DECT_MM_REGISTERED)

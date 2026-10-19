@@ -123,6 +123,9 @@ static void test_register_ok(void)
 		res2 = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res2_len);
 		CHECK(res2 != NULL && res2_len == 4);
 		CHECK_EQ(memcmp(res2, want, 4), 0);
+		/* The allocated UAK (A21 output) is retained for chip persistence. */
+		CHECK_EQ(mm.subscribed, 1);
+		CHECK_EQ(memcmp(mm.uak, uak, sizeof(uak)), 0);
 	}
 
 	n = dect_mm_poll(&mm, out, sizeof(out));

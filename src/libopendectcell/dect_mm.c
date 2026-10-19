@@ -185,11 +185,11 @@ static void send_access_reject(struct dect_mm *mm)
 #define TPUI_ID_TYPE	0xA0u	/* PORTABLE-IDENTITY octet 3: identity type TPUI */
 #define TPUI_ID_LEN	0x94u	/* octet 3a: ext + 20-bit identity length */
 #define TPUI_PREFIX	0x11u	/* AVM fixed prefix byte of the 20-bit TPUI */
-#define REG_SLOT	1u	/* subscriber slot for the (single) handset */
 
 static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_len)
 {
-	uint8_t tpui[5] = { TPUI_ID_TYPE, TPUI_ID_LEN, 0x00, TPUI_PREFIX, REG_SLOT };
+	uint8_t tpui[5] = { TPUI_ID_TYPE, TPUI_ID_LEN, 0x00, TPUI_PREFIX,
+			    DECT_MM_REG_SLOT };
 	unsigned idx;
 	uint8_t *b = txq_slot(mm, &idx);
 	size_t off;
@@ -270,6 +270,14 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 	/* Answer the PP's challenge: RES2 = A22(A21(K,RS), RAND_P). */
 	dect_dsaa_a21(k, mm->rs, uak);
 	dect_dsaa_a22(uak, rand_p, res2);
+
+	/*
+	 * A21(K,RS) = KS' is the key allocated by this procedure: it becomes the
+	 * handset's long-term UAK [CR A-0022]. Keep it so the chip subscription
+	 * record (0x020A) can be written [CR A-0026].
+	 */
+	memcpy(mm->uak, uak, DECT_MM_UAK_LEN);
+	mm->subscribed = 1;
 
 	send_auth_reply(mm, res2);
 	send_access_accept(mm);

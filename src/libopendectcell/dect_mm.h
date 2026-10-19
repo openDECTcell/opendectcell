@@ -31,6 +31,8 @@
 #define DECT_MM_PIN_MAX		16u
 #define DECT_MM_RFPI_LEN	5u
 #define DECT_MM_PORTID_MAX	20u	/* saved PORTABLE-IDENTITY contents */
+#define DECT_MM_UAK_LEN		16u	/* allocated long-term key (128-bit) */
+#define DECT_MM_REG_SLOT	1u	/* chip subscription slot for the handset */
 
 enum dect_mm_state {
 	DECT_MM_IDLE,
@@ -74,6 +76,14 @@ struct dect_mm {
 	uint8_t rs[16];				/* random seed (RS) */
 	uint8_t port_id[DECT_MM_PORTID_MAX];	/* PP PORTABLE-IDENTITY contents */
 	size_t  port_id_len;
+
+	/*
+	 * Allocated long-term key (UAK). Key allocation derives it from the AC
+	 * (PIN); it is the 16-byte credential the chip stores for the handset via
+	 * 0x020A [CR A-0026]. Valid once `subscribed` is set (authentication OK).
+	 */
+	uint8_t uak[DECT_MM_UAK_LEN];
+	uint8_t subscribed;			/* 1 = authenticated, uak valid */
 
 	/* FIFO of outbound NWK messages (e.g. AUTH-REPLY then ACCESS-RIGHTS-ACCEPT). */
 	uint8_t  out[DECT_MM_TXQ][DECT_LAPC_MSG_MAX];
