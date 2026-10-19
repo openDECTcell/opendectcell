@@ -94,7 +94,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [ ] `dect-probe`: ring a handset, play a tone, echo mode
 - [ ] **[hw]** Gate G7: a handset rings and audio passes
   - [x] **Audio passes, both directions** (2026-10-19, v22): the chip delivers the call's coded G.722 bearer on the TDM slot and accepts it back; echoing it is audible in the handset. See `docs/call-g7.md`
-  - [ ] Handset rings (incoming call / milestone B)
+  - [ ] Handset rings (incoming call / milestone B) — implemented (`-a ring=MS`: page `0x0300` + FP-originated CC-SETUP), unit-tested, **not yet run on hardware**
   - [ ] G.722 codec on the host, so real audio can be sourced and sunk
 - [ ] After G7: clean-room review of all docs, then make openDECTcell and opendectcell-controller public
 
