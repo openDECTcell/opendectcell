@@ -285,6 +285,7 @@ static void on_auth_reply_cipher(struct dect_mm *mm, const uint8_t *ies,
 		return;
 	}
 	memcpy(mm->dck, dck, DECT_MM_DCK_LEN);
+	memcpy(mm->cipher_res, xres, sizeof(mm->cipher_res));
 	mm->cipher_state = DECT_MM_CIPHER_READY;
 	send_cipher_request(mm);
 }

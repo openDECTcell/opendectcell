@@ -87,13 +87,24 @@ struct stubd {
 	/*
 	 * The handset's long-term key, kept across connections: registration and a
 	 * later call run on different connections (each re-inits the MM FSM), and
-	 * call-time ciphering needs the UAK. Not yet persisted across daemon
-	 * restarts -- a call then needs a fresh enrolment.
+	 * call-time ciphering needs the UAK. Persisted in the subscription store
+	 * (-s) so a call after a daemon restart needs no fresh enrolment.
 	 */
 	uint8_t uak[DECT_MM_UAK_LEN];
 	int uak_valid;
 	const char *sub_path;	/* host-side subscription store (holds the UAK) */
 	int sub_restored;	/* stored subscription already pushed to the chip */
+	/*
+	 * Experimental chip cipher-enable (0x0208). Its field layout is only
+	 * statically derived and the key offsets are unproven [CR A-0027 Q1], so
+	 * it is never sent unless -k asks for a specific selector and layout.
+	 */
+	struct chip_cipher {
+		int     enabled;
+		uint8_t selector;
+		int     use_rs;		/* 1 = RS[0..7] in the 12-byte field, else RAND_F */
+		int     long_form;	/* 1 = 33-byte mail variant */
+	} chip_cipher;
 	/* Voice-slot probe: which TDM slot carries a call's audio (mapping open). */
 	uint16_t vs_last[8];
 	uint32_t vs_changes[8];
@@ -549,6 +560,69 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 		log_mail(&m, "tx M", s->show_params);
 }
 
+/*
+ * Hand the call's security material to the chip (0x0208), so the STUB can
+ * switch the radio to DSC. Layout from [CR A-0027 Q1]: selector, 12 bytes and
+ * then 8 bytes copied out of the host's authentication result, three zero
+ * bytes, FF FF, and a two-byte EEPROM field; a 33-byte variant appends 0x40
+ * plus two per-terminal status bytes.
+ *
+ * Which bytes of the authentication result land in those fields is NOT proven
+ * -- A-0027 explicitly declines to map the DCK to offsets. We fill the 8-byte
+ * field with the DCK and the 12-byte field with the challenge (RAND_F or RS)
+ * plus the verified RES, which is the obvious reading, and leave the EEPROM
+ * field zero. That is a hypothesis under test, which is why -k must name the
+ * selector and layout explicitly instead of the daemon picking one.
+ *
+ * Selector: A-0027 reports one producer state using a link/terminal number and
+ * another using "terminal slot + 7". The latter collides with the 0x07..0x0C
+ * subscription-record selectors, so a wrong guess there can overwrite a stored
+ * subscription. Prefer a low selector; the store (-s) lets us rewrite the
+ * record if it does get clobbered.
+ */
+static void send_chip_cipher(struct stubd *s)
+{
+	struct dect_mail m;
+	uint8_t dck[DECT_MM_DCK_LEN];
+	size_t n = 0;
+
+	if (!dect_mm_cipher_dck(&s->reg.mm, dck))
+		return;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0208u;		/* chip security/cipher material */
+	m.param[n++] = s->chip_cipher.selector;
+	memcpy(&m.param[n], s->chip_cipher.use_rs ? s->reg.mm.rs
+						  : s->reg.mm.rand_f, 8);
+	n += 8;
+	memcpy(&m.param[n], s->reg.mm.cipher_res, 4);
+	n += 4;
+	memcpy(&m.param[n], dck, DECT_MM_DCK_LEN);
+	n += DECT_MM_DCK_LEN;
+	m.param[n++] = 0x00u;		/* zeroed by the producer */
+	m.param[n++] = 0x00u;
+	m.param[n++] = 0x00u;
+	m.param[n++] = 0xFFu;		/* FF FF initialised by the producer */
+	m.param[n++] = 0xFFu;
+	m.param[n++] = 0x00u;		/* EEPROM configuration field (unknown) */
+	m.param[n++] = 0x00u;
+	if (s->chip_cipher.long_form) {
+		m.param[n++] = 0x40u;	/* fixed in the 33-byte form */
+		m.param[n++] = 0x00u;	/* per-terminal status/config */
+		m.param[n++] = 0x00u;
+	}
+	m.param_len = (uint16_t)n;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	memset(dck, 0, sizeof(dck));
+	memset(&m, 0, sizeof(m));	/* the mail held the DCK */
+	/* Never log this mail's parameters: they carry the cipher key. */
+	printf("call: cipher: chip command 0x0208 sent (selector %u, %u bytes, %s)\n",
+	       s->chip_cipher.selector, (unsigned int)(n + 2),
+	       s->chip_cipher.use_rs ? "RS" : "RAND_F");
+}
+
 /* Flush any LAPC frames the FSM wants to transmit. */
 static void pump_lapc(struct stubd *s)
 {
@@ -736,6 +810,14 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	/* Never log key material: state only. */
 	if (s->reg.mm.cipher_state == DECT_MM_CIPHER_READY && !s->reg.cipher_done) {
 		s->reg.cipher_done = 1;
+		/*
+		 * Key material first, then the over-air request: A-0027 Q5 makes
+		 * loading the chip and negotiating the cipher distinct steps in
+		 * that order. The CIPHER-REQUEST is only queued here; it still has
+		 * to travel through LAPC, so the mail below wins the race.
+		 */
+		if (s->chip_cipher.enabled)
+			send_chip_cipher(s);
 		printf("call: cipher: DCK derived, CIPHER-REQUEST sent\n");
 	} else if (s->reg.mm.cipher_state == DECT_MM_CIPHER_FAILED &&
 		   !s->reg.cipher_done) {
@@ -910,6 +992,32 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	return 0;
 }
 
+/* Parse -k SEL[,rs][,33]. Returns 0 on success, -1 on a malformed spec. */
+static int parse_chip_cipher(struct chip_cipher *cc, const char *spec)
+{
+	char *end;
+	unsigned long sel;
+
+	sel = strtoul(spec, &end, 0);
+	if (end == spec || sel > 0xFFu)
+		return -1;
+	cc->enabled = 1;
+	cc->selector = (uint8_t)sel;
+	while (*end == ',') {
+		const char *opt = ++end;
+
+		while (*end && *end != ',')
+			end++;
+		if ((size_t)(end - opt) == 2 && memcmp(opt, "rs", 2) == 0)
+			cc->use_rs = 1;
+		else if ((size_t)(end - opt) == 2 && memcmp(opt, "33", 2) == 0)
+			cc->long_form = 1;
+		else
+			return -1;
+	}
+	return *end ? -1 : 0;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -929,7 +1037,13 @@ static void usage(void)
 		"           handset can register (parks the radio on exit)\n"
 		"  -P PIN   registration PIN / AC (default 0000; used with -g)\n"
 		"  -s PATH  subscription store, holds the handset key; reloaded into\n"
-		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off)\n");
+		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off)\n"
+		"  -k SPEC  EXPERIMENTAL: hand the call's cipher material to the chip\n"
+		"           (0x0208) once the DCK is derived. SPEC is SEL[,rs][,33]:\n"
+		"           SEL = selector (try the link/terminal number first; 7..12\n"
+		"           may overwrite a stored subscription), rs = put RS instead\n"
+		"           of RAND_F in the challenge field, 33 = long mail variant.\n"
+		"           The field mapping is unproven [CR A-0027]; off by default\n");
 }
 
 int main(int argc, char **argv)
@@ -949,7 +1063,7 @@ int main(int argc, char **argv)
 	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));
 	s.sub_path = "/etc/opendectcell-sub";	/* overridden by -s */
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:h")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -968,6 +1082,12 @@ int main(int argc, char **argv)
 		case 'g': s.do_register = 1; break;
 		case 'P': s.pin = optarg; break;
 		case 's': s.sub_path = optarg[0] ? optarg : NULL; break;
+		case 'k':
+			if (parse_chip_cipher(&s.chip_cipher, optarg) < 0) {
+				usage();
+				return 2;
+			}
+			break;
 		default: usage(); return 2;
 		}
 	}

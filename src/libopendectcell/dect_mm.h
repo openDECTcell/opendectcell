@@ -102,6 +102,7 @@ struct dect_mm {
 	enum dect_mm_cipher_state cipher_state;
 	uint8_t cipher_uak[DECT_MM_UAK_LEN];	/* key for the call-time auth */
 	uint8_t dck[DECT_MM_DCK_LEN];		/* derived cipher key (valid when READY) */
+	uint8_t cipher_res[4];			/* the PP's verified RES (valid when READY) */
 
 	/* FIFO of outbound NWK messages (e.g. AUTH-REPLY then ACCESS-RIGHTS-ACCEPT). */
 	uint8_t  out[DECT_MM_TXQ][DECT_LAPC_MSG_MAX];
