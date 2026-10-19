@@ -158,6 +158,15 @@ struct stubd {
 		int      tone_high;	/* high byte lane instead of low */
 		int      tone16;	/* 16-bit linear in the whole word (default profile) */
 		int      tone16be;	/* ... big-endian within the word */
+		/*
+		 * GenDSP routes to establish once the call's audio is connected:
+		 * 0xFFF1 sub 0x0A {dst, src} to task 0x23 [CR COMMAND_SET §7.1,
+		 * docs/stub-pcm-control-channel.md]. dst/src: ADPCM 0..3, PCM 4..6,
+		 * wideband 7..9; src may also be silence 12 or test tone 15.
+		 * Measured at G4: PCM 6 drives raw word 0, PCM 4 drives raw word 5.
+		 */
+		uint8_t  dsp_dst[8], dsp_src[8];
+		unsigned dsp_n;
 		uint8_t  tx_idle;	/* transmit filler for unmapped slots */
 		int      have_tx_idle;
 		uint8_t  tx_voice_idle;	/* transmit filler for the voice lanes */
@@ -819,6 +828,27 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 		log_mail(&m, "tx M", s->show_params);
 	printf("call: audio connect: %s0x022D on channel %u\n",
 	       a->send_f626 ? "0xF626, " : "", chan);
+
+	/*
+	 * GenDSP connects (-a dsp=DST:SRC,...). A debug path, so only on the
+	 * bench, and reversible: route the destination to silence 12 or send
+	 * 0xFFF1 sub 0x09 n to restore channel n's default [CR A-0029 §6].
+	 */
+	for (unsigned i = 0; i < a->dsp_n; i++) {
+		memset(&m, 0, sizeof(m));
+		m.src = DECT_TASK_PCM;
+		m.dst = 0x23u;		/* debug/management task */
+		m.prim = 0xFFF1u;
+		m.param[0] = 0x0Au;	/* DSP_ROUTE */
+		m.param[1] = a->dsp_dst[i];
+		m.param[2] = a->dsp_src[i];
+		m.param_len = 3;
+		send_mail(s, (unsigned int)s->tx_slot, &m);
+		if (s->verbose)
+			log_mail(&m, "tx M", s->show_params);
+		printf("call: dsp route: dst %u <- src %u\n",
+		       a->dsp_dst[i], a->dsp_src[i]);
+	}
 }
 
 /*
@@ -1392,7 +1422,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		klen = eq ? (size_t)(eq - key) : (size_t)(spec - key);
 		if (eq) {
 			v = strtoul(eq + 1, &end, 0);
-			if (end != spec)
+			if (end != spec && !(klen == 3 && !memcmp(key, "dsp", 3)))
 				return -1;
 		}
 		if (!eq && klen == 4 && !memcmp(key, "f626", 4))
@@ -1512,7 +1542,10 @@ static void usage(void)
 		"           tone=HZ (multiple of 125) transmits an A-law test tone to\n"
 		"           the handset while a call is up, into raw word toneword=N\n"
 		"           (default 0 = dect1), low byte, or the high byte with tonehigh;\n"
-		"           tone16 / tone16be write 16-bit linear into the whole word\n"
+		"           tone16 / tone16be write 16-bit linear into the whole word;\n"
+		"           dsp=DST:SRC (repeatable) sends GenDSP connect 0xFFF1/0A after\n"
+		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
+		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
 		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0,\n"
 		"           txidle=0xff,voiceidle=0xff\n");
