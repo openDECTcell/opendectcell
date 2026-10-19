@@ -37,6 +37,36 @@ def extract(data, slots, word, phase, step):
     return bytes(out)
 
 
+def words(data, slots, word):
+    frame = slots * 2
+    return [data[i * frame + word * 2:i * frame + word * 2 + 2]
+            for i in range(len(data) // frame)]
+
+
+def extract_capped(data, slots, word, max_run):
+    """De-duplicate, but drop the surplus of an over-long hold.
+
+    Normally each coded word occupies exactly two frames.  Occasionally the
+    chip holds one for longer -- measured at 4, 10 and 40 frames, i.e. 1/8
+    and 1/2 of a DECT frame (80 TDM frames), so these are bearer underruns
+    on the chip side rather than anything the capture does.  Feeding the
+    repeats to the decoder makes it re-adapt and that is audible.  Capping a
+    run at `max_run` frames keeps ordinary pairs untouched and shortens only
+    the stalls, which trades a little timing drift for fewer artefacts.
+    """
+    w = words(data, slots, word)
+    out = bytearray()
+    i, n = 0, len(w)
+    while i < n:
+        j = i
+        while j < n and w[j] == w[i]:
+            j += 1
+        run = min(j - i, max_run)
+        out += w[i] * max(1, run // 2)
+        i = j
+    return bytes(out)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -52,6 +82,10 @@ def main():
                    help="keep one frame in STEP (default 2; 1 disables de-duplication)")
     p.add_argument("--from-sec", type=float, default=0.0)
     p.add_argument("--to-sec", type=float)
+    p.add_argument("--max-run", type=int, metavar="N",
+                   help="cap a held word at N frames (try 2) to shorten the "
+                        "chip's bearer underruns instead of feeding the "
+                        "repeats to the decoder")
     p.add_argument("--wav", help="also decode to this WAV with ffmpeg")
     a = p.parse_args()
 
@@ -60,7 +94,10 @@ def main():
     frame = a.slots * 2
     lo = int(a.from_sec * 8000) * frame
     hi = int(a.to_sec * 8000) * frame if a.to_sec else len(data)
-    stream = extract(data[lo:hi], a.slots, a.word, a.phase, a.step)
+    if a.max_run:
+        stream = extract_capped(data[lo:hi], a.slots, a.word, a.max_run)
+    else:
+        stream = extract(data[lo:hi], a.slots, a.word, a.phase, a.step)
 
     out = a.out or (a.capture.rsplit(".", 1)[0] + ".g722")
     with open(out, "wb") as f:
