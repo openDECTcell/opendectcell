@@ -1443,7 +1443,23 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->tone_hz = (unsigned)v;
 		} else if (klen == 8 && !memcmp(key, "toneword", 8))
 			a->tone_word = (uint8_t)v;
-		else if (!eq)
+		else if (klen == 3 && !memcmp(key, "dsp", 3)) {
+			/* dsp=DST:SRC -- the generic check above let the ':' through */
+			unsigned long src;
+			const char *colon = memchr(eq + 1, ':', (size_t)(spec - eq - 1));
+
+			if (!colon || a->dsp_n >= 8u)
+				return -1;
+			v = strtoul(eq + 1, &end, 0);
+			if (end != colon)
+				return -1;
+			src = strtoul(colon + 1, &end, 0);
+			if (end != spec || v > 17u || src > 22u)
+				return -1;
+			a->dsp_dst[a->dsp_n] = (uint8_t)v;
+			a->dsp_src[a->dsp_n] = (uint8_t)src;
+			a->dsp_n++;
+		} else if (!eq)
 			return -1;
 		else if (klen == 3 && !memcmp(key, "sel", 3))
 			a->sel = (uint8_t)v;
