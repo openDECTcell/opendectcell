@@ -94,6 +94,10 @@ struct stubd {
 	int uak_valid;
 	const char *sub_path;	/* host-side subscription store (holds the UAK) */
 	int sub_restored;	/* stored subscription already pushed to the chip */
+	/* Voice-slot probe: which TDM slot carries a call's audio (mapping open). */
+	uint16_t vs_last[8];
+	uint32_t vs_changes[8];
+	uint32_t vs_frames;
 	struct reg_ctx {
 		int active;
 		int persisted;		/* chip subscription written this connection */
@@ -704,6 +708,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	     s->reg.cc.state == DECT_CC_ST_ACTIVE)) {
 		send_audio_bind(s, s->reg.handle);
 		s->reg.call_bound = 1;
+		memset(s->vs_changes, 0, sizeof(s->vs_changes));
+		s->vs_frames = 0;		/* start the voice-slot probe */
 		printf("call: connected (handle %u) -- audio channel bound\n",
 		       s->reg.handle);
 
@@ -765,6 +771,39 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 	}
 }
 
+/*
+ * While a call is up, count per-slot sample changes. The STUB's audio-channel ->
+ * TDM-slot mapping is not documented (docs/stub-pcm-control-channel.md), so find
+ * the call's voice slot empirically: it is the one that keeps changing while the
+ * idle slots hold a constant fill. Read-only.
+ */
+static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fpb)
+{
+	unsigned int f, n, nslots = s->slots < 8u ? s->slots : 8u;
+
+	if (!s->reg.call_bound)
+		return;
+	for (f = 0; f < fpb; f++) {
+		for (n = 0; n < nslots; n++) {
+			uint16_t v;
+
+			memcpy(&v, fr + (f * s->slots + n) * 2u, 2);
+			if (s->vs_frames && v != s->vs_last[n])
+				s->vs_changes[n]++;
+			s->vs_last[n] = v;
+		}
+		s->vs_frames++;
+	}
+	if (s->vs_frames >= 8000u) {		/* 8 kHz frame rate: about one second */
+		printf("call: slot activity (changes/s):");
+		for (n = 0; n < nslots; n++)
+			printf(" %u:%u", n, s->vs_changes[n]);
+		printf("\n");
+		memset(s->vs_changes, 0, sizeof(s->vs_changes));
+		s->vs_frames = 0;
+	}
+}
+
 /* Main loop: decode mails, drive the session, (re)send the contact. */
 static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 {
@@ -811,6 +850,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 						(unsigned int)s->rx_slot) * 2u, 2);
 					dect_rx_push(&s->rx, pair, 2);
 				}
+				voice_slot_probe(s, fr, fpb);
 				now = mono_ms();
 				while (dect_rx_pull(&s->rx, &m)) {
 					if (s->verbose)
