@@ -84,10 +84,20 @@ struct stubd {
 	int rand_fd;		/* /dev/urandom, -1 if unavailable */
 	uint8_t rfpi[DECT_MM_RFPI_LEN];
 	int have_rfpi;
+	/*
+	 * The handset's long-term key, kept across connections: registration and a
+	 * later call run on different connections (each re-inits the MM FSM), and
+	 * call-time ciphering needs the UAK. Not yet persisted across daemon
+	 * restarts -- a call then needs a fresh enrolment.
+	 */
+	uint8_t uak[DECT_MM_UAK_LEN];
+	int uak_valid;
 	struct reg_ctx {
 		int active;
 		int persisted;		/* chip subscription written this connection */
 		int call_bound;		/* audio channel bound for the active call */
+		int cipher_started;	/* call-time authentication kicked off */
+		int cipher_done;	/* cipher outcome already reported */
 		uint8_t handle;
 		struct dect_lc_rx lc;
 		struct dect_lapc lapc;
@@ -492,6 +502,8 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.active = 1;
 	s->reg.persisted = 0;
 	s->reg.call_bound = 0;
+	s->reg.cipher_started = 0;
+	s->reg.cipher_done = 0;
 	s->reg.handle = handle;
 	dect_lc_rx_init(&s->reg.lc, 0);
 	dect_lapc_init(&s->reg.lapc, 0);
@@ -588,6 +600,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * LOCATE-REQUEST, install the subscription in the chip, once per connection.
 	 */
 	if (!s->reg.persisted && s->reg.mm.subscribed && s->reg.mm.stats.located) {
+		/* Keep the UAK for the later call's ciphering. */
+		memcpy(s->uak, s->reg.mm.uak, DECT_MM_UAK_LEN);
+		s->uak_valid = 1;
 		send_subscription(s);
 		/*
 		 * Close registration once the handset is enrolled. AVM's documented
@@ -618,6 +633,35 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.call_bound = 1;
 		printf("call: connected (handle %u) -- audio channel bound\n",
 		       s->reg.handle);
+
+		/*
+		 * Start call ciphering: challenge the handset with the stored UAK so
+		 * both sides derive the DCK, then ask it to switch on DSC. The chip
+		 * cipher-enable (0x0208) is not sent yet -- its DCK byte mapping is
+		 * unproven [CR A-0027 Q1] -- so this validates the MM half only.
+		 */
+		if (s->uak_valid && !s->reg.cipher_started) {
+			uint8_t rand_f[8], rs[16];
+
+			gen_rand(s, rand_f, sizeof(rand_f));
+			gen_rand(s, rs, sizeof(rs));
+			dect_mm_start_cipher(&s->reg.mm, s->uak, rand_f, rs);
+			s->reg.cipher_started = 1;
+			printf("call: cipher: authenticating handset\n");
+			drain_nwk(s, now);
+		} else if (!s->uak_valid) {
+			printf("call: cipher: no UAK (handset must enrol this session)\n");
+		}
+	}
+
+	/* Never log key material: state only. */
+	if (s->reg.mm.cipher_state == DECT_MM_CIPHER_READY && !s->reg.cipher_done) {
+		s->reg.cipher_done = 1;
+		printf("call: cipher: DCK derived, CIPHER-REQUEST sent\n");
+	} else if (s->reg.mm.cipher_state == DECT_MM_CIPHER_FAILED &&
+		   !s->reg.cipher_done) {
+		s->reg.cipher_done = 1;
+		printf("call: cipher: authentication FAILED (RES mismatch)\n");
 	}
 }
 

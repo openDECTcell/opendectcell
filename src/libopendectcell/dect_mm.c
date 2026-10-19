@@ -218,11 +218,14 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 }
 
 /*
- * Call-time ciphering (FP-initiated authentication + CIPHER-REQUEST). The IE
- * contents below are provisional and to be confirmed against AVM [CR Q-0015].
+ * Call-time ciphering (FP-initiated authentication + CIPHER-REQUEST).
+ * CIPHER-INFO is AVM's exact over-air content `19 02 81 98` [CR A-0027 Q3]:
+ * 0x81 enables the standard cipher, 0x98 identifies the DCK / key number 8.
+ * AUTH-TYPE is still provisional (A-0011 saw AVM use a 0x18 second octet, i.e.
+ * UAK key number 8, which matches the 0x98 above); confirm against hardware.
  */
 #define AUTH_TYPE_CIPHER { 0x01u, 0x18u, 0x10u }	/* DSAA1, UAK #8, flags (TBD) */
-#define CIPHER_INFO_DSC  { 0x81u, 0x01u }		/* Y, DSC; DCK (TBD) */
+#define CIPHER_INFO_DSC  { 0x81u, 0x98u }		/* [CR A-0027] enable, DCK #8 */
 
 /* FP -> PP AUTHENTICATION-REQUEST: challenge the PP with RAND_F/RS (K = UAK). */
 static void send_auth_request_fp(struct dect_mm *mm)
