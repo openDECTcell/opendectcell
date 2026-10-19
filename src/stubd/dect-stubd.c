@@ -99,8 +99,14 @@ struct stubd {
 	size_t      cc_port_id_len;
 	uint8_t     cc_fixed_id[DECT_CC_ID_MAX];
 	size_t      cc_fixed_id_len;
-	int         ring_paged;		/* 0x0300 sent, awaiting the link */
-	int         ring_pending;	/* send CC-SETUP when a link comes up */
+	/*
+	 * Ringing the handset. A page is a broadcast the handset may simply
+	 * miss, and the stock host guards each one with a 3 s timer, so page
+	 * again until the handset brings up a link or we give up.
+	 */
+	enum { RING_IDLE, RING_PAGING, RING_DONE } ring_state;
+	unsigned    ring_pages;		/* pages sent for this attempt */
+	uint64_t    ring_last;		/* when the last one went out */
 	int sub_restored;	/* stored subscription already pushed to the chip */
 	/*
 	 * Experimental chip cipher-enable (0x0208). Its field layout is only
@@ -1117,8 +1123,57 @@ static void send_page(struct stubd *s)
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
-	printf("ring: paged the handset (0x0300 {%02x 11 %02x})\n",
-	       RING_PAGE_INFO, DECT_MM_REG_SLOT);
+	printf("ring: paged the handset, attempt %u (0x0300 {%02x 11 %02x})\n",
+	       s->ring_pages + 1u, RING_PAGE_INFO, DECT_MM_REG_SLOT);
+}
+
+#define RING_PAGE_RETRIES	4u	/* pages before giving up */
+#define RING_PAGE_INTERVAL	3000u	/* ms between them; the stock guard */
+
+static void ring_tick(struct stubd *s, uint64_t now)
+{
+	if (!s->audio.ring_ms || s->ring_state == RING_DONE ||
+	    s->sess.state != DECT_SESS_UP)
+		return;
+
+	if (s->ring_state == RING_IDLE) {
+		if (now - g_start < s->audio.ring_ms)
+			return;
+		if (!s->cc_fixed_id_len) {
+			printf("ring: no stored call identities -- let the "
+			       "handset place one call first (with -s), then "
+			       "retry\n");
+			s->ring_state = RING_DONE;
+			return;
+		}
+		s->ring_state = RING_PAGING;
+		/*
+		 * A link may already be up, in which case the handset does not
+		 * need paging at all and the SETUP can go straight out.
+		 */
+		if (s->reg.active) {
+			printf("ring: a link is already up -- sending CC-SETUP "
+			       "without paging\n");
+			s->ring_state = RING_DONE;
+			if (dect_cc_setup(&s->reg.cc, s->cc_port_id,
+					  s->cc_port_id_len, s->cc_fixed_id,
+					  s->cc_fixed_id_len, RING_BASIC_SVC))
+				printf("ring: CC-SETUP could not be queued\n");
+			return;
+		}
+	}
+
+	if (s->ring_pages && now - s->ring_last < RING_PAGE_INTERVAL)
+		return;
+	if (s->ring_pages >= RING_PAGE_RETRIES) {
+		printf("ring: the handset did not answer %u pages, giving up\n",
+		       s->ring_pages);
+		s->ring_state = RING_DONE;
+		return;
+	}
+	s->ring_pages++;
+	s->ring_last = now;
+	send_page(s);
 }
 
 /* Ask the chip to move this call's bearer (see audio_cfg.handover_ms). */
@@ -1622,8 +1677,8 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * Only the assignment is sent. 0x022D stays behind the call, as
 		 * its 0x0242 handler is gated on a bound call.
 		 */
-		if (s->ring_pending) {
-			s->ring_pending = 0;
+		if (s->ring_state == RING_PAGING) {
+			s->ring_state = RING_DONE;
 			if (dect_cc_setup(&s->reg.cc, s->cc_port_id,
 					  s->cc_port_id_len, s->cc_fixed_id,
 					  s->cc_fixed_id_len, RING_BASIC_SVC))
@@ -1833,19 +1888,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
 			send_handover(s, now);
-			if (s->audio.ring_ms && !s->ring_paged &&
-			    s->sess.state == DECT_SESS_UP &&
-			    now - g_start >= s->audio.ring_ms) {
-				s->ring_paged = 1;
-				if (!s->cc_fixed_id_len)
-					printf("ring: no stored call identities "
-					       "-- let the handset place one call "
-					       "first, then retry\n");
-				else {
-					s->ring_pending = 1;
-					send_page(s);
-				}
-			}
+			ring_tick(s, now);
 			dsp_sweep(s, now);
 		}
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
