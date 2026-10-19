@@ -150,6 +150,7 @@ struct stubd {
 		uint8_t  mode;		/* 0x0230 extra mode byte */
 		uint8_t  codec;		/* 0x0230 codec byte */
 		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
+		int      nowait;	/* send 0x022D immediately (old behaviour) */
 		uint8_t  tx_idle;	/* transmit filler for unmapped slots */
 		int      have_tx_idle;
 		uint8_t  tx_voice_idle;	/* transmit filler for the voice lanes */
@@ -163,6 +164,8 @@ struct stubd {
 		int active;
 		int persisted;		/* chip subscription written this connection */
 		int call_bound;		/* audio channel bound for the active call */
+		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
+		uint64_t bind_ms;	/* when 0x0230 went out, for the fallback */
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
 		uint8_t handle;
@@ -657,6 +660,8 @@ static void send_subscription(struct stubd *s)
  * paths (mute/unmute, audio-state events) rather than as a fixed third step,
  * but connecting the path explicitly is still what we want.
  */
+static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan);
+
 static void send_audio_bind(struct stubd *s, uint8_t handle)
 {
 	const struct audio_cfg *a = &s->audio;
@@ -691,14 +696,48 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 
+	printf("call: audio assign: 0x0251 %s(sel %u gain 0x%02x), "
+	       "0x0230 {%02x %04x %02x %02x}%s\n",
+	       a->no_gain ? "SKIPPED " : "", a->sel, a->gain,
+	       a->flags, a->mask, a->mode, a->codec,
+	       a->nowait ? "" : " -- 0x022D waits for 0x0242");
+
+	/*
+	 * 0x022D connects the path of a connection "whose channel is already
+	 * assigned" [CR COMMAND_SET §6.5]. The assignment is asynchronous: the
+	 * 0x0242 confirmation arrives tens of milliseconds after 0x0230, while a
+	 * 0x022D queued here is on the wire within a few. AVM sends 0x022D from
+	 * state-dependent paths rather than as a fixed third mail [CR A-0029 §2,
+	 * A-0030 §2 Q6], so we wait for the confirmation too -- see the 0x0242
+	 * case in handle_reg_mail() -- unless -a nowait asks for the old order.
+	 */
+	if (a->nowait)
+		send_audio_connect(s, handle, a->flags & 0x0Fu);
+}
+
+/*
+ * Connect the assigned channel: optionally route it (0xF626, not part of
+ * AVM's bind), then 0x022D with bit 7 clear. `chan` is the channel the chip
+ * confirmed in 0x0242 -- A-0032 Q9: trust the returned channel, not the one
+ * we asked for.
+ */
+static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
+{
+	const struct audio_cfg *a = &s->audio;
+	struct dect_mail m;
+
+	if (s->reg.audio_connected)
+		return;
+	s->reg.audio_connected = 1;
+
 	if (a->send_f626) {
 		memset(&m, 0, sizeof(m));
 		m.src = DECT_TASK_PCM;
 		m.dst = DECT_TASK_CONTACT_DST;
-		m.prim = 0xF626u;	/* SET_AUDIO_ROUTE (not in AVM's bind) */
+		m.prim = 0xF626u;	/* SET_AUDIO_ROUTE */
 		m.param[0] = handle;
 		m.param[1] = 0x01u;	/* enable */
-		m.param[2] = (uint8_t)(a->flags & 0x0Fu);	/* chan_cfg */
+		m.param[2] = chan;	/* chan_cfg */
 		m.param[3] = 0x00u;	/* param (LE) */
 		m.param[4] = 0x00u;
 		m.param_len = 5;
@@ -717,12 +756,22 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
+	printf("call: audio connect: %s0x022D on channel %u\n",
+	       a->send_f626 ? "0xF626, " : "", chan);
+}
 
-	printf("call: audio bind: 0x0251 %s(sel %u gain 0x%02x), "
-	       "0x0230 {%02x %04x %02x %02x}, %s0x022D\n",
-	       a->no_gain ? "SKIPPED " : "", a->sel, a->gain,
-	       a->flags, a->mask, a->mode, a->codec,
-	       a->send_f626 ? "0xF626, " : "");
+/*
+ * Fallback: if the chip never confirms the assignment, connect anyway after
+ * half a second so the deferred order can never do worse than the old one.
+ */
+static void audio_connect_fallback(struct stubd *s, uint64_t now)
+{
+	if (!s->reg.call_bound || s->reg.audio_connected || !s->reg.active)
+		return;
+	if (now - s->reg.bind_ms < 500u)
+		return;
+	printf("call: audio connect: no 0x0242 within 500 ms, connecting anyway\n");
+	send_audio_connect(s, s->reg.handle, s->audio.flags & 0x0Fu);
 }
 
 /*
@@ -968,11 +1017,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	if (!s->reg.call_bound &&
 	    (s->reg.cc.state == DECT_CC_ST_CONNECT_PENDING ||
 	     s->reg.cc.state == DECT_CC_ST_ACTIVE)) {
+		s->reg.audio_connected = 0;
+		s->reg.bind_ms = now;
 		send_audio_bind(s, s->reg.handle);
 		s->reg.call_bound = 1;
 		memset(s->vs_changes, 0, sizeof(s->vs_changes));
 		s->vs_frames = 0;		/* start the voice-slot probe */
-		printf("call: connected (handle %u) -- audio channel bound\n",
+		printf("call: connected (handle %u) -- audio channel assigned\n",
 		       s->reg.handle);
 
 		/*
@@ -1045,6 +1096,21 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 	case DECT_PRIM_SIGNALLING:
 		if (s->reg.active)
 			reg_segment(s, m, now);
+		break;
+	case 0x0242:
+		/*
+		 * Channel assignment confirmed: {handle, chan_flags, mask}. The
+		 * low nibble is the channel the chip actually gave us; 0 or 0xF
+		 * means none. Only the long form answers 0x0230 [CR COMMAND_SET
+		 * §8.4]; the short one reports later state changes.
+		 */
+		if (s->reg.call_bound && !s->reg.audio_connected &&
+		    m->param_len >= 4 && m->param[0] == s->reg.handle) {
+			uint8_t chan = m->param[1] & 0x0Fu;
+
+			if (chan >= 1u && chan <= 6u)
+				send_audio_connect(s, s->reg.handle, chan);
+		}
 		break;
 	default:
 		break;
@@ -1194,6 +1260,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		}
 
 		now = mono_ms();
+		if (s->do_register)
+			audio_connect_fallback(s, now);
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
 			struct dect_mail cm;
 
@@ -1270,6 +1338,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->send_f626 = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nogain", 6))
 			a->no_gain = 1;
+		else if (!eq && klen == 6 && !memcmp(key, "nowait", 6))
+			a->nowait = 1;
 		else if (!eq)
 			return -1;
 		else if (klen == 3 && !memcmp(key, "sel", 3))
@@ -1364,7 +1434,8 @@ static void usage(void)
 		"           (the handset then drops it as unencrypted)\n"
 		"  -a SPEC  audio bind parameters, comma separated [CR A-0029]:\n"
 		"           sel=N gain=N (0x0251), flags=N mask=N mode=N codec=N\n"
-		"           (0x0230), nogain = skip 0x0251, f626 = also send 0xF626\n"
+		"           (0x0230), nogain = skip 0x0251, f626 = also send 0xF626,\n"
+		"           nowait = send 0x022D at once instead of after 0x0242\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
 		"           Default: sel=1,gain=1,flags=1,mask=0,mode=0,codec=0,\n"
 		"           txidle=0xff,voiceidle=0xff\n");
