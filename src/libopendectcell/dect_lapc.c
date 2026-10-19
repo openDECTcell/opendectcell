@@ -266,6 +266,7 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	l->modulus = 2;
 	if (f->nlf) {
 		l->vr = 0;		/* new link: discard the old receive state */
+		l->rxmsg_len = 0;	/* and any partial reassembly from the old link */
 		l->nlf_pending = 0;	/* PT established the link; our frames are subsequent */
 	}
 
@@ -280,6 +281,7 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	case DECT_LAPC_DISC:
 		queue_ua(l, f->pf);
 		l->established = 0;
+		l->rxmsg_len = 0;	/* drop any partial reassembly on disconnect */
 		return 0;
 
 	case DECT_LAPC_RR:

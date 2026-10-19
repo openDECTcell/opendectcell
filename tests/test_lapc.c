@@ -164,6 +164,38 @@ static void test_fsm_rx_single(void)
 	CHECK_EQ(dect_lapc_poll_tx(&l, tx, sizeof(tx)), 0);	/* nothing more */
 }
 
+/*
+ * A new-link I-frame (NLF set) must discard any partial reassembly from the old
+ * link, so a dropped/retransmitted multi-segment message cannot prepend stale
+ * bytes to the next NWK message.
+ */
+static void test_fsm_rx_nlf_resets_reassembly(void)
+{
+	struct dect_lapc l;
+	uint8_t part[2] = { 0xAA, 0xBB };
+	uint8_t msg[3] = { 0x11, 0x22, 0x33 };
+	uint8_t frame[DECT_LC_LAPC_MAX], out[DECT_LAPC_MSG_MAX];
+	struct dect_lapc_frame f;
+	size_t n;
+	int r;
+
+	dect_lapc_init(&l, 0);
+
+	/* Partial first segment (more=1): buffered, not yet delivered. */
+	n = dect_lapc_build_i(frame, sizeof(frame), 0, 0, DECT_LAPC_LLN_A, 0, 0, 0, 1,
+			      part, sizeof(part));
+	CHECK_EQ(dect_lapc_parse(frame, n, &f), 0);
+	CHECK_EQ(dect_lapc_rx(&l, &f, 100, out, sizeof(out)), 0);
+
+	/* New link (NLF) then a complete message: only the new bytes come out. */
+	n = dect_lapc_build_i(frame, sizeof(frame), 0, 1, DECT_LAPC_LLN_A, 0, 0, 1, 0,
+			      msg, sizeof(msg));
+	CHECK_EQ(dect_lapc_parse(frame, n, &f), 0);
+	r = dect_lapc_rx(&l, &f, 110, out, sizeof(out));
+	CHECK_EQ(r, 3);				/* not 5 (no stale AA BB prefix) */
+	CHECK_EQ(memcmp(out, msg, 3), 0);
+}
+
 /* Send a short message; it goes out as one I-frame and completes on the ack. */
 static void test_fsm_tx_short(void)
 {
@@ -263,6 +295,7 @@ int main(void)
 	test_build_rr_roundtrip();
 	test_lapc_over_lc();
 	test_fsm_rx_single();
+	test_fsm_rx_nlf_resets_reassembly();
 	test_fsm_tx_short();
 	test_fsm_retransmit();
 	test_fsm_loopback_segmented();
