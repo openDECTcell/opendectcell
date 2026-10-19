@@ -48,6 +48,21 @@ void dect_lc_checksum(const uint8_t *frame, size_t flen, uint16_t lsig,
 	out[1] = (uint8_t)(y ^ (lsig & 0xFFu));
 }
 
+/*
+ * The link signature that makes this frame valid: XOR the received checksum with
+ * the checksum the frame would carry for LSIG 0. A registered PP signs with
+ * LSIG = low 16 bits of its PMID (EN 300 175-4 §7.10), so we learn it from the
+ * establishment frame rather than requiring it up front.
+ */
+static uint16_t derive_lsig(const uint8_t *frame, size_t flen)
+{
+	uint8_t c0[2];
+
+	dect_lc_checksum(frame, flen, 0, c0);
+	return (uint16_t)(((frame[flen - 2] ^ c0[0]) << 8) |
+			  (frame[flen - 1] ^ c0[1]));
+}
+
 /* Valid iff, with the link signature removed, both C0 and C1 are zero (§B.3). */
 static int checksum_ok(const uint8_t *frame, size_t flen, uint16_t lsig)
 {
@@ -131,8 +146,18 @@ int dect_lc_rx_fragment(struct dect_lc_rx *rx, const uint8_t seg[DECT_LC_FRAG_LE
 	if (rx->len < rx->flen)
 		return 0;		/* need more fragments */
 
-	/* A full frame is buffered. */
-	if (!checksum_ok(rx->buf, rx->flen, rx->lsig)) {
+	/*
+	 * A full frame is buffered. Lock the link signature, or learn it from the
+	 * opening (single-fragment, empty) establishment frame: a registered PP
+	 * signs with LSIG = low 16 bits of its PMID, not 0. Only the establishment
+	 * frame teaches the LSIG; a later data frame that fails is a real error.
+	 */
+	if (checksum_ok(rx->buf, rx->flen, rx->lsig)) {
+		rx->lsig_locked = 1;
+	} else if (!rx->lsig_locked && rx->flen == DECT_LC_FRAG_LEN) {
+		rx->lsig = derive_lsig(rx->buf, rx->flen);
+		rx->lsig_locked = 1;
+	} else {
 		rx->len = 0;
 		rx->flen = 0;
 		rx->stats.csum_errors++;

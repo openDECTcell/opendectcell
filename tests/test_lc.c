@@ -112,6 +112,42 @@ static void test_empty_info(void)
 	CHECK_EQ(memcmp(out, lapc, 3), 0);
 }
 
+/*
+ * A registered PP signs Cs frames with LSIG = low 16 bits of its PMID. The rx
+ * learns that signature from the opening establishment frame and then validates
+ * the rest of the link with it; a wrong signature is rejected once locked.
+ */
+static void test_lsig_autolearn(void)
+{
+	uint8_t est[3] = { 0x91, 0x00, 0x01 };		/* empty establishment frame */
+	uint8_t data[5] = { 0x11, 0x02, 0x09, 0xAA, 0xBB };
+	uint8_t frame[DECT_LC_FRAME_MAX];
+	uint8_t out[DECT_LC_LAPC_MAX];
+	struct dect_lc_rx rx;
+	size_t flen, off;
+	int r = 0;
+
+	dect_lc_rx_init(&rx, 0);			/* start as if unregistered */
+
+	flen = dect_lc_build(est, sizeof(est), 0x1101, frame, sizeof(frame));
+	CHECK_EQ(flen, 5);
+	r = dect_lc_rx_fragment(&rx, frame, out, sizeof(out));
+	CHECK_EQ(r, 3);					/* accepted by learning LSIG */
+	CHECK_EQ(rx.lsig, 0x1101);
+	CHECK_EQ(rx.lsig_locked, 1);
+
+	flen = dect_lc_build(data, sizeof(data), 0x1101, frame, sizeof(frame));
+	for (off = 0; off < flen; off += DECT_LC_FRAG_LEN)
+		r = dect_lc_rx_fragment(&rx, &frame[off], out, sizeof(out));
+	CHECK_EQ(r, (int)sizeof(data));			/* same LSIG validates */
+	CHECK_EQ(memcmp(out, data, sizeof(data)), 0);
+
+	flen = dect_lc_build(data, sizeof(data), 0x2222, frame, sizeof(frame));
+	for (off = 0; off < flen; off += DECT_LC_FRAG_LEN)
+		r = dect_lc_rx_fragment(&rx, &frame[off], out, sizeof(out));
+	CHECK_EQ(r, -1);				/* wrong LSIG now rejected */
+}
+
 int main(void)
 {
 	test_checksum_vectors();
@@ -120,5 +156,6 @@ int main(void)
 	test_build_reassemble_roundtrip();
 	test_reassemble_bad_checksum();
 	test_empty_info();
+	test_lsig_autolearn();
 	return CHECK_DONE();
 }

@@ -71,10 +71,17 @@ struct dect_lc_rx {
 	uint8_t  buf[DECT_LC_FRAME_MAX];
 	size_t   len;		/* octets accumulated in buf */
 	size_t   flen;		/* expected frame length, 0 until the LI octet */
-	uint16_t lsig;
+	uint16_t lsig;		/* link signature (auto-learned from frame 1) */
+	uint8_t  lsig_locked;	/* 1 once the signature is fixed for this link */
 	struct dect_lc_rx_stats stats;
 };
 
+/*
+ * lsig is the signature to try first (0 for an unregistered PP). The first
+ * complete frame locks the link's signature: if it does not validate with lsig,
+ * the real one is derived from it (a registered PP uses LSIG = low 16 bits of
+ * its PMID / assigned TPUI, not 0). Read rx->lsig afterwards to sign replies.
+ */
 void dect_lc_rx_init(struct dect_lc_rx *rx, uint16_t lsig);
 
 /*

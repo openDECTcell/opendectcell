@@ -366,7 +366,9 @@ static void send_cplane(struct stubd *s, uint8_t handle,
 {
 	uint8_t cs[DECT_LC_FRAME_MAX];
 	struct dect_mail m;
-	size_t flen = dect_lc_build(lapc, lapc_len, 0, cs, sizeof(cs));
+	/* Sign with the link's signature (0 while unregistered, the PP's PMID-
+	 * derived LSIG once learned from its establishment frame). */
+	size_t flen = dect_lc_build(lapc, lapc_len, s->reg.lc.lsig, cs, sizeof(cs));
 
 	if (flen == 0)
 		return;
