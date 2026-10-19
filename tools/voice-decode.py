@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Work out how a captured DECT voice slot is encoded.
+
+`dect-stubd -w FILE` dumps the call's TDM slot raw: two bytes per frame, in
+frame order, nothing interpreted. The slot itself is measured (channel 1 is
+TDM slot 0), but what sits inside those two bytes is not. At 8000 frames/s the
+plausible readings are:
+
+  * 16-bit linear PCM at 8 kHz (either byte order)
+  * A-law at 16 kHz, both bytes being consecutive samples
+  * A-law at 8 kHz in one byte of each pair, the other byte padding
+
+This script scores each reading and prints the ranking, then writes the best
+few out as WAV files to listen to. The scoring is deliberately crude but it
+separates speech from noise well: real voice has most of its energy below
+1 kHz, a high zero-crossing count only in fricatives, and -- crucially -- it
+has silences, so its short-term energy varies a lot. A misread stream looks
+like white noise: flat spectrum, near-constant energy.
+
+Usage:  voice-decode.py capture.raw [-o outdir]
+"""
+import argparse
+import math
+import os
+import struct
+import sys
+import wave
+
+# ITU-T G.711 A-law, same table as dect_audio.c.
+def alaw_decode(a):
+    a ^= 0x55
+    sign = a & 0x80
+    exponent = (a & 0x70) >> 4
+    mantissa = a & 0x0F
+    if exponent == 0:
+        sample = (mantissa << 4) + 8
+    else:
+        sample = ((mantissa << 4) + 0x108) << (exponent - 1)
+    return -sample if sign else sample
+
+
+ALAW = [alaw_decode(i) for i in range(256)]
+
+
+def readings(data):
+    """Yield (name, rate, samples) for every candidate interpretation."""
+    n = len(data) // 2 * 2
+    data = data[:n]
+
+    pcm_le = list(struct.unpack('<%dh' % (n // 2), data))
+    pcm_be = list(struct.unpack('>%dh' % (n // 2), data))
+    yield ('pcm16-le @8k', 8000, pcm_le)
+    yield ('pcm16-be @8k', 8000, pcm_be)
+    yield ('alaw-both @16k', 16000, [ALAW[b] for b in data])
+    yield ('alaw-low @8k', 8000, [ALAW[b] for b in data[0::2]])
+    yield ('alaw-high @8k', 8000, [ALAW[b] for b in data[1::2]])
+
+
+def score(samples, rate):
+    """Higher is more speech-like. Returns (score, detail dict)."""
+    if len(samples) < rate // 2:
+        return -1e9, {}
+
+    # Normalise so the measures do not depend on the reading's amplitude.
+    peak = max(1, max(abs(s) for s in samples))
+    xs = [s / peak for s in samples]
+
+    # Short-term energy over 20 ms frames: speech has silences, noise does not.
+    win = max(1, rate // 50)
+    energies = []
+    for i in range(0, len(xs) - win, win):
+        frame = xs[i:i + win]
+        energies.append(math.sqrt(sum(v * v for v in frame) / win))
+    if not energies:
+        return -1e9, {}
+    mean_e = sum(energies) / len(energies)
+    if mean_e <= 1e-9:
+        return -1e9, {}
+    spread = math.sqrt(sum((e - mean_e) ** 2 for e in energies) / len(energies))
+    dynamics = spread / mean_e
+
+    # Zero crossings per second: voiced speech is a few hundred to ~2k,
+    # white noise sits near rate/2.
+    zc = sum(1 for i in range(1, len(xs)) if (xs[i - 1] < 0) != (xs[i] < 0))
+    zcr = zc * rate / len(xs)
+    zcr_norm = zcr / (rate / 2)
+
+    # Adjacent-sample correlation: speech is strongly correlated, noise is not.
+    num = sum(xs[i] * xs[i - 1] for i in range(1, len(xs)))
+    den = sum(v * v for v in xs)
+    corr = num / den if den else 0.0
+
+    # Correlated and dynamic and not hissing.
+    s = corr * 2.0 + dynamics - zcr_norm * 2.0
+
+    # A constant or near-DC stream scores a perfect correlation of 1.0 without
+    # being audio at all -- that is what a padding byte looks like. Speech
+    # always crosses zero at least a few dozen times a second.
+    if zcr < 20.0:
+        s -= 10.0
+
+    return s, {'corr': corr, 'dynamics': dynamics, 'zcr': zcr, 'rms': mean_e}
+
+
+def write_wav(path, samples, rate):
+    with wave.open(path, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        clipped = [max(-32768, min(32767, int(s))) for s in samples]
+        w.writeframes(struct.pack('<%dh' % len(clipped), *clipped))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('capture')
+    ap.add_argument('-o', '--outdir', default=None,
+                    help='write WAVs here (default: alongside the capture)')
+    args = ap.parse_args()
+
+    with open(args.capture, 'rb') as f:
+        data = f.read()
+    if len(data) < 32:
+        sys.exit('capture too short: %d bytes' % len(data))
+    print('%d bytes = %.2f s at 8000 frames/s\n' % (len(data), len(data) / 2 / 8000))
+
+    outdir = args.outdir or os.path.dirname(os.path.abspath(args.capture))
+    os.makedirs(outdir, exist_ok=True)
+
+    results = []
+    for name, rate, samples in readings(data):
+        sc, detail = score(samples, rate)
+        results.append((sc, name, rate, samples, detail))
+    results.sort(key=lambda r: -r[0])
+
+    print('%-16s %7s  %7s  %9s  %8s  %6s' %
+          ('reading', 'score', 'corr', 'dynamics', 'zcr/s', 'rms'))
+    for sc, name, rate, _, d in results:
+        if not d:
+            print('%-16s %7s' % (name, 'n/a'))
+            continue
+        print('%-16s %7.3f  %7.3f  %9.3f  %8.0f  %6.4f' %
+              (name, sc, d['corr'], d['dynamics'], d['zcr'], d['rms']))
+
+    base = os.path.splitext(os.path.basename(args.capture))[0]
+    print()
+    for sc, name, rate, samples, d in results[:3]:
+        if not d:
+            continue
+        safe = name.replace(' ', '').replace('@', '-')
+        path = os.path.join(outdir, '%s.%s.wav' % (base, safe))
+        write_wav(path, samples, rate)
+        print('wrote %s' % path)
+    print('\nListen to the top-ranked file. Speech means the reading is right;'
+          '\nhiss or a buzz at the wrong pitch means try the next one.')
+
+
+if __name__ == '__main__':
+    main()

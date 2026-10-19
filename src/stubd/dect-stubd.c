@@ -109,6 +109,16 @@ struct stubd {
 	uint16_t vs_last[8];
 	uint32_t vs_changes[8];
 	uint32_t vs_frames;
+	/*
+	 * Voice capture (-w): dump the call's TDM slot raw, two bytes per frame,
+	 * so the sample format can be worked out offline. The slot is measured,
+	 * the encoding inside it is not: 8000 frames/s x 2 bytes could be 16-bit
+	 * linear at 8 kHz, A-law at 16 kHz, or A-law in one byte of each pair.
+	 */
+	const char *voice_path;
+	FILE       *voice_fp;
+	int         voice_slot;		/* -V, default 0 (measured) */
+	uint32_t    voice_bytes;
 	struct reg_ctx {
 		int active;
 		int persisted;		/* chip subscription written this connection */
@@ -886,6 +896,30 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 	}
 }
 
+/*
+ * Dump the call's voice slot while it is bound: the raw two bytes per frame,
+ * in frame order, with nothing interpreted. Decoding happens offline -- see
+ * tools/voice-decode.py, which tries the candidate formats against the file.
+ */
+static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
+{
+	unsigned int f;
+
+	if (!s->voice_fp || !s->reg.call_bound ||
+	    (unsigned int)s->voice_slot >= s->slots)
+		return;
+	for (f = 0; f < fpb; f++) {
+		if (fwrite(fr + (f * s->slots + (unsigned int)s->voice_slot) * 2u,
+			   2, 1, s->voice_fp) != 1) {
+			perror("voice capture");
+			fclose(s->voice_fp);
+			s->voice_fp = NULL;
+			return;
+		}
+		s->voice_bytes += 2u;
+	}
+}
+
 /* Main loop: decode mails, drive the session, (re)send the contact. */
 static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 {
@@ -933,6 +967,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 					dect_rx_push(&s->rx, pair, 2);
 				}
 				voice_slot_probe(s, fr, fpb);
+				voice_capture(s, fr, fpb);
 				now = mono_ms();
 				while (dect_rx_pull(&s->rx, &m)) {
 					if (s->verbose)
@@ -1043,7 +1078,11 @@ static void usage(void)
 		"           SEL = selector (try the link/terminal number first; 7..12\n"
 		"           may overwrite a stored subscription), rs = put RS instead\n"
 		"           of RAND_F in the challenge field, 33 = long mail variant.\n"
-		"           The field mapping is unproven [CR A-0027]; off by default\n");
+		"           The field mapping is unproven [CR A-0027]; off by default\n"
+		"  -w FILE  capture the call's voice slot to FILE (raw, 2 bytes per\n"
+		"           frame, while a call is bound) -- holds call audio, keep\n"
+		"           it local\n"
+		"  -V SLOT  voice slot to capture (default 0, measured for channel 1)\n");
 }
 
 int main(int argc, char **argv)
@@ -1063,7 +1102,7 @@ int main(int argc, char **argv)
 	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));
 	s.sub_path = "/etc/opendectcell-sub";	/* overridden by -s */
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:h")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -1082,6 +1121,8 @@ int main(int argc, char **argv)
 		case 'g': s.do_register = 1; break;
 		case 'P': s.pin = optarg; break;
 		case 's': s.sub_path = optarg[0] ? optarg : NULL; break;
+		case 'w': s.voice_path = optarg; break;
+		case 'V': s.voice_slot = (int)strtol(optarg, NULL, 0); break;
 		case 'k':
 			if (parse_chip_cipher(&s.chip_cipher, optarg) < 0) {
 				usage();
@@ -1135,7 +1176,19 @@ int main(int argc, char **argv)
 	}
 	if (s.do_register)
 		s.rand_fd = open("/dev/urandom", O_RDONLY);
+	if (s.voice_path) {
+		s.voice_fp = fopen(s.voice_path, "wb");
+		if (!s.voice_fp) {
+			perror(s.voice_path);
+			goto out;
+		}
+	}
 	ret = run_loop(&s, fpb, run_seconds);
+	if (s.voice_fp) {
+		fclose(s.voice_fp);
+		printf("voice: captured %u bytes from slot %d (%u frames)\n",
+		       s.voice_bytes, s.voice_slot, s.voice_bytes / 2u);
+	}
 
 	/* Park the radio so the base does not keep beaconing with registration
 	 * open after we exit. [CR COMMAND_SET §6.2/§6.1] */
