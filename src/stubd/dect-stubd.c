@@ -39,7 +39,9 @@
 #include "dect_cs.h"
 #include "dect_lc.h"
 #include "dect_lapc.h"
+#include "dect_nwk.h"
 #include "dect_mm.h"
+#include "dect_cc.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
 #define PROBE_BLOCKS	40u
@@ -89,6 +91,7 @@ struct stubd {
 		struct dect_lc_rx lc;
 		struct dect_lapc lapc;
 		struct dect_mm mm;
+		struct dect_cc cc;
 	} reg;
 };
 
@@ -441,7 +444,34 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	dect_lc_rx_init(&s->reg.lc, 0);
 	dect_lapc_init(&s->reg.lapc, 0);
 	dect_mm_init(&s->reg.mm, &mcfg);
+	dect_cc_init(&s->reg.cc);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
+}
+
+/* Drain queued NWK responses (MM and CC) into LAPC, one per free window. */
+static void drain_nwk(struct stubd *s, uint64_t now)
+{
+	uint8_t msg[DECT_LAPC_MSG_MAX];
+	size_t mlen;
+
+	while (!s->reg.lapc.outstanding) {
+		mlen = dect_mm_poll(&s->reg.mm, msg, sizeof(msg));
+		if (mlen == 0)
+			mlen = dect_cc_poll(&s->reg.cc, msg, sizeof(msg));
+		if (mlen == 0)
+			break;
+		if (s->verbose) {
+			size_t i;
+
+			printf("reg: nwk out --> ");
+			for (i = 0; i < mlen; i++)
+				printf("%02x ", msg[i]);
+			printf("\n");
+		}
+		if (dect_lapc_send(&s->reg.lapc, msg, mlen, now) != 0)
+			break;
+		pump_lapc(s);
+	}
 }
 
 /* Feed one 0x0203 signalling segment up the stack; send any responses. */
@@ -473,7 +503,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		printf("reg: nwk_len=%d\n", nwk_len);
 	pump_lapc(s);				/* at least the LAPC ack */
 	if (nwk_len > 0) {
-		uint8_t rand_f[8], rs[16];
+		struct dect_nwk_hdr h;
+		const uint8_t *ies;
+		size_t ies_len;
 
 		if (s->verbose) {		/* local only: carries IPUI, never commit */
 			int i;
@@ -483,32 +515,21 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 				printf("%02x ", nwk[i]);
 			printf("\n");
 		}
-		gen_rand(s, rand_f, sizeof(rand_f));
-		gen_rand(s, rs, sizeof(rs));
-		dect_mm_rx(&s->reg.mm, nwk, (size_t)nwk_len, rand_f, rs);
-	}
+		/* Route by protocol discriminator: CC to call control, else MM. */
+		if (dect_nwk_parse(nwk, (size_t)nwk_len, &h, &ies, &ies_len) == 0 &&
+		    h.pd == DECT_PD_CC) {
+			dect_cc_rx(&s->reg.cc, nwk, (size_t)nwk_len);
+		} else {
+			uint8_t rand_f[8], rs[16];
 
-	/* Drain the MM output queue into LAPC, one message per free window. The
-	 * next message goes out when the handset acknowledges the previous one. */
-	{
-		uint8_t mmsg[DECT_LAPC_MSG_MAX];
-		size_t mlen;
-
-		while (!s->reg.lapc.outstanding &&
-		       (mlen = dect_mm_poll(&s->reg.mm, mmsg, sizeof(mmsg))) > 0) {
-			if (s->verbose) {
-				size_t i;
-
-				printf("reg: nwk out --> ");
-				for (i = 0; i < mlen; i++)
-					printf("%02x ", mmsg[i]);
-				printf("\n");
-			}
-			if (dect_lapc_send(&s->reg.lapc, mmsg, mlen, now) != 0)
-				break;
-			pump_lapc(s);
+			gen_rand(s, rand_f, sizeof(rand_f));
+			gen_rand(s, rs, sizeof(rs));
+			dect_mm_rx(&s->reg.mm, nwk, (size_t)nwk_len, rand_f, rs);
 		}
 	}
+
+	/* The next message goes out when the handset acknowledges the previous one. */
+	drain_nwk(s, now);
 
 	/*
 	 * Once the handset is authenticated (UAK valid) and we have answered its
@@ -533,6 +554,10 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		printf("reg: handset registered\n");
 	else if (s->reg.mm.state == DECT_MM_FAILED)
 		printf("reg: registration rejected\n");
+
+	if (s->reg.cc.state == DECT_CC_ST_ACTIVE)
+		printf("call: active (handle %u) -- audio binding TBD\n",
+		       s->reg.handle);
 }
 
 /* Route a received mail into the registration stack (when -g). */
