@@ -113,6 +113,13 @@ size_t dect_nwk_put_ie(uint8_t *out, size_t cap, size_t off, uint8_t id,
 		       const uint8_t *data, size_t len);
 
 /*
+ * Append a double-octet fixed IE [id, value] at out+off, for the 0xE0 family
+ * above. Returns the new offset, or 0 on overflow.
+ */
+size_t dect_nwk_put_fixed_ie(uint8_t *out, size_t cap, size_t off, uint8_t id,
+			     uint8_t value);
+
+/*
  * Find the first variable-length IE with the given id in an IE block. Returns a
  * pointer to its contents and writes the content length to *out_len, or NULL if
  * absent. Single-octet fixed IEs (bit 8 = 1) are skipped.

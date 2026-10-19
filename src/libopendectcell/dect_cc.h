@@ -37,6 +37,9 @@ enum dect_cc_state {
 	DECT_CC_ST_CONNECT_PENDING,	/* CONNECT sent, awaiting CONNECT-ACK */
 	DECT_CC_ST_ACTIVE,		/* call up: bind audio */
 	DECT_CC_ST_RELEASED,		/* call released */
+	/* Incoming call (we originate towards the handset). */
+	DECT_CC_ST_CALL_PRESENT,	/* SETUP sent, awaiting the PP's answer */
+	DECT_CC_ST_RINGING,		/* PP sent ALERTING: the handset is ringing */
 };
 
 #define DECT_CC_TXQ	3u		/* pending outbound NWK messages */
@@ -45,11 +48,14 @@ struct dect_cc_stats {
 	uint32_t setup;		/* CC-SETUP received */
 	uint32_t connected;	/* reached ACTIVE */
 	uint32_t released;
+	uint32_t alerting;	/* ALERTING received: the handset is ringing */
 };
 
 struct dect_cc {
 	enum dect_cc_state state;
 	uint8_t ti_value;		/* transaction value from the PP's SETUP */
+	uint8_t ti_flag;		/* our side of the transaction */
+	uint8_t incoming;		/* 1 = we originated towards the PP */
 
 	/* FIFO of outbound NWK messages (e.g. CALL-PROC then CONNECT). */
 	uint8_t  out[DECT_CC_TXQ][DECT_LAPC_MSG_MAX];
@@ -64,6 +70,26 @@ void dect_cc_init(struct dect_cc *cc);
 /* Feed a decoded NWK message (the LAPC I-frame payload). Non-CC messages are
  * ignored. Any responses are queued; pull them with dect_cc_poll(). */
 void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len);
+
+/*
+ * Start an incoming call: queue an FP-originated CC-SETUP towards the handset,
+ * which makes it ring. `port_id` is the PP's PORTABLE-IDENTITY contents as the
+ * subscription stored them (`dect_mm.port_id`), `fixed_id` the FIXED-IDENTITY
+ * contents identifying this base. `basic_service` is the <<BASIC-SERVICE>>
+ * value octet: the low nibble is the service (8 = wideband speech, which is
+ * what AVM handsets negotiate here), the high nibble the call class.
+ *
+ * EN 300 444 makes PORTABLE-IDENTITY, FIXED-IDENTITY and BASIC-SERVICE
+ * mandatory in an FP-originated SETUP. The handset answers ALERTING while it
+ * rings and CONNECT when the user accepts; we then send CONNECT-ACK and the
+ * call is active, at which point the audio bind is the same as for a call the
+ * handset places.
+ *
+ * Returns 0, or -1 if a call is already up or the message would not fit.
+ */
+int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len,
+		  const uint8_t *fixed_id, size_t fixed_id_len,
+		  uint8_t basic_service);
 
 /* Queue a CC-RELEASE to hang up an active call. Returns 0, or -1 if idle. */
 int dect_cc_release(struct dect_cc *cc);

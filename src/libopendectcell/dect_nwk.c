@@ -56,6 +56,17 @@ size_t dect_nwk_put_ie(uint8_t *out, size_t cap, size_t off, uint8_t id,
 	return off + 2 + len;
 }
 
+size_t dect_nwk_put_fixed_ie(uint8_t *out, size_t cap, size_t off, uint8_t id,
+			     uint8_t value)
+{
+	if (off + 2 > cap)
+		return 0;
+
+	out[off]     = id;		/* bit 8 = 1 => fixed length */
+	out[off + 1] = value;
+	return off + 2;
+}
+
 const uint8_t *dect_nwk_find_ie(const uint8_t *ies, size_t ies_len, uint8_t id,
 				size_t *out_len)
 {

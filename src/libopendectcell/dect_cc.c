@@ -13,6 +13,7 @@ void dect_cc_init(struct dect_cc *cc)
 {
 	memset(cc, 0, sizeof(*cc));
 	cc->state = DECT_CC_ST_NULL;
+	cc->ti_flag = DECT_TI_RESPONDER;	/* until a call says otherwise */
 }
 
 /* Reserve the next free TX slot and return a pointer to build into, or NULL. */
@@ -44,6 +45,52 @@ static void queue_msg(struct dect_cc *cc, uint8_t ti_flag, uint8_t msg_type)
 	txq_commit(cc, idx, off);
 }
 
+int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len,
+		  const uint8_t *fixed_id, size_t fixed_id_len,
+		  uint8_t basic_service)
+{
+	unsigned idx;
+	uint8_t *b;
+	size_t off;
+
+	if (cc->state != DECT_CC_ST_NULL && cc->state != DECT_CC_ST_RELEASED)
+		return -1;
+	b = txq_slot(cc, &idx);
+	if (!b)
+		return -1;
+
+	/*
+	 * We are the originating side of this transaction, so the F bit is the
+	 * originator value and the transaction value is ours to pick. Value 0
+	 * is fine: the handset's own calls run in a separate transaction, and
+	 * the two are told apart by the flag.
+	 */
+	cc->incoming = 1;
+	cc->ti_flag = DECT_TI_ORIGINATOR;
+	cc->ti_value = 0;
+
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 cc->ti_flag, cc->ti_value, DECT_CC_SETUP);
+	if (!off)
+		return -1;
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+			      DECT_IE_PORTABLE_IDENTITY, port_id, port_id_len);
+	if (!off)
+		return -1;
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+			      DECT_IE_FIXED_IDENTITY, fixed_id, fixed_id_len);
+	if (!off)
+		return -1;
+	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
+				    DECT_IE_BASIC_SERVICE, basic_service);
+	if (!off)
+		return -1;
+
+	txq_commit(cc, idx, off);
+	cc->state = DECT_CC_ST_CALL_PRESENT;
+	return 0;
+}
+
 static void on_setup(struct dect_cc *cc)
 {
 	cc->stats.setup++;
@@ -67,7 +114,7 @@ static void on_connect_ack(struct dect_cc *cc)
 
 static void on_release(struct dect_cc *cc)
 {
-	queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_RELEASE_COM);
+	queue_msg(cc, cc->ti_flag, DECT_CC_RELEASE_COM);
 	cc->state = DECT_CC_ST_RELEASED;
 	cc->stats.released++;
 }
@@ -85,7 +132,29 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 	case DECT_CC_SETUP:
 		if (cc->state == DECT_CC_ST_NULL) {
 			cc->ti_value = h.ti_value;
+			cc->ti_flag = DECT_TI_RESPONDER;
+			cc->incoming = 0;
 			on_setup(cc);
+		}
+		break;
+	case DECT_CC_ALERTING:
+		/* Incoming call: the handset is ringing. */
+		if (cc->incoming && cc->state == DECT_CC_ST_CALL_PRESENT) {
+			cc->state = DECT_CC_ST_RINGING;
+			cc->stats.alerting++;
+		}
+		break;
+	case DECT_CC_CONNECT:
+		/*
+		 * Incoming call: the user answered. The originating side
+		 * confirms with CONNECT-ACK, and then the call is active and
+		 * the audio bind is the same as for a handset-placed call.
+		 */
+		if (cc->incoming && (cc->state == DECT_CC_ST_CALL_PRESENT ||
+				     cc->state == DECT_CC_ST_RINGING)) {
+			queue_msg(cc, cc->ti_flag, DECT_CC_CONNECT_ACK);
+			cc->state = DECT_CC_ST_ACTIVE;
+			cc->stats.connected++;
 		}
 		break;
 	case DECT_CC_CONNECT_ACK:
@@ -106,7 +175,7 @@ int dect_cc_release(struct dect_cc *cc)
 {
 	if (cc->state == DECT_CC_ST_NULL || cc->state == DECT_CC_ST_RELEASED)
 		return -1;
-	queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_RELEASE);
+	queue_msg(cc, cc->ti_flag, DECT_CC_RELEASE);
 	cc->state = DECT_CC_ST_RELEASED;
 	cc->stats.released++;
 	return 0;

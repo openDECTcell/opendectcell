@@ -134,8 +134,68 @@ static void test_ignores_non_cc(void)
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
 }
 
+/*
+ * An FP-originated call: SETUP towards the handset, the handset rings
+ * (ALERTING), the user answers (CONNECT) and we confirm with CONNECT-ACK.
+ */
+static void test_outgoing_call_to_handset(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	struct dect_cc cc;
+	uint8_t out[64], msg[8];
+	size_t n;
+
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+
+	/* The queued SETUP: originator side, with the three mandatory IEs. */
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u + 2u + sizeof(port_id) + 2u + sizeof(fixed_id) + 2u);
+	CHECK_EQ(out[1], DECT_CC_SETUP);
+	CHECK_EQ(out[2], DECT_IE_PORTABLE_IDENTITY);
+	CHECK_EQ(out[2 + 2 + sizeof(port_id)], DECT_IE_FIXED_IDENTITY);
+	CHECK_EQ(out[n - 2], DECT_IE_BASIC_SERVICE);
+	CHECK_EQ(out[n - 1], 0x88);
+
+	/* The handset rings. */
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
+			       0, DECT_CC_ALERTING);
+	dect_cc_rx(&cc, msg, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_RINGING);
+	CHECK_EQ(cc.stats.alerting, 1u);
+
+	/* The user answers; we confirm and the call is active. */
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
+			       0, DECT_CC_CONNECT);
+	dect_cc_rx(&cc, msg, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u);
+	CHECK_EQ(out[1], DECT_CC_CONNECT_ACK);
+}
+
+/* An ALERTING for a call we did not originate must not move the state. */
+static void test_alerting_ignored_when_responder(void)
+{
+	struct dect_cc cc;
+	uint8_t msg[8];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
+			       0, DECT_CC_ALERTING);
+	dect_cc_rx(&cc, msg, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(cc.stats.alerting, 0u);
+}
+
 int main(void)
 {
+	test_outgoing_call_to_handset();
+	test_alerting_ignored_when_responder();
 	test_incoming_setup();
 	test_release_from_pp();
 	test_release_from_fp();
