@@ -116,6 +116,7 @@ struct stubd {
 	 * the encoding inside it is not: 8000 frames/s x 2 bytes could be 16-bit
 	 * linear at 8 kHz, A-law at 16 kHz, or A-law in one byte of each pair.
 	 */
+	int         no_cipher;		/* -C: never send CIPHER-REQUEST */
 	const char *voice_path;
 	FILE       *voice_fp;
 	int         voice_slot;		/* -V, default 0 (measured) */
@@ -824,10 +825,20 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		/*
 		 * Start call ciphering: challenge the handset with the stored UAK so
 		 * both sides derive the DCK, then ask it to switch on DSC. The chip
-		 * cipher-enable (0x0208) is not sent yet -- its DCK byte mapping is
-		 * unproven [CR A-0027 Q1] -- so this validates the MM half only.
+		 * cipher-enable (0x0208) only goes out when -k asks for it, its field
+		 * mapping being unproven [CR A-0028 §1].
+		 *
+		 * -C suppresses all of this. The handset ciphers the whole bearer --
+		 * voice included -- the moment it sees our CIPHER-REQUEST, and we
+		 * cannot decipher, so a captured voice slot is ciphertext from ~400 ms
+		 * into the call. Suppressing the request keeps the call in the clear
+		 * long enough to work out the sample format, at the price of the
+		 * handset dropping it with its unencrypted-connection complaint.
 		 */
-		if (s->uak_valid && !s->reg.cipher_started) {
+		if (s->no_cipher && !s->reg.cipher_started) {
+			s->reg.cipher_started = 1;
+			printf("call: cipher: suppressed (-C), call stays in the clear\n");
+		} else if (s->uak_valid && !s->reg.cipher_started) {
 			uint8_t rand_f[8], rs[16];
 
 			gen_rand(s, rand_f, sizeof(rand_f));
@@ -1111,7 +1122,11 @@ static void usage(void)
 		"  -w FILE  capture the call's voice slot to FILE (raw, 2 bytes per\n"
 		"           frame, while a call is bound) -- holds call audio, keep\n"
 		"           it local\n"
-		"  -V SLOT  voice slot to capture (default 0, measured for channel 1)\n");
+		"  -V SLOT  voice slot to capture (default 0, measured for channel 1)\n"
+		"  -C       do not start call ciphering. The handset ciphers the whole\n"
+		"           bearer once it sees CIPHER-REQUEST, so captured voice is\n"
+		"           ciphertext; -C keeps the call in the clear for audio work\n"
+		"           (the handset then drops it as unencrypted)\n");
 }
 
 int main(int argc, char **argv)
@@ -1131,7 +1146,7 @@ int main(int argc, char **argv)
 	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));
 	s.sub_path = "/etc/opendectcell-sub";	/* overridden by -s */
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:h")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:Ch")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -1150,6 +1165,7 @@ int main(int argc, char **argv)
 		case 'g': s.do_register = 1; break;
 		case 'P': s.pin = optarg; break;
 		case 's': s.sub_path = optarg[0] ? optarg : NULL; break;
+		case 'C': s.no_cipher = 1; break;
 		case 'w': s.voice_path = optarg; break;
 		case 'V': s.voice_slot = (int)strtol(optarg, NULL, 0); break;
 		case 'k':
