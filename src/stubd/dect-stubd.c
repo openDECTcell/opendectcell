@@ -1743,6 +1743,25 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	printf("rx: mails %u seq_gaps %u csum_errors %u framing_errors %u resyncs %u\n",
 	       s->rx.stats.mails, s->rx.stats.seq_gaps, s->rx.stats.csum_errors,
 	       s->rx.stats.framing_errors, s->rx.stats.resyncs);
+	/*
+	 * Transport bookkeeping from the driver. `dropped` counts receive
+	 * blocks lost because read() was too slow, which would show up in a
+	 * capture as words held over -- the audio stalls we are chasing. If it
+	 * is zero while the capture still stalls, the gaps are the chip's.
+	 */
+	{
+		struct dect_pcm_stats ps;
+
+		if (!ioctl(s->fd, DECT_IOC_PCM_STATS, &ps))
+			printf("pcm: blocks %llu dropped %llu multi %llu empty %llu "
+			       "errors %llu overruns %u tx_blocks %u tx_frames %u\n",
+			       (unsigned long long)ps.blocks,
+			       (unsigned long long)ps.dropped,
+			       (unsigned long long)ps.multi,
+			       (unsigned long long)ps.empty,
+			       (unsigned long long)ps.errors,
+			       ps.overruns, ps.tx_blocks, ps.tx_frames);
+	}
 	free(buf);
 	free(txbuf);
 	return 0;
