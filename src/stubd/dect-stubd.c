@@ -171,6 +171,7 @@ struct stubd {
 		int      have_tx_idle;
 		uint8_t  tx_voice_idle;	/* transmit filler for the voice lanes */
 		int      have_voice_idle;
+		unsigned status_ms;	/* poll 0xF624 connection status (0 = off) */
 	} audio;
 	const char *voice_path;
 	FILE       *voice_fp;
@@ -182,6 +183,7 @@ struct stubd {
 		int call_bound;		/* audio channel bound for the active call */
 		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
 		uint64_t bind_ms;	/* when 0x0230 went out, for the fallback */
+		uint64_t status_ms;	/* when the last 0xF624 poll went out */
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
 		uint8_t handle;
@@ -866,6 +868,60 @@ static void audio_connect_fallback(struct stubd *s, uint64_t now)
 }
 
 /*
+ * Ask the STUB for the per-link connection status: 0xF624 {link, 0x0A},
+ * answered by 0xF625 with a 0x2D-byte status record. AVM's host driver polls
+ * this every 30 s for its connection monitor [CR the hardware-analysis notes §6 1.5,
+ * §5 host mail 0xF611]. It is a pure read, so it changes nothing about what
+ * the radio transmits -- which is why it is usable during a live call.
+ *
+ * The record's first bytes are the ones we are after: MAC slot, RF carrier,
+ * the codec/slot-type byte and the link type. The codec byte doubles as the
+ * bearer's slot type: 0 = full slot (G.726 narrowband), 1..3 = long slot
+ * (G.722 or the AVM wideband codecs) [CR the hardware-analysis notes §8 3.3,
+ * §5 4.4]. A G.722 call that is running on a full-slot bearer would explain
+ * silence on an otherwise correctly bound audio channel.
+ */
+static void send_conn_status_req(struct stubd *s, uint64_t now)
+{
+	struct dect_mail m;
+
+	if (!s->audio.status_ms || !s->reg.call_bound || !s->reg.active)
+		return;
+	if (s->reg.status_ms && now - s->reg.status_ms < s->audio.status_ms)
+		return;
+	s->reg.status_ms = now;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0xF624u;		/* connection status request */
+	m.param[0] = s->reg.handle;
+	m.param[1] = 0x0Au;		/* the selector AVM's monitor uses */
+	m.param_len = 2;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+}
+
+/* Decode the 0xF625 answer; param[0..1] repeat the request, status from [2]. */
+static void report_conn_status(const struct dect_mail *m)
+{
+	const uint8_t *st = m->param + 2;
+	unsigned n = m->param_len > 2u ? (unsigned)m->param_len - 2u : 0u;
+
+	if (n < 6u) {
+		printf("call: status: short 0xF625 (%u bytes)\n", n);
+		return;
+	}
+	printf("call: status: mac slot %u carrier %u codec/slottype 0x%02x (%s) "
+	       "linktype %u state 0x%02x\n",
+	       st[0], st[1], st[3],
+	       st[3] == 0u ? "full slot, G.726" :
+	       (st[3] <= 3u ? "long slot, wideband" : "unknown"),
+	       st[4], st[5]);
+}
+
+/*
  * Hand the call's security material to the chip (0x0208), so the STUB can
  * switch the radio to DSC. Layout traced to its producer in [CR A-0028 §1],
  * which corrects A-0027: offsets below are into the complete mail, so they are
@@ -1199,9 +1255,20 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		    m->param_len >= 4 && m->param[0] == s->reg.handle) {
 			uint8_t chan = m->param[1] & 0x0Fu;
 
-			if (chan >= 1u && chan <= 6u)
+			/*
+			 * Valid STUB channels are 0..9 (ADPCM 0..3, PCM 4..6,
+			 * wideband 7..9); 0xF means "not connected"
+			 * [CR the hardware-analysis notes §6 1.6]. We used to stop at 6,
+			 * which silently skipped the connect for a wideband
+			 * channel.
+			 */
+			if (chan >= 1u && chan <= 9u)
 				send_audio_connect(s, s->reg.handle, chan);
 		}
+		break;
+	case 0xF625:
+		if (s->reg.call_bound)
+			report_conn_status(m);
 		break;
 	default:
 		break;
@@ -1351,8 +1418,10 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		}
 
 		now = mono_ms();
-		if (s->do_register)
+		if (s->do_register) {
 			audio_connect_fallback(s, now);
+			send_conn_status_req(s, now);
+		}
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
 			struct dect_mail cm;
 
@@ -1477,6 +1546,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->tx_idle = (uint8_t)v, a->have_tx_idle = 1;
 		else if (klen == 9 && !memcmp(key, "voiceidle", 9))
 			a->tx_voice_idle = (uint8_t)v, a->have_voice_idle = 1;
+		else if (klen == 6 && !memcmp(key, "status", 6))
+			a->status_ms = (unsigned)v;
 		else
 			return -1;
 		if (*spec == ',')
@@ -1563,6 +1634,9 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           status=MS polls the chip's per-link connection status\n"
+		"           (0xF624, read-only) every MS ms while a call is bound and\n"
+		"           prints the MAC slot, carrier and bearer slot type\n"
 		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0,\n"
 		"           txidle=0xff,voiceidle=0xff\n");
 }
