@@ -173,13 +173,18 @@ def main():
             sdata = bytes(sdata)
         # A slot that never changes cannot be speech; skip it cheaply so the
         # ranking is not cluttered by the seven idle slots.
+        # Raw DMA words are the two 16-bit halves of each 32-bit group swapped,
+        # so logical TDM slot = raw ^ 1 [CR A-0035]. Label both: raw is what
+        # the capture holds, logical is what the channel tables talk about
+        # (dect1 = logical 1 = raw 0, low byte).
+        label = 'raw%d/log%d' % (slot, slot ^ 1)
         if len(set(sdata)) <= 2:
-            print('slot %d: constant (%s) -- skipped'
-                  % (slot, ' '.join('%02x' % b for b in sorted(set(sdata)))))
+            print('%s: constant (%s) -- skipped'
+                  % (label, ' '.join('%02x' % b for b in sorted(set(sdata)))))
             continue
         for name, rate, samples in readings(sdata):
             sc, detail = score(samples, rate)
-            results.append((sc, 'slot%d %s' % (slot, name), rate, samples, detail))
+            results.append((sc, '%s %s' % (label, name), rate, samples, detail))
     results.sort(key=lambda r: -r[0])
 
     print()
