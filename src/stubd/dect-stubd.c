@@ -761,6 +761,15 @@ static void send_cplane(struct stubd *s, uint8_t handle,
  * A version 1 file still loads; it simply has no identities, and they are
  * learned and saved the first time the handset places a call.
  */
+/* The original layout, so files written before version 2 still load. */
+struct sub_record_v1 {
+	uint32_t magic;
+	uint8_t  slot;
+	uint8_t  uak[DECT_MM_UAK_LEN];
+	uint8_t  port_id_len;
+	uint8_t  port_id[DECT_MM_PORTID_MAX];
+};
+
 struct sub_record {
 	uint32_t magic;
 	uint8_t  slot;
@@ -818,8 +827,15 @@ static int sub_load(struct stubd *s)
 		return 0;
 	n = read(fd, &r, sizeof(r));
 	close(fd);
-	if (n != (ssize_t)sizeof(r) ||
-	    (r.magic != SUB_MAGIC && r.magic != SUB_MAGIC2) ||
+	/*
+	 * Two sizes are valid: the original record, and the current one that
+	 * adds the call identities. Checking the size against the matching
+	 * magic keeps an old file loading instead of being discarded, which
+	 * would silently lose the subscription.
+	 */
+	if (!((n == (ssize_t)sizeof(struct sub_record_v1) &&
+	       r.magic == SUB_MAGIC) ||
+	      (n == (ssize_t)sizeof(r) && r.magic == SUB_MAGIC2)) ||
 	    r.port_id_len > DECT_MM_PORTID_MAX)
 		return 0;
 	memcpy(s->uak, r.uak, DECT_MM_UAK_LEN);
