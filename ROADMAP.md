@@ -93,6 +93,9 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [ ] `libopendectcell`: CC setup/alert/connect/release, connection-to-voice-slot binding
 - [ ] `dect-probe`: ring a handset, play a tone, echo mode
 - [ ] **[hw]** Gate G7: a handset rings and audio passes
+  - [x] **Audio passes, both directions** (2026-10-19, v22): the chip delivers the call's coded G.722 bearer on the TDM slot and accepts it back; echoing it is audible in the handset. See `docs/call-g7.md`
+  - [ ] Handset rings (incoming call / milestone B)
+  - [ ] G.722 codec on the host, so real audio can be sourced and sunk
 - [ ] After G7: clean-room review of all docs, then make openDECTcell and opendectcell-controller public
 
 ## M8: Full GAP / CAT-iq basics in libopendectcell
