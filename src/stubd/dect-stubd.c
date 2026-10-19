@@ -917,20 +917,18 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
  *   [6..0x0F]  ten RSSI bytes, one per carrier
  *   [0x10..]   ten u16 counters [0x28..] u32 BER
  *
- * The counters are named in the host's own column order for this record
- * [CR the hardware-analysis notes §5 4.4]: duration, received B-field frames,
- * then the error and handover counters. *(order inferred from that header)*
+ * The host's column order for this record is duration, received B-field
+ * frames, Q1/Q2 errors, slide errors, sync errors, handovers and the A/X/Z
+ * CRC counts -- but the same source says the host *reorders* them when it
+ * builds that view [CR the hardware-analysis notes §5 4.4], so the wire order
+ * is not known. We print them by index and interpret them in the doc rather
+ * than baking a guessed mapping into the output.
  *
  * The B-field frame counter is the one that matters: it separates "a bearer
  * exists" from "voice frames are actually arriving", which is the distinction
  * A-0038 §5 names as the crucial missing stage. Deltas are what count, so we
  * print the change since the previous poll.
  */
-static const char *const conn_counter_name[10] = {
-	"dur", "rxbframe", "q1err", "q2err", "slideerr",
-	"syncerr", "handover", "acrc", "xcrc", "zcrc"
-};
-
 static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 {
 	const uint8_t *p = m->param;
@@ -959,7 +957,7 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 	printf("\ncall: status: counters");
 	for (i = 0; i < 10u; i++) {
 		int d = (int)c[i] - (int)s->reg.counter[i];
-		printf(" %s=%u%+d", conn_counter_name[i], c[i],
+		printf(" c%u=%u%+d", i, c[i],
 		       s->reg.have_counters ? d : 0);
 	}
 	printf(" ber=%u\n", ber);
