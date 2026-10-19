@@ -43,18 +43,39 @@ def alaw_decode(a):
 ALAW = [alaw_decode(i) for i in range(256)]
 
 
+# ITU-T G.711 mu-law, the other companding AVM's DSP could plausibly use.
+def ulaw_decode(u):
+    u = ~u & 0xFF
+    sign = u & 0x80
+    exponent = (u >> 4) & 0x07
+    mantissa = u & 0x0F
+    sample = ((mantissa << 3) + 0x84) << exponent
+    sample -= 0x84
+    return -sample if sign else sample
+
+
+ULAW = [ulaw_decode(i) for i in range(256)]
+
+
 def readings(data):
-    """Yield (name, rate, samples) for every candidate interpretation."""
+    """Yield (name, rate, samples) for every candidate interpretation.
+
+    A-0029 Sec.4 warns that a 16-bit TDM word may hold two independent 8-bit
+    voice channels, one companded sample per byte lane. So the per-lane
+    readings matter at least as much as the 16-bit ones, and a lane may be
+    A-law or mu-law.
+    """
     n = len(data) // 2 * 2
     data = data[:n]
 
-    pcm_le = list(struct.unpack('<%dh' % (n // 2), data))
-    pcm_be = list(struct.unpack('>%dh' % (n // 2), data))
-    yield ('pcm16-le @8k', 8000, pcm_le)
-    yield ('pcm16-be @8k', 8000, pcm_be)
+    yield ('pcm16-le @8k', 8000, list(struct.unpack('<%dh' % (n // 2), data)))
+    yield ('pcm16-be @8k', 8000, list(struct.unpack('>%dh' % (n // 2), data)))
     yield ('alaw-both @16k', 16000, [ALAW[b] for b in data])
+    yield ('ulaw-both @16k', 16000, [ULAW[b] for b in data])
     yield ('alaw-low @8k', 8000, [ALAW[b] for b in data[0::2]])
     yield ('alaw-high @8k', 8000, [ALAW[b] for b in data[1::2]])
+    yield ('ulaw-low @8k', 8000, [ULAW[b] for b in data[0::2]])
+    yield ('ulaw-high @8k', 8000, [ULAW[b] for b in data[1::2]])
 
 
 def score(samples, rate):
@@ -117,30 +138,58 @@ def main():
     ap.add_argument('capture')
     ap.add_argument('-o', '--outdir', default=None,
                     help='write WAVs here (default: alongside the capture)')
+    ap.add_argument('-s', '--slots', type=int, default=0,
+                    help='frames hold this many interleaved 16-bit slots; '
+                         'each is scored separately (0 = one slot only)')
+    ap.add_argument('--skip', type=float, default=0.0,
+                    help='ignore the first N seconds (e.g. before audio starts)')
     args = ap.parse_args()
 
     with open(args.capture, 'rb') as f:
         data = f.read()
     if len(data) < 32:
         sys.exit('capture too short: %d bytes' % len(data))
-    print('%d bytes = %.2f s at 8000 frames/s\n' % (len(data), len(data) / 2 / 8000))
+
+    nslots = max(1, args.slots)
+    frame = nslots * 2
+    nframes = len(data) // frame
+    if args.skip:
+        off = int(args.skip * 8000) * frame
+        data, nframes = data[off:], nframes - int(args.skip * 8000)
+    print('%d bytes, %d slots, %d frames = %.2f s at 8000 frames/s\n'
+          % (len(data), nslots, nframes, nframes / 8000.0))
 
     outdir = args.outdir or os.path.dirname(os.path.abspath(args.capture))
     os.makedirs(outdir, exist_ok=True)
 
     results = []
-    for name, rate, samples in readings(data):
-        sc, detail = score(samples, rate)
-        results.append((sc, name, rate, samples, detail))
+    for slot in range(nslots):
+        if nslots == 1:
+            sdata = data
+        else:
+            sdata = bytearray()
+            for f in range(nframes):
+                sdata += data[f * frame + slot * 2: f * frame + slot * 2 + 2]
+            sdata = bytes(sdata)
+        # A slot that never changes cannot be speech; skip it cheaply so the
+        # ranking is not cluttered by the seven idle slots.
+        if len(set(sdata)) <= 2:
+            print('slot %d: constant (%s) -- skipped'
+                  % (slot, ' '.join('%02x' % b for b in sorted(set(sdata)))))
+            continue
+        for name, rate, samples in readings(sdata):
+            sc, detail = score(samples, rate)
+            results.append((sc, 'slot%d %s' % (slot, name), rate, samples, detail))
     results.sort(key=lambda r: -r[0])
 
-    print('%-16s %7s  %7s  %9s  %8s  %6s' %
+    print()
+    print('%-26s %7s  %7s  %9s  %8s  %6s' %
           ('reading', 'score', 'corr', 'dynamics', 'zcr/s', 'rms'))
-    for sc, name, rate, _, d in results:
+    for sc, name, rate, _, d in results[:12]:
         if not d:
-            print('%-16s %7s' % (name, 'n/a'))
+            print('%-26s %7s' % (name, 'n/a'))
             continue
-        print('%-16s %7.3f  %7.3f  %9.3f  %8.0f  %6.4f' %
+        print('%-26s %7.3f  %7.3f  %9.3f  %8.0f  %6.4f' %
               (name, sc, d['corr'], d['dynamics'], d['zcr'], d['rms']))
 
     base = os.path.splitext(os.path.basename(args.capture))[0]
@@ -148,7 +197,7 @@ def main():
     for sc, name, rate, samples, d in results[:3]:
         if not d:
             continue
-        safe = name.replace(' ', '').replace('@', '-')
+        safe = name.replace(' ', '.').replace('@', '-')
         path = os.path.join(outdir, '%s.%s.wav' % (base, safe))
         write_wav(path, samples, rate)
         print('wrote %s' % path)

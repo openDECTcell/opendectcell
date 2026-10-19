@@ -117,9 +117,25 @@ struct stubd {
 	 * linear at 8 kHz, A-law at 16 kHz, or A-law in one byte of each pair.
 	 */
 	int         no_cipher;		/* -C: never send CIPHER-REQUEST */
+	/*
+	 * Audio bind parameters [CR A-0029 §1]. Every field AVM derives from its
+	 * negotiated call state is settable here, because we cannot derive them
+	 * and each hardware run costs a person's attention -- so one run should
+	 * be able to sweep a hypothesis rather than needing a rebuild per guess.
+	 */
+	struct audio_cfg {
+		uint8_t  sel;		/* 0x0251 channel parameter selector */
+		uint8_t  gain;		/* 0x0251 value (stored << 8 by the STUB) */
+		int      no_gain;	/* skip 0x0251 entirely */
+		uint8_t  flags;		/* 0x0230 chan_flags (low nibble = channel) */
+		uint16_t mask;		/* 0x0230 chan_mask */
+		uint8_t  mode;		/* 0x0230 extra mode byte */
+		uint8_t  codec;		/* 0x0230 codec byte */
+		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
+	} audio;
 	const char *voice_path;
 	FILE       *voice_fp;
-	int         voice_slot;		/* -V, default 0 (measured) */
+	int         voice_slot;		/* -V: one slot only; <0 = every slot */
 	uint32_t    voice_bytes;
 	struct reg_ctx {
 		int active;
@@ -530,35 +546,73 @@ static void send_subscription(struct stubd *s)
  * connect the audio path (0x022D). Reply 0x0242 confirms the channel. This sets
  * up the bearer; feeding actual voice (echo/tone) is a later step.
  */
-#define DECT_AUDIO_CHAN	1u
+/*
+ * Bind a connected call's voice path, in the order AVM's own bind routine uses
+ * [CR A-0029 §1]: 0x0251 SET_CHANNEL_PARAM *first*, then 0x0230 in its full
+ * six-parameter form. Our earlier sequence had three faults, all from A-0029:
+ *
+ *  - 0x0251 was never sent at all. AVM sends it before the channel is assigned,
+ *    not after; its third byte is an EEPROM-derived value that A-0029 could not
+ *    recover, so -a gain=N makes it settable.
+ *  - 0x0230 was sent in the two-byte short form. The STUB defaults the missing
+ *    fields, so it is not invalid, but it does not reproduce AVM's setup.
+ *  - 0xF626 was sent between the two. A-0029 found it absent from the normal
+ *    binding producer -- it lives in the transport's serialisation logic -- so
+ *    it is off unless -a f626 asks for it.
+ *
+ * 0x022D stays last: A-0029 found it produced by separate state-dependent
+ * paths (mute/unmute, audio-state events) rather than as a fixed third step,
+ * but connecting the path explicitly is still what we want.
+ */
 static void send_audio_bind(struct stubd *s, uint8_t handle)
 {
+	const struct audio_cfg *a = &s->audio;
 	struct dect_mail m;
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0230u;		/* ASSIGN_AUDIO_CHANNEL */
-	m.param[0] = handle;
-	m.param[1] = DECT_AUDIO_CHAN;	/* chan_flags: low nibble = channel */
-	m.param_len = 2;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	if (!a->no_gain) {
+		memset(&m, 0, sizeof(m));
+		m.src = DECT_TASK_PCM;
+		m.dst = DECT_TASK_CONTACT_DST;
+		m.prim = 0x0251u;	/* SET_CHANNEL_PARAM, before the assign */
+		m.param[0] = handle;
+		m.param[1] = a->sel;	/* channel parameter selector (1..3) */
+		m.param[2] = a->gain;	/* stored as value << 8 in the DSP block */
+		m.param_len = 3;
+		send_mail(s, (unsigned int)s->tx_slot, &m);
+		if (s->verbose)
+			log_mail(&m, "tx M", s->show_params);
+	}
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0xF626u;		/* SET_AUDIO_ROUTE */
+	m.prim = 0x0230u;		/* ASSIGN_AUDIO_CHANNEL, full form */
 	m.param[0] = handle;
-	m.param[1] = 0x01u;		/* enable */
-	m.param[2] = DECT_AUDIO_CHAN;	/* chan_cfg: low nibble = channel */
-	m.param[3] = 0x00u;		/* param (LE) */
-	m.param[4] = 0x00u;
-	m.param_len = 5;
+	m.param[1] = a->flags;		/* chan_flags: low nibble = channel */
+	m.param[2] = (uint8_t)(a->mask & 0xFFu);	/* chan_mask (LE) */
+	m.param[3] = (uint8_t)(a->mask >> 8);
+	m.param[4] = a->mode;		/* extra mode byte */
+	m.param[5] = a->codec;		/* codec byte */
+	m.param_len = 6;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
+
+	if (a->send_f626) {
+		memset(&m, 0, sizeof(m));
+		m.src = DECT_TASK_PCM;
+		m.dst = DECT_TASK_CONTACT_DST;
+		m.prim = 0xF626u;	/* SET_AUDIO_ROUTE (not in AVM's bind) */
+		m.param[0] = handle;
+		m.param[1] = 0x01u;	/* enable */
+		m.param[2] = (uint8_t)(a->flags & 0x0Fu);	/* chan_cfg */
+		m.param[3] = 0x00u;	/* param (LE) */
+		m.param[4] = 0x00u;
+		m.param_len = 5;
+		send_mail(s, (unsigned int)s->tx_slot, &m);
+		if (s->verbose)
+			log_mail(&m, "tx M", s->show_params);
+	}
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
@@ -570,6 +624,12 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
+
+	printf("call: audio bind: 0x0251 %s(sel %u gain 0x%02x), "
+	       "0x0230 {%02x %04x %02x %02x}, %s0x022D\n",
+	       a->no_gain ? "SKIPPED " : "", a->sel, a->gain,
+	       a->flags, a->mask, a->mode, a->codec,
+	       a->send_f626 ? "0xF626, " : "");
 }
 
 /*
@@ -940,19 +1000,39 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 {
 	unsigned int f;
 
-	if (!s->voice_fp || !s->reg.call_bound ||
-	    (unsigned int)s->voice_slot >= s->slots)
+	if (!s->voice_fp || !s->reg.call_bound)
+		return;
+
+	/*
+	 * Default (-V absent) dumps every slot of every frame, so one capture
+	 * can be searched offline for the voice: A-0029 §4 warns that a 16-bit
+	 * TDM word may hold two independent 8-bit channels, that the lane
+	 * matters, and that a slot picked by index in the DMA buffer is not
+	 * necessarily the logical channel. Guessing a slot per run would cost a
+	 * dial each; capturing all of them costs disk.
+	 */
+	if (s->voice_slot < 0) {
+		size_t n = (size_t)fpb * s->slots * 2u;
+
+		if (fwrite(fr, 1, n, s->voice_fp) != n)
+			goto fail;
+		s->voice_bytes += (uint32_t)n;
+		return;
+	}
+
+	if ((unsigned int)s->voice_slot >= s->slots)
 		return;
 	for (f = 0; f < fpb; f++) {
 		if (fwrite(fr + (f * s->slots + (unsigned int)s->voice_slot) * 2u,
-			   2, 1, s->voice_fp) != 1) {
-			perror("voice capture");
-			fclose(s->voice_fp);
-			s->voice_fp = NULL;
-			return;
-		}
+			   2, 1, s->voice_fp) != 1)
+			goto fail;
 		s->voice_bytes += 2u;
 	}
+	return;
+fail:
+	perror("voice capture");
+	fclose(s->voice_fp);
+	s->voice_fp = NULL;
 }
 
 /* Main loop: decode mails, drive the session, (re)send the contact. */
@@ -1062,6 +1142,54 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	return 0;
 }
 
+/*
+ * Parse -a key=value[,key=value...]: the audio bind fields (see struct
+ * audio_cfg). Bare keys "f626" and "nogain" take no value. Returns 0 on
+ * success, -1 on a malformed spec.
+ */
+static int parse_audio(struct audio_cfg *a, const char *spec)
+{
+	while (*spec) {
+		const char *key = spec, *eq;
+		unsigned long v = 0;
+		size_t klen;
+		char *end;
+
+		while (*spec && *spec != ',')
+			spec++;
+		eq = memchr(key, '=', (size_t)(spec - key));
+		klen = eq ? (size_t)(eq - key) : (size_t)(spec - key);
+		if (eq) {
+			v = strtoul(eq + 1, &end, 0);
+			if (end != spec)
+				return -1;
+		}
+		if (!eq && klen == 4 && !memcmp(key, "f626", 4))
+			a->send_f626 = 1;
+		else if (!eq && klen == 6 && !memcmp(key, "nogain", 6))
+			a->no_gain = 1;
+		else if (!eq)
+			return -1;
+		else if (klen == 3 && !memcmp(key, "sel", 3))
+			a->sel = (uint8_t)v;
+		else if (klen == 4 && !memcmp(key, "gain", 4))
+			a->gain = (uint8_t)v;
+		else if (klen == 5 && !memcmp(key, "flags", 5))
+			a->flags = (uint8_t)v;
+		else if (klen == 4 && !memcmp(key, "mask", 4))
+			a->mask = (uint16_t)v;
+		else if (klen == 4 && !memcmp(key, "mode", 4))
+			a->mode = (uint8_t)v;
+		else if (klen == 5 && !memcmp(key, "codec", 5))
+			a->codec = (uint8_t)v;
+		else
+			return -1;
+		if (*spec == ',')
+			spec++;
+	}
+	return 0;
+}
+
 /* Parse -k SEL[,rs][,33]. Returns 0 on success, -1 on a malformed spec. */
 static int parse_chip_cipher(struct chip_cipher *cc, const char *spec)
 {
@@ -1122,11 +1250,16 @@ static void usage(void)
 		"  -w FILE  capture the call's voice slot to FILE (raw, 2 bytes per\n"
 		"           frame, while a call is bound) -- holds call audio, keep\n"
 		"           it local\n"
-		"  -V SLOT  voice slot to capture (default 0, measured for channel 1)\n"
+		"  -V SLOT  capture only this slot (default: every slot, so the\n"
+		"           voice can be found offline)\n"
 		"  -C       do not start call ciphering. The handset ciphers the whole\n"
 		"           bearer once it sees CIPHER-REQUEST, so captured voice is\n"
 		"           ciphertext; -C keeps the call in the clear for audio work\n"
-		"           (the handset then drops it as unencrypted)\n");
+		"           (the handset then drops it as unencrypted)\n"
+		"  -a SPEC  audio bind parameters, comma separated [CR A-0029]:\n"
+		"           sel=N gain=N (0x0251), flags=N mask=N mode=N codec=N\n"
+		"           (0x0230), nogain = skip 0x0251, f626 = also send 0xF626\n"
+		"           Default: sel=1,gain=1,flags=1,mask=0,mode=0,codec=0\n");
 }
 
 int main(int argc, char **argv)
@@ -1146,7 +1279,11 @@ int main(int argc, char **argv)
 	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));
 	s.sub_path = "/etc/opendectcell-sub";	/* overridden by -s */
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:Ch")) != -1) {
+	s.voice_slot = -1;		/* capture every slot unless -V says one */
+	s.audio.sel = 1;		/* simple single-channel case [CR A-0029] */
+	s.audio.gain = 1;
+	s.audio.flags = 1;		/* channel 1 */
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:Ca:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -1166,6 +1303,12 @@ int main(int argc, char **argv)
 		case 'P': s.pin = optarg; break;
 		case 's': s.sub_path = optarg[0] ? optarg : NULL; break;
 		case 'C': s.no_cipher = 1; break;
+		case 'a':
+			if (parse_audio(&s.audio, optarg)) {
+				usage();
+				return 2;
+			}
+			break;
 		case 'w': s.voice_path = optarg; break;
 		case 'V': s.voice_slot = (int)strtol(optarg, NULL, 0); break;
 		case 'k':
