@@ -172,6 +172,17 @@ struct stubd {
 		uint8_t  tx_voice_idle;	/* transmit filler for the voice lanes */
 		int      have_voice_idle;
 		unsigned status_ms;	/* poll 0xF624 connection status (0 = off) */
+		int      cap_all;	/* -w captures from start-up, not just calls */
+		/*
+		 * dspsweep=DST[:MS]: during a bound call, walk the GenDSP source
+		 * numbers 0..22 into destination DST, one per MS ms (default
+		 * 1000). The daemon already prints per-slot change counts once a
+		 * second, so the log lines up source against lane activity and a
+		 * single call covers the whole source range. Off by default; the
+		 * destination's default route is restored when the sweep ends.
+		 */
+		int      sweep_dst;	/* -1 = off */
+		unsigned sweep_ms;
 	} audio;
 	const char *voice_path;
 	FILE       *voice_fp;
@@ -186,6 +197,9 @@ struct stubd {
 		uint64_t status_ms;	/* when the last 0xF624 poll went out */
 		uint16_t counter[10];	/* previous 0xF625 counters, for deltas */
 		int have_counters;
+		unsigned sweep_idx;	/* next GenDSP source for -a dspsweep */
+		uint64_t sweep_ms;	/* when the current source was routed */
+		int sweep_done;
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
 		uint8_t handle;
@@ -905,6 +919,70 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 		log_mail(&m, "tx M", s->show_params);
 }
 
+/* Send one GenDSP command: 0xFFF1 sub, with one or two argument bytes. */
+static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
+			unsigned len)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_PCM_REMOTE;
+	m.prim = 0xFFF1u;
+	m.param[0] = sub;
+	m.param[1] = a;
+	m.param[2] = b;
+	m.param_len = (uint16_t)len;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+}
+
+/*
+ * Walk the GenDSP source numbers into one destination during a live call, one
+ * per interval, so a single call covers the whole source range: the daemon
+ * already prints per-slot change counts once a second, so the log lines up
+ * "which source" against "which lane moved".
+ *
+ * Measured with the radio off and no call [observed, 2026-10-19]: into
+ * destination 6, which drives raw DMA word 0, sources 0, 21 and 22 leave the
+ * lane at the 0xFEFE idle fill, 19 and 20 drive it to 0x7FFF and 0x8000 --
+ * the extremes of 16-bit linear -- and every other source holds it at a
+ * constant 0x0000 or 0xFFFF. So the lane carries 16-bit linear, it can reach
+ * full scale, and a connected-but-silent source reads 0x0000, which is what a
+ * bound call leaves there.
+ *
+ * When the sweep finishes it restores the default routes of channels 1..6
+ * (sub 0x09, the documented range) rather than leaving the chip re-routed
+ * [CR A-0038 §2].
+ */
+static void dsp_sweep(struct stubd *s, uint64_t now)
+{
+	const struct audio_cfg *a = &s->audio;
+
+	if (a->sweep_dst < 0 || !s->reg.call_bound || !s->reg.active ||
+	    s->reg.sweep_done)
+		return;
+	if (s->reg.sweep_ms && now - s->reg.sweep_ms < a->sweep_ms)
+		return;
+	s->reg.sweep_ms = now;
+
+	if (s->reg.sweep_idx > 22u) {
+		unsigned n;
+
+		for (n = 1; n <= 6u; n++)
+			send_gendsp(s, 0x09u, (uint8_t)n, 0, 2);
+		printf("call: dsp sweep: done, default routes restored\n");
+		s->reg.sweep_done = 1;
+		return;
+	}
+	send_gendsp(s, 0x0Au, (uint8_t)a->sweep_dst,
+		    (uint8_t)s->reg.sweep_idx, 3);
+	printf("call: dsp sweep: dest %d <- src %u\n",
+	       a->sweep_dst, s->reg.sweep_idx);
+	s->reg.sweep_idx++;
+}
+
 /*
  * Decode the 0xF625 answer. The ten RSSI bytes are the anchor that fixes the
  * offsets: they sit at the same place in the chip's DECT-status answer
@@ -1212,6 +1290,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.bind_ms = now;
 		s->reg.status_ms = 0;
 		s->reg.have_counters = 0;
+		s->reg.sweep_idx = 0;
+		s->reg.sweep_ms = 0;
+		s->reg.sweep_done = 0;
 		send_audio_bind(s, s->reg.handle);
 		s->reg.call_bound = 1;
 		memset(s->vs_changes, 0, sizeof(s->vs_changes));
@@ -1363,7 +1444,13 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 {
 	unsigned int f;
 
-	if (!s->voice_fp || !s->reg.call_bound)
+	/*
+	 * Normally only a bound call is captured, which keeps the files small.
+	 * `-a capall` captures from start-up instead, so the TDM lanes can be
+	 * watched with the radio off -- which is how the chip's DSP routing is
+	 * probed without transmitting anything.
+	 */
+	if (!s->voice_fp || (!s->reg.call_bound && !s->audio.cap_all))
 		return;
 
 	/*
@@ -1467,6 +1554,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
+			dsp_sweep(s, now);
 		}
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
 			struct dect_mail cm;
@@ -1546,6 +1634,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->no_gain = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nowait", 6))
 			a->nowait = 1;
+		else if (!eq && klen == 6 && !memcmp(key, "capall", 6))
+			a->cap_all = 1;
 		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
 			a->tone_high = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "tone16", 6))
@@ -1594,6 +1684,18 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->tx_voice_idle = (uint8_t)v, a->have_voice_idle = 1;
 		else if (klen == 6 && !memcmp(key, "status", 6))
 			a->status_ms = (unsigned)v;
+		else if (klen == 8 && !memcmp(key, "dspsweep", 8)) {
+			const char *colon = strchr(eq + 1, ':');
+
+			if (v > 17u)
+				return -1;
+			a->sweep_dst = (int)v;
+			if (colon)
+				a->sweep_ms = (unsigned)strtoul(colon + 1,
+								NULL, 0);
+			if (!a->sweep_ms)
+				a->sweep_ms = 1000u;
+		}
 		else
 			return -1;
 		if (*spec == ',')
@@ -1680,6 +1782,11 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           capall makes -w capture from start-up, not only while a\n"
+		"           call is bound (for radio-off TDM probing)\n"
+		"           dspsweep=DST[:MS] walks GenDSP sources 0..22 into DST\n"
+		"           during a call, one per MS ms (default 1000), then\n"
+		"           restores the default routes of channels 1..6\n"
 		"           status=MS polls the chip's per-link connection status\n"
 		"           (0xF624, read-only) every MS ms while a call is bound and\n"
 		"           prints the MAC slot, carrier and bearer slot type\n"
@@ -1714,6 +1821,7 @@ int main(int argc, char **argv)
 	 */
 	s.audio.gain = 0x2Bu;
 	s.audio.flags = 1;		/* channel 1 */
+	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
 	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:Ca:h")) != -1) {
