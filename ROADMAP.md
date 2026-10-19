@@ -97,6 +97,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
   - [ ] Handset rings (incoming call / milestone B) — implemented (`-a ring=MS`: page `0x0300` + FP-originated CC-SETUP), unit-tested, **not yet run on hardware**
   - [ ] G.722 codec on the host, so real audio can be sourced and sunk
 - [ ] After G7: clean-room review of all docs, then make openDECTcell and opendectcell-controller public
+  - Concrete finding (2026-10-19 scan): nine AVM symbol names survive in `docs/stub-pcm-control-channel.md` and `docs/models/7520-DECT-analysis.md` — exported `PCM-link*` entry points and a few module-internal function names. AGENTS.md §2.2 allows "primitive names and IDs", so this is a call to make deliberately rather than a breach; decide once and apply it to both files. Nothing in `docs/call-g7.md` carries any.
 
 ## M8: Full GAP / CAT-iq basics in libopendectcell
 - [ ] Locate, temporary identities, ciphering (DSC), outgoing calls, CLIP
