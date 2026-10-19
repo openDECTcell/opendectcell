@@ -92,10 +92,10 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 ## M7: Minimal call → **Gate G7**
 - [ ] `libopendectcell`: CC setup/alert/connect/release, connection-to-voice-slot binding
 - [ ] `dect-probe`: ring a handset, play a tone, echo mode
-- [ ] **[hw]** Gate G7: a handset rings and audio passes
-  - [x] **Audio passes, both directions** (2026-10-19, v22): the chip delivers the call's coded G.722 bearer on the TDM slot and accepts it back; echoing it is audible in the handset. See `docs/call-g7.md`
-  - [ ] Handset rings (incoming call / milestone B) — implemented (`-a ring=MS`: page `0x0300` + FP-originated CC-SETUP), unit-tested, **not yet run on hardware**
-  - [ ] G.722 codec on the host, so real audio can be sourced and sunk
+- [x] **[hw]** **Gate G7 PASSED (2026-10-19)**: the handset rings, it is answered, and audio passes
+  - [x] **Audio passes, both directions** (v22): the chip delivers the call's coded G.722 bearer on the TDM slot and accepts it back; echoing it is audible in the handset. See `docs/call-g7.md`
+  - [x] **Handset rings** (v27): `-a ring=MS` pages (`0x0300`) and sends an FP-originated CC-SETUP; the handset rang, was answered, and the call bound audio on the same path
+  - [ ] G.722 codec on the host, so real audio can be sourced and sunk rather than echoed or replayed (not a gate item; `-a play=FILE` covers replay today)
 - [ ] After G7: clean-room review of all docs, then make openDECTcell and opendectcell-controller public
   - Concrete finding (2026-10-19 scan): nine AVM symbol names survive in `docs/stub-pcm-control-channel.md` and `docs/models/7520-DECT-analysis.md` — exported `PCM-link*` entry points and a few module-internal function names. AGENTS.md §2.2 allows "primitive names and IDs", so this is a call to make deliberately rather than a breach; decide once and apply it to both files. Nothing in `docs/call-g7.md` carries any.
 
