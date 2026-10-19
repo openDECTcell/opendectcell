@@ -198,6 +198,7 @@ struct stubd {
 		 * channel assignment that exists at that moment.
 		 */
 		int      bind_early;
+		int      loopback;	/* echo the received bearer word back */
 	} audio;
 	const char *voice_path;
 	FILE       *voice_fp;
@@ -352,7 +353,8 @@ static void tx_tone(struct stubd *s, uint8_t *fr)
  * cadence A-0030 §2 Q1 describes ("refills occur per buffer, not per
  * individual 8-kHz frame").
  */
-static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames)
+static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
+		     const uint8_t *rx)
 {
 	size_t fb = s->slots * 2u;
 	unsigned int f, n;
@@ -379,6 +381,30 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames)
 					continue;
 				fr[n * 2u] = s->tx_voice_idle;
 				fr[n * 2u + 1u] = s->tx_voice_idle;
+			}
+		}
+		/*
+		 * Bearer loopback: copy the received word straight back out,
+		 * byte for byte, frame for frame.
+		 *
+		 * What the chip puts on a bound call's lane is the coded G.722
+		 * bearer, not PCM -- 4000 distinct 16-bit words per second, each
+		 * held for two frames, which decodes to speech once de-duplicated
+		 * (v19, confirmed by ear). Copying it back verbatim therefore
+		 * hands the chip a valid coded stream with no encoder on our
+		 * side, and preserves the two-frame cadence for free. If the
+		 * handset hears itself, the transmit direction is proved -- and
+		 * it explains every inaudible test tone so far, because those
+		 * wrote A-law or linear PCM into a slot that carries coded bits.
+		 */
+		if (s->audio.loopback && s->reg.call_bound && rx) {
+			unsigned int w = s->audio.tone_word;
+
+			if (w < s->slots && w != (unsigned int)s->tx_slot) {
+				const uint8_t *src = rx + (f * s->slots + w) * 2u;
+
+				fr[w * 2u] = src[0];
+				fr[w * 2u + 1u] = src[1];
 			}
 		}
 		tx_tone(s, fr);
@@ -1574,7 +1600,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				}
 				voice_slot_probe(s, fr, fpb);
 				voice_capture(s, fr, fpb);
-				tx_block(s, fpb, txbuf);
+				tx_block(s, fpb, txbuf, fr);
 				now = mono_ms();
 				while (dect_rx_pull(&s->rx, &m)) {
 					if (s->verbose)
@@ -1675,6 +1701,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->nowait = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "capall", 6))
 			a->cap_all = 1;
+		else if (!eq && klen == 8 && !memcmp(key, "loopback", 8))
+			a->loopback = 1;
 		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
 			a->tone_high = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "tone16", 6))
@@ -1821,6 +1849,9 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           loopback echoes the received bearer word (toneword)\n"
+		"           straight back to the handset, byte for byte -- the\n"
+		"           lane carries coded G.722, so this needs no encoder\n"
 		"           capall makes -w capture from start-up, not only while a\n"
 		"           call is bound (for radio-off TDM probing)\n"
 		"           dspsweep=DST[:MS] walks GenDSP sources 0..22 into DST\n"
