@@ -92,6 +92,8 @@ struct stubd {
 	 */
 	uint8_t uak[DECT_MM_UAK_LEN];
 	int uak_valid;
+	const char *sub_path;	/* host-side subscription store (holds the UAK) */
+	int sub_restored;	/* stored subscription already pushed to the chip */
 	struct reg_ctx {
 		int active;
 		int persisted;		/* chip subscription written this connection */
@@ -388,6 +390,76 @@ static void send_cplane(struct stubd *s, uint8_t handle,
 }
 
 /*
+ * Host-side subscription store.
+ *
+ * The chip's subscription is volatile: it is lost whenever the radio is parked,
+ * so AVM keeps the record host-side and reloads it into the chip at start-up
+ * [CR A-0026]. We do the same with one small file, which also gives call-time
+ * ciphering the UAK after a daemon restart (registration and a later call run on
+ * different connections). The file holds long-term key material, so it is
+ * created 0600 and must never leave the box.
+ */
+#define SUB_MAGIC	0x44535531u	/* "DSU1" */
+
+struct sub_record {
+	uint32_t magic;
+	uint8_t  slot;
+	uint8_t  uak[DECT_MM_UAK_LEN];
+	uint8_t  port_id_len;
+	uint8_t  port_id[DECT_MM_PORTID_MAX];
+};
+
+static void sub_save(struct stubd *s)
+{
+	struct sub_record r;
+	int fd;
+
+	if (!s->sub_path || !s->uak_valid)
+		return;
+	memset(&r, 0, sizeof(r));
+	r.magic = SUB_MAGIC;
+	r.slot = DECT_MM_REG_SLOT;
+	memcpy(r.uak, s->uak, DECT_MM_UAK_LEN);
+	r.port_id_len = (uint8_t)s->reg.mm.port_id_len;
+	memcpy(r.port_id, s->reg.mm.port_id, sizeof(r.port_id));
+
+	fd = open(s->sub_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0) {
+		printf("sub: cannot write %s: %s\n", s->sub_path, strerror(errno));
+		return;
+	}
+	if (write(fd, &r, sizeof(r)) != (ssize_t)sizeof(r))
+		printf("sub: short write to %s\n", s->sub_path);
+	else
+		printf("sub: subscription saved to %s\n", s->sub_path);
+	close(fd);
+}
+
+/* Load the stored subscription, if any. Returns 1 when a record was adopted. */
+static int sub_load(struct stubd *s)
+{
+	struct sub_record r;
+	int fd;
+	ssize_t n;
+
+	if (!s->sub_path)
+		return 0;
+	fd = open(s->sub_path, O_RDONLY);
+	if (fd < 0)
+		return 0;
+	n = read(fd, &r, sizeof(r));
+	close(fd);
+	if (n != (ssize_t)sizeof(r) || r.magic != SUB_MAGIC ||
+	    r.port_id_len > DECT_MM_PORTID_MAX)
+		return 0;
+	memcpy(s->uak, r.uak, DECT_MM_UAK_LEN);
+	s->uak_valid = 1;
+	printf("sub: restored subscription for slot %u from %s\n",
+	       r.slot, s->sub_path);
+	return 1;
+}
+
+/*
  * Persist the just-enrolled handset in the chip so it holds standby and is
  * reachable: 0x0247 {slot, op=1, status} then 0x020A {slot, UAK[16], extra},
  * to STUB task 0x02, in that order, after LOCATE-ACCEPT [CR A-0026]. The 16-byte
@@ -417,7 +489,7 @@ static void send_subscription(struct stubd *s)
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x020Au;
 	m.param[0] = DECT_MM_REG_SLOT;	/* slot */
-	memcpy(&m.param[1], s->reg.mm.uak, DECT_MM_UAK_LEN);	/* 16-byte credential */
+	memcpy(&m.param[1], s->uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
 	m.param[1 + DECT_MM_UAK_LEN] = 0x00u;			/* extra (unknown) */
 	m.param_len = (uint16_t)(2 + DECT_MM_UAK_LEN);
 	send_mail(s, (unsigned int)s->tx_slot, &m);
@@ -600,10 +672,11 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * LOCATE-REQUEST, install the subscription in the chip, once per connection.
 	 */
 	if (!s->reg.persisted && s->reg.mm.subscribed && s->reg.mm.stats.located) {
-		/* Keep the UAK for the later call's ciphering. */
+		/* Keep the UAK for the later call's ciphering, and across restarts. */
 		memcpy(s->uak, s->reg.mm.uak, DECT_MM_UAK_LEN);
 		s->uak_valid = 1;
 		send_subscription(s);
+		sub_save(s);
 		/*
 		 * Close registration once the handset is enrolled. AVM's documented
 		 * sequence opens registration (0x022B 'A') and closes it afterwards
@@ -768,6 +841,17 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			if (s->xmail_idx == s->n_xmail)
 				printf("all %u extra mails sent\n", s->n_xmail);
 		}
+		/*
+		 * Reload a stored subscription into the chip once the radio is up,
+		 * the way AVM restores saved handsets at boot [CR A-0026], so the
+		 * handset stays known across daemon restarts.
+		 */
+		if (s->sess.state == DECT_SESS_UP && s->xmail_idx >= s->n_xmail &&
+		    s->uak_valid && !s->sub_restored) {
+			send_subscription(s);
+			s->sub_restored = 1;
+			printf("sub: stored subscription reloaded into the chip\n");
+		}
 		/* Drive LAPC retransmission timers for the registration link. */
 		if (s->do_register && s->reg.active) {
 			dect_lapc_tick(&s->reg.lapc, now);
@@ -803,7 +887,9 @@ static void usage(void)
 		"  -g       GAP registration mode: bring up the radio + open\n"
 		"           registration, then run the host C-plane stack so a\n"
 		"           handset can register (parks the radio on exit)\n"
-		"  -P PIN   registration PIN / AC (default 0000; used with -g)\n");
+		"  -P PIN   registration PIN / AC (default 0000; used with -g)\n"
+		"  -s PATH  subscription store, holds the handset key; reloaded into\n"
+		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off)\n");
 }
 
 int main(int argc, char **argv)
@@ -822,7 +908,8 @@ int main(int argc, char **argv)
 	s.tx_slot = s.rx_slot = -1;
 	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:h")) != -1) {
+	s.sub_path = "/etc/opendectcell-sub";	/* overridden by -s */
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -840,6 +927,7 @@ int main(int argc, char **argv)
 			break;
 		case 'g': s.do_register = 1; break;
 		case 'P': s.pin = optarg; break;
+		case 's': s.sub_path = optarg[0] ? optarg : NULL; break;
 		default: usage(); return 2;
 		}
 	}
@@ -855,6 +943,9 @@ int main(int argc, char **argv)
 		usage();
 		return 2;
 	}
+
+	if (s.do_register)
+		sub_load(&s);		/* restores the UAK; chip reload once up */
 
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
