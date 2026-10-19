@@ -11,7 +11,9 @@
 #define S_TV_SHIFT	4u	/* octet 1 bits 7-5: transaction value */
 #define S_PD_MASK	0x0Fu	/* octet 1 bits 4-1: protocol discriminator */
 #define S_MSG_MASK	0x7Fu	/* octet 2 bits 7-1: message type */
-#define IE_FIXED	0x80u	/* IE octet bit 8: single-octet fixed IE */
+#define IE_FIXED	0x80u	/* IE octet bit 8: fixed-format IE (no length octet) */
+#define IE_DOUBLE_MASK	0xF0u	/* fixed IEs with this high nibble ... */
+#define IE_DOUBLE	0xE0u	/* ... are double-octet elements (2 bytes) */
 
 int dect_nwk_parse(const uint8_t *msg, size_t len, struct dect_nwk_hdr *h,
 		   const uint8_t **ies, size_t *ies_len)
@@ -62,8 +64,10 @@ const uint8_t *dect_nwk_find_ie(const uint8_t *ies, size_t ies_len, uint8_t id,
 	while (pos < ies_len) {
 		uint8_t ie = ies[pos];
 
-		if (ie & IE_FIXED) {		/* single-octet fixed IE: skip */
-			pos += 1;
+		if (ie & IE_FIXED) {		/* fixed-format IE: skip it */
+			/* 0xE0-0xEF are double-octet elements (BASIC-SERVICE,
+			 * RELEASE-REASON, …); all other fixed IEs are one octet. */
+			pos += ((ie & IE_DOUBLE_MASK) == IE_DOUBLE) ? 2 : 1;
 			continue;
 		}
 		if (pos + 2 > ies_len)

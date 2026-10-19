@@ -45,6 +45,19 @@
 #define DECT_MM_LOCATE_ACCEPT		0x55u
 #define DECT_MM_LOCATE_REJECT		0x57u
 
+/* CC (Call Control) message types (§7.4.1; octet 2). */
+#define DECT_CC_ALERTING		0x01u
+#define DECT_CC_CALL_PROC		0x02u
+#define DECT_CC_SETUP			0x05u
+#define DECT_CC_CONNECT			0x07u
+#define DECT_CC_SETUP_ACK		0x0Du
+#define DECT_CC_CONNECT_ACK		0x0Fu
+#define DECT_CC_RELEASE			0x4Du
+#define DECT_CC_RELEASE_COM		0x5Au
+#define DECT_CC_IWU_INFO		0x60u
+#define DECT_CC_NOTIFY			0x6Eu
+#define DECT_CC_INFO			0x7Bu
+
 /* Variable-length IE identifiers (§7.6). */
 #define DECT_IE_INFO_TYPE		0x01u
 #define DECT_IE_IDENTITY_TYPE		0x02u
@@ -63,6 +76,16 @@
 #define DECT_IE_MODEL_IDENTIFIER	0x78u
 #define DECT_IE_ESCAPE_TO_PROPRIETARY	0x7Bu
 #define DECT_IE_CIPHER_INFO		0x19u
+#define DECT_IE_CALL_ATTRIBUTES		0x13u	/* CC, variable length */
+#define DECT_IE_CONNECTION_ATTRIBUTES	0x17u	/* CC, variable length */
+
+/*
+ * Double-octet fixed IEs (§7.5.3): first octet 0xE0 | sub-id, then one value
+ * octet. Used by CC. dect_nwk_find_ie() skips these correctly; they are not
+ * built through dect_nwk_put_ie (which is for variable-length IEs).
+ */
+#define DECT_IE_BASIC_SERVICE		0xE0u	/* + {call class, service} */
+#define DECT_IE_RELEASE_REASON		0xE2u	/* + reason code */
 
 struct dect_nwk_hdr {
 	uint8_t pd;		/* protocol discriminator */

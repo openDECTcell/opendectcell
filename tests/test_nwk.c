@@ -96,6 +96,26 @@ static void test_skip_fixed_ie(void)
 	CHECK_EQ(p[0], 0xAA);
 }
 
+/* A double-octet fixed IE (0xE0-0xEF) is skipped as two octets, not one. */
+static void test_skip_double_octet_ie(void)
+{
+	uint8_t ies[16];
+	const uint8_t *p;
+	size_t off = 0, len;
+
+	ies[off++] = DECT_IE_BASIC_SERVICE;	/* 0xE0: double-octet element ... */
+	ies[off++] = 0x00;			/* ... + its value octet */
+	off = dect_nwk_put_ie(ies, sizeof(ies), off, DECT_IE_PORTABLE_IDENTITY,
+			      (const uint8_t[]){ 0x80, 0xB4, 0x01 }, 3);
+	CHECK(off > 0);
+
+	/* If the double octet were skipped as one byte, this would misalign. */
+	p = dect_nwk_find_ie(ies, off, DECT_IE_PORTABLE_IDENTITY, &len);
+	CHECK(p != NULL);
+	CHECK_EQ(len, 3);
+	CHECK_EQ(p[0], 0x80);
+}
+
 /* A declared length that overruns the block is rejected (no over-read). */
 static void test_truncated_ie(void)
 {
@@ -113,6 +133,7 @@ int main(void)
 	test_header_short();
 	test_put_find_ie();
 	test_skip_fixed_ie();
+	test_skip_double_octet_ie();
 	test_truncated_ie();
 	return CHECK_DONE();
 }
