@@ -156,6 +156,8 @@ struct stubd {
 		unsigned tone_hz;	/* transmit test tone (0 = off); multiple of 125 */
 		uint8_t  tone_word;	/* raw DMA word to write it into (default 0) */
 		int      tone_high;	/* high byte lane instead of low */
+		int      tone16;	/* 16-bit linear in the whole word (default profile) */
+		int      tone16be;	/* ... big-endian within the word */
 		uint8_t  tx_idle;	/* transmit filler for unmapped slots */
 		int      have_tx_idle;
 		uint8_t  tx_voice_idle;	/* transmit filler for the voice lanes */
@@ -280,8 +282,23 @@ static void tx_tone(struct stubd *s, uint8_t *fr)
 	if (!s->audio.tone_hz || !s->reg.call_bound || w >= s->slots ||
 	    w == (unsigned int)s->tx_slot)
 		return;
-	fr[w * 2u + (s->audio.tone_high ? 1u : 0u)] =
-		dect_alaw_encode(tone_sine[s->tone_phase]);
+	if (s->audio.tone16) {
+		/*
+		 * The stock driver's *default* (non-enhanced) profile has a
+		 * separate 16-bit path [CR A-0030 §3 Q3, A-0035 §Q1]; which
+		 * profile is active is not established. Byte order within the
+		 * word is not to be inferred from the platform, so both are
+		 * selectable.
+		 */
+		int16_t v = tone_sine[s->tone_phase];
+		uint8_t lo = (uint8_t)(v & 0xFF), hi = (uint8_t)((v >> 8) & 0xFF);
+
+		fr[w * 2u] = s->audio.tone16be ? hi : lo;
+		fr[w * 2u + 1u] = s->audio.tone16be ? lo : hi;
+	} else {
+		fr[w * 2u + (s->audio.tone_high ? 1u : 0u)] =
+			dect_alaw_encode(tone_sine[s->tone_phase]);
+	}
 	s->tone_phase = (s->tone_phase + step) & 63u;
 }
 
@@ -740,8 +757,11 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	       a->flags, a->mask, a->mode, a->codec,
 	       a->nowait ? "" : " -- 0x022D waits for 0x0242");
 	if (a->tone_hz)
-		printf("call: tx tone: %u Hz A-law into raw word %u %s byte\n",
-		       a->tone_hz, a->tone_word, a->tone_high ? "high" : "low");
+		printf("call: tx tone: %u Hz %s into raw word %u%s\n",
+		       a->tone_hz,
+		       a->tone16 ? (a->tone16be ? "pcm16-be" : "pcm16-le") : "A-law",
+		       a->tone_word,
+		       a->tone16 ? "" : (a->tone_high ? " high byte" : " low byte"));
 
 	/*
 	 * 0x022D connects the path of a connection "whose channel is already
@@ -1383,6 +1403,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->nowait = 1;
 		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
 			a->tone_high = 1;
+		else if (!eq && klen == 6 && !memcmp(key, "tone16", 6))
+			a->tone16 = 1;
+		else if (!eq && klen == 8 && !memcmp(key, "tone16be", 8))
+			a->tone16 = a->tone16be = 1;
 		else if (klen == 4 && !memcmp(key, "tone", 4)) {
 			if (v % 125u || v > 3875u)
 				return -1;
@@ -1487,7 +1511,8 @@ static void usage(void)
 		"           nowait = send 0x022D at once instead of after 0x0242\n"
 		"           tone=HZ (multiple of 125) transmits an A-law test tone to\n"
 		"           the handset while a call is up, into raw word toneword=N\n"
-		"           (default 0 = dect1), low byte, or the high byte with tonehigh\n"
+		"           (default 0 = dect1), low byte, or the high byte with tonehigh;\n"
+		"           tone16 / tone16be write 16-bit linear into the whole word\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
 		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0,\n"
 		"           txidle=0xff,voiceidle=0xff\n");
