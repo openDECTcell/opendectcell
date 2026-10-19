@@ -183,6 +183,21 @@ struct stubd {
 		 */
 		int      sweep_dst;	/* -1 = off */
 		unsigned sweep_ms;
+		/*
+		 * bindearly: assign the audio channel as soon as the chip
+		 * reports a connection, not only when a call connects.
+		 *
+		 * v19 is the one run in which call audio ever reached the TDM,
+		 * and the one thing that distinguished it was that the chip
+		 * reported connection-up *again* 120 ms after the bind, then
+		 * re-confirmed the channel. Every silent run had the opposite
+		 * order: the connection came up long before the call, its only
+		 * 0x0242 carried audio type 0x40 with no channel, and the bind
+		 * arrived later. The theory this tests is that the chip wires
+		 * its audio route when a connection is established, using the
+		 * channel assignment that exists at that moment.
+		 */
+		int      bind_early;
 	} audio;
 	const char *voice_path;
 	FILE       *voice_fp;
