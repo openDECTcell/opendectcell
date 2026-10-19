@@ -216,7 +216,23 @@ struct stubd {
 		 * primitive-name table corrects that.
 		 */
 		unsigned handover_ms;
+		/*
+		 * play=FILE: transmit a raw G.722 stream to the handset while a
+		 * call is up, looping. The lane wants one coded 16-bit word per
+		 * two TDM frames, i.e. 8000 bytes/s, which is exactly G.722's
+		 * rate, so the file is consumed two bytes every two frames.
+		 *
+		 * This is the clean downlink source the loopback cannot be: the
+		 * loopback re-sends the uplink including its underruns, so any
+		 * glitch the handset plays might be ours. A file plays the same
+		 * every time.
+		 */
+		const char *play_path;
+		uint8_t  *play;
+		size_t    play_len;
 	} audio;
+	size_t      play_pos;		/* byte offset into audio.play */
+	int         play_phase;		/* 0 = load a new word, 1 = hold it */
 	const char *voice_path;
 	FILE       *voice_fp;
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
@@ -415,7 +431,25 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		 * it explains every inaudible test tone so far, because those
 		 * wrote A-law or linear PCM into a slot that carries coded bits.
 		 */
-		if (s->audio.loopback && s->reg.call_bound && rx) {
+		/*
+		 * File playback: one coded word per two frames, looping. Takes
+		 * precedence over the loopback, which it exists to replace as a
+		 * source whose glitches cannot be blamed on the uplink.
+		 */
+		if (s->audio.play && s->reg.call_bound) {
+			unsigned int w = s->audio.tone_word;
+
+			if (w < s->slots && w != (unsigned int)s->tx_slot) {
+				if (!s->play_phase) {
+					if (s->play_pos + 2u > s->audio.play_len)
+						s->play_pos = 0;
+					s->play_pos += 2u;
+				}
+				s->play_phase ^= 1;
+				fr[w * 2u] = s->audio.play[s->play_pos - 2u];
+				fr[w * 2u + 1u] = s->audio.play[s->play_pos - 1u];
+			}
+		} else if (s->audio.loopback && s->reg.call_bound && rx) {
 			unsigned int w = s->audio.tone_word;
 
 			if (w < s->slots && w != (unsigned int)s->tx_slot) {
@@ -1789,7 +1823,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			/* "dsp" and "dspsweep" carry a ':' in their value. */
 			if (end != spec &&
 			    !(klen == 3 && !memcmp(key, "dsp", 3)) &&
-			    !(klen == 8 && !memcmp(key, "dspsweep", 8)))
+			    !(klen == 8 && !memcmp(key, "dspsweep", 8)) &&
+			    !(klen == 4 && !memcmp(key, "play", 4)))
 				return -1;
 		}
 		if (!eq && klen == 4 && !memcmp(key, "f626", 4))
@@ -1806,6 +1841,17 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->bind_early = 1;
 		else if (klen == 8 && !memcmp(key, "handover", 8))
 			a->handover_ms = (unsigned)v;
+		else if (klen == 4 && !memcmp(key, "play", 4)) {
+			/* value is a path, not a number: take it verbatim */
+			size_t n = (size_t)(spec - (eq + 1));
+			char *path = malloc(n + 1);
+
+			if (!path)
+				return -1;
+			memcpy(path, eq + 1, n);
+			path[n] = '\0';
+			a->play_path = path;
+		}
 		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
 			a->tone_high = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "tone16", 6))
@@ -1952,6 +1998,9 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           play=FILE transmits a raw G.722 stream (8000 bytes/s) to\n"
+		"           the handset while a call is up, looping -- a clean\n"
+		"           downlink source, unlike the loopback\n"
 		"           handover=MS asks the chip to move the call's bearer MS ms\n"
 		"           after the bind (0x016A), which is the event that has\n"
 		"           accompanied every run where audio flowed\n"
@@ -2080,6 +2129,30 @@ int main(int argc, char **argv)
 	if (s.tx_slot >= (int)s.slots || s.rx_slot >= (int)s.slots) {
 		fprintf(stderr, "slot out of range\n");
 		goto out;
+	}
+	if (s.audio.play_path) {
+		FILE *pf = fopen(s.audio.play_path, "rb");
+		long n;
+
+		if (!pf || fseek(pf, 0, SEEK_END) || (n = ftell(pf)) <= 0) {
+			fprintf(stderr, "cannot read %s\n", s.audio.play_path);
+			if (pf)
+				fclose(pf);
+			return 1;
+		}
+		rewind(pf);
+		s.audio.play = malloc((size_t)n);
+		if (!s.audio.play || fread(s.audio.play, 1, (size_t)n, pf)
+		    != (size_t)n) {
+			fprintf(stderr, "cannot read %s\n", s.audio.play_path);
+			fclose(pf);
+			return 1;
+		}
+		fclose(pf);
+		s.audio.play_len = (size_t)n & ~(size_t)1;
+		printf("play: %s, %zu bytes = %.1f s of G.722 at 64 kbit/s\n",
+		       s.audio.play_path, s.audio.play_len,
+		       (double)s.audio.play_len / 8000.0);
 	}
 	if (s.audio.have_tx_idle)
 		s.tx_idle = s.audio.tx_idle;
