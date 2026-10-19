@@ -1437,7 +1437,7 @@ static void usage(void)
 		"           (0x0230), nogain = skip 0x0251, f626 = also send 0xF626,\n"
 		"           nowait = send 0x022D at once instead of after 0x0242\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
-		"           Default: sel=1,gain=1,flags=1,mask=0,mode=0,codec=0,\n"
+		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0,\n"
 		"           txidle=0xff,voiceidle=0xff\n");
 }
 
@@ -1460,7 +1460,13 @@ int main(int argc, char **argv)
 	s.sub_path = "/etc/opendectcell-sub";	/* overridden by -s */
 	s.voice_slot = -1;		/* capture every slot unless -V says one */
 	s.audio.sel = 1;		/* simple single-channel case [CR A-0029] */
-	s.audio.gain = 1;
+	/*
+	 * 0x2B is the fresh-default byte AVM's own 0x0251 producer reads from
+	 * EEPROM 0x2A + channel index (all six records initialised to 0x2B)
+	 * [CR A-0036]. Its DSP semantics are still unproven; it is simply the
+	 * one value with provenance, where 1 was a placeholder.
+	 */
+	s.audio.gain = 0x2Bu;
 	s.audio.flags = 1;		/* channel 1 */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
