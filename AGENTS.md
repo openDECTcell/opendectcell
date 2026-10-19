@@ -25,7 +25,7 @@ First target: FRITZ!Box 7520 (since 2026-10-17; previously the 7412). See `READM
 ## 3. Commit and push discipline
 
 - **Commit early and often:** one logical change per commit. A doc finding, a function plus its test, a refactor: each is its own commit. Never mix unrelated changes.
-- **Push after every commit** (or at least every few small commits). The remote is the source of truth, so changes stay traceable and easy to revert.
+- **Push after every commit.** Always `git push` immediately after committing — never leave a commit living only on the maintainer's machine, where it can be lost. The remote is the source of truth, so changes stay traceable and easy to revert.
 - **Never rewrite published history:** no force-push and no rebasing of pushed commits. Fix mistakes with a follow-up commit or `git revert`.
 - **Commit message format:** an imperative summary of 72 characters or less, a blank line, then the *why*. Reference issues (`Refs #12`, `Fixes #12`). End with the attribution line your tool requires.
 - **Before committing:** `git status` and `git diff --staged`. Check that nothing from `work/` and no AVM material is staged.
@@ -65,6 +65,7 @@ First target: FRITZ!Box 7520 (since 2026-10-17; previously the 7412). See `READM
   - which logs to send back
 
   Record the outcome in the issue and, if relevant, in the docs ("observed on hardware").
+- **Always leave the radio parked when not actively testing.** The DECT radio must never transmit unattended. Turn it on only for an explicit, agreed test, and park it (close registration `0x022C 01`, then radio off `0x015B 00`) as soon as the test ends — including after an interrupted or crashed run. If a run leaves the chip beaconing (it keeps transmitting autonomously after the daemon exits), park it explicitly, e.g. `dect-stubd -M "0x22:0x02:0x022c:01" -M "0x22:0x02:0x015b:00" -t 6`. Never start transmitting unless the user has explicitly agreed to that test.
 
 ## 7. Documentation workflow
 
