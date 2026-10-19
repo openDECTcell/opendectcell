@@ -20,10 +20,12 @@ SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-25.12.5-ipq40xx-*))
 TCBIN   := $(firstword $(wildcard $(SDK)/staging_dir/toolchain-*/bin))
 XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 
-# dect-stubd uses only the framing and session modules, not the audio one.
+# dect-stubd: framing, session, the C-plane stack, and the A-law codec for the
+# transmit test tone (dect_audio.c pulls in libm).
 STUBD_SRC := src/stubd/dect-stubd.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
 	src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c \
-	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c
+	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c \
+	src/libopendectcell/dect_audio.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
 .PHONY: all check cross clean
@@ -41,7 +43,7 @@ $(BUILD)/dect-pcmcap: src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c s
 # Host build of dect-stubd: compiles everywhere, runs only on the box.
 $(BUILD)/dect-stubd: $(STUBD_SRC) src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC)
+	$(CC) $(CFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC) -lm
 
 # Result: build/dect-fwload.arm (stripped), ready to copy to the box.
 cross: $(FWLOAD_SRC)
@@ -57,7 +59,7 @@ cross: $(FWLOAD_SRC)
 		-o $(BUILD)/dect-pcmcap.arm src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-pcmcap.arm
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror $(STUBD_INC) \
-		-o $(BUILD)/dect-stubd.arm $(STUBD_SRC)
+		-o $(BUILD)/dect-stubd.arm $(STUBD_SRC) -lm
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-stubd.arm
 
 $(BUILD)/test_fwimage: tests/test_fwimage.c src/fwload/fwimage.c src/fwload/fwimage.h tests/check.h

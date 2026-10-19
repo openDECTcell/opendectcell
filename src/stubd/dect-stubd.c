@@ -42,6 +42,7 @@
 #include "dect_nwk.h"
 #include "dect_mm.h"
 #include "dect_cc.h"
+#include "dect_audio.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
 #define PROBE_BLOCKS	40u
@@ -135,6 +136,7 @@ struct stubd {
 	uint8_t     tx_idle;		/* filler for unmapped slots (-a txidle) */
 	uint8_t     tx_voice_idle;	/* filler for the voice lanes */
 	uint32_t    tx_blocks;
+	unsigned    tone_phase;		/* index into tone_sine, advanced per frame */
 	/*
 	 * Audio bind parameters [CR A-0029 §1]. Every field AVM derives from its
 	 * negotiated call state is settable here, because we cannot derive them
@@ -151,6 +153,9 @@ struct stubd {
 		uint8_t  codec;		/* 0x0230 codec byte */
 		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
 		int      nowait;	/* send 0x022D immediately (old behaviour) */
+		unsigned tone_hz;	/* transmit test tone (0 = off); multiple of 125 */
+		uint8_t  tone_word;	/* raw DMA word to write it into (default 0) */
+		int      tone_high;	/* high byte lane instead of low */
 		uint8_t  tx_idle;	/* transmit filler for unmapped slots */
 		int      have_tx_idle;
 		uint8_t  tx_voice_idle;	/* transmit filler for the voice lanes */
@@ -248,6 +253,38 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 	return 0;
 }
 
+/* One cycle at 8000 frames/s / 64 = 125 Hz steps; amplitude ~ -12 dBFS. */
+static const int16_t tone_sine[64] = {
+	     0,    784,   1561,   2322,   3061,   3771,   4445,   5075,
+	  5657,   6184,   6652,   7055,   7391,   7656,   7846,   7961,
+	  8000,   7961,   7846,   7656,   7391,   7055,   6652,   6184,
+	  5657,   5075,   4445,   3771,   3061,   2322,   1561,    784,
+	     0,   -784,  -1561,  -2322,  -3061,  -3771,  -4445,  -5075,
+	 -5657,  -6184,  -6652,  -7055,  -7391,  -7656,  -7846,  -7961,
+	 -8000,  -7961,  -7846,  -7656,  -7391,  -7055,  -6652,  -6184,
+	 -5657,  -5075,  -4445,  -3771,  -3061,  -2322,  -1561,   -784
+};
+
+/*
+ * Write the test tone into its lane. Host -> chip uses the same raw word
+ * indexing as chip -> host -- our control slot is transmitted at raw word 1
+ * and received there too -- so raw word 0, low byte, is the transmit side of
+ * dect1 under A-0035's mapping. Writing A-law here while a call is up is the
+ * one-way TX proof A-0030 §8.4, A-0033 step 3 and A-0035 step 5 all ask for.
+ */
+static void tx_tone(struct stubd *s, uint8_t *fr)
+{
+	unsigned int w = s->audio.tone_word;
+	unsigned int step = s->audio.tone_hz * 64u / 8000u;
+
+	if (!s->audio.tone_hz || !s->reg.call_bound || w >= s->slots ||
+	    w == (unsigned int)s->tx_slot)
+		return;
+	fr[w * 2u + (s->audio.tone_high ? 1u : 0u)] =
+		dect_alaw_encode(tone_sine[s->tone_phase]);
+	s->tone_phase = (s->tone_phase + step) & 63u;
+}
+
 /*
  * Transmit one DMA block: every frame carries the control slot (the next two
  * queued mail bytes, or idle when the queue is empty) and every other slot its
@@ -285,6 +322,7 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames)
 				fr[n * 2u + 1u] = s->tx_voice_idle;
 			}
 		}
+		tx_tone(s, fr);
 		if (s->txq_len >= 2u) {
 			fr[(unsigned int)s->tx_slot * 2u] =
 				s->txq[s->txq_head];
@@ -701,6 +739,9 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	       a->no_gain ? "SKIPPED " : "", a->sel, a->gain,
 	       a->flags, a->mask, a->mode, a->codec,
 	       a->nowait ? "" : " -- 0x022D waits for 0x0242");
+	if (a->tone_hz)
+		printf("call: tx tone: %u Hz A-law into raw word %u %s byte\n",
+		       a->tone_hz, a->tone_word, a->tone_high ? "high" : "low");
 
 	/*
 	 * 0x022D connects the path of a connection "whose channel is already
@@ -1340,6 +1381,14 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->no_gain = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nowait", 6))
 			a->nowait = 1;
+		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
+			a->tone_high = 1;
+		else if (klen == 4 && !memcmp(key, "tone", 4)) {
+			if (v % 125u || v > 3875u)
+				return -1;
+			a->tone_hz = (unsigned)v;
+		} else if (klen == 8 && !memcmp(key, "toneword", 8))
+			a->tone_word = (uint8_t)v;
 		else if (!eq)
 			return -1;
 		else if (klen == 3 && !memcmp(key, "sel", 3))
@@ -1436,6 +1485,9 @@ static void usage(void)
 		"           sel=N gain=N (0x0251), flags=N mask=N mode=N codec=N\n"
 		"           (0x0230), nogain = skip 0x0251, f626 = also send 0xF626,\n"
 		"           nowait = send 0x022D at once instead of after 0x0242\n"
+		"           tone=HZ (multiple of 125) transmits an A-law test tone to\n"
+		"           the handset while a call is up, into raw word toneword=N\n"
+		"           (default 0 = dect1), low byte, or the high byte with tonehigh\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
 		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0,\n"
 		"           txidle=0xff,voiceidle=0xff\n");
