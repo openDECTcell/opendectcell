@@ -87,6 +87,7 @@ struct stubd {
 	struct reg_ctx {
 		int active;
 		int persisted;		/* chip subscription written this connection */
+		int call_bound;		/* audio channel bound for the active call */
 		uint8_t handle;
 		struct dect_lc_rx lc;
 		struct dect_lapc lapc;
@@ -414,6 +415,54 @@ static void send_subscription(struct stubd *s)
 		log_mail(&m, "tx M", s->show_params);
 }
 
+/*
+ * Bind a connected call's voice path to DSP audio channel 1 [CR COMMAND_SET
+ * §6.5]: assign the channel (0x0230), program the DSP route (0xF626 on), then
+ * connect the audio path (0x022D). Reply 0x0242 confirms the channel. This sets
+ * up the bearer; feeding actual voice (echo/tone) is a later step.
+ */
+#define DECT_AUDIO_CHAN	1u
+static void send_audio_bind(struct stubd *s, uint8_t handle)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0230u;		/* ASSIGN_AUDIO_CHANNEL */
+	m.param[0] = handle;
+	m.param[1] = DECT_AUDIO_CHAN;	/* chan_flags: low nibble = channel */
+	m.param_len = 2;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0xF626u;		/* SET_AUDIO_ROUTE */
+	m.param[0] = handle;
+	m.param[1] = 0x01u;		/* enable */
+	m.param[2] = DECT_AUDIO_CHAN;	/* chan_cfg: low nibble = channel */
+	m.param[3] = 0x00u;		/* param (LE) */
+	m.param[4] = 0x00u;
+	m.param_len = 5;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x022Du;		/* AUDIO_PATH_ON_OFF */
+	m.param[0] = handle;
+	m.param[1] = 0x00u;		/* bit 7 = 0: connect */
+	m.param_len = 2;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+}
+
 /* Flush any LAPC frames the FSM wants to transmit. */
 static void pump_lapc(struct stubd *s)
 {
@@ -442,6 +491,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 
 	s->reg.active = 1;
 	s->reg.persisted = 0;
+	s->reg.call_bound = 0;
 	s->reg.handle = handle;
 	dect_lc_rx_init(&s->reg.lc, 0);
 	dect_lapc_init(&s->reg.lapc, 0);
@@ -557,9 +607,18 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	else if (s->reg.mm.state == DECT_MM_FAILED)
 		printf("reg: registration rejected\n");
 
-	if (s->reg.cc.state == DECT_CC_ST_ACTIVE)
-		printf("call: active (handle %u) -- audio binding TBD\n",
+	/*
+	 * Bind the voice path once we have answered the call (CONNECT sent). The
+	 * C4 treats CONNECT as answered even though it does not send CONNECT-ACK.
+	 */
+	if (!s->reg.call_bound &&
+	    (s->reg.cc.state == DECT_CC_ST_CONNECT_PENDING ||
+	     s->reg.cc.state == DECT_CC_ST_ACTIVE)) {
+		send_audio_bind(s, s->reg.handle);
+		s->reg.call_bound = 1;
+		printf("call: connected (handle %u) -- audio channel bound\n",
 		       s->reg.handle);
+	}
 }
 
 /* Route a received mail into the registration stack (when -g). */
