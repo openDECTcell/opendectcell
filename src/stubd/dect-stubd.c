@@ -118,6 +118,24 @@ struct stubd {
 	 */
 	int         no_cipher;		/* -C: never send CIPHER-REQUEST */
 	/*
+	 * Continuous transmit [CR A-0030 §1.1, §10]. Stock AVM services the TDM
+	 * transmit DMA every block, interleaving the control slot and the voice
+	 * lanes into one stream; it does not write a burst of frames only when a
+	 * mail is pending. Worse, our burst wrote 0xFF across *every* slot, which
+	 * A-0030 §4 Q8 warns against explicitly: it overwrites the voice lanes.
+	 *
+	 * So mails become a queue of control-slot bytes (two per frame) that the
+	 * block loop drains, and each transmitted block fills the voice lanes with
+	 * their own idle value instead of trampling them.
+	 */
+	int         tx_ring;		/* ring active: queue mails, do not write */
+	uint8_t     txq[4096];		/* pending control-slot bytes */
+	size_t      txq_head, txq_len;
+	uint32_t    txq_drops;
+	uint8_t     tx_idle;		/* filler for unmapped slots (-a txidle) */
+	uint8_t     tx_voice_idle;	/* filler for the voice lanes */
+	uint32_t    tx_blocks;
+	/*
 	 * Audio bind parameters [CR A-0029 §1]. Every field AVM derives from its
 	 * negotiated call state is settable here, because we cannot derive them
 	 * and each hardware run costs a person's attention -- so one run should
@@ -132,6 +150,10 @@ struct stubd {
 		uint8_t  mode;		/* 0x0230 extra mode byte */
 		uint8_t  codec;		/* 0x0230 codec byte */
 		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
+		uint8_t  tx_idle;	/* transmit filler for unmapped slots */
+		int      have_tx_idle;
+		uint8_t  tx_voice_idle;	/* transmit filler for the voice lanes */
+		int      have_voice_idle;
 	} audio;
 	const char *voice_path;
 	FILE       *voice_fp;
@@ -188,6 +210,26 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 
 	if (el_len <= 0 || tx_slot >= s->slots)
 		return -1;
+
+	/*
+	 * Once the ring is running every write goes through it, so the mail is
+	 * appended to the control-slot byte queue and the block loop paces it
+	 * out. Before that -- control-slot probing and bring-up -- there is no
+	 * ring yet, so the original burst write is still used.
+	 */
+	if (s->tx_ring) {
+		if (s->txq_len + (size_t)el_len > sizeof(s->txq)) {
+			s->txq_drops++;
+			return -1;
+		}
+		for (k = 0; k < (size_t)el_len; k++)
+			s->txq[(s->txq_head + s->txq_len + k) % sizeof(s->txq)] =
+				el[k];
+		s->txq_len += (size_t)el_len;
+		s->tx_seq++;
+		return 0;
+	}
+
 	nf = (size_t)el_len / 2u;
 	frames = malloc(nf * fb);
 	if (!frames)
@@ -201,6 +243,57 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 		return -1;
 	s->tx_seq++;
 	return 0;
+}
+
+/*
+ * Transmit one DMA block: every frame carries the control slot (the next two
+ * queued mail bytes, or idle when the queue is empty) and every other slot its
+ * configured idle value. Called once per received block so the transmit side
+ * keeps pace with the receive side without per-frame syscalls, which is the
+ * cadence A-0030 §2 Q1 describes ("refills occur per buffer, not per
+ * individual 8-kHz frame").
+ */
+static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames)
+{
+	size_t fb = s->slots * 2u;
+	unsigned int f, n;
+
+	if (s->tx_slot < 0)
+		return;
+	for (f = 0; f < fpb; f++) {
+		uint8_t *fr = frames + f * fb;
+
+		for (n = 0; n < s->slots; n++) {
+			uint8_t fill = (n == (unsigned int)s->tx_slot)
+				? 0xFFu : s->tx_idle;
+
+			fr[n * 2u] = fill;
+			fr[n * 2u + 1u] = fill;
+		}
+		/*
+		 * Voice lanes get their own filler so a silent call sends
+		 * silence rather than whatever the control path happens to use.
+		 */
+		if (s->reg.call_bound && s->tx_voice_idle != s->tx_idle) {
+			for (n = 0; n < s->slots; n++) {
+				if (n == (unsigned int)s->tx_slot)
+					continue;
+				fr[n * 2u] = s->tx_voice_idle;
+				fr[n * 2u + 1u] = s->tx_voice_idle;
+			}
+		}
+		if (s->txq_len >= 2u) {
+			fr[(unsigned int)s->tx_slot * 2u] =
+				s->txq[s->txq_head];
+			fr[(unsigned int)s->tx_slot * 2u + 1u] =
+				s->txq[(s->txq_head + 1u) % sizeof(s->txq)];
+			s->txq_head = (s->txq_head + 2u) % sizeof(s->txq);
+			s->txq_len -= 2u;
+		}
+	}
+	if (write(s->fd, frames, fpb * fb) != (ssize_t)(fpb * fb))
+		s->txq_drops++;
+	s->tx_blocks++;
 }
 
 /* Parse "SRC:DST:PRIM[:HEX]" and send it as a mail in the control slot. */
@@ -1041,10 +1134,15 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	size_t block = s->slots * 2u * fpb;
 	size_t slot = (sizeof(struct dect_pcm_block) + block + 7u) & ~(size_t)7u;
 	uint8_t *buf = malloc(slot * 16u);
+	uint8_t *txbuf = malloc(block);
 	uint64_t start = mono_ms();
 
-	if (!buf)
+	if (!buf || !txbuf) {
+		free(buf);
+		free(txbuf);
 		return -1;
+	}
+	s->tx_ring = 1;		/* from here on, mails are paced by tx_block() */
 	g_start = start;
 	while (!stop) {
 		struct pollfd pfd = { .fd = s->fd, .events = POLLIN };
@@ -1083,6 +1181,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				}
 				voice_slot_probe(s, fr, fpb);
 				voice_capture(s, fr, fpb);
+				tx_block(s, fpb, txbuf);
 				now = mono_ms();
 				while (dect_rx_pull(&s->rx, &m)) {
 					if (s->verbose)
@@ -1135,10 +1234,13 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	printf("session: state %d contacts %u answers %u status %u deaths %u\n",
 	       s->sess.state, s->sess.stats.contacts_sent, s->sess.stats.answers,
 	       s->sess.stats.status_mails, s->sess.stats.deaths);
+	printf("tx: blocks %u queue_drops %u idle %02x voice_idle %02x\n",
+	       s->tx_blocks, s->txq_drops, s->tx_idle, s->tx_voice_idle);
 	printf("rx: mails %u seq_gaps %u csum_errors %u framing_errors %u resyncs %u\n",
 	       s->rx.stats.mails, s->rx.stats.seq_gaps, s->rx.stats.csum_errors,
 	       s->rx.stats.framing_errors, s->rx.stats.resyncs);
 	free(buf);
+	free(txbuf);
 	return 0;
 }
 
@@ -1182,6 +1284,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->mode = (uint8_t)v;
 		else if (klen == 5 && !memcmp(key, "codec", 5))
 			a->codec = (uint8_t)v;
+		else if (klen == 6 && !memcmp(key, "txidle", 6))
+			a->tx_idle = (uint8_t)v, a->have_tx_idle = 1;
+		else if (klen == 9 && !memcmp(key, "voiceidle", 9))
+			a->tx_voice_idle = (uint8_t)v, a->have_voice_idle = 1;
 		else
 			return -1;
 		if (*spec == ',')
@@ -1259,7 +1365,9 @@ static void usage(void)
 		"  -a SPEC  audio bind parameters, comma separated [CR A-0029]:\n"
 		"           sel=N gain=N (0x0251), flags=N mask=N mode=N codec=N\n"
 		"           (0x0230), nogain = skip 0x0251, f626 = also send 0xF626\n"
-		"           Default: sel=1,gain=1,flags=1,mask=0,mode=0,codec=0\n");
+		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           Default: sel=1,gain=1,flags=1,mask=0,mode=0,codec=0,\n"
+		"           txidle=0xff,voiceidle=0xff\n");
 }
 
 int main(int argc, char **argv)
@@ -1283,6 +1391,8 @@ int main(int argc, char **argv)
 	s.audio.sel = 1;		/* simple single-channel case [CR A-0029] */
 	s.audio.gain = 1;
 	s.audio.flags = 1;		/* channel 1 */
+	s.tx_idle = 0xFFu;
+	s.tx_voice_idle = 0xFFu;
 	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:Ca:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
@@ -1362,6 +1472,10 @@ int main(int argc, char **argv)
 		fprintf(stderr, "slot out of range\n");
 		goto out;
 	}
+	if (s.audio.have_tx_idle)
+		s.tx_idle = s.audio.tx_idle;
+	if (s.audio.have_voice_idle)
+		s.tx_voice_idle = s.audio.tx_voice_idle;
 	if (s.do_register)
 		s.rand_fd = open("/dev/urandom", O_RDONLY);
 	if (s.voice_path) {
