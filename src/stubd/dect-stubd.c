@@ -585,23 +585,30 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 						   | ((uint32_t)src[1] << 8);
 
 					/*
-					 * A received transition marks the
-					 * chip's pair boundary, so realign to
-					 * it; between transitions keep our own
-					 * two-frame rate. Slaving the rate to
-					 * the transitions as well would drag
-					 * the chip's uplink underruns (holds
-					 * of 4, 10 and 40 frames) into the
-					 * downlink and stretch the audio --
-					 * which is what v32's glitches were.
+					 * Advance strictly on a received
+					 * transition: supply exactly one word
+					 * for each one the chip produces.
+					 *
+					 * Keeping our own two-frame rate and
+					 * merely realigning the phase on each
+					 * transition was tried and is worse
+					 * (run A, 2026-10-20: back to noise).
+					 * The chip consumes the downlink at
+					 * the rate it produces the uplink, so
+					 * when it stalls -- the holds of 4, 10
+					 * and 40 frames in A-0072-3, about
+					 * three a second -- a free-running
+					 * rate over-supplies and octets are
+					 * dropped. Matching the transitions
+					 * cannot over-supply; the price is
+					 * that the audio stretches slightly
+					 * through a stall, which is what v32's
+					 * glitches were. Those glitches are
+					 * the chip's uplink underrun showing
+					 * through, not a separate defect of
+					 * ours.
 					 */
-					if (v != s->rx_word_prev) {
-						advance = 1;
-						s->play_phase = 1;
-					} else {
-						advance = !s->play_phase;
-						s->play_phase ^= 1;
-					}
+					advance = (v != s->rx_word_prev);
 					s->rx_word_prev = v;
 				} else {
 					advance = !s->play_phase;
@@ -1852,16 +1859,32 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		uint8_t h = m->param_len ? m->param[0] : 0;
 
 		/*
-		 * The chip can repeat connection-up for a handle that is already
-		 * up -- observed in v18, ~150 ms after a call had bound, which
-		 * re-armed the C-plane and dropped the call state underneath a
-		 * live call. Treat a repeat for the same handle as a no-op while
-		 * that handle's call is bound; a different handle, or an idle
-		 * one, still starts a fresh link.
+		 * The chip can repeat connection-up for a handle that is
+		 * already up -- observed in v18, ~150 ms after a call had
+		 * bound, which re-armed the C-plane and dropped the call state
+		 * underneath a live call.
+		 *
+		 * Guarding on call_bound alone was not enough. An incoming call
+		 * binds audio only when it connects, so between our CC-SETUP
+		 * and the user pressing accept the flag is still clear, and a
+		 * repeat in that window re-initialised LAPC, MM and CC. Run A2
+		 * (2026-10-20) caught it: the chip re-established 1.2 s after
+		 * the handset's CC-ALERTING, so the CC-CONNECT two seconds
+		 * later arrived at a state machine with no transaction, no
+		 * CONNECT-ACK went out, and the handset released the call --
+		 * and wedged badly enough to need its battery pulled.
+		 *
+		 * The re-establishment is the same event that wires the chip's
+		 * audio route, so it is expected and must not be disruptive.
+		 * Keep the state whenever that handle has a call in any phase;
+		 * a different handle, or a genuinely idle one, still starts a
+		 * fresh link.
 		 */
-		if (s->reg.active && s->reg.call_bound && h == s->reg.handle) {
+		if (s->reg.active && h == s->reg.handle
+		    && (s->reg.call_bound || dect_cc_busy(&s->reg.cc))) {
 			printf("reg: connection up (handle %u) repeated while "
-			       "a call is bound -- keeping call state\n", h);
+			       "a call is in progress -- keeping call state\n",
+			       h);
 			break;
 		}
 		reg_start(s, h);
@@ -2428,7 +2451,8 @@ static void usage(void)
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech)\n"
 		"           playsync advances the coded stream on the received\n"
-		"           lane's word boundary instead of a cadence of our own\n"
+		"           lane's word boundary instead of a cadence of our own;\n"
+		"           required for anything but a steady tone\n"
 		"           playraw=FILE replays a verbatim TDM lane instead (two\n"
 		"           bytes per frame, 16000 B/s, as -w captures it): no\n"
 		"           cadence logic, nothing interpreted\n"
