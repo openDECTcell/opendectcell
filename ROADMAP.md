@@ -103,7 +103,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 
 ## M8: Full GAP / CAT-iq basics in libopendectcell
 - [ ] Locate, temporary identities, ciphering (DSC), outgoing calls
-- [~] CLIP/CNIP: `src/libopendectcell/dect_clip.c` builds CALLING-PARTY-NUMBER (`0x6C`) and CALLING-PARTY-NAME (`0x6D`) from the public ETSI text, wired into the FP-originated CC-SETUP and into `dect-stubd -a clip=/cnip=`. **[hw]** No handset has been shown either IE. Privacy semantics (what to send for a withheld caller) stay deliberately unimplemented: we omit, because the one stock value we have for the restricted case is ambiguous
+- [~] CLIP/CNIP: `src/libopendectcell/dect_clip.c` builds CALLING-PARTY-NUMBER (`0x6C`) and CALLING-PARTY-NAME (`0x6D`) from the public ETSI text, wired into the FP-originated CC-SETUP and into `dect-stubd -a clip=/cnip=`. **[hw]** No handset has been shown either IE. Privacy semantics (what to send for a withheld caller) stay deliberately unimplemented: we omit, because the one stock value we have for the restricted case is ambiguous Since 2026-10-20 the SETUP can also carry `<<CALL-INFORMATION>>` (`src/libopendectcell/dect_callinfo.c`, `-a lineid=`): CAT-iq 2.0 marks an incoming external call by its line identifier, the leading explanation for the C4's "Intern" display (test card #73).
 - [ ] Wideband (G.722) codec negotiation
 - [ ] Multiple handsets and parallel calls (STUB limit: about 3 PCM channels)
 - [ ] Golden-trace regression tests in CI
