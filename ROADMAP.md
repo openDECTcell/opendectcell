@@ -102,7 +102,8 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
   - **Still open — the 2026-10-19 scan undercounted.** It found nine names in two files; a repo-wide sweep finds symbol-shaped names in six. The remainder are **not** AVM-authored and so fall outside the rule above, but still need one deliberate call: (a) RTX/Dialog mail-OS and FP-stack internals (`docs/models/7520-DECT-analysis.md` §mail OS, `docs/mac-bringup.md`, `docs/capacity.md`, `docs/models/7362SL-DECT-analysis.md`) — third-party SDK, not AVM's, but equally only readable from a binary; (b) AVM GPIO/clock line names in `docs/7412-spi-tdm-and-loader.md` and `docs/models/7412-DECT-analysis.md`, which plausibly come from the device tree in AVM's GPL kernel source and would then be explicitly allowed. Stripping (a) would cost real traceability in the MAC and capacity notes, so decide before publishing rather than now.
 
 ## M8: Full GAP / CAT-iq basics in libopendectcell
-- [ ] Locate, temporary identities, ciphering (DSC), outgoing calls, CLIP
+- [ ] Locate, temporary identities, ciphering (DSC), outgoing calls
+- [~] CLIP/CNIP: `src/libopendectcell/dect_clip.c` builds CALLING-PARTY-NUMBER (`0x6C`) and CALLING-PARTY-NAME (`0x6D`) from the public ETSI text, wired into the FP-originated CC-SETUP and into `dect-stubd -a clip=/cnip=`. **[hw]** No handset has been shown either IE. Privacy semantics (what to send for a withheld caller) stay deliberately unimplemented: we omit, because the one stock value we have for the restricted case is ambiguous
 - [ ] Wideband (G.722) codec negotiation
 - [ ] Multiple handsets and parallel calls (STUB limit: about 3 PCM channels)
 - [ ] Golden-trace regression tests in CI
