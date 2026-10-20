@@ -705,7 +705,7 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 					s->play_pos++;
 					s->pl_adv++;
 					s->pl_frames++;
-					continue;
+					goto lane_done;
 				}
 				if (advance) {
 					if (s->play_pos + 2u > s->audio.play_len)
@@ -728,6 +728,8 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 					fr[w * 2u + 1u] =
 						s->audio.play[s->play_pos - 1u];
 				}
+lane_done:
+				;
 			}
 		} else if (s->audio.loopback && s->reg.call_bound && rx) {
 			unsigned int w = s->audio.tone_word;
