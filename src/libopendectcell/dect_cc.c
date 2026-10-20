@@ -128,6 +128,11 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 	return 0;
 }
 
+int dect_cc_busy(const struct dect_cc *cc)
+{
+	return cc->state != DECT_CC_ST_NULL && cc->state != DECT_CC_ST_RELEASED;
+}
+
 void dect_cc_set_signal(struct dect_cc *cc, int enable, uint8_t value)
 {
 	cc->signal_on = (uint8_t)(enable != 0);

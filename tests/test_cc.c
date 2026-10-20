@@ -221,8 +221,56 @@ static void test_learns_identities_from_setup(void)
 	CHECK_EQ(memcmp(cc.peer_fixed_id, fixed_id, sizeof(fixed_id)), 0);
 }
 
+/*
+ * dect_cc_busy() must be true for the whole life of a transaction, including
+ * the window between an FP-originated SETUP and the handset answering. The
+ * daemon uses it to decide whether a repeated chip connection-up is a new
+ * link or the chip re-establishing one underneath a call; getting that wrong
+ * lost a CC-CONNECT on hardware (run A2, 2026-10-20).
+ */
+static void test_busy_spans_the_whole_call(void)
+{
+	static const uint8_t port_id[] = { 0x20, 0x10, 0x00, 0x11, 0x22 };
+	static const uint8_t fixed_id[] = { 0x20, 0x09, 0x88, 0x77, 0x66 };
+	struct dect_cc cc;
+	uint8_t msg[DECT_LAPC_MSG_MAX];
+	size_t off;
+
+	dect_cc_init(&cc);
+	CHECK(!dect_cc_busy(&cc));		/* idle */
+
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	CHECK(dect_cc_busy(&cc));		/* SETUP sent, not yet answered */
+	while (dect_cc_poll(&cc, msg, sizeof(msg)) > 0)
+		;
+	CHECK(dect_cc_busy(&cc));		/* still pending after draining */
+
+	/* the handset rings */
+	off = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+				 DECT_TI_RESPONDER, 0, DECT_CC_ALERTING);
+	dect_cc_rx(&cc, msg, off);
+	CHECK(dect_cc_busy(&cc));
+
+	/* the user answers */
+	off = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+				 DECT_TI_RESPONDER, 0, DECT_CC_CONNECT);
+	dect_cc_rx(&cc, msg, off);
+	CHECK(dect_cc_busy(&cc));
+	CHECK(dect_cc_poll(&cc, msg, sizeof(msg)) > 0);	/* CONNECT-ACK */
+
+	/* and hangs up */
+	off = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+				 DECT_TI_RESPONDER, 0, DECT_CC_RELEASE);
+	dect_cc_rx(&cc, msg, off);
+	while (dect_cc_poll(&cc, msg, sizeof(msg)) > 0)
+		;
+	CHECK(!dect_cc_busy(&cc));		/* released */
+}
+
 int main(void)
 {
+	test_busy_spans_the_whole_call();
 	test_learns_identities_from_setup();
 	test_outgoing_call_to_handset();
 	test_alerting_ignored_when_responder();

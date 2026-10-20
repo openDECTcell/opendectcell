@@ -138,6 +138,15 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
  */
 void dect_cc_set_signal(struct dect_cc *cc, int enable, uint8_t value);
 
+/*
+ * Non-zero while a call transaction exists -- from the moment a SETUP is sent
+ * or received until the call is released. The caller needs this to tell a
+ * genuinely new link from the chip re-establishing one underneath a call that
+ * has not been answered yet: re-initialising the stack in that window loses
+ * the transaction, and the handset's CC-CONNECT then goes unanswered.
+ */
+int dect_cc_busy(const struct dect_cc *cc);
+
 /* Queue a CC-RELEASE to hang up an active call. Returns 0, or -1 if idle. */
 int dect_cc_release(struct dect_cc *cc);
 
