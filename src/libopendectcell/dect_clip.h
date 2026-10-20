@@ -107,6 +107,17 @@ struct dect_clip {
 	uint8_t	name_presentation;
 	uint8_t	name_screening;
 	uint8_t	name_alphabet;		/* enum dect_clip_alphabet */
+
+	/*
+	 * Placement hint, not a property of the identity: emit the two IEs
+	 * before <<BASIC-SERVICE>> rather than after it. It exists because a
+	 * byte-exact 0x6C and 0x6D placed after the fixed-length IE were
+	 * ignored by a C4 (v28/v29), and IE order is the next candidate --
+	 * EN 300 175-5 lists the variable-length IEs of a message in
+	 * ascending identifier order, which our default placement keeps but
+	 * with a fixed-length IE in between. Sweepable rather than guessed.
+	 */
+	uint8_t	emit_before_basic_service;
 };
 
 /*

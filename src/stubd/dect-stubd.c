@@ -44,6 +44,11 @@
 #include "dect_cc.h"
 #include "dect_audio.h"
 #include "dect_clip.h"
+
+/* Longest -a loopdelay ring, in frames (1 s at 8 kHz). */
+#define LOOP_DELAY_MAX 8000u
+
+#define RING_BASIC_SVC	0x88u		/* normal call class, wideband speech */
 #include "dect_g722.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
@@ -232,6 +237,44 @@ struct stubd {
 		int      bind_early;
 		int      loopback;	/* echo the received bearer word back */
 		/*
+		 * loopdelay=N: echo the lane through an N-frame ring instead
+		 * of in the same frame. The cadence stays locked to the
+		 * chip's own pair boundaries -- each transmitted word still
+		 * changes exactly when a received one does -- but the content
+		 * is N frames old, so the handset cannot be hearing a live
+		 * side-tone. Every downlink source that worked so far was
+		 * live-derived, and every one that failed was free-running
+		 * from a file; this separates the cadence from the source.
+		 */
+		unsigned loop_delay;
+		/*
+		 * playsync: advance the coded stream when the *received* lane
+		 * word changes, instead of free-running a two-frame cadence
+		 * of our own. v31 showed why this matters: a loopback delayed
+		 * by half a second came back as clear speech, so the content
+		 * can be arbitrarily old -- what the chip needs is that our
+		 * word changes on the same frame boundary its own does. A
+		 * free-running cadence slips against it, which a steady sine
+		 * survives (v25) and speech does not (v29, v30).
+		 */
+		int      play_sync;
+		/*
+		 * basicsvc=N: the <<BASIC-SERVICE>> value octet. Low nibble
+		 * is the service (8 = wideband speech), high nibble the call
+		 * class. v32 rang with 0x88 and the C4 labelled the call
+		 * "Intern" rather than showing the number it had plainly
+		 * parsed, so the call class is the first thing to sweep.
+		 */
+		uint8_t  basic_svc;
+		/*
+		 * signal=N: send <<SIGNAL>> N in the SETUP. v33 showed a
+		 * call-class-3 SETUP displays the caller but never alerts,
+		 * so the alerting pattern has to be stated rather than left
+		 * to the handset. 0x40..0x47 are alerting patterns 0..7.
+		 */
+		int      signal_on;
+		uint8_t  signal_value;
+		/*
 		 * handover=MS: MS ms after the audio bind, ask the chip to move
 		 * the call's bearer.
 		 *
@@ -275,6 +318,17 @@ struct stubd {
 		 */
 		const char *clip_number;
 		const char *clip_name;
+		/*
+		 * The descriptor fields, settable for the same reason every
+		 * 0x0230 field is: v28 sent a byte-exact 0x6C and 0x6D and the
+		 * C4 displayed neither, so which field the handset gates on is
+		 * now the open question and one run should be able to sweep it.
+		 * Defaults are the honest ones (not screened); the stock
+		 * producer's ordinary branch sends clipscr=1, i.e. `01 81`.
+		 */
+		uint8_t  clip_ton, clip_npi, clip_scr;
+		uint8_t  cnip_scr, cnip_alpha;
+		int      clip_first;	/* identity IEs before BASIC-SERVICE */
 		const char *play_path;
 		/*
 		 * playpcm=FILE takes the same lane but feeds it ordinary
@@ -284,9 +338,23 @@ struct stubd {
 		 * than a file somebody pre-encoded on a workstation.
 		 */
 		int       play_pcm;
+		/*
+		 * playraw=FILE: the file is not a G.722 stream but a verbatim
+		 * TDM lane -- two bytes per frame, 16000 B/s, exactly as a
+		 * -w capture holds them. Nothing is interpreted: no cadence
+		 * logic, no two-frame hold, no octet pairing. Feeding back a
+		 * lane the chip itself produced is the one downlink test that
+		 * assumes nothing about the convention.
+		 */
+		int       play_raw;
 		uint8_t  *play;
 		size_t    play_len;
 	} audio;
+	/* Ring for -a loopdelay=N, two bytes per frame. */
+	uint8_t     loop_ring[LOOP_DELAY_MAX * 2u];
+	unsigned    loop_wr;
+	int         loop_primed;
+	uint32_t    rx_word_prev;	/* last received lane word, for playsync */
 	size_t      play_pos;		/* byte offset into audio.play */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
 	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
@@ -493,16 +561,59 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		 * precedence over the loopback, which it exists to replace as a
 		 * source whose glitches cannot be blamed on the uplink.
 		 */
-		if (s->audio.play && s->reg.call_bound) {
+		if (s->audio.play && s->audio.play_raw && s->reg.call_bound) {
+			unsigned int w = s->audio.tone_word;
+
+			/* Verbatim lane: two bytes every frame, no cadence. */
+			if (w < s->slots && w != (unsigned int)s->tx_slot) {
+				if (s->play_pos + 2u > s->audio.play_len)
+					s->play_pos = 0;
+				fr[w * 2u] = s->audio.play[s->play_pos];
+				fr[w * 2u + 1u] = s->audio.play[s->play_pos + 1u];
+				s->play_pos += 2u;
+			}
+		} else if (s->audio.play && s->reg.call_bound) {
 			unsigned int w = s->audio.tone_word;
 
 			if (w < s->slots && w != (unsigned int)s->tx_slot) {
-				if (!s->play_phase) {
+				int advance;
+
+				if (s->audio.play_sync && rx) {
+					const uint8_t *src = rx
+						+ (f * s->slots + w) * 2u;
+					uint32_t v = (uint32_t)src[0]
+						   | ((uint32_t)src[1] << 8);
+
+					/*
+					 * A received transition marks the
+					 * chip's pair boundary, so realign to
+					 * it; between transitions keep our own
+					 * two-frame rate. Slaving the rate to
+					 * the transitions as well would drag
+					 * the chip's uplink underruns (holds
+					 * of 4, 10 and 40 frames) into the
+					 * downlink and stretch the audio --
+					 * which is what v32's glitches were.
+					 */
+					if (v != s->rx_word_prev) {
+						advance = 1;
+						s->play_phase = 1;
+					} else {
+						advance = !s->play_phase;
+						s->play_phase ^= 1;
+					}
+					s->rx_word_prev = v;
+				} else {
+					advance = !s->play_phase;
+					s->play_phase ^= 1;
+				}
+				if (!s->play_pos)
+					advance = 1;	/* prime */
+				if (advance) {
 					if (s->play_pos + 2u > s->audio.play_len)
 						s->play_pos = 0;
 					s->play_pos += 2u;
 				}
-				s->play_phase ^= 1;
 				fr[w * 2u] = s->audio.play[s->play_pos - 2u];
 				fr[w * 2u + 1u] = s->audio.play[s->play_pos - 1u];
 			}
@@ -526,7 +637,21 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 				 * coded words from the start, worked. Until there
 				 * is something real to send, send the filler.
 				 */
-				if (v != 0x0000u && v != 0xFEFEu) {
+				if (s->audio.loop_delay) {
+					unsigned rd = (s->loop_wr + 1u)
+						    % s->audio.loop_delay;
+
+					s->loop_ring[s->loop_wr * 2u] = src[0];
+					s->loop_ring[s->loop_wr * 2u + 1u] = src[1];
+					s->loop_wr = rd;
+					if (!s->loop_primed && rd == 0u)
+						s->loop_primed = 1;
+					if (s->loop_primed) {
+						fr[w * 2u] = s->loop_ring[rd * 2u];
+						fr[w * 2u + 1u] =
+							s->loop_ring[rd * 2u + 1u];
+					}
+				} else if (v != 0x0000u && v != 0xFEFEu) {
 					fr[w * 2u] = src[0];
 					fr[w * 2u + 1u] = src[1];
 				}
@@ -1172,7 +1297,6 @@ static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
  * [CR the hardware-analysis notes §6; COMMAND_SET §6.3].
  */
 #define RING_PAGE_INFO	0x2Cu		/* CC page, wideband SETUP to follow */
-#define RING_BASIC_SVC	0x88u		/* normal call class, wideband speech */
 
 static void send_page(struct stubd *s)
 {
@@ -1224,7 +1348,7 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id,
 					     s->cc_port_id_len, s->cc_fixed_id,
 					     s->cc_fixed_id_len,
-					     RING_BASIC_SVC, &s->clip))
+					     s->audio.basic_svc, &s->clip))
 				printf("ring: CC-SETUP could not be queued\n");
 			return;
 		}
@@ -1495,6 +1619,8 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	dect_lapc_init(&s->reg.lapc, 0);
 	dect_mm_init(&s->reg.mm, &mcfg);
 	dect_cc_init(&s->reg.cc);
+	dect_cc_set_signal(&s->reg.cc, s->audio.signal_on,
+			   s->audio.signal_value);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
 }
 
@@ -1757,7 +1883,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id,
 					     s->cc_port_id_len, s->cc_fixed_id,
 					     s->cc_fixed_id_len,
-					     RING_BASIC_SVC, &s->clip))
+					     s->audio.basic_svc, &s->clip))
 				printf("ring: CC-SETUP could not be queued\n");
 			else
 				printf("ring: CC-SETUP queued -- the handset "
@@ -2061,6 +2187,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 8 && !memcmp(key, "dspsweep", 8)) &&
 			    !(klen == 4 && !memcmp(key, "play", 4)) &&
 			    !(klen == 7 && !memcmp(key, "playpcm", 7)) &&
+			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
@@ -2075,12 +2202,38 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->cap_all = 1;
 		else if (!eq && klen == 8 && !memcmp(key, "loopback", 8))
 			a->loopback = 1;
+		else if (klen == 9 && !memcmp(key, "loopdelay", 9)) {
+			if (v < 2u || v > LOOP_DELAY_MAX)
+				return -1;
+			a->loop_delay = (unsigned)v;
+			a->loopback = 1;
+		}
 		else if (!eq && klen == 9 && !memcmp(key, "bindearly", 9))
 			a->bind_early = 1;
 		else if (klen == 8 && !memcmp(key, "handover", 8))
 			a->handover_ms = (unsigned)v;
 		else if (klen == 4 && !memcmp(key, "ring", 4))
 			a->ring_ms = (unsigned)v;
+		else if (klen == 7 && !memcmp(key, "clipton", 7))
+			a->clip_ton = (uint8_t)v;
+		else if (klen == 7 && !memcmp(key, "clipnpi", 7))
+			a->clip_npi = (uint8_t)v;
+		else if (klen == 7 && !memcmp(key, "clipscr", 7))
+			a->clip_scr = (uint8_t)v;
+		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
+			a->basic_svc = (uint8_t)v;
+		else if (klen == 6 && !memcmp(key, "signal", 6)) {
+			a->signal_value = (uint8_t)v;
+			a->signal_on = 1;
+		}
+		else if (!eq && klen == 8 && !memcmp(key, "playsync", 8))
+			a->play_sync = 1;
+		else if (!eq && klen == 9 && !memcmp(key, "clipfirst", 9))
+			a->clip_first = 1;
+		else if (klen == 7 && !memcmp(key, "cnipscr", 7))
+			a->cnip_scr = (uint8_t)v;
+		else if (klen == 9 && !memcmp(key, "cnipalpha", 9))
+			a->cnip_alpha = (uint8_t)v;
 		else if ((klen == 4 && !memcmp(key, "clip", 4))
 			 || (klen == 4 && !memcmp(key, "cnip", 4))) {
 			/* text, not a number: take the value verbatim */
@@ -2097,7 +2250,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 				a->clip_name = text;
 		}
 		else if ((klen == 4 && !memcmp(key, "play", 4))
-			 || (klen == 7 && !memcmp(key, "playpcm", 7))) {
+			 || (klen == 7 && !memcmp(key, "playpcm", 7))
+			 || (klen == 7 && !memcmp(key, "playraw", 7))) {
 			/* value is a path, not a number: take it verbatim */
 			size_t n = (size_t)(spec - (eq + 1));
 			char *path = malloc(n + 1);
@@ -2107,7 +2261,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			memcpy(path, eq + 1, n);
 			path[n] = '\0';
 			a->play_path = path;
-			a->play_pcm = (klen == 7);
+			a->play_pcm = (klen == 7 && key[4] == 'p');
+			a->play_raw = (klen == 7 && key[4] == 'r');
 		}
 		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
 			a->tone_high = 1;
@@ -2268,15 +2423,30 @@ static void usage(void)
 		"           downlink source, unlike the loopback\n"
 		"           playpcm=FILE does the same from 16 kHz signed 16-bit\n"
 		"           little-endian PCM, encoding it to G.722 at start-up\n"
+		"           signal=N adds <<SIGNAL>> N to the SETUP (0x40..0x47 =\n"
+		"           alerting pattern 0..7); omitted, the handset picks\n"
+		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
+		"           nibble call class, low nibble 8 = wideband speech)\n"
+		"           playsync advances the coded stream on the received\n"
+		"           lane's word boundary instead of a cadence of our own\n"
+		"           playraw=FILE replays a verbatim TDM lane instead (two\n"
+		"           bytes per frame, 16000 B/s, as -w captures it): no\n"
+		"           cadence logic, nothing interpreted\n"
 		"           clip=NUMBER cnip=NAME put a calling-party number\n"
 		"           (0x6C, printable IA5) and name (0x6D, UTF-8) in the\n"
 		"           FP-originated CC-SETUP, both presented as allowed and\n"
-		"           user-provided-not-screened. Omitted options send no IE\n"
+		"           user-provided-not-screened. Omitted options send no IE.\n"
+		"           clipton=N clipnpi=N clipscr=N cnipscr=N cnipalpha=N\n"
+		"           sweep the descriptor fields; the stock producer's\n"
+		"           ordinary branch is clipscr=1, giving `01 81`.\n"
+		"           clipfirst puts both IEs before <<BASIC-SERVICE>>\n"
 		"           handover=MS asks the chip to move the call's bearer MS ms\n"
 		"           after the bind (0x016A), which is the event that has\n"
 		"           accompanied every run where audio flowed\n"
 		"           bindearly assigns the audio channel when the chip reports a\n"
 		"           connection, not when a call connects\n"
+		"           loopdelay=N echoes it through an N-frame ring (2..%u)\n"
+		"           instead: same cadence, older content\n"
 		"           loopback echoes the received bearer word (toneword)\n"
 		"           straight back to the handset, byte for byte -- the\n"
 		"           lane carries coded G.722, so this needs no encoder\n"
@@ -2290,7 +2460,7 @@ static void usage(void)
 		"           prints the MAC slot, carrier and bearer slot type\n"
 		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0\n"
 		"           (flags=0x41 is the wideband bind used at G7),\n"
-		"           txidle=0xff,voiceidle=0xff\n");
+		"           txidle=0xff,voiceidle=0xff\n", LOOP_DELAY_MAX);
 }
 
 int main(int argc, char **argv)
@@ -2320,6 +2490,14 @@ int main(int argc, char **argv)
 	 */
 	s.audio.gain = 0x2Bu;
 	s.audio.flags = 1;		/* channel 1 */
+	s.audio.clip_ton = DECT_CLIP_TON_UNKNOWN;
+	s.audio.clip_npi = DECT_CLIP_NPI_E164;
+	s.audio.clip_scr = DECT_CLIP_SCR_USER_UNSCREENED;
+	s.audio.cnip_scr = DECT_CLIP_SCR_USER_UNSCREENED;
+	s.audio.cnip_alpha = DECT_CLIP_ALPHABET_UTF8;
+	s.rx_word_prev = 0xFFFFFFFFu;	/* no word seen yet */
+	s.audio.basic_svc = RING_BASIC_SVC;
+	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN0;
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
@@ -2384,25 +2562,30 @@ int main(int argc, char **argv)
 	dect_clip_init(&s.clip);
 	if (s.audio.clip_number
 	    && dect_clip_set_number(&s.clip, s.audio.clip_number,
-				    DECT_CLIP_TON_UNKNOWN, DECT_CLIP_NPI_E164,
+				    (enum dect_clip_ton)s.audio.clip_ton,
+				    (enum dect_clip_npi)s.audio.clip_npi,
 				    DECT_CLIP_PRES_ALLOWED,
-				    DECT_CLIP_SCR_USER_UNSCREENED)) {
+				    (enum dect_clip_screening)s.audio.clip_scr)) {
 		fprintf(stderr, "clip: number rejected (printable IA5, "
 			"at most %u bytes)\n", DECT_CLIP_NUMBER_MAX);
 		return 1;
 	}
 	if (s.audio.clip_name
 	    && dect_clip_set_name(&s.clip, s.audio.clip_name,
-				  DECT_CLIP_ALPHABET_UTF8,
+				  (enum dect_clip_alphabet)s.audio.cnip_alpha,
 				  DECT_CLIP_PRES_ALLOWED,
-				  DECT_CLIP_SCR_USER_UNSCREENED)) {
+				  (enum dect_clip_screening)s.audio.cnip_scr)) {
 		fprintf(stderr, "cnip: name rejected (well-formed UTF-8 "
 			"without control characters, at most %u bytes)\n",
 			DECT_CLIP_NAME_MAX);
 		return 1;
 	}
+	s.clip.emit_before_basic_service = (uint8_t)(s.audio.clip_first != 0);
 	if (s.audio.clip_number || s.audio.clip_name)
-		printf("clip: CC-SETUP will carry %s%s%s\n",
+		printf("clip: ton=%u npi=%u clipscr=%u cnipscr=%u "
+		       "cnipalpha=%u -- CC-SETUP will carry %s%s%s\n",
+		       s.audio.clip_ton, s.audio.clip_npi, s.audio.clip_scr,
+		       s.audio.cnip_scr, s.audio.cnip_alpha,
 		       s.audio.clip_number ? "a number" : "",
 		       (s.audio.clip_number && s.audio.clip_name) ? " and " : "",
 		       s.audio.clip_name ? "a name" : "");
@@ -2474,8 +2657,14 @@ int main(int argc, char **argv)
 			       "%zu bytes of G.722\n",
 			       s.audio.play_path, ns, s.audio.play_len);
 		}
-		printf("play: %zu bytes = %.1f s of G.722 at 64 kbit/s\n",
-		       s.audio.play_len, (double)s.audio.play_len / 8000.0);
+		if (s.audio.play_raw)
+			printf("play: %zu bytes = %.1f s of verbatim TDM lane "
+			       "at 16000 B/s\n", s.audio.play_len,
+			       (double)s.audio.play_len / 16000.0);
+		else
+			printf("play: %zu bytes = %.1f s of G.722 at 64 kbit/s\n",
+			       s.audio.play_len,
+			       (double)s.audio.play_len / 8000.0);
 	}
 	if (s.audio.have_tx_idle)
 		s.tx_idle = s.audio.tx_idle;
