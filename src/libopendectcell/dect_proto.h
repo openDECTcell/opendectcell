@@ -57,7 +57,17 @@
 #define DECT_PRIM_CONN_UP	0x0200u	/* CONNECTION_ESTABLISHED (dst 0x03) */
 #define DECT_PRIM_CONN_DOWN	0x0201u	/* CONNECTION_RELEASED (dst 0x03) */
 #define DECT_PRIM_SIGNALLING	0x0203u	/* 5-byte NWK/Cs signalling segment (dst 0x03) */
-#define DECT_PRIM_CONN_PARAM	0x0243u	/* CONNECTION_PARAMETER (dst 0x03) [CR §8.2] */
+/*
+ * 0x0243 is link-control bookkeeping, not an audio marker [CR A-0072-2]. The
+ * stock receiver sits in the connection's link-control / data-link path: it
+ * updates a counter/window value and may resume buffered signalling fragments.
+ * The examined path never touches audio assignment or DSP route activation.
+ * Its two trailing bytes are ordinary numeric inputs to that procedure -- there
+ * is no special 0x29 case, so "connection-parameter selector" is [not
+ * established]. Keep the pair opaque: log it with its timestamp, never gate on
+ * it and never encode it as an enumeration.
+ */
+#define DECT_PRIM_LINK_CTRL	0x0243u	/* link-control update (dst 0x03) */
 #define DECT_PRIM_AUDIO_STATE	0x0242u	/* audio channel state (dst 0x10) [CR §8.4] */
 #define DECT_PRIM_ACCESS_EVENT	0xF604u	/* HANDSET_ACCESS_EVENT (short-form access) */
 #define DECT_PRIM_ACCESS_CHAL	0x0E0Du	/* ACCESS_CHALLENGE_DATA (dst 0x05) */
