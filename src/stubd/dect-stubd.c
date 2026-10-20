@@ -203,6 +203,14 @@ struct stubd {
 		uint8_t  codec;		/* 0x0230 extra byte (not a codec id) */
 		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
 		int      nowait;	/* send 0x022D immediately (old behaviour) */
+		/*
+		 * noconnect: never send 0x022D. The stock connect sequence is
+		 * exactly 0x0251 then 0x0230 [CR A-0034]; 0x022D is the stock
+		 * mute control (0x80 = mute), never sent at connect. Whether
+		 * the chip reads more than bit 7 of its byte is not
+		 * established, so omitting it is the clean comparison.
+		 */
+		int      no_connect;
 		unsigned tone_hz;	/* transmit test tone (0 = off); multiple of 125 */
 		uint8_t  tone_word;	/* raw DMA word to write it into (default 0) */
 		int      tone_high;	/* high byte lane instead of low */
@@ -1352,6 +1360,10 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 	if (s->reg.audio_connected)
 		return;
 	s->reg.audio_connected = 1;
+	if (a->no_connect) {
+		printf("call: audio connect: 0x022D omitted (-a noconnect)\n");
+		return;
+	}
 
 	if (a->send_f626) {
 		memset(&m, 0, sizeof(m));
@@ -2506,6 +2518,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->send_f626 = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nogain", 6))
 			a->no_gain = 1;
+		else if (!eq && klen == 9 && !memcmp(key, "noconnect", 9))
+			a->no_connect = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nowait", 6))
 			a->nowait = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "capall", 6))
@@ -2770,6 +2784,8 @@ static void usage(void)
 		"           0x41 works, 0x40 alone binds nothing), mode is master and\n"
 		"           codec is extra. nogain = skip 0x0251, f626 = send 0xF626,\n"
 		"           nowait = send 0x022D at once instead of after 0x0242\n"
+		"           noconnect = never send 0x022D (the stock connect is\n"
+		"           0x0251 then 0x0230 and nothing else)\n"
 		"           tone=HZ (multiple of 125) transmits an A-law test tone to\n"
 		"           the handset while a call is up, into raw word toneword=N\n"
 		"           (default 0 = dect1), low byte, or the high byte with tonehigh;\n"
