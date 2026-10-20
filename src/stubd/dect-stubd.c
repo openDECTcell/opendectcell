@@ -43,6 +43,7 @@
 #include "dect_mm.h"
 #include "dect_cc.h"
 #include "dect_audio.h"
+#include "dect_g722.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
 #define PROBE_BLOCKS	40u
@@ -264,6 +265,14 @@ struct stubd {
 		 */
 		unsigned ring_ms;
 		const char *play_path;
+		/*
+		 * playpcm=FILE takes the same lane but feeds it ordinary
+		 * 16 kHz signed 16-bit little-endian PCM, which is encoded to
+		 * G.722 once at start-up. The box has no ffmpeg, so this is
+		 * the only way to put real audio on the downlink there rather
+		 * than a file somebody pre-encoded on a workstation.
+		 */
+		int       play_pcm;
 		uint8_t  *play;
 		size_t    play_len;
 	} audio;
@@ -2036,7 +2045,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			if (end != spec &&
 			    !(klen == 3 && !memcmp(key, "dsp", 3)) &&
 			    !(klen == 8 && !memcmp(key, "dspsweep", 8)) &&
-			    !(klen == 4 && !memcmp(key, "play", 4)))
+			    !(klen == 4 && !memcmp(key, "play", 4)) &&
+			    !(klen == 7 && !memcmp(key, "playpcm", 7)))
 				return -1;
 		}
 		if (!eq && klen == 4 && !memcmp(key, "f626", 4))
@@ -2055,7 +2065,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->handover_ms = (unsigned)v;
 		else if (klen == 4 && !memcmp(key, "ring", 4))
 			a->ring_ms = (unsigned)v;
-		else if (klen == 4 && !memcmp(key, "play", 4)) {
+		else if ((klen == 4 && !memcmp(key, "play", 4))
+			 || (klen == 7 && !memcmp(key, "playpcm", 7))) {
 			/* value is a path, not a number: take it verbatim */
 			size_t n = (size_t)(spec - (eq + 1));
 			char *path = malloc(n + 1);
@@ -2065,6 +2076,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			memcpy(path, eq + 1, n);
 			path[n] = '\0';
 			a->play_path = path;
+			a->play_pcm = (klen == 7);
 		}
 		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
 			a->tone_high = 1;
@@ -2223,6 +2235,8 @@ static void usage(void)
 		"           play=FILE transmits a raw G.722 stream (8000 bytes/s) to\n"
 		"           the handset while a call is up, looping -- a clean\n"
 		"           downlink source, unlike the loopback\n"
+		"           playpcm=FILE does the same from 16 kHz signed 16-bit\n"
+		"           little-endian PCM, encoding it to G.722 at start-up\n"
 		"           handover=MS asks the chip to move the call's bearer MS ms\n"
 		"           after the bind (0x016A), which is the event that has\n"
 		"           accompanied every run where audio flowed\n"
@@ -2373,9 +2387,35 @@ int main(int argc, char **argv)
 		}
 		fclose(pf);
 		s.audio.play_len = (size_t)n & ~(size_t)1;
-		printf("play: %s, %zu bytes = %.1f s of G.722 at 64 kbit/s\n",
-		       s.audio.play_path, s.audio.play_len,
-		       (double)s.audio.play_len / 8000.0);
+		if (s.audio.play_pcm) {
+			/*
+			 * The file is 16 kHz s16le; encode it to G.722 in
+			 * place. Two input bytes per sample, two samples per
+			 * output octet, so the coded stream is a quarter of
+			 * the size and the buffer always has room.
+			 */
+			struct dect_g722_state enc;
+			size_t ns = s.audio.play_len / 2u, i, coded;
+			int16_t *pcm = malloc(ns * sizeof(*pcm));
+
+			if (!pcm) {
+				fprintf(stderr, "out of memory for %s\n",
+					s.audio.play_path);
+				return 1;
+			}
+			for (i = 0; i < ns; i++)
+				pcm[i] = (int16_t)((uint16_t)s.audio.play[2 * i]
+					 | ((uint16_t)s.audio.play[2 * i + 1] << 8));
+			dect_g722_init(&enc);
+			coded = dect_g722_encode(&enc, pcm, ns, s.audio.play);
+			free(pcm);
+			s.audio.play_len = coded & ~(size_t)1;
+			printf("play: %s, %zu samples of 16 kHz PCM encoded to "
+			       "%zu bytes of G.722\n",
+			       s.audio.play_path, ns, s.audio.play_len);
+		}
+		printf("play: %zu bytes = %.1f s of G.722 at 64 kbit/s\n",
+		       s.audio.play_len, (double)s.audio.play_len / 8000.0);
 	}
 	if (s.audio.have_tx_idle)
 		s.tx_idle = s.audio.tx_idle;

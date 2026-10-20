@@ -26,7 +26,7 @@ XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 STUBD_SRC := src/stubd/dect-stubd.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
 	src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c \
 	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c \
-	src/libopendectcell/dect_audio.c
+	src/libopendectcell/dect_audio.c src/libopendectcell/dect_g722.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
 .PHONY: all check cross clean
