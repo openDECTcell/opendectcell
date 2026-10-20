@@ -133,6 +133,18 @@ struct stubd {
 	uint32_t vs_changes[8];
 	uint32_t vs_frames;
 	/*
+	 * Uplink hold statistics for the bearer lane (tone_word): how many
+	 * live words were held longer than the nominal two frames in the
+	 * last second, how many extra frames that cost, and how many of
+	 * those holds started at the same position within the 80-frame
+	 * DECT frame as the previous one -- the frame-locked signature
+	 * that codec 0 showed in v22 and codec 3 did not in C4.
+	 */
+	uint32_t vh_run;		/* frames the current word has been held */
+	uint32_t vh_holds, vh_extra, vh_locked;
+	uint32_t vh_frame;		/* running frame index since bind */
+	uint32_t vh_last_phase;
+	/*
 	 * Voice capture (-w): dump the call's TDM slot raw, two bytes per frame,
 	 * so the sample format can be worked out offline. The slot is measured,
 	 * the encoding inside it is not: 8000 frames/s x 2 bytes could be 16-bit
@@ -2205,6 +2217,27 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 			memcpy(&v, fr + (f * s->slots + n) * 2u, 2);
 			if (s->vs_frames && v != s->vs_last[n])
 				s->vs_changes[n]++;
+			if (n == s->audio.tone_word) {
+				int live = v != 0x0000u && v != 0xFEFEu &&
+					   v != 0xFFFFu;
+
+				if (v == s->vs_last[n]) {
+					s->vh_run++;
+				} else {
+					if (live && s->vh_run > 2u) {
+						uint32_t ph = (s->vh_frame -
+							       s->vh_run) % 80u;
+
+						s->vh_holds++;
+						s->vh_extra += s->vh_run - 2u;
+						if (ph == s->vh_last_phase)
+							s->vh_locked++;
+						s->vh_last_phase = ph;
+					}
+					s->vh_run = 1;
+				}
+				s->vh_frame++;
+			}
 			s->vs_last[n] = v;
 		}
 		s->vs_frames++;
@@ -2214,6 +2247,13 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 		for (n = 0; n < nslots; n++)
 			printf(" %u:%u", n, s->vs_changes[n]);
 		printf("\n");
+		printf("call: uplink holds: %u longer than 2 frames, %u extra "
+		       "frames, %u frame-locked (same phase mod 80 as the "
+		       "previous hold)\n",
+		       s->vh_holds, s->vh_extra, s->vh_locked);
+		s->vh_holds = 0;
+		s->vh_extra = 0;
+		s->vh_locked = 0;
 		if (s->audio.play && !s->audio.play_raw && s->reg.call_bound) {
 			/*
 			 * Expect frames ~8000, advances ~4000 and, with
