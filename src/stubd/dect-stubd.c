@@ -288,12 +288,33 @@ struct stubd {
 		 *   2  the same in the high byte
 		 *
 		 * Mode 0's four parity/order variants were all swept on
-		 * hardware on 2026-10-20 and all sound like noise, so the
-		 * convention is probably not "a held word" at all. Modes 1
-		 * and 2 are the untried alternative: they deliver the same
-		 * 8000 octets/s but one octet at a time.
+		 * hardware on 2026-10-20 and all sound like noise. A-0030
+		 * then showed that mode 0 *is* the stock host's convention on
+		 * this box, and that modes 1 and 2 are the convention of a
+		 * denser slot map this box does not run [CR A-0030 §3, §9].
+		 * They stay selectable, but the fault is not the layout.
 		 */
 		unsigned play_byte;
+		/*
+		 * playslow=N: hold every N-th coded word for four frames
+		 * instead of two, so the lane carries 8000 * (1 - 1/N)
+		 * octets/s. Every downlink source that was heard clean so far
+		 * supplied the chip at or below its own rate (the loopback
+		 * exactly, A4 and v32 below it), and every one that was heard
+		 * as noise supplied a steady 8000 octets/s -- which is above
+		 * the chip's measured uplink rate, 7976 octets/s in v22. The
+		 * uplink's holds are 4, 10 and 40 frames, so a 4-frame hold
+		 * is a shape the chip itself produces. N=100 under-supplies
+		 * by 1 %, three times the measured deficit.
+		 */
+		unsigned play_slow;
+		/*
+		 * playphase=MS: alternate the held-word frame parity every
+		 * MS ms, keeping octet order and layout fixed. Two variants,
+		 * not six: a falsification run that should hear one thing
+		 * throughout, or hear it alternate.
+		 */
+		unsigned play_phase_ms;
 		/*
 		 * basicsvc=N: the <<BASIC-SERVICE>> value octet. Low nibble
 		 * is the service (8 = wideband speech), high nibble the call
@@ -393,6 +414,8 @@ struct stubd {
 	uint32_t    rx_word_prev;	/* last received lane word, for playsync */
 	FILE       *play_log_fp;	/* -a playlog: the octets we transmit */
 	uint32_t    pl_frames, pl_adv, pl_rxchg;	/* cadence counters */
+	uint32_t    pl_held;		/* advances deferred by -a playslow */
+	unsigned    play_slow_ctr;
 	int         play_locked;	/* playsync has seen its first transition */
 	int         sweep_inv, sweep_swap;	/* active combination */
 	unsigned    sweep_byte;			/* 0 = held word, 1 = low, 2 = high */
@@ -680,8 +703,8 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 					 * and the idle fills must not count, or
 					 * the "lock" lands on the first frame
 					 * processed -- a DMA block boundary --
-					 * which is what every run before
-					 * 2026-10-21 actually locked to.
+					 * which is what every run up to B3
+					 * (2026-10-20) actually locked to.
 					 */
 					if (v != s->rx_word_prev &&
 					    lane_word_live(v) &&
@@ -703,6 +726,17 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 				}
 				if (!s->play_pos)
 					advance = 1;	/* prime */
+				else if (advance && s->audio.play_slow &&
+					 ++s->play_slow_ctr >= s->audio.play_slow) {
+					/*
+					 * Defer this advance by one pair of
+					 * frames: the word is held for four,
+					 * the parity is untouched.
+					 */
+					s->play_slow_ctr = 0;
+					s->pl_held++;
+					advance = 0;
+				}
 				if (s->sweep_byte) {
 					/*
 					 * One octet per frame: the lane holds
@@ -1392,7 +1426,21 @@ static void play_sweep(struct stubd *s, uint64_t now)
 		"one octet per frame, high byte"
 	};
 
-	if (!s->audio.play_sweep_ms || !s->reg.call_bound)
+	if (!s->reg.call_bound)
+		return;
+	if (s->audio.play_phase_ms) {
+		if (s->sweep_at && now - s->sweep_at < s->audio.play_phase_ms)
+			return;
+		s->sweep_at = now;
+		s->sweep_inv ^= 1;
+		s->play_phase ^= 1;	/* shift the pair boundary by a frame */
+		printf("call: play phase %c at t=%llu ms\n",
+		       s->sweep_inv ? 'B' : 'A',
+		       (unsigned long long)(now - g_start));
+		fflush(stdout);
+		return;
+	}
+	if (!s->audio.play_sweep_ms)
 		return;
 	if (s->sweep_at && now - s->sweep_at < s->audio.play_sweep_ms)
 		return;
@@ -2162,8 +2210,8 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 			 * 4000 means we are over- or under-supplying the lane.
 			 */
 			printf("call: play cadence: %u frames, %u advances, "
-			       "%u rx transitions -> %u octets/s%s\n",
-			       s->pl_frames, s->pl_adv, s->pl_rxchg,
+			       "%u rx transitions, %u held -> %u octets/s%s\n",
+			       s->pl_frames, s->pl_adv, s->pl_rxchg, s->pl_held,
 			       s->pl_adv * 2u,
 			       s->audio.play_sync
 			       ? (s->play_locked ? " (phase locked)"
@@ -2172,6 +2220,7 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 			s->pl_frames = 0;
 			s->pl_adv = 0;
 			s->pl_rxchg = 0;
+			s->pl_held = 0;
 		}
 		memset(s->vs_changes, 0, sizeof(s->vs_changes));
 		s->vs_frames = 0;
@@ -2459,6 +2508,13 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 				return -1;
 			a->play_byte = (unsigned)v;
 		}
+		else if (klen == 8 && !memcmp(key, "playslow", 8)) {
+			if (v < 2u)
+				return -1;
+			a->play_slow = (unsigned)v;
+		}
+		else if (klen == 9 && !memcmp(key, "playphase", 9))
+			a->play_phase_ms = (unsigned)v;
 		else if (!eq && klen == 9 && !memcmp(key, "clipfirst", 9))
 			a->clip_first = 1;
 		else if (klen == 7 && !memcmp(key, "cnipscr", 7))
@@ -2664,6 +2720,10 @@ static void usage(void)
 		"           playsweep=MS walks all six lane layouts every MS ms\n"
 		"           during a call and prints which is active;\n"
 		"           playinv / playswap / playbyte pin one\n"
+		"           playslow=N holds every N-th word four frames, so the\n"
+		"           lane carries 1/N less than 8000 octets/s (N=100: 1 %%)\n"
+		"           playphase=MS alternates only the held-word parity\n"
+		"           every MS ms (two variants, not six)\n"
 		"           playlog=FILE records the octets actually handed to\n"
 		"           the lane, so the stream can be decoded offline\n"
 		"           playsync advances the coded stream on the received\n"
