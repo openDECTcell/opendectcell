@@ -29,6 +29,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "dect_clip.h"	/* struct dect_clip */
 #include "dect_lapc.h"	/* DECT_LAPC_MSG_MAX */
 
 enum dect_cc_state {
@@ -104,6 +105,23 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len);
 int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len,
 		  const uint8_t *fixed_id, size_t fixed_id_len,
 		  uint8_t basic_service);
+
+/*
+ * As dect_cc_setup(), plus caller identity: CALLING-PARTY-NUMBER and
+ * CALLING-PARTY-NAME are appended after BASIC-SERVICE when `id` supplies them
+ * with presentation allowed. `id` may be NULL, which is exactly
+ * dect_cc_setup().
+ *
+ * The IEs are appended last so that a SETUP without an identity is
+ * byte-identical to the one that was proved at G7. Either IE is silently
+ * omitted when it has no content, when presentation is not allowed, or when
+ * the message has no room left for it -- a caller's name is never a reason to
+ * fail a call that would otherwise ring.
+ */
+int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
+		     size_t port_id_len, const uint8_t *fixed_id,
+		     size_t fixed_id_len, uint8_t basic_service,
+		     const struct dect_clip *id);
 
 /* Queue a CC-RELEASE to hang up an active call. Returns 0, or -1 if idle. */
 int dect_cc_release(struct dect_cc *cc);

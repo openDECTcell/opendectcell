@@ -49,6 +49,15 @@ int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len
 		  const uint8_t *fixed_id, size_t fixed_id_len,
 		  uint8_t basic_service)
 {
+	return dect_cc_setup_id(cc, port_id, port_id_len, fixed_id,
+				fixed_id_len, basic_service, NULL);
+}
+
+int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
+		     size_t port_id_len, const uint8_t *fixed_id,
+		     size_t fixed_id_len, uint8_t basic_service,
+		     const struct dect_clip *id)
+{
 	unsigned idx;
 	uint8_t *b;
 	size_t off;
@@ -85,6 +94,21 @@ int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len
 				    DECT_IE_BASIC_SERVICE, basic_service);
 	if (!off)
 		return -1;
+
+	/*
+	 * Caller identity last, and never fatal: if either IE does not fit,
+	 * the call still rings without it.
+	 */
+	if (id) {
+		size_t with_id = dect_clip_put_number(b, DECT_LAPC_MSG_MAX,
+						      off, id);
+
+		if (with_id)
+			off = with_id;
+		with_id = dect_clip_put_name(b, DECT_LAPC_MSG_MAX, off, id, 0);
+		if (with_id)
+			off = with_id;
+	}
 
 	txq_commit(cc, idx, off);
 	cc->state = DECT_CC_ST_CALL_PRESENT;

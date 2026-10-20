@@ -43,6 +43,7 @@
 #include "dect_mm.h"
 #include "dect_cc.h"
 #include "dect_audio.h"
+#include "dect_clip.h"
 #include "dect_g722.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
@@ -264,6 +265,16 @@ struct stubd {
 		 * the link it brings up. Milestone B; see docs/call-g7.md.
 		 */
 		unsigned ring_ms;
+		/*
+		 * clip=NUMBER and cnip=NAME: the caller identity an
+		 * FP-originated CC-SETUP carries. Both are presented as
+		 * "allowed, user-provided not screened", because that is the
+		 * only honest claim we can make for a number a person typed
+		 * on our command line -- we have no network screening verdict
+		 * and must not assert one. Absent options mean no IE at all.
+		 */
+		const char *clip_number;
+		const char *clip_name;
 		const char *play_path;
 		/*
 		 * playpcm=FILE takes the same lane but feeds it ordinary
@@ -278,6 +289,7 @@ struct stubd {
 	} audio;
 	size_t      play_pos;		/* byte offset into audio.play */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
+	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
 	const char *voice_path;
 	FILE       *voice_fp;
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
@@ -1209,9 +1221,10 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			printf("ring: a link is already up -- sending CC-SETUP "
 			       "without paging\n");
 			s->ring_state = RING_DONE;
-			if (dect_cc_setup(&s->reg.cc, s->cc_port_id,
-					  s->cc_port_id_len, s->cc_fixed_id,
-					  s->cc_fixed_id_len, RING_BASIC_SVC))
+			if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id,
+					     s->cc_port_id_len, s->cc_fixed_id,
+					     s->cc_fixed_id_len,
+					     RING_BASIC_SVC, &s->clip))
 				printf("ring: CC-SETUP could not be queued\n");
 			return;
 		}
@@ -1741,9 +1754,10 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 */
 		if (s->ring_state == RING_PAGING) {
 			s->ring_state = RING_DONE;
-			if (dect_cc_setup(&s->reg.cc, s->cc_port_id,
-					  s->cc_port_id_len, s->cc_fixed_id,
-					  s->cc_fixed_id_len, RING_BASIC_SVC))
+			if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id,
+					     s->cc_port_id_len, s->cc_fixed_id,
+					     s->cc_fixed_id_len,
+					     RING_BASIC_SVC, &s->clip))
 				printf("ring: CC-SETUP could not be queued\n");
 			else
 				printf("ring: CC-SETUP queued -- the handset "
@@ -2046,7 +2060,9 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 3 && !memcmp(key, "dsp", 3)) &&
 			    !(klen == 8 && !memcmp(key, "dspsweep", 8)) &&
 			    !(klen == 4 && !memcmp(key, "play", 4)) &&
-			    !(klen == 7 && !memcmp(key, "playpcm", 7)))
+			    !(klen == 7 && !memcmp(key, "playpcm", 7)) &&
+			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
+			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
 		if (!eq && klen == 4 && !memcmp(key, "f626", 4))
@@ -2065,6 +2081,21 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->handover_ms = (unsigned)v;
 		else if (klen == 4 && !memcmp(key, "ring", 4))
 			a->ring_ms = (unsigned)v;
+		else if ((klen == 4 && !memcmp(key, "clip", 4))
+			 || (klen == 4 && !memcmp(key, "cnip", 4))) {
+			/* text, not a number: take the value verbatim */
+			size_t n = (size_t)(spec - (eq + 1));
+			char *text = malloc(n + 1);
+
+			if (!text)
+				return -1;
+			memcpy(text, eq + 1, n);
+			text[n] = '\0';
+			if (key[1] == 'l')
+				a->clip_number = text;
+			else
+				a->clip_name = text;
+		}
 		else if ((klen == 4 && !memcmp(key, "play", 4))
 			 || (klen == 7 && !memcmp(key, "playpcm", 7))) {
 			/* value is a path, not a number: take it verbatim */
@@ -2237,6 +2268,10 @@ static void usage(void)
 		"           downlink source, unlike the loopback\n"
 		"           playpcm=FILE does the same from 16 kHz signed 16-bit\n"
 		"           little-endian PCM, encoding it to G.722 at start-up\n"
+		"           clip=NUMBER cnip=NAME put a calling-party number\n"
+		"           (0x6C, printable IA5) and name (0x6D, UTF-8) in the\n"
+		"           FP-originated CC-SETUP, both presented as allowed and\n"
+		"           user-provided-not-screened. Omitted options send no IE\n"
 		"           handover=MS asks the chip to move the call's bearer MS ms\n"
 		"           after the bind (0x016A), which is the event that has\n"
 		"           accompanied every run where audio flowed\n"
@@ -2346,6 +2381,31 @@ int main(int argc, char **argv)
 	dect_rx_init(&s.rx);
 	dect_session_init(&s.sess, &scfg);
 
+	dect_clip_init(&s.clip);
+	if (s.audio.clip_number
+	    && dect_clip_set_number(&s.clip, s.audio.clip_number,
+				    DECT_CLIP_TON_UNKNOWN, DECT_CLIP_NPI_E164,
+				    DECT_CLIP_PRES_ALLOWED,
+				    DECT_CLIP_SCR_USER_UNSCREENED)) {
+		fprintf(stderr, "clip: number rejected (printable IA5, "
+			"at most %u bytes)\n", DECT_CLIP_NUMBER_MAX);
+		return 1;
+	}
+	if (s.audio.clip_name
+	    && dect_clip_set_name(&s.clip, s.audio.clip_name,
+				  DECT_CLIP_ALPHABET_UTF8,
+				  DECT_CLIP_PRES_ALLOWED,
+				  DECT_CLIP_SCR_USER_UNSCREENED)) {
+		fprintf(stderr, "cnip: name rejected (well-formed UTF-8 "
+			"without control characters, at most %u bytes)\n",
+			DECT_CLIP_NAME_MAX);
+		return 1;
+	}
+	if (s.audio.clip_number || s.audio.clip_name)
+		printf("clip: CC-SETUP will carry %s%s%s\n",
+		       s.audio.clip_number ? "a number" : "",
+		       (s.audio.clip_number && s.audio.clip_name) ? " and " : "",
+		       s.audio.clip_name ? "a name" : "");
 	s.fd = open(dev, O_RDWR);
 	if (s.fd < 0) {
 		perror(dev);
