@@ -386,6 +386,7 @@ struct stubd {
 	size_t      play_pos;		/* byte offset into audio.play */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
 	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
+	uint8_t     next_ti;		/* rotates per FP-originated call */
 	const char *voice_path;
 	FILE       *voice_fp;
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
@@ -1447,6 +1448,8 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			printf("ring: a link is already up -- sending CC-SETUP "
 			       "without paging\n");
 			s->ring_state = RING_DONE;
+			s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
+			dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
 			if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id,
 					     s->cc_port_id_len, s->cc_fixed_id,
 					     s->cc_fixed_id_len,
@@ -1723,6 +1726,8 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	dect_cc_init(&s->reg.cc);
 	dect_cc_set_signal(&s->reg.cc, s->audio.signal_on,
 			   s->audio.signal_value);
+	/* a fresh transaction per call; see dect_cc_set_next_ti() */
+	dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
 }
 
@@ -2001,6 +2006,8 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 */
 		if (s->ring_state == RING_PAGING) {
 			s->ring_state = RING_DONE;
+			s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
+			dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
 			if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id,
 					     s->cc_port_id_len, s->cc_fixed_id,
 					     s->cc_fixed_id_len,

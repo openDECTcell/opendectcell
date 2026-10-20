@@ -268,8 +268,40 @@ static void test_busy_spans_the_whole_call(void)
 	CHECK(!dect_cc_busy(&cc));		/* released */
 }
 
+/*
+ * A fresh transaction value per FP-originated call. Reusing 0 after a call
+ * that ended without a clean release left a C4 acknowledging the next SETUP
+ * at the link layer and then discarding it (hardware, 2026-10-20).
+ */
+static void test_transaction_value_rotates(void)
+{
+	static const uint8_t port_id[] = { 0x20, 0x10, 0x00, 0x11, 0x22 };
+	static const uint8_t fixed_id[] = { 0x20, 0x09, 0x88, 0x77, 0x66 };
+	struct dect_cc cc;
+	uint8_t msg[DECT_LAPC_MSG_MAX];
+	struct dect_nwk_hdr h;
+	const uint8_t *ies;
+	size_t ies_len, n;
+	unsigned ti;
+
+	for (ti = 0; ti < 8; ti++) {
+		dect_cc_init(&cc);
+		dect_cc_set_next_ti(&cc, (uint8_t)ti);
+		CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+				       fixed_id, sizeof(fixed_id), 0x88), 0);
+		n = dect_cc_poll(&cc, msg, sizeof(msg));
+		CHECK(n > 0);
+		CHECK_EQ(dect_nwk_parse(msg, n, &h, &ies, &ies_len), 0);
+		/* 7 wraps to 0: only 0..6 are valid for the originating side */
+		CHECK_EQ(h.ti_value, ti % 7u);
+		CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
+		CHECK_EQ(h.msg_type, DECT_CC_SETUP);
+	}
+}
+
 int main(void)
 {
+	test_transaction_value_rotates();
 	test_busy_spans_the_whole_call();
 	test_learns_identities_from_setup();
 	test_outgoing_call_to_handset();

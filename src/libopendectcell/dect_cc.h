@@ -79,6 +79,7 @@ struct dect_cc {
 	 */
 	uint8_t  signal_on;
 	uint8_t  signal_value;
+	uint8_t  next_ti;		/* transaction value for the next SETUP */
 
 	/* FIFO of outbound NWK messages (e.g. CALL-PROC then CONNECT). */
 	uint8_t  out[DECT_CC_TXQ][DECT_LAPC_MSG_MAX];
@@ -146,6 +147,19 @@ void dect_cc_set_signal(struct dect_cc *cc, int enable, uint8_t value);
  * the transaction, and the handset's CC-CONNECT then goes unanswered.
  */
 int dect_cc_busy(const struct dect_cc *cc);
+
+/*
+ * Choose the transaction value the next FP-originated SETUP will use. Values
+ * 0..6 are valid for the originating side (7 is the extended-TI escape).
+ *
+ * We used to hardcode 0 for every call. A call that ends without a clean
+ * release can leave the portable part believing that transaction is still
+ * open, and it then acknowledges the next SETUP at the link layer and
+ * discards the message -- which is exactly the signature seen on hardware on
+ * 2026-10-20 after a call was cut off mid-media. Rotating costs nothing and
+ * is what the standard expects anyway.
+ */
+void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti);
 
 /* Queue a CC-RELEASE to hang up an active call. Returns 0, or -1 if idle. */
 int dect_cc_release(struct dect_cc *cc);

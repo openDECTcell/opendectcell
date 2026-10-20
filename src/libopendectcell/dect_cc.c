@@ -87,7 +87,7 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 	 */
 	cc->incoming = 1;
 	cc->ti_flag = DECT_TI_ORIGINATOR;
-	cc->ti_value = 0;
+	cc->ti_value = cc->next_ti;
 
 	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
 				 cc->ti_flag, cc->ti_value, DECT_CC_SETUP);
@@ -126,6 +126,11 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 	txq_commit(cc, idx, off);
 	cc->state = DECT_CC_ST_CALL_PRESENT;
 	return 0;
+}
+
+void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti)
+{
+	cc->next_ti = (uint8_t)(ti % 7u);
 }
 
 int dect_cc_busy(const struct dect_cc *cc)
