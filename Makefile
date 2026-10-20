@@ -26,7 +26,8 @@ XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 STUBD_SRC := src/stubd/dect-stubd.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
 	src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c \
 	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c \
-	src/libopendectcell/dect_clip.c src/libopendectcell/dect_audio.c src/libopendectcell/dect_g722.c
+	src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_audio.c \
+	src/libopendectcell/dect_g722.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
 .PHONY: all check cross clean
@@ -104,13 +105,13 @@ $(BUILD)/test_mm: tests/test_mm.c src/libopendectcell/dect_mm.c src/libopendectc
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_mm.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c
 
-$(BUILD)/test_cc: tests/test_cc.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.h tests/check.h
+$(BUILD)/test_cc: tests/test_cc.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_cc.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_cc.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.c
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_cc.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c
 
-$(BUILD)/test_clip: tests/test_clip.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.h tests/check.h
+$(BUILD)/test_clip: tests/test_clip.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_clip.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_clip.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_nwk.c
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_clip.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_callinfo.c
 
 $(BUILD)/test_callinfo: tests/test_callinfo.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_callinfo.h tests/check.h
 	@mkdir -p $(BUILD)

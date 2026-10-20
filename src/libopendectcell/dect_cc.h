@@ -29,6 +29,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "dect_callinfo.h"	/* struct dect_callinfo */
 #include "dect_clip.h"	/* struct dect_clip */
 #include "dect_lapc.h"	/* DECT_LAPC_MSG_MAX */
 
@@ -79,6 +80,12 @@ struct dect_cc {
 	 */
 	uint8_t  signal_on;
 	uint8_t  signal_value;
+	/*
+	 * Optional <<CALL-INFORMATION>> for an FP-originated SETUP: the
+	 * line (and call) identifiers that mark the call as external. Empty
+	 * by default, so the SETUP proved at G7 is unchanged.
+	 */
+	struct dect_callinfo callinfo;
 	uint8_t  next_ti;		/* transaction value for the next SETUP */
 
 	/* FIFO of outbound NWK messages (e.g. CALL-PROC then CONNECT). */
@@ -138,6 +145,15 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
  * to sending no IE and letting the handset choose.
  */
 void dect_cc_set_signal(struct dect_cc *cc, int enable, uint8_t value);
+
+/*
+ * Set the <<CALL-INFORMATION>> the next FP-originated SETUP carries, after
+ * every other IE (the stock order puts 0x7E last). `ci` is copied; NULL goes
+ * back to sending none. Like the caller identity it is never fatal: an IE
+ * that does not fit, or an invalid `ci`, is left out and the call still
+ * rings, so validate with dect_callinfo_valid() where the values come in.
+ */
+void dect_cc_set_callinfo(struct dect_cc *cc, const struct dect_callinfo *ci);
 
 /*
  * Non-zero while a call transaction exists -- from the moment a SETUP is sent

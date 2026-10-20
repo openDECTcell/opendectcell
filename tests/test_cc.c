@@ -299,8 +299,71 @@ static void test_transaction_value_rotates(void)
 	}
 }
 
+/*
+ * <<CALL-INFORMATION>> goes after everything else, caller identity included,
+ * and dect_cc_init() forgets it -- so the daemon has to set it again on every
+ * new link, exactly like <<SIGNAL>>.
+ */
+static void test_setup_carries_line_identifier(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t ie[] = { 0x7E, 0x06, 0x00, 0x00, 0x80,
+				      0x00, 0x05, 0x81 };
+	const size_t plain = 2u + 2u + sizeof(port_id) + 2u + sizeof(fixed_id)
+			     + 2u;
+	struct dect_callinfo ci;
+	struct dect_clip id;
+	struct dect_cc cc;
+	uint8_t out[DECT_LAPC_MSG_MAX];
+	size_t n;
+
+	dect_callinfo_init(&ci);
+	ci.has_line = 1;
+	ci.line_id = 0;
+	ci.has_line_type = 1;
+	ci.line_type = DECT_CALLINFO_NDT_DELAY;
+	dect_clip_init(&id);
+	CHECK_EQ(dect_clip_set_number(&id, "0123", DECT_CLIP_TON_UNKNOWN,
+				      DECT_CLIP_NPI_E164,
+				      DECT_CLIP_PRES_ALLOWED,
+				      DECT_CLIP_SCR_USER_UNSCREENED), 0);
+
+	dect_cc_init(&cc);
+	dect_cc_set_callinfo(&cc, &ci);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id,
+				  sizeof(fixed_id), 0x88, &id), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	/* ... BASIC-SERVICE, CALLING-PARTY-NUMBER (2 + 2 + 4), then ours */
+	CHECK_EQ(n, plain + 8u + sizeof(ie));
+	CHECK_EQ(out[plain], DECT_IE_CALLING_PARTY_NUMBER);
+	CHECK(memcmp(out + n - sizeof(ie), ie, sizeof(ie)) == 0);
+
+	/* re-initialised: no IE, the G7 SETUP again */
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id), fixed_id,
+			       sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), plain);
+
+	/* NULL clears; an invalid set is left out, the call still goes */
+	dect_cc_init(&cc);
+	dect_cc_set_callinfo(&cc, &ci);
+	dect_cc_set_callinfo(&cc, NULL);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id), fixed_id,
+			       sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), plain);
+
+	dect_cc_init(&cc);
+	ci.line_id = DECT_CALLINFO_LINE_NONE;
+	dect_cc_set_callinfo(&cc, &ci);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id), fixed_id,
+			       sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), plain);
+}
+
 int main(void)
 {
+	test_setup_carries_line_identifier();
 	test_transaction_value_rotates();
 	test_busy_spans_the_whole_call();
 	test_learns_identities_from_setup();

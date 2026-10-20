@@ -56,6 +56,15 @@ static size_t put_identity(uint8_t *b, size_t off, const struct dect_clip *id)
 	return next ? next : off;
 }
 
+/* Append <<CALL-INFORMATION>> if any is set; like the identity, never fatal. */
+static size_t put_callinfo(uint8_t *b, size_t off,
+			   const struct dect_callinfo *ci)
+{
+	size_t next = dect_callinfo_put(b, DECT_LAPC_MSG_MAX, off, ci);
+
+	return next ? next : off;
+}
+
 int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len,
 		  const uint8_t *fixed_id, size_t fixed_id_len,
 		  uint8_t basic_service)
@@ -123,9 +132,20 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 	if (id && !id->emit_before_basic_service)
 		off = put_identity(b, off, id);
 
+	/* Line and call identifiers, last as in the stock order. */
+	off = put_callinfo(b, off, &cc->callinfo);
+
 	txq_commit(cc, idx, off);
 	cc->state = DECT_CC_ST_CALL_PRESENT;
 	return 0;
+}
+
+void dect_cc_set_callinfo(struct dect_cc *cc, const struct dect_callinfo *ci)
+{
+	if (ci)
+		cc->callinfo = *ci;
+	else
+		dect_callinfo_init(&cc->callinfo);
 }
 
 void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti)
