@@ -72,6 +72,14 @@ struct dect_cc {
 	uint8_t peer_fixed_id[DECT_CC_ID_MAX];
 	size_t  peer_fixed_id_len;
 
+	/*
+	 * Optional <<SIGNAL>> for an FP-originated SETUP: the alerting
+	 * pattern the handset should use. Off by default, because the
+	 * handset has its own default and we only override it deliberately.
+	 */
+	uint8_t  signal_on;
+	uint8_t  signal_value;
+
 	/* FIFO of outbound NWK messages (e.g. CALL-PROC then CONNECT). */
 	uint8_t  out[DECT_CC_TXQ][DECT_LAPC_MSG_MAX];
 	size_t   out_len[DECT_CC_TXQ];
@@ -122,6 +130,13 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 		     size_t port_id_len, const uint8_t *fixed_id,
 		     size_t fixed_id_len, uint8_t basic_service,
 		     const struct dect_clip *id);
+
+/*
+ * Ask for a <<SIGNAL>> IE in the next FP-originated SETUP. `value` is the
+ * signal code, e.g. DECT_SIGNAL_ALERT_PATTERN0. Passing enable = 0 goes back
+ * to sending no IE and letting the handset choose.
+ */
+void dect_cc_set_signal(struct dect_cc *cc, int enable, uint8_t value);
 
 /* Queue a CC-RELEASE to hang up an active call. Returns 0, or -1 if idle. */
 int dect_cc_release(struct dect_cc *cc);

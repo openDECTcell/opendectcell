@@ -45,6 +45,17 @@ static void queue_msg(struct dect_cc *cc, uint8_t ti_flag, uint8_t msg_type)
 	txq_commit(cc, idx, off);
 }
 
+/* Append both identity IEs; either may be omitted, neither may fail the call. */
+static size_t put_identity(uint8_t *b, size_t off, const struct dect_clip *id)
+{
+	size_t next = dect_clip_put_number(b, DECT_LAPC_MSG_MAX, off, id);
+
+	if (next)
+		off = next;
+	next = dect_clip_put_name(b, DECT_LAPC_MSG_MAX, off, id, 0);
+	return next ? next : off;
+}
+
 int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len,
 		  const uint8_t *fixed_id, size_t fixed_id_len,
 		  uint8_t basic_service)
@@ -90,29 +101,37 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 			      DECT_IE_FIXED_IDENTITY, fixed_id, fixed_id_len);
 	if (!off)
 		return -1;
+	/*
+	 * Caller identity, and never fatal: if either IE does not fit, the
+	 * call still rings without it. Placement is before or after
+	 * <<BASIC-SERVICE>> depending on the identity's placement hint.
+	 */
+	if (id && id->emit_before_basic_service)
+		off = put_identity(b, off, id);
+
 	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
 				    DECT_IE_BASIC_SERVICE, basic_service);
 	if (!off)
 		return -1;
-
-	/*
-	 * Caller identity last, and never fatal: if either IE does not fit,
-	 * the call still rings without it.
-	 */
-	if (id) {
-		size_t with_id = dect_clip_put_number(b, DECT_LAPC_MSG_MAX,
-						      off, id);
-
-		if (with_id)
-			off = with_id;
-		with_id = dect_clip_put_name(b, DECT_LAPC_MSG_MAX, off, id, 0);
-		if (with_id)
-			off = with_id;
+	if (cc->signal_on) {
+		off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
+					    DECT_IE_SIGNAL, cc->signal_value);
+		if (!off)
+			return -1;
 	}
+
+	if (id && !id->emit_before_basic_service)
+		off = put_identity(b, off, id);
 
 	txq_commit(cc, idx, off);
 	cc->state = DECT_CC_ST_CALL_PRESENT;
 	return 0;
+}
+
+void dect_cc_set_signal(struct dect_cc *cc, int enable, uint8_t value)
+{
+	cc->signal_on = (uint8_t)(enable != 0);
+	cc->signal_value = value;
 }
 
 /* Copy an identity IE's contents out of a received message, if it is there. */

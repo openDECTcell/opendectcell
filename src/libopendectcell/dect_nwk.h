@@ -86,6 +86,16 @@
  */
 #define DECT_IE_BASIC_SERVICE		0xE0u	/* + {call class, service} */
 #define DECT_IE_RELEASE_REASON		0xE2u	/* + reason code */
+/*
+ * <<SIGNAL>> (§7.6.8): tells the portable part which tone or alerting pattern
+ * to produce. Values 0x40..0x47 are "alerting on, pattern 0..7", 0x48 is the
+ * continuous pattern and 0x4F is "alerting off"; 0x00..0x08 are tones.
+ * Without it the handset falls back on whatever its call class implies, which
+ * is why a call-class-3 SETUP arrived silently (v33).
+ */
+#define DECT_IE_SIGNAL			0xE4u	/* + signal value */
+#define DECT_SIGNAL_ALERT_PATTERN0	0x40u
+#define DECT_SIGNAL_ALERT_OFF		0x4Fu
 
 struct dect_nwk_hdr {
 	uint8_t pd;		/* protocol discriminator */
