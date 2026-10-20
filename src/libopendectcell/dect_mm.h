@@ -33,6 +33,19 @@
 #define DECT_MM_PORTID_MAX	20u	/* saved PORTABLE-IDENTITY contents */
 #define DECT_MM_UAK_LEN		16u	/* allocated long-term key (128-bit) */
 #define DECT_MM_REG_SLOT	1u	/* chip subscription slot for the handset */
+/*
+ * Hard ceiling on the 0x020A slot number, not a configuration limit
+ * [CR A-SubscriberCapacity-7]. Credential records sit at a 17-byte stride from
+ * a fixed table base, indexed one-based:
+ *
+ *     record(slot) = table_base + 17 * (slot - 1)
+ *
+ * The address reached by slot 7 coincides with the start of the separate
+ * radio-maintained table the 0xF605 subsystem uses, and the analysed writer
+ * does not range-check the index itself. Slot 0 takes a different command path.
+ * Never emit 0x020A with a slot outside 1..6, not even as an experiment.
+ */
+#define DECT_MM_MAX_SLOT	6u
 
 #define DECT_MM_DCK_LEN		8u	/* derived cipher key (64-bit) */
 

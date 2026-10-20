@@ -157,13 +157,30 @@ struct stubd {
 	 * be able to sweep a hypothesis rather than needing a rebuild per guess.
 	 */
 	struct audio_cfg {
-		uint8_t  sel;		/* 0x0251 channel parameter selector */
+		uint8_t  sel;		/* 0x0251 selector, valid 1..6; the stock
+					   host derives it from the 0x0230 mode
+					   byte's low nibble [CR A-CodecModes-3] */
 		uint8_t  gain;		/* 0x0251 value (stored << 8 by the STUB) */
 		int      no_gain;	/* skip 0x0251 entirely */
-		uint8_t  flags;		/* 0x0230 chan_flags (low nibble = channel) */
-		uint16_t mask;		/* 0x0230 chan_mask */
-		uint8_t  mode;		/* 0x0230 extra mode byte */
-		uint8_t  codec;		/* 0x0230 codec byte */
+		/*
+		 * 0x0230 is {link, mode, mask_le16, master, extra}
+		 * [CR A-CodecModes-1]. The CLI keys below are the historical
+		 * names and are kept so the recorded hardware runs in
+		 * docs/call-g7.md stay reproducible -- `flags` is the mode
+		 * byte, `mode` is the master byte, `codec` is the extra byte.
+		 */
+		uint8_t  flags;		/* 0x0230 mode byte: low nibble = audio
+					   channel, bit 6 (0x40) = codec-class
+					   flag. 0x41 = channel 1 wideband (our
+					   working G.722 bind); 0x01 = the
+					   channel-1 narrowband candidate,
+					   untested and only meaningful on a
+					   bearer negotiated narrowband; 0x40
+					   alone allocates no channel -- never
+					   send it */
+		uint16_t mask;		/* 0x0230 TDM slot mask, little-endian */
+		uint8_t  mode;		/* 0x0230 master byte (not a mode) */
+		uint8_t  codec;		/* 0x0230 extra byte (not a codec id) */
 		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
 		int      nowait;	/* send 0x022D immediately (old behaviour) */
 		unsigned tone_hz;	/* transmit test tone (0 = off); multiple of 125 */
@@ -878,11 +895,23 @@ static void send_subscription(struct stubd *s)
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 
+	/*
+	 * Slot 7 would address the start of the 0xF605 table and the chip-side
+	 * writer does not range-check it [CR A-SubscriberCapacity-7]. Refuse
+	 * rather than trust the caller; see DECT_MM_MAX_SLOT.
+	 */
+	if (DECT_MM_REG_SLOT < 1u || DECT_MM_REG_SLOT > DECT_MM_MAX_SLOT) {
+		fprintf(stderr, "sub: refusing 0x020A for slot %u "
+			"(valid 1..%u)\n",
+			(unsigned)DECT_MM_REG_SLOT, DECT_MM_MAX_SLOT);
+		return;
+	}
+
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x020Au;
-	m.param[0] = DECT_MM_REG_SLOT;	/* slot */
+	m.param[0] = DECT_MM_REG_SLOT;	/* slot, one-based, 17-byte record stride */
 	memcpy(&m.param[1], s->uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
 	m.param[1 + DECT_MM_UAK_LEN] = 0x00u;			/* extra (unknown) */
 	m.param_len = (uint16_t)(2 + DECT_MM_UAK_LEN);
@@ -928,7 +957,7 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 		m.dst = DECT_TASK_CONTACT_DST;
 		m.prim = 0x0251u;	/* SET_CHANNEL_PARAM, before the assign */
 		m.param[0] = handle;
-		m.param[1] = a->sel;	/* channel parameter selector (1..3) */
+		m.param[1] = a->sel;	/* selector, valid 1..6 [CR A-CodecModes-3] */
 		m.param[2] = a->gain;	/* stored as value << 8 in the DSP block */
 		m.param_len = 3;
 		send_mail(s, (unsigned int)s->tx_slot, &m);
@@ -941,11 +970,11 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0230u;		/* ASSIGN_AUDIO_CHANNEL, full form */
 	m.param[0] = handle;
-	m.param[1] = a->flags;		/* chan_flags: low nibble = channel */
-	m.param[2] = (uint8_t)(a->mask & 0xFFu);	/* chan_mask (LE) */
+	m.param[1] = a->flags;		/* mode: low nibble = channel, 0x40 = wideband */
+	m.param[2] = (uint8_t)(a->mask & 0xFFu);	/* slot mask (LE) */
 	m.param[3] = (uint8_t)(a->mask >> 8);
-	m.param[4] = a->mode;		/* extra mode byte */
-	m.param[5] = a->codec;		/* codec byte */
+	m.param[4] = a->mode;		/* master */
+	m.param[5] = a->codec;		/* extra */
 	m.param_len = 6;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
@@ -2067,8 +2096,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->dsp_n++;
 		} else if (!eq)
 			return -1;
-		else if (klen == 3 && !memcmp(key, "sel", 3))
+		else if (klen == 3 && !memcmp(key, "sel", 3)) {
+			if (v < 1u || v > 6u)	/* [CR A-CodecModes-3] */
+				return -1;
 			a->sel = (uint8_t)v;
+		}
 		else if (klen == 4 && !memcmp(key, "gain", 4))
 			a->gain = (uint8_t)v;
 		else if (klen == 5 && !memcmp(key, "flags", 5))
@@ -2172,8 +2204,11 @@ static void usage(void)
 		"           ciphertext; -C keeps the call in the clear for audio work\n"
 		"           (the handset then drops it as unencrypted)\n"
 		"  -a SPEC  audio bind parameters, comma separated [CR A-0029]:\n"
-		"           sel=N gain=N (0x0251), flags=N mask=N mode=N codec=N\n"
-		"           (0x0230), nogain = skip 0x0251, f626 = also send 0xF626,\n"
+		"           sel=1..6 gain=N (0x0251), flags=N mask=N mode=N codec=N\n"
+		"           = 0x0230 {link, mode, mask, master, extra}: flags is the\n"
+		"           mode byte (low nibble = channel, 0x40 = wideband class;\n"
+		"           0x41 works, 0x40 alone binds nothing), mode is master and\n"
+		"           codec is extra. nogain = skip 0x0251, f626 = send 0xF626,\n"
 		"           nowait = send 0x022D at once instead of after 0x0242\n"
 		"           tone=HZ (multiple of 125) transmits an A-law test tone to\n"
 		"           the handset while a call is up, into raw word toneword=N\n"
@@ -2204,7 +2239,8 @@ static void usage(void)
 		"           status=MS polls the chip's per-link connection status\n"
 		"           (0xF624, read-only) every MS ms while a call is bound and\n"
 		"           prints the MAC slot, carrier and bearer slot type\n"
-		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0,\n"
+		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0\n"
+		"           (flags=0x41 is the wideband bind used at G7),\n"
 		"           txidle=0xff,voiceidle=0xff\n");
 }
 
