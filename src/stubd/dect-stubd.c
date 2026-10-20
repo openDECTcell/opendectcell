@@ -259,6 +259,27 @@ struct stubd {
 		 */
 		int      play_sync;
 		/*
+		 * playlog=FILE: append every octet pair as it is handed to the
+		 * lane, and count frames, advances and received transitions.
+		 * Judging a codec by ear through a DECT bearer localises
+		 * nothing; this makes the transmitted stream decodable offline
+		 * and the cadence countable.
+		 */
+		const char *play_log;
+		/*
+		 * The cadence is right (8000 octets/s, phase taken from the
+		 * chip's own boundary) and the stream decodes to speech, yet
+		 * the handset hears loud noise -- which is what a G.722
+		 * decoder makes of structurally wrong octets. Two bits are
+		 * left: which parity of frame starts a word, and the order of
+		 * the two octets within it. playinv and playswap set them;
+		 * playsweep=MS walks all four every MS ms so one call can
+		 * find the right one instead of four.
+		 */
+		int      play_inv;
+		int      play_swap;
+		unsigned play_sweep_ms;
+		/*
 		 * basicsvc=N: the <<BASIC-SERVICE>> value octet. Low nibble
 		 * is the service (8 = wideband speech), high nibble the call
 		 * class. v32 rang with 0x88 and the C4 labelled the call
@@ -355,6 +376,13 @@ struct stubd {
 	unsigned    loop_wr;
 	int         loop_primed;
 	uint32_t    rx_word_prev;	/* last received lane word, for playsync */
+	FILE       *play_log_fp;	/* -a playlog: the octets we transmit */
+	uint32_t    pl_frames, pl_adv, pl_rxchg;	/* cadence counters */
+	int         play_locked;	/* playsync has seen its first transition */
+	int         sweep_inv, sweep_swap;	/* active combination */
+	unsigned    sweep_idx;
+	uint64_t    sweep_at;
+	uint64_t    pl_last_ms;
 	size_t      play_pos;		/* byte offset into audio.play */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
 	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
@@ -585,31 +613,56 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 						   | ((uint32_t)src[1] << 8);
 
 					/*
-					 * Advance strictly on a received
-					 * transition: supply exactly one word
-					 * for each one the chip produces.
+					 * Lock the phase once, then free-run
+					 * at a steady two frames per word.
 					 *
-					 * Keeping our own two-frame rate and
-					 * merely realigning the phase on each
-					 * transition was tried and is worse
-					 * (run A, 2026-10-20: back to noise).
-					 * The chip consumes the downlink at
-					 * the rate it produces the uplink, so
-					 * when it stalls -- the holds of 4, 10
-					 * and 40 frames in A-0072-3, about
-					 * three a second -- a free-running
-					 * rate over-supplies and octets are
-					 * dropped. Matching the transitions
-					 * cannot over-supply; the price is
-					 * that the audio stretches slightly
-					 * through a stall, which is what v32's
-					 * glitches were. Those glitches are
-					 * the chip's uplink underrun showing
-					 * through, not a separate defect of
-					 * ours.
+					 * The chip consumes the downlink at a
+					 * constant 8000 octets/s -- it has to,
+					 * the bearer is 64 kbit/s -- so the
+					 * rate must be ours to keep. What we
+					 * cannot guess is *which* of each pair
+					 * of frames starts a word, and getting
+					 * that wrong is what made a
+					 * free-running stream noise in v28-v30
+					 * while leaving a steady sine intact.
+					 *
+					 * The first received transition after
+					 * the call binds reveals the chip's
+					 * pair boundary, so take the phase
+					 * from it and then ignore the receive
+					 * lane entirely. There is no drift to
+					 * chase: both directions run off the
+					 * same 8 kHz frame clock.
+					 *
+					 * Two things that do not work, both
+					 * measured on 2026-10-20. Advancing on
+					 * every transition (v32, A3, A4)
+					 * starves: the uplink carries the
+					 * handset's microphone, so when the
+					 * user stops talking the lane stops
+					 * changing and the downlink falls from
+					 * 8000 octets/s to zero -- the
+					 * instrumented run recorded seven
+					 * consecutive seconds of no advances.
+					 * Realigning the phase on every
+					 * transition (run A) is no better,
+					 * because the chip's holds of 4, 10
+					 * and 40 frames make the transitions
+					 * unevenly spaced, so each realignment
+					 * inserts or drops an octet.
 					 */
-					advance = (v != s->rx_word_prev);
+					if (v != s->rx_word_prev) {
+						s->pl_rxchg++;
+						if (!s->play_locked) {
+							s->play_locked = 1;
+							s->play_phase =
+								s->sweep_inv
+								? 1 : 0;
+						}
+					}
 					s->rx_word_prev = v;
+					advance = !s->play_phase;
+					s->play_phase ^= 1;
 				} else {
 					advance = !s->play_phase;
 					s->play_phase ^= 1;
@@ -620,9 +673,23 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 					if (s->play_pos + 2u > s->audio.play_len)
 						s->play_pos = 0;
 					s->play_pos += 2u;
+					s->pl_adv++;
+					if (s->play_log_fp)
+						fwrite(&s->audio.play[s->play_pos - 2u],
+						       1, 2, s->play_log_fp);
 				}
-				fr[w * 2u] = s->audio.play[s->play_pos - 2u];
-				fr[w * 2u + 1u] = s->audio.play[s->play_pos - 1u];
+				s->pl_frames++;
+				if (s->sweep_swap) {
+					fr[w * 2u] =
+						s->audio.play[s->play_pos - 1u];
+					fr[w * 2u + 1u] =
+						s->audio.play[s->play_pos - 2u];
+				} else {
+					fr[w * 2u] =
+						s->audio.play[s->play_pos - 2u];
+					fr[w * 2u + 1u] =
+						s->audio.play[s->play_pos - 1u];
+				}
 			}
 		} else if (s->audio.loopback && s->reg.call_bound && rx) {
 			unsigned int w = s->audio.tone_word;
@@ -1252,6 +1319,34 @@ static void audio_connect_fallback(struct stubd *s, uint64_t now)
  * §5 4.4]. A G.722 call that is running on a full-slot bearer would explain
  * silence on an otherwise correctly bound audio channel.
  */
+/*
+ * -a playsweep=MS: walk the four (parity, byte-order) combinations while a
+ * call is bound, so one call can identify the right one. Each change
+ * re-locks the phase from the next received transition.
+ */
+static void play_sweep(struct stubd *s, uint64_t now)
+{
+	static const char *const name[4] = {
+		"phase A, octets in order", "phase B, octets in order",
+		"phase A, octets swapped",  "phase B, octets swapped"
+	};
+
+	if (!s->audio.play_sweep_ms || !s->reg.call_bound)
+		return;
+	if (s->sweep_at && now - s->sweep_at < s->audio.play_sweep_ms)
+		return;
+	s->sweep_at = now;
+	s->sweep_inv = (int)(s->sweep_idx & 1u);
+	s->sweep_swap = (int)((s->sweep_idx >> 1) & 1u);
+	printf("call: play combination %u/4 at t=%llu ms -- %s\n",
+	       (s->sweep_idx & 3u) + 1u,
+	       (unsigned long long)(now - g_start), name[s->sweep_idx & 3u]);
+	fflush(stdout);
+	s->sweep_idx++;
+	s->play_locked = 0;		/* re-lock the phase for this variant */
+	s->rx_word_prev = 0xFFFFFFFFu;
+}
+
 static void send_conn_status_req(struct stubd *s, uint64_t now)
 {
 	struct dect_mail m;
@@ -1791,6 +1886,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.sweep_done = 0;
 		send_audio_bind(s, s->reg.handle);
 		s->reg.call_bound = 1;
+		/* take the phase from this call's first received transition */
+		s->play_locked = 0;
+		s->rx_word_prev = 0xFFFFFFFFu;
 		memset(s->vs_changes, 0, sizeof(s->vs_changes));
 		s->vs_frames = 0;		/* start the voice-slot probe */
 		printf("call: connected (handle %u) -- audio channel assigned\n",
@@ -1988,6 +2086,24 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 		for (n = 0; n < nslots; n++)
 			printf(" %u:%u", n, s->vs_changes[n]);
 		printf("\n");
+		if (s->audio.play && !s->audio.play_raw && s->reg.call_bound) {
+			/*
+			 * Expect frames ~8000, advances ~4000 and, with
+			 * playsync, rx_changes == advances. A rate far from
+			 * 4000 means we are over- or under-supplying the lane.
+			 */
+			printf("call: play cadence: %u frames, %u advances, "
+			       "%u rx transitions -> %u octets/s%s\n",
+			       s->pl_frames, s->pl_adv, s->pl_rxchg,
+			       s->pl_adv * 2u,
+			       s->audio.play_sync
+			       ? (s->play_locked ? " (phase locked)"
+						 : " (phase NOT yet locked)")
+			       : "");
+			s->pl_frames = 0;
+			s->pl_adv = 0;
+			s->pl_rxchg = 0;
+		}
 		memset(s->vs_changes, 0, sizeof(s->vs_changes));
 		s->vs_frames = 0;
 	}
@@ -2112,6 +2228,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
+			play_sweep(s, now);
 			send_handover(s, now);
 			ring_tick(s, now);
 			dsp_sweep(s, now);
@@ -2211,6 +2328,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 4 && !memcmp(key, "play", 4)) &&
 			    !(klen == 7 && !memcmp(key, "playpcm", 7)) &&
 			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
+			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
@@ -2243,6 +2361,16 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->clip_npi = (uint8_t)v;
 		else if (klen == 7 && !memcmp(key, "clipscr", 7))
 			a->clip_scr = (uint8_t)v;
+		else if (klen == 7 && !memcmp(key, "playlog", 7)) {
+			size_t n = (size_t)(spec - (eq + 1));
+			char *path = malloc(n + 1);
+
+			if (!path)
+				return -1;
+			memcpy(path, eq + 1, n);
+			path[n] = '\0';
+			a->play_log = path;
+		}
 		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
 			a->basic_svc = (uint8_t)v;
 		else if (klen == 6 && !memcmp(key, "signal", 6)) {
@@ -2251,6 +2379,12 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		}
 		else if (!eq && klen == 8 && !memcmp(key, "playsync", 8))
 			a->play_sync = 1;
+		else if (!eq && klen == 7 && !memcmp(key, "playinv", 7))
+			a->play_inv = 1;
+		else if (!eq && klen == 8 && !memcmp(key, "playswap", 8))
+			a->play_swap = 1;
+		else if (klen == 9 && !memcmp(key, "playsweep", 9))
+			a->play_sweep_ms = (unsigned)v;
 		else if (!eq && klen == 9 && !memcmp(key, "clipfirst", 9))
 			a->clip_first = 1;
 		else if (klen == 7 && !memcmp(key, "cnipscr", 7))
@@ -2450,6 +2584,11 @@ static void usage(void)
 		"           alerting pattern 0..7); omitted, the handset picks\n"
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech)\n"
+		"           playsweep=MS walks the four (frame parity, octet\n"
+		"           order) combinations every MS ms during a call, and\n"
+		"           prints which is active; playinv / playswap pin one\n"
+		"           playlog=FILE records the octets actually handed to\n"
+		"           the lane, so the stream can be decoded offline\n"
 		"           playsync advances the coded stream on the received\n"
 		"           lane's word boundary instead of a cadence of our own;\n"
 		"           required for anything but a steady tone\n"
@@ -2634,6 +2773,15 @@ int main(int argc, char **argv)
 		fprintf(stderr, "slot out of range\n");
 		goto out;
 	}
+	if (s.audio.play_log) {
+		s.play_log_fp = fopen(s.audio.play_log, "wb");
+		if (!s.play_log_fp) {
+			fprintf(stderr, "cannot write %s\n", s.audio.play_log);
+			return 1;
+		}
+		printf("playlog: recording transmitted octets to %s\n",
+		       s.audio.play_log);
+	}
 	if (s.audio.play_path) {
 		FILE *pf = fopen(s.audio.play_path, "rb");
 		long n;
@@ -2718,6 +2866,10 @@ int main(int argc, char **argv)
 		printf("reg: radio parked\n");
 	}
 out:
+	if (s.play_log_fp) {
+		printf("playlog: %ld octets written\n", ftell(s.play_log_fp));
+		fclose(s.play_log_fp);
+	}
 	if (s.rand_fd >= 0)
 		close(s.rand_fd);
 	tear_down(&s);
