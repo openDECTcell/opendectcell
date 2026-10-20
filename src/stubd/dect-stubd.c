@@ -549,6 +549,12 @@ static void tx_tone(struct stubd *s, uint8_t *fr)
 	s->tone_phase = (s->tone_phase + step) & 63u;
 }
 
+/* A received lane word that carries bearer data rather than a fill. */
+static int lane_word_live(uint32_t v)
+{
+	return v <= 0xFFFFu && v != 0x0000u && v != 0xFEFEu && v != 0xFFFFu;
+}
+
 /*
  * Transmit one DMA block: every frame carries the control slot (the next two
  * queued mail bytes, or idle when the queue is empty) and every other slot its
@@ -668,7 +674,18 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 					 * unevenly spaced, so each realignment
 					 * inserts or drops an octet.
 					 */
-					if (v != s->rx_word_prev) {
+					/*
+					 * A transition is a change between two
+					 * live words. The sentinel after a reset
+					 * and the idle fills must not count, or
+					 * the "lock" lands on the first frame
+					 * processed -- a DMA block boundary --
+					 * which is what every run before
+					 * 2026-10-21 actually locked to.
+					 */
+					if (v != s->rx_word_prev &&
+					    lane_word_live(v) &&
+					    lane_word_live(s->rx_word_prev)) {
 						s->pl_rxchg++;
 						if (!s->play_locked) {
 							s->play_locked = 1;
