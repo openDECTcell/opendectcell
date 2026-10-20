@@ -280,6 +280,21 @@ struct stubd {
 		int      play_swap;
 		unsigned play_sweep_ms;
 		/*
+		 * playbyte=N chooses how octets are laid into the lane:
+		 *   0  one 16-bit word (two octets) held across two frames,
+		 *      which is how the chip's own uplink looks
+		 *   1  one octet per frame in the low byte, advancing every
+		 *      frame, the other byte left as the transmit filler
+		 *   2  the same in the high byte
+		 *
+		 * Mode 0's four parity/order variants were all swept on
+		 * hardware on 2026-10-20 and all sound like noise, so the
+		 * convention is probably not "a held word" at all. Modes 1
+		 * and 2 are the untried alternative: they deliver the same
+		 * 8000 octets/s but one octet at a time.
+		 */
+		unsigned play_byte;
+		/*
 		 * basicsvc=N: the <<BASIC-SERVICE>> value octet. Low nibble
 		 * is the service (8 = wideband speech), high nibble the call
 		 * class. v32 rang with 0x88 and the C4 labelled the call
@@ -380,6 +395,7 @@ struct stubd {
 	uint32_t    pl_frames, pl_adv, pl_rxchg;	/* cadence counters */
 	int         play_locked;	/* playsync has seen its first transition */
 	int         sweep_inv, sweep_swap;	/* active combination */
+	unsigned    sweep_byte;			/* 0 = held word, 1 = low, 2 = high */
 	unsigned    sweep_idx;
 	uint64_t    sweep_at;
 	uint64_t    pl_last_ms;
@@ -670,6 +686,27 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 				}
 				if (!s->play_pos)
 					advance = 1;	/* prime */
+				if (s->sweep_byte) {
+					/*
+					 * One octet per frame: the lane holds
+					 * a new octet every 125 us, in one
+					 * byte position, and the other byte
+					 * keeps the transmit filler.
+					 */
+					unsigned lo = (s->sweep_byte == 1u);
+
+					if (s->play_pos >= s->audio.play_len)
+						s->play_pos = 0;
+					fr[w * 2u + (lo ? 0u : 1u)] =
+						s->audio.play[s->play_pos];
+					if (s->play_log_fp)
+						fwrite(&s->audio.play[s->play_pos],
+						       1, 1, s->play_log_fp);
+					s->play_pos++;
+					s->pl_adv++;
+					s->pl_frames++;
+					continue;
+				}
 				if (advance) {
 					if (s->play_pos + 2u > s->audio.play_len)
 						s->play_pos = 0;
@@ -1327,9 +1364,13 @@ static void audio_connect_fallback(struct stubd *s, uint64_t now)
  */
 static void play_sweep(struct stubd *s, uint64_t now)
 {
-	static const char *const name[4] = {
-		"phase A, octets in order", "phase B, octets in order",
-		"phase A, octets swapped",  "phase B, octets swapped"
+	static const char *const name[6] = {
+		"held word, phase A, octets in order",
+		"held word, phase B, octets in order",
+		"held word, phase A, octets swapped",
+		"held word, phase B, octets swapped",
+		"one octet per frame, low byte",
+		"one octet per frame, high byte"
 	};
 
 	if (!s->audio.play_sweep_ms || !s->reg.call_bound)
@@ -1337,13 +1378,15 @@ static void play_sweep(struct stubd *s, uint64_t now)
 	if (s->sweep_at && now - s->sweep_at < s->audio.play_sweep_ms)
 		return;
 	s->sweep_at = now;
+	s->sweep_idx %= 6u;
 	s->sweep_inv = (int)(s->sweep_idx & 1u);
 	s->sweep_swap = (int)((s->sweep_idx >> 1) & 1u);
-	printf("call: play combination %u/4 at t=%llu ms -- %s\n",
-	       (s->sweep_idx & 3u) + 1u,
-	       (unsigned long long)(now - g_start), name[s->sweep_idx & 3u]);
+	s->sweep_byte = s->sweep_idx >= 4u ? s->sweep_idx - 3u : 0u;
+	printf("call: play combination %u/6 at t=%llu ms -- %s\n",
+	       s->sweep_idx + 1u,
+	       (unsigned long long)(now - g_start), name[s->sweep_idx]);
 	fflush(stdout);
-	s->sweep_idx++;
+	s->sweep_idx = (s->sweep_idx + 1u) % 6u;
 	s->play_locked = 0;		/* re-lock the phase for this variant */
 	s->rx_word_prev = 0xFFFFFFFFu;
 }
@@ -2392,6 +2435,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->play_swap = 1;
 		else if (klen == 9 && !memcmp(key, "playsweep", 9))
 			a->play_sweep_ms = (unsigned)v;
+		else if (klen == 8 && !memcmp(key, "playbyte", 8)) {
+			if (v > 2u)
+				return -1;
+			a->play_byte = (unsigned)v;
+		}
 		else if (!eq && klen == 9 && !memcmp(key, "clipfirst", 9))
 			a->clip_first = 1;
 		else if (klen == 7 && !memcmp(key, "cnipscr", 7))
@@ -2591,9 +2639,12 @@ static void usage(void)
 		"           alerting pattern 0..7); omitted, the handset picks\n"
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech)\n"
-		"           playsweep=MS walks the four (frame parity, octet\n"
-		"           order) combinations every MS ms during a call, and\n"
-		"           prints which is active; playinv / playswap pin one\n"
+		"           playbyte=0|1|2 lane layout: 0 = a 16-bit word held\n"
+		"           two frames, 1 = one octet per frame in the low byte,\n"
+		"           2 = the high byte\n"
+		"           playsweep=MS walks all six lane layouts every MS ms\n"
+		"           during a call and prints which is active;\n"
+		"           playinv / playswap / playbyte pin one\n"
 		"           playlog=FILE records the octets actually handed to\n"
 		"           the lane, so the stream can be decoded offline\n"
 		"           playsync advances the coded stream on the received\n"
@@ -2665,6 +2716,7 @@ int main(int argc, char **argv)
 	s.audio.clip_scr = DECT_CLIP_SCR_USER_UNSCREENED;
 	s.audio.cnip_scr = DECT_CLIP_SCR_USER_UNSCREENED;
 	s.audio.cnip_alpha = DECT_CLIP_ALPHABET_UTF8;
+	s.sweep_byte = 0;
 	s.rx_word_prev = 0xFFFFFFFFu;	/* no word seen yet */
 	s.audio.basic_svc = RING_BASIC_SVC;
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN0;
