@@ -43,6 +43,7 @@
 #include "dect_mm.h"
 #include "dect_cc.h"
 #include "dect_audio.h"
+#include "dect_callinfo.h"
 #include "dect_clip.h"
 
 /* Longest -a loopdelay ring, in frames (1 s at 8 kHz). */
@@ -386,6 +387,15 @@ struct stubd {
 		uint8_t  clip_ton, clip_npi, clip_scr;
 		uint8_t  cnip_scr, cnip_alpha;
 		int      clip_first;	/* identity IEs before BASIC-SERVICE */
+		/*
+		 * lineid=N linetype=N callid=N callstatus=N: the
+		 * <<CALL-INFORMATION>> subrecords of an FP-originated SETUP.
+		 * TS 102 527-3 7.4.5.3.2 requires a line identifier in every
+		 * incoming external call and none in an internal one, and we
+		 * have never sent it -- the leading reason the C4 says
+		 * "Intern". Each is opt-in; none means no IE.
+		 */
+		struct dect_callinfo callinfo;
 		const char *play_path;
 		/*
 		 * playpcm=FILE takes the same lane but feeds it ordinary
@@ -1836,6 +1846,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	dect_cc_init(&s->reg.cc);
 	dect_cc_set_signal(&s->reg.cc, s->audio.signal_on,
 			   s->audio.signal_value);
+	dect_cc_set_callinfo(&s->reg.cc, &s->audio.callinfo);
 	/* a fresh transaction per call; see dect_cc_set_next_ti() */
 	dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
@@ -2521,6 +2532,30 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->cnip_scr = (uint8_t)v;
 		else if (klen == 9 && !memcmp(key, "cnipalpha", 9))
 			a->cnip_alpha = (uint8_t)v;
+		else if (klen == 6 && !memcmp(key, "lineid", 6)) {
+			if (v >= DECT_CALLINFO_LINE_NONE)
+				return -1;
+			a->callinfo.has_line = 1;
+			a->callinfo.line_id = (uint8_t)v;
+		}
+		else if (klen == 8 && !memcmp(key, "linetype", 8)) {
+			if (v > 3u)
+				return -1;
+			a->callinfo.has_line_type = 1;
+			a->callinfo.line_type = (uint8_t)v;
+		}
+		else if (klen == 6 && !memcmp(key, "callid", 6)) {
+			if (v > 0x7Fu)
+				return -1;
+			a->callinfo.has_call_id = 1;
+			a->callinfo.call_id = (uint8_t)v;
+		}
+		else if (klen == 10 && !memcmp(key, "callstatus", 10)) {
+			if (v > 0x7Fu)
+				return -1;
+			a->callinfo.has_call_status = 1;
+			a->callinfo.call_status = (uint8_t)v;
+		}
 		else if ((klen == 4 && !memcmp(key, "clip", 4))
 			 || (klen == 4 && !memcmp(key, "cnip", 4))) {
 			/* text, not a number: take the value verbatim */
@@ -2740,6 +2775,11 @@ static void usage(void)
 		"           sweep the descriptor fields; the stock producer's\n"
 		"           ordinary branch is clipscr=1, giving `01 81`.\n"
 		"           clipfirst puts both IEs before <<BASIC-SERVICE>>\n"
+		"           lineid=N (0..126) linetype=N (bit 0 VoIP delay, bit 1\n"
+		"           in-band second calls) callid=N callstatus=N add a\n"
+		"           <<CALL-INFORMATION>> (0x7E) to the FP-originated\n"
+		"           CC-SETUP; CAT-iq 2.0 marks an external call by its line\n"
+		"           id. Our one SIP line is lineid=0,linetype=1.\n"
 		"           handover=MS asks the chip to move the call's bearer MS ms\n"
 		"           after the bind (0x016A), which is the event that has\n"
 		"           accompanied every run where audio flowed\n"
@@ -2882,6 +2922,22 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	s.clip.emit_before_basic_service = (uint8_t)(s.audio.clip_first != 0);
+	if (!dect_callinfo_valid(&s.audio.callinfo)) {
+		fprintf(stderr, "callinfo: rejected (linetype needs lineid; "
+			"callstatus must be a defined call status)\n");
+		return 1;
+	}
+	{
+		const struct dect_callinfo *ci = &s.audio.callinfo;
+
+		if (ci->has_line || ci->has_call_id || ci->has_call_status)
+			printf("callinfo: CC-SETUP will carry "
+			       "<<CALL-INFORMATION>>%s%s%s%s\n",
+			       ci->has_line ? " line" : "",
+			       ci->has_line_type ? " linetype" : "",
+			       ci->has_call_id ? " callid" : "",
+			       ci->has_call_status ? " callstatus" : "");
+	}
 	if (s.audio.clip_number || s.audio.clip_name)
 		printf("clip: ton=%u npi=%u clipscr=%u cnipscr=%u "
 		       "cnipalpha=%u -- CC-SETUP will carry %s%s%s\n",
