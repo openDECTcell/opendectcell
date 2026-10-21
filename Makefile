@@ -31,7 +31,7 @@ STUBD_SRC := src/stubd/dect-stubd.c src/libopendectcell/dect_mail.c src/libopend
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
 .PHONY: all check cross clean
-all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap $(BUILD)/dect-stubd
+all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap $(BUILD)/dect-stubd $(BUILD)/dect-maildump
 
 $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
 	@mkdir -p $(BUILD)
@@ -43,6 +43,12 @@ $(BUILD)/dect-pcmcap: src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c s
 	$(CC) $(CFLAGS) -Ikernel/include/uapi -Isrc/libopendectcell -o $@ src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
 
 # Host build of dect-stubd: compiles everywhere, runs only on the box.
+# Offline: recover the full mail stream from a `dect-stubd -w` capture. The
+# control slot is in every capture, so this works on runs already taken.
+$(BUILD)/dect-maildump: src/tools/dect-maildump.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_mail.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc/libopendectcell -o $@ src/tools/dect-maildump.c src/libopendectcell/dect_mail.c
+
 $(BUILD)/dect-stubd: $(STUBD_SRC) src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC) -lm
