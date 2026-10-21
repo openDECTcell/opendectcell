@@ -507,6 +507,20 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
 	 */
 	for (i = 0; i < m->param_len && i < sizeof(m->param); i++)
 		printf(" %02x", m->param[i]);
+	/*
+	 * The build stamp is ASCII ("RAM: <date>"). It arrives once, as the
+	 * first mail after the first contact following a chip boot, so a run
+	 * that reuses an already-loaded STUB never sees it. Decoding it here
+	 * makes "which chip build is actually loaded" readable in the log,
+	 * which is the confirmation the 08.25/07.56 blob swap needs.
+	 */
+	if (m->prim == DECT_PRIM_BUILD_STAMP && m->param_len) {
+		printf("  \"");
+		for (i = 0; i < m->param_len && i < sizeof(m->param); i++)
+			putchar((m->param[i] >= 0x20 && m->param[i] < 0x7f)
+				? (char)m->param[i] : '.');
+		printf("\"");
+	}
 	printf("\n");
 }
 
