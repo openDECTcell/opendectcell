@@ -16,6 +16,10 @@
  *   dect-maildump call.raw                 # every mail
  *   dect-maildump call.raw -p f625         # only the terminal statistics
  *   dect-maildump call.raw -c 8 -w 1       # slots per frame, control word
+ *
+ * Timestamps are relative to the start of the capture. dect-stubd begins
+ * capturing when a call binds (unless -a capall), so t=0 is the bind and not
+ * the daemon's start; its own log timestamps are offset from these.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -35,8 +39,9 @@ static void usage(void)
 		"  -p HEX only print this primitive (e.g. -p f625)\n"
 		"  -q     print one line per mail without the payload\n"
 		"\n"
-		"Times are milliseconds from the start of the capture, which is\n"
-		"the daemon's own start, so they line up with its log.\n");
+		"Times are seconds from the start of the CAPTURE. dect-stubd starts\n"
+		"capturing when a call binds (unless -a capall), so t=0 is the bind,\n"
+		"NOT the daemon's start: its log timestamps are offset from these.\n");
 }
 
 int main(int argc, char **argv)
