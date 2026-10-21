@@ -36,8 +36,13 @@ Our protocol knowledge belongs to one specific STUB build per model, so the prof
 | 7412 | `FRITZ.Box_7412.137.06.88.image` | `4fabee65d07a3214f9083de81ae54089f01bbfccb4cdbb672f37487a09cdfaa6` |
 | 7362 SL | `FRITZ.Box_7362_SL-07.18.image` | `8aae3b5e3450fd2c9999e003068e786096c11d8ef53f7d47c25cebd057a797d3` |
 | 7520 | `FRITZ.Box_7520-08.25.image` | `7cac33c72b2222468f34033a15c35487aa35062265ab0013bb480068ebab7b31` |
+| 7520 | `FRITZ.Box_7520-07.56.image` | `9bdb332678f981d83ac31cf1b68c489ab9c979e2ac601d18b81bb802f16d0d20` |
 
 For developers, the UCI option `fw_allow_unverified` lets an unknown build through, with a warning in the log.
+
+**Two 7520 builds are listed since 2026-10-21.** Everything this project has measured was observed against the 08.25 second-stage STUB; the 07.56 one was added so the chip build can itself be tested as a variable, and because the stock-capture reference box runs 07.56 (see the maintainers' notes). Facts carried over from one build to the other must say which build they came from.
+
+`[CR, the hardware-analysis step, 2026-10-21]` The **first-stage loader is byte-identical** between the two builds (`0d855b5929f8b2ad0b8d8fb38065b32e27f9357cd44a2b4e60573b1b5b6da895`), so the upload protocol is unchanged. The **factory parameter block** sits at the same position in both images with the same tag/length sequence — tags 1 (len 5), 2 (len 2), 3 (len 1), 4 (len 1), 6 (len 1), 7 (len 1) — so `dect-fwload`'s patching of tags 1–4 and the mode byte needs no change. `[derived statically, both images]`
 
 ## 5. Alternatives considered
 
