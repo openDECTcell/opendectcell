@@ -499,10 +499,14 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
 		printf("%s\n", m->param_len ? " [params hidden]" : "");
 		return;
 	}
-	for (i = 0; i < m->param_len && i < 24u; i++)
+	/*
+	 * Print the whole payload. The old 24-byte cut silently discarded the
+	 * part of 0xF625 that matters most: its 28 per-terminal counters sit
+	 * at offsets 16..43 [CR COMMAND_SET 8.1], so every run up to
+	 * 2026-10-20 logged 8 of them and threw the other 20 away.
+	 */
+	for (i = 0; i < m->param_len && i < sizeof(m->param); i++)
 		printf(" %02x", m->param[i]);
-	if (m->param_len > 24u)
-		printf(" ...");
 	printf("\n");
 }
 
