@@ -86,6 +86,24 @@
  * built through dect_nwk_put_ie (which is for variable-length IEs).
  */
 #define DECT_IE_BASIC_SERVICE		0xE0u	/* + {call class, service} */
+/*
+ * <<BASIC-SERVICE>> value octet (§7.6.4): high nibble call class, low nibble
+ * basic service. Call classes, which we had only half-written down:
+ *
+ *   0x2 LiA service setup   0x3 ULE service     0x4 message call
+ *   0x7 DECT/ISDN IIP       0x8 NORMAL call     0x9 internal call
+ *   0xA emergency           0xB service call    0xC external handover
+ *   0xD supplementary svc   0xE OA&M
+ *
+ * Services: 0x0 basic speech defaults, 0x8 wideband speech defaults, 0x9/0xA
+ * SUOTA, 0xB DTAM wideband, 0xF other.
+ *
+ * So our ring SETUP's 0x88 is "normal call, wideband speech", which is right,
+ * and the class-3 SETUP that arrived silently in v33 was a ULE service call.
+ * A Gigaset A540's own 0xE0 0x28 sessions are class 2 -- CAT-iq LIST ACCESS,
+ * not voice calls -- which is what the <<IWU-TO-IWU>> dialog in dect_iwu.c
+ * carries. See docs/tasks-2026-10-22.md.
+ */
 #define DECT_IE_RELEASE_REASON		0xE2u	/* + reason code */
 /*
  * <<SIGNAL>> (§7.6.8): tells the portable part which tone or alerting pattern
