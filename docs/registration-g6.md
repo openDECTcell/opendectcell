@@ -235,3 +235,48 @@ control and the PCM audio path. That is **G7**, not registration.
 partial buffer only implicitly; it now drops any partial NWK message on a
 new-link I-frame (NLF) or DISC, so a link restart mid-message cannot prepend
 stale bytes [CR A-0023 Q5].
+
+## Stock registration, naming and clock, observed over the air (2026-10-22)
+
+`[CR A-StockTrace-4]`, from an over-the-air trace of a stock 7520 (7.56 host,
+Mar 31 2022 chip) registering a **factory-reset** third-party handset. The
+factory reset matters: a handset that already knows its name and time gives the
+base nothing to push, so a plain re-registration would have hidden the very
+steps wanted. The protocol was the maintainer's suggestion.
+
+**The registration sequence is standard DECT MM** `[observed]`:
+`ACCESS-RIGHTS-REQUEST` → `KEY-ALLOCATE` → `ACCESS-RIGHTS-ACCEPT`, with
+`AUTHENTICATION-REQUEST`/`-REPLY` pairs interleaved. That matches what this
+project already implements (§ above) and is the conformance reference we wanted.
+
+**A handset has no intrinsic name: the base pushes it.** `[observed]` three
+times in one session — at registration, on an isolated rename in the stock web
+interface with nothing else happening, and again when the handset re-attached
+after a power cycle. The base also **sets the handset's clock**, seen on the
+same re-attach, and it is **not** the standard `<<MMS date/time>>` element.
+This is distinct from `<<CALLING-PARTY-NAME>>` in a call setup: that is a
+*caller's* name, this is the handset's *own* name.
+
+**Open, and challenged by the clean side the same day.** The answer attributes
+both pushes to an "AVM-proprietary message", evidenced by an `"AVM "` tag on
+the frame. Two reasons that reading may be wrong, both put back to the room:
+
+1. The same room earlier described its tracer as delivering `"AVM "`-framed
+   DLC and MAC frames, i.e. `"AVM "` looks like the **capture tool's container
+   marker on every frame**, which would make it evidence about the tracer and
+   not about the protocol.
+2. The handset that accepted the name and the clock was a **factory-reset
+   Gigaset**. A third-party handset will not implement an AVM-proprietary
+   protocol, so a mechanism both vendors honour is far more likely standard or
+   industry de-facto, most plausibly CAT-iq. "Not the `<<MMS date/time>>`
+   element" is a real finding but is not the same as "proprietary".
+
+`[not established]` which it is. The distinction decides real work: if it is
+CAT-iq we implement naming and clock-setting from specifications we already
+cite; if it is genuinely proprietary we have a format to decode and a harder
+interoperability question. **Do not build either feature until this is
+settled.** The raw capture is archived in the the hardware-analysis step, so settling it needs no
+hardware.
+
+Also present in that capture and archived: the idle beacon, the paging that
+precedes an incoming call, and six release messages.
