@@ -228,6 +228,13 @@ struct stubd {
 		uint8_t  mode;		/* 0x0230 master byte (not a mode) */
 		uint8_t  codec;		/* 0x0230 extra byte (not a codec id) */
 		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
+		/*
+		 * nbcodec: advertise only the full-slot codec in <<CODEC-LIST>>,
+		 * dropping the G.722 entry that asks for a long slot. Tests
+		 * whether the A540's RELEASE-REASON 0x32 is a long-slot bearer
+		 * it cannot allocate (docs/tasks-2026-10-22.md T3).
+		 */
+		int      nbcodec;
 		int      nowait;	/* send 0x022D immediately (old behaviour) */
 		/*
 		 * noconnect: never send 0x022D. The stock connect sequence is
@@ -2073,6 +2080,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	if (s->pin)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
+	mcfg.narrowband_only = (uint8_t)s->audio.nbcodec;
 	if (s->have_rfpi)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
 
@@ -2762,6 +2770,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		}
 		if (!eq && klen == 4 && !memcmp(key, "f626", 4))
 			a->send_f626 = 1;
+		else if (!eq && klen == 7 && !memcmp(key, "nbcodec", 7))
+			a->nbcodec = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nogain", 6))
 			a->no_gain = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "noconnect", 9))

@@ -87,6 +87,21 @@ struct dect_mm_cfg {
 	 * to the cell. See openDECTcell issues #65 and #76.
 	 */
 	uint8_t tpui[3];
+	/*
+	 * 1 = advertise only the narrowband codec in <<CODEC-LIST>>.
+	 *
+	 * The default list offers G.722 (codec identifier 3) on a LONG SLOT
+	 * (j=640) first, then G.726 (identifier 2) on a full slot. A long slot
+	 * is the larger allocation, and a PP that cannot get one releases with
+	 * RELEASE-REASON 0x32 "insufficient resources" -- which is exactly how
+	 * the Gigaset A540 refuses our FP-originated calls, while a FRITZ!Fon
+	 * C4 on the same base rings. Offering the full-slot codec alone tests
+	 * whether the long slot is what it cannot allocate.
+	 *
+	 * `[not established]` that this is the cause. See
+	 * docs/tasks-2026-10-22.md T3.
+	 */
+	uint8_t narrowband_only;
 };
 
 struct dect_mm_stats {

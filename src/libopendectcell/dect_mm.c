@@ -159,11 +159,27 @@ static const uint8_t codec_list_wb[] = {
 	0x02u, 0x00u, 0x84u,	/* G.726, 32 kbit/s, full slot, last  */
 };
 
-static size_t put_codec_list(uint8_t *b, size_t off)
+/*
+ * Full-slot codec only, for cfg.narrowband_only. Same IE, one entry: the
+ * G.722 entry above asks for a long slot (j=640), this one does not.
+ */
+static const uint8_t codec_list_nb[] = {
+	CODEC_NEG_POSSIBLE,
+	0x02u, 0x00u, 0x84u,	/* G.726, 32 kbit/s, full slot, last  */
+};
+
+static size_t put_codec_list(const struct dect_mm *mm, uint8_t *b, size_t off)
 {
-	size_t n = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
-				   DECT_IE_CODEC_LIST, codec_list_wb,
-				   sizeof(codec_list_wb));
+	const uint8_t *list = codec_list_wb;
+	size_t len = sizeof(codec_list_wb);
+	size_t n;
+
+	if (mm->cfg.narrowband_only) {
+		list = codec_list_nb;
+		len = sizeof(codec_list_nb);
+	}
+	n = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+			    DECT_IE_CODEC_LIST, list, len);
 
 	/*
 	 * put_ie returns 0 if the element would not fit, and the callers here
@@ -192,7 +208,7 @@ static void send_access_accept(struct dect_mm *mm)
 	memcpy(&fixed_id[2], mm->cfg.rfpi, DECT_MM_RFPI_LEN);
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_FIXED_IDENTITY,
 			      fixed_id, sizeof(fixed_id));
-	off = put_codec_list(b, off);		/* TS 102 527-1 7.3.1 */
+	off = put_codec_list(mm, b, off);	/* TS 102 527-1 7.3.1 */
 	txq_commit(mm, idx, off);
 	mm->state = DECT_MM_REGISTERED;
 	mm->stats.accepted++;
@@ -272,7 +288,7 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	if (la && la_len)
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_LOCATION_AREA, la, la_len);
-	off = put_codec_list(b, off);		/* TS 102 527-1 7.3.1 */
+	off = put_codec_list(mm, b, off);	/* TS 102 527-1 7.3.1 */
 	txq_commit(mm, idx, off);
 	mm->stats.located++;
 }
