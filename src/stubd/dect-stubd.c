@@ -24,6 +24,7 @@
 #include <inttypes.h>
 #include <poll.h>
 #include <signal.h>
+#include <sys/statvfs.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +49,28 @@
 
 /* Longest -a loopdelay ring, in frames (1 s at 8 kHz). */
 #define LOOP_DELAY_MAX 8000u
+
+/* Headroom left for the log and anything else sharing the filesystem. */
+#define CAPTURE_HEADROOM	(16u * 1024u * 1024u)
+/* Stop capturing rather than fill the filesystem completely. */
+#define CAPTURE_FLOOR		(8u * 1024u * 1024u)
+
+/* Free bytes on the filesystem holding `path`, or 0 if it cannot be read. */
+static uint64_t fs_free_bytes(const char *path)
+{
+	char dir[512];
+	struct statvfs vfs;
+	char *slash;
+
+	snprintf(dir, sizeof(dir), "%s", path);
+	slash = strrchr(dir, '/');
+	if (slash)
+		*slash = '\0';
+	if (statvfs(slash ? dir : ".", &vfs) != 0)
+		return 0;
+	return (uint64_t)vfs.f_bavail * (uint64_t)vfs.f_frsize;
+}
+
 
 #define RING_BASIC_SVC	0x88u		/* normal call class, wideband speech */
 #include "dect_g722.h"
@@ -115,6 +138,7 @@ struct stubd {
 	enum { RING_IDLE, RING_PAGING, RING_WAIT_PAGE_RESP,
 	       RING_DONE } ring_state;
 	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
+	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
 	unsigned    ring_pages;		/* pages sent for this attempt */
 	uint64_t    ring_last;		/* when the last one went out */
 	int sub_restored;	/* stored subscription already pushed to the chip */
@@ -371,6 +395,16 @@ struct stubd {
 		int      signal_on;
 		uint8_t  signal_value;
 		/*
+		 * ti=N: pin the CC transaction identifier of an FP-originated
+		 * SETUP instead of rotating it. Stock uses TI 0 in every
+		 * base->handset SETUP we have bytes for, and every call this
+		 * project ever completed used TI 0 (v28, v30, v34, A2, A3, B2);
+		 * every refused one used TI 1. Those are confounded with the
+		 * handset -- the TI-0 runs are all the C4 -- so this exists to
+		 * separate them. -1 keeps the rotation.
+		 */
+		int      ti_fixed;
+		/*
 		 * handover=MS: MS ms after the audio bind, ask the chip to move
 		 * the call's bearer.
 		 *
@@ -482,6 +516,7 @@ struct stubd {
 	FILE       *voice_fp;
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
 	uint32_t    voice_bytes;
+	uint32_t    voice_space_checked;
 	struct reg_ctx {
 		int active;
 		int persisted;		/* chip subscription written this connection */
@@ -1630,11 +1665,26 @@ static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
  * 0x0300 carries {page info, TPUI high, TPUI low}: the last two are the low
  * 16 bits of the TPUI we assigned at registration, which our LOCATE-ACCEPT
  * packs as {0, 0x11, slot} -- so 0x11 and the slot. The page info byte is
- * 0x0C for a CC page and 0x2C when the SETUP will carry <<BASIC-SERVICE>>
- * with service 8, i.e. wideband, which is what this handset uses
- * [CR the hardware-analysis notes §6; COMMAND_SET §6.3].
+ * 0x0C for a CC page, plus 0x20 when the SETUP will carry <<BASIC-SERVICE>>
+ * with service 8, i.e. wideband [CR the hardware-analysis notes §6; COMMAND_SET §6.3].
+ *
+ * Stock derives it exactly this way, in its paging routine: it reads the
+ * <<BASIC-SERVICE>> element of the setup it is about to send and uses
+ * 0x0C | (low nibble == 8 ? 0x20 : 0) [CR A-StockTrace-5 §10]. We used to
+ * hardcode 0x2C, which was right for the wideband default and silently wrong
+ * for any other basic service -- `-a basicsvc=0x80` paged "wideband to
+ * follow" and then sent a narrowband SETUP, so that test was measuring a
+ * self-contradiction rather than narrowband.
  */
-#define RING_PAGE_INFO	0x2Cu		/* CC page, wideband SETUP to follow */
+#define RING_PAGE_CC	0x0Cu		/* CC page */
+#define RING_PAGE_WIDEBAND 0x20u	/* ... wideband SETUP to follow */
+
+static uint8_t ring_page_info(const struct stubd *s)
+{
+	return (uint8_t)(RING_PAGE_CC |
+			 ((s->audio.basic_svc & 0x0Fu) == 0x08u
+			  ? RING_PAGE_WIDEBAND : 0u));
+}
 
 /*
  * Pages before giving up. 4 (12 s) was far too short: run F1 (2026-10-22)
@@ -1646,6 +1696,8 @@ static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
 #define RING_PAGE_RETRIES	20u	/* pages before giving up (60 s) */
 #define RING_PAGE_INTERVAL	3000u	/* ms between them; the stock guard */
 #define RING_PAGE_RESP_MS	1500u	/* wait this long for the page response */
+#define RING_SETUP_RETRY_MS	2000u	/* re-try a refused CC-SETUP this often */
+#define RING_SETUP_TRIES	8u	/* ... this many times before giving up */
 
 static void send_page(struct stubd *s)
 {
@@ -1655,7 +1707,7 @@ static void send_page(struct stubd *s)
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0300u;
-	m.param[0] = RING_PAGE_INFO;
+	m.param[0] = ring_page_info(s);
 	m.param[1] = 0x11u;			/* TPUI prefix AVM uses */
 	m.param[2] = DECT_MM_REG_SLOT;		/* the handset's slot */
 	m.param_len = 3;
@@ -1663,9 +1715,9 @@ static void send_page(struct stubd *s)
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 	printf("ring: paged the handset, attempt %u of %u "
-	       "(0x0300 {%02x 11 %02x})\n",
-	       s->ring_pages, RING_PAGE_RETRIES, RING_PAGE_INFO,
-	       DECT_MM_REG_SLOT);
+	       "(0x0300 {%02x 11 %02x}, basic service %02x)\n",
+	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
+	       DECT_MM_REG_SLOT, s->audio.basic_svc);
 }
 
 /*
@@ -1680,18 +1732,40 @@ static void send_page(struct stubd *s)
  * as the retransmission arrived. The SETUP therefore waits for the handset to
  * answer the page, which is also the order the paging procedure prescribes.
  */
-static void ring_queue_setup(struct stubd *s, const char *why)
+static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 {
-	s->ring_state = RING_DONE;
-	s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
-	dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
-	if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id, s->cc_port_id_len,
-			     s->cc_fixed_id, s->cc_fixed_id_len,
-			     s->audio.basic_svc, &s->clip))
-		printf("ring: CC-SETUP could not be queued\n");
+	/*
+	 * dect_cc_setup_id() refuses unless the CC entity is idle, and this is
+	 * a real collision rather than a rare one: the A540 CAT opens a CAT-iq
+	 * service call of its own roughly every 17 s and holds it for about
+	 * 13 s. Run F4 caught it exactly -- the handset's call ran 48.6 s to
+	 * 61.6 s and our ring fired at 58.5 s -- so abandoning the ring on the
+	 * first refusal loses the call about as often as not. Retry while the
+	 * paging window is still open.
+	 */
+	if (s->audio.ti_fixed >= 0)
+		s->next_ti = (uint8_t)s->audio.ti_fixed;
 	else
+		s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
+	dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
+	if (!dect_cc_setup_id(&s->reg.cc, s->cc_port_id, s->cc_port_id_len,
+			      s->cc_fixed_id, s->cc_fixed_id_len,
+			      s->audio.basic_svc, &s->clip)) {
+		s->ring_state = RING_DONE;
 		printf("ring: CC-SETUP queued (%s) -- the handset should ring\n",
 		       why);
+		return;
+	}
+	if (++s->ring_setup_tries >= RING_SETUP_TRIES) {
+		s->ring_state = RING_DONE;
+		printf("ring: CC-SETUP refused %u times, the handset's own call "
+		       "never cleared; giving up\n", s->ring_setup_tries);
+		return;
+	}
+	s->ring_resp_deadline = now + RING_SETUP_RETRY_MS;
+	printf("ring: CC-SETUP refused (a call is in progress), retry %u of %u "
+	       "in %u ms\n", s->ring_setup_tries, RING_SETUP_TRIES,
+	       RING_SETUP_RETRY_MS);
 }
 
 
@@ -1708,7 +1782,9 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	 */
 	if (s->ring_state == RING_WAIT_PAGE_RESP) {
 		if (now >= s->ring_resp_deadline)
-			ring_queue_setup(s, "no page response, deadline");
+			ring_queue_setup(s, now, s->ring_setup_tries
+					 ? "retrying after a refusal"
+					 : "no page response, deadline");
 		return;
 	}
 
@@ -1728,7 +1804,7 @@ static void ring_tick(struct stubd *s, uint64_t now)
 		 * need paging at all and the SETUP can go straight out.
 		 */
 		if (s->reg.active) {
-			ring_queue_setup(s, "a link was already up");
+			ring_queue_setup(s, now, "a link was already up");
 			return;
 		}
 	}
@@ -2093,7 +2169,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			 * on link-up loses the frame.
 			 */
 			if (s->ring_state == RING_WAIT_PAGE_RESP)
-				ring_queue_setup(s, "page response received");
+				ring_queue_setup(s, now, "page response received");
 		} else if (parsed && h.pd == DECT_PD_CC) {
 			dect_cc_rx(&s->reg.cc, nwk, (size_t)nwk_len);
 			/*
@@ -2450,6 +2526,26 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 	 * necessarily the logical channel. Guessing a slot per run would cost a
 	 * dial each; capturing all of them costs disk.
 	 */
+	/*
+	 * Check the filesystem every megabyte or so and stop before it fills.
+	 * The capture's own writes report ENOSPC, but the log's do not, so a
+	 * full filesystem silences the daemon instead of failing it.
+	 */
+	if (s->voice_bytes - s->voice_space_checked > (1u << 20)) {
+		uint64_t have = fs_free_bytes(s->voice_path);
+
+		s->voice_space_checked = s->voice_bytes;
+		if (have && have < CAPTURE_FLOOR) {
+			printf("voice capture: stopping, only %llu MiB left on "
+			       "%s -- the log would go silent next\n",
+			       (unsigned long long)(have >> 20), s->voice_path);
+			fflush(stdout);
+			fclose(s->voice_fp);
+			s->voice_fp = NULL;
+			return;
+		}
+	}
+
 	if (s->voice_slot < 0) {
 		size_t n = (size_t)fpb * s->slots * 2u;
 
@@ -2693,6 +2789,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		}
 		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
 			a->basic_svc = (uint8_t)v;
+		else if (klen == 2 && !memcmp(key, "ti", 2))
+			a->ti_fixed = (int)v;
 		else if (klen == 6 && !memcmp(key, "signal", 6)) {
 			a->signal_value = (uint8_t)v;
 			a->signal_on = 1;
@@ -2893,6 +2991,7 @@ static int parse_chip_cipher(struct chip_cipher *cc, const char *spec)
 	return *end ? -1 : 0;
 }
 
+
 static void usage(void)
 {
 	fprintf(stderr,
@@ -3053,6 +3152,7 @@ int main(int argc, char **argv)
 	s.rx_word_prev = 0xFFFFFFFFu;	/* no word seen yet */
 	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
+	s.audio.ti_fixed = -1;
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN0;
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
@@ -3254,6 +3354,31 @@ int main(int argc, char **argv)
 	if (s.do_register)
 		s.rand_fd = open("/dev/urandom", O_RDONLY);
 	if (s.voice_path) {
+		/*
+		 * The capture writes slots * 2 bytes per 8 kHz frame -- 128 KB/s
+		 * for the usual eight slots, so a four-minute run costs ~30 MB.
+		 * On OpenWrt /tmp is a RAM disk, and filling it does not fail
+		 * usefully: the capture's own writes return ENOSPC and are
+		 * handled, but the log's do not, so the daemon goes silent
+		 * mid-line while the radio keeps running. On 2026-10-22 that
+		 * cost two bench runs and read exactly like a handset that
+		 * would not synchronise. Refuse to start instead.
+		 */
+		uint64_t need = (uint64_t)s.slots * 2u * 8000u *
+				(run_seconds ? (uint64_t)run_seconds : 240u);
+		uint64_t have = fs_free_bytes(s.voice_path);
+
+		if (have && have < need + CAPTURE_HEADROOM) {
+			fprintf(stderr,
+				"%s: %llu MiB free, but this run needs about "
+				"%llu MiB of capture plus headroom.\n"
+				"Free some space or drop -w; a full filesystem "
+				"silently wedges the log.\n",
+				s.voice_path,
+				(unsigned long long)(have >> 20),
+				(unsigned long long)(need >> 20));
+			goto out;
+		}
 		s.voice_fp = fopen(s.voice_path, "wb");
 		if (!s.voice_fp) {
 			perror(s.voice_path);
