@@ -274,9 +274,242 @@ the frame. Two reasons that reading may be wrong, both put back to the room:
 `[not established]` which it is. The distinction decides real work: if it is
 CAT-iq we implement naming and clock-setting from specifications we already
 cite; if it is genuinely proprietary we have a format to decode and a harder
-interoperability question. **Do not build either feature until this is
-settled.** The raw capture is archived in the the hardware-analysis step, so settling it needs no
+interoperability question. ~~**Do not build either feature until this is
+settled.**~~ **Settled 2026-10-22 -- see the next section; the hold is
+lifted.** The raw capture is archived in the the hardware-analysis step, so settling it needed no
 hardware.
 
 Also present in that capture and archived: the idle beacon, the paging that
 precedes an incoming call, and six release messages.
+
+### Settled: both pushes ride `<<ESCAPE-TO-PROPRIETARY>>` under EMC 0x0002 (2026-10-22)
+
+`[CR A-StockTrace-4 §4]` decoded the clock push from the archived capture, so
+the question above is answered and the "do not build either feature" hold is
+lifted.
+
+Both the name and the clock travel in the **standard** `<<ESCAPE-TO-
+PROPRIETARY>>` IE, tag `0x7B` (EN 300 175-5), with the proprietary header
+`81 00 02` — discriminator type EMC, **EMC = 0x0002** — and then a sub-record:
+
+| what | sub-tag | payload |
+|---|---|---|
+| handset name | `0x54` | `02` then ASCII (observed: `C430A`) |
+| date and time | `0x3B` | len 9, `DD MM YY` BCD, a byte, weekday, `HH MM` BCD |
+
+The records as captured, **complete** `[CR A-StockTrace-4 §3/§4, corrected
+2026-10-22]` -- an earlier transcription here dropped the trailing sub-record,
+which is why the length octet did not match the content:
+
+```
+time:  7b 11 | 81 00 02 | 3b 09 03 22 10 26 00 04 09 12 01 | 5b 01 90
+       |  |    |          |  |  |  |__|__|  |  |  |__|  |     |  |  +- sequence
+       |  |    |          |  |  |  DD MM YY |  wd HH MM  01    |  +- len 1
+       |  |    |          |  |  +- 03                          +- sub-tag 0x5B
+       |  |    |          |  +- len 9
+       |  |    |          +- sub-tag 0x3B (date/time, BCD)
+       |  |    +- EMC header: discriminator type EMC, EMC = 0x0002
+       |  +- length 0x11 = 17 = 3 + 11 + 3
+       +- <<ESCAPE-TO-PROPRIETARY>>
+
+name:  7b 0e | 81 00 02 | 54 06 02 43 34 33 30 41 | 5b 01 91
+                          |  |  |  |___________|     sub-tag 0x5B, len 1, seq
+                          |  |  +- 02               "C430A"
+                          |  +- len 6
+                          +- sub-tag 0x54 (handset name)
+       length 0x0e = 14 = 3 + 8 + 3
+```
+
+Two corrections to the earlier reading in this file. **Name and time are not
+alternative sub-records in one IE**: they are separate IEs in separate frames,
+each its own `0x7B` / EMC-`0x0002` wrapper carrying exactly one content record.
+And **every such IE also carries a `0x5B` sub-record, length 1, a sequence
+counter** -- `[observed]` 0x90 (time), 0x91 (name), 0x92 (name on re-attach),
+0x94 (time on re-attach), interleaved across both kinds and advancing. It is
+always present and is counted by the IE length, so **it must be emitted or the
+length will not match the content**.
+
+**The counter is settled** `[CR A-StockTrace-4 §3, full sweep]`: it is **one
+monotonic byte per subscription**, `+1` on **every** proprietary push, shared
+across content types -- the observed run is strictly consecutive
+`8e` name, `8f` settings, `90` time, `91` name, `92` name, `93` settings,
+`94` time. Not one counter per message type. It wraps at `0xFF`, and the
+starting value is wherever the subscription's counter already stands (the
+capture begins mid-range at `0x8e`), so starting anywhere and incrementing is
+safe.
+
+**And the handset acknowledges it.** `[observed]` after each base push with
+`0x5B` = X the handset sends its `0x59` record carrying **the same X** --
+`8e->8e`, `8f->8f`, `90->90`, `91->91`, through `94`. So this is a
+**sequenced, acknowledged channel**, and re-emitting a value the handset has
+already seen will almost certainly be deduped: the push would land once and
+then silently stop updating. **Never reuse a counter value.**
+
+**Reinterpretation of §4a above.** That section recorded the clock push as
+being *preceded* by a handset frame carrying PORTABLE-IDENTITY and an escape
+sub-record `0x59`, and read it as an identify that triggers the push. With the
+acknowledgement now understood, the `0x59` frames are **acks of the previous
+push**, and the apparent "precedes" relationship is an artefact of the
+interleaving (push N, ack N, push N+1, ack N+1). **The push is not triggered by
+a handset identify.** This is a positive reason for the gating already chosen:
+fire on our own LOCATE-ACCEPT, never on `0x59`/`0x64`, which are responses and
+not requests.
+
+**The channel carries more than name and time.** `[observed]` on the same
+counter: settings lists (`0x58`) and softkey labels (`0x26`, holding the German
+UI strings "Still" and "Ablehnen"). So `0x7B` / EMC `0x0002` is a general
+sequenced handset-configuration push channel, of which name and clock are two
+message types. Recorded for shape; not needed now.
+
+Two captures are byte-identical **except the minute** (09:12 and 09:15), which
+is what pins the field layout rather than merely fitting it, and the `04`
+matches the ISO weekday of 2026-10-22 (Thursday), an independent cross-check
+that the field really is a date. Offsets `0x7df5d` and `0x11cac9` in the AVM
+room's `registration.raw`.
+
+A second, fuller timestamp (sub-tag `0xC0`, `YY MM DD HH MM SS`, 2026-10-22
+09:11:21, at `0x212d3`) is **not** wrapped in the escape IE and appears once.
+`[assumed]` the base's own system timestamp rather than a handset-facing push.
+The three stamps advance (09:11:21 -> 09:12 -> 09:15), so it is a live clock.
+
+**How to read this.** The earlier dispute was framed as "AVM-proprietary
+versus CAT-iq" and the truth is neither pole. The *container* is a standard
+ETSI IE we already cite, so there is no proprietary protocol to reverse and
+no new framing to implement -- that part of the challenge in the section above
+was right. But `<<ESCAPE-TO-PROPRIETARY>>` is by definition the IE whose
+*content* is vendor-scoped, so the sub-records are not CAT-iq elements either,
+and the first reading was right that the payload is not standardised.
+
+`[assumed, not observed]` that EMC 0x0002 is an industry de-facto value rather
+than AVM's own: the handset that accepted both pushes was a factory-reset
+Gigaset, which is unlikely to implement an AVM-only EMC. This matters for
+**our** base: emitting EMC 0x0002 means claiming someone else's manufacturer
+code. Before we ship it, check EMC 0x0002 against the ETSI EMC assignment and
+test whether the Gigasets also accept the same sub-records under a different
+EMC. If they do, use ours; if only 0x0002 works, that is an interoperability
+fact to document, not to hide.
+
+**Work this unblocks:** naming and clock-setting are now ordinary
+implementation -- build the IE, fill a BCD payload. No further capture needed.
+The the hardware-analysis step holds the raw frames if a conformance test wants exact byte
+windows.
+
+#### EMC ownership and the trigger, answered (`[CR A-StockTrace-4 §4a]`, 2026-10-22)
+
+**EMC 0x0002 is not AVM-exclusive, so emitting it is interoperation, not
+impersonation.** `[observed]` all 28 escape IEs in the capture carry the single
+value 0x0002 and they travel in **both** directions -- 15 base->handset and 13
+handset->base -- and the **factory-reset third-party Gigaset emits its own**
+proprietary records under EMC 0x0002 (sub-tag `0x59`, seven times,
+handset-originated). A third-party handset stamping its own records with 0x0002
+is the evidence that settles the practical question: both sides already treat it
+as a shared interop value. This retires the worry logged in the section above.
+
+`[not established]` who owns 0x0002 in the ETSI registry. The room did not
+decode the FP's broadcast ARI/RFPI EMC (hard from the OTA MAC layer) and is
+holding the handset IPUI EMC on the clean-room boundary as a device identity.
+So "safe to emit" rests on observed bidirectional use, not on a registry check.
+If we ever publish, check the registry; for interoperation the question is
+closed.
+
+**The push is attach-triggered: implement a responder, not a sender.**
+`[observed]` both base->handset clock pushes are preceded, within ~3 DLC frames,
+by a handset-originated frame carrying the handset's PORTABLE-IDENTITY plus a
+proprietary escape sub-record (tag `0x59`). No clock push occurs without a
+preceding handset identify, and the capture holds no spontaneous or periodic
+push. `[not established]` that `0x59` *means* "send me the time" -- its
+semantics were not decoded -- only that the push follows the identify.
+
+Direction is trustworthy here: the tracer's DLC frame carries a direction bit at
+header offset `0x1a` (0 = hs->base, 1 = base->hs) that splits the capture
+147/147; every clock push is dir=1 and every preceding identify is dir=0.
+
+**Where this lands in our stack.** Our bench on 2026-10-22 showed a
+factory-reset-era Gigaset re-attaching to our base with **LOCATE-REQUEST**
+(`0x54`), which our `dect_mm.c` already answers with **LOCATE-ACCEPT** (`0x55`).
+That is the same attach exchange the stock base pushes name and time after. So
+the implementation point is immediately after we send LOCATE-ACCEPT, and we
+already have the hook. Note the stock trigger frame carries PORTABLE-IDENTITY
+*plus* sub-record `0x59`, which our handset's LOCATE-REQUEST may or may not
+include -- check a real trace before gating the push on seeing `0x59`, or gate
+it on the attach alone.
+
+`[not established]` whether the `0xC0` record is once per boot: the build-stamp
+boot marker lives on the host/chip mail interface, not the OTA trace, so a
+single capture cannot distinguish once-per-boot from once-per-capture. A kernel
+log across a chip reboot would settle it.
+
+### First non-AVM handset registered: Gigaset A540 CAT (2026-10-22)
+
+`[observed]` A factory-reset **Gigaset A540 CAT** completed a full authenticated
+registration against our base, on the **08.25** STUB, with `dect-stubd -g -P
+0000 -p -t 600`. The handset displayed "MT angemeldet". Every earlier
+registration in this project was a FRITZ!Fon C4, so this is the first evidence
+that our MM implementation is not AVM-specific.
+
+```
+PP -> FP   05 44   ACCESS-RIGHTS-REQUEST
+FP -> PP   05 42   KEY-ALLOCATE
+PP -> FP   85 40   AUTHENTICATION-REQUEST     (the PIN is entered here)
+FP -> PP   05 41   AUTHENTICATION-REPLY
+FP -> PP   85 45   ACCESS-RIGHTS-ACCEPT
+PP -> FP   05 54   LOCATE-REQUEST
+FP -> PP   85 55   LOCATE-ACCEPT
+PP -> FP   05 5d   (two octets, no IEs -- see below)
+```
+
+`sub: subscription saved to /etc/opendectcell-sub` (84 bytes) and `reg: subscription
+persisted + registration closed (slot 1)`. We hold a real UAK for this handset,
+so later daemon starts reload it into the chip and the handset re-attaches by
+itself within a second or two.
+
+**`0x5D` is undocumented here.** `[observed]` the only handset message after
+LOCATE-ACCEPT is MM type `0x5D` with `nwk_len=2`: no IEs at all. Our
+`dect_nwk.h` defines MM types only to `0x55`, and the type is recorded by its
+observed properties rather than named. `[not established]` what it means.
+
+**`0x5D` is shared, not A540-specific** `[CR A-StockTrace-4 §4a]`: a **C430A**
+in the stock capture sends the same bare `05 5d`, `nwk_len=2`, no IEs, three
+times, each ~20-25 frames after an `85 55` LOCATE-ACCEPT -- byte-identical in
+shape, decoded with the same calibration on both sides. The contrast that
+matters: the C430A emits **both** the bare `0x5D` **and** the `0x64`/`0x59`
+frame, while the A540 emits **only** `0x5D`. So `0x5D` is the common post-locate
+signal and `0x64`/`0x59` is the C430A-specific extra.
+
+It matters for the name/clock work: `[CR A-StockTrace-4 §4a]` found that the
+stock base pushes name and time after a handset-originated `0x64` message
+carrying PORTABLE-IDENTITY and escape sub-record `0x59`. **Our A540 emits no
+such message** -- `0x5D` is empty -- so the push must be gated on
+**LOCATE-ACCEPT**, which we already send, and *not* on `0x59`/`0x64`. Nor on
+`0x5D`, shared though it is: LOCATE-ACCEPT is **our own outgoing** message, so
+it is the cleanest hook and it sits before the point where the two handsets'
+post-locate behaviour diverges. Pushing there fires slightly earlier than
+stock, which the room assesses as harmless.
+
+#### Two traps this session walked into, recorded so they are not repeated
+
+1. **A re-attach is not a registration.** Earlier the same day a **C430A**,
+   still subscribed from when this box ran FRITZ!OS, attached to our base on its
+   own and originated calls, while the A540 in the maintainer's hand showed
+   "Anmeldung"/"Synchronisiere" and never completed. The logs showed a healthy
+   base and an attached handset, which read as success and was not. The
+   discriminator is the message type: **`0x44` means registration, `0x54` means
+   re-attach**; and `/etc/opendectcell-sub` is written only on the former. Our base
+   advertises the box's **real RFPI** (patched from the factory block at `mtd5`
+   `0x3d000`), so to any handset ever registered to this box under FRITZ!OS we
+   are indistinguishable from the stock base.
+2. **Restarting the daemon de-syncs every handset.** `-g` parks the radio on
+   exit, so each restart drops the base off the air and handsets fall back to
+   "Synchronisiere". A `ring=MS` of 20 s then pages a handset that is not yet
+   listening. Start the daemon **once** and give the handset at least ~60-90 s
+   before the page.
+
+#### Still open
+
+`[not established]` whether the A540 can register on the **07.56** STUB. Three
+windows on 07.56 produced **no handset activity whatsoever** -- not one bearer
+-- while 08.25 worked on the next attempt with no other change. That is
+suggestive but it is two conditions with one trial each, and the handset was
+also factory-reset in between, so it is **not** a controlled comparison. If the
+Mar-2022 chip build is needed for the audio work, re-test registration on it
+before assuming it is usable.

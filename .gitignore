@@ -16,3 +16,6 @@ kernel/.*.cmd
 kernel/.tmp_*
 kernel/modules.order
 kernel/Module.symvers
+
+# ETSI specifications: freely downloadable, see docs/specs/README.md
+docs/specs/*.pdf
