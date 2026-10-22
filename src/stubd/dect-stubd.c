@@ -1662,9 +1662,13 @@ static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
 /*
  * Page the handset so it brings up a link we can send a CC-SETUP on.
  *
- * 0x0300 carries {page info, TPUI high, TPUI low}: the last two are the low
- * 16 bits of the TPUI we assigned at registration, which our LOCATE-ACCEPT
- * packs as {0, 0x11, slot} -- so 0x11 and the slot. The page info byte is
+ * 0x0300 carries {page info, 0x11, slot}. Our LOCATE-ACCEPT packs the TPUI as
+ * {0, 0x11, slot}, so the last two octets are also its low 16 bits -- but note
+ * that in stock the 0x11 is a **hardcoded constant** in the stock paging routine
+ * (`mov r3,#17`), not a byte taken from the identity [CR A-StockTrace-5 §21].
+ * The two agree today because our TPUI is built with the same prefix. We take
+ * them from dect_mm_tpui() anyway, so that a pool-assigned TPUI (#68) is paged
+ * with the value it was actually given rather than with a constant. The page info byte is
  * 0x0C for a CC page, plus 0x20 when the SETUP will carry <<BASIC-SERVICE>>
  * with service 8, i.e. wideband [CR the hardware-analysis notes §6; COMMAND_SET §6.3].
  *
