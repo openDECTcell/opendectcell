@@ -63,6 +63,59 @@ def fmt(addr, a, b=None):
     return f"  {addr:#08x}: {a:02x} -> {b:02x}"
 
 
+
+def report_changed(sweeps, args):
+    """Every address that ever takes more than one value.
+
+    Diffing two sweeps answers "did these two differ". The question that
+    matters is "did anything move at all, ever", because a run in which
+    nothing moves is a run that measured nothing -- which is what every
+    sweep taken before 2026-10-22 did, and it was not obvious from a diff
+    of two arbitrary sweeps.
+    """
+    seen = {}
+    for i, (_n, state, d) in enumerate(sweeps, 1):
+        for a, v in d.items():
+            seen.setdefault(a, {}).setdefault(v, []).append((i, state))
+
+    if args.addr is not None:
+        lo, hi = args.addr, args.addr + args.len
+        seen = {a: v for a, v in seen.items() if lo <= a < hi}
+
+    changed = sorted(a for a, vals in seen.items() if len(vals) > 1)
+    total = len(seen)
+    print(f"{len(sweeps)} sweeps, {total} addresses covered, "
+          f"{len(changed)} ever changed")
+    if not changed:
+        print("  NOTHING MOVED. Either the chip is not touching these "
+              "addresses, or\n  the capture contains no live media. Check "
+              "that a call was up and that\n  audio was actually flowing "
+              "before reading anything into this.")
+        return 0
+
+    runs, i = [], 0
+    while i < len(changed):
+        j = i
+        while j + 1 < len(changed) and changed[j + 1] == changed[j] + 1:
+            j += 1
+        runs.append((changed[i], changed[j]))
+        i = j + 1
+
+    for lo, hi in runs:
+        print(f"  {lo:#08x}..{hi:#08x} ({hi - lo + 1}B)")
+        for a in range(lo, min(hi + 1, lo + 8)):
+            vals = seen[a]
+            bits = []
+            for v, where in sorted(vals.items()):
+                states = {st for _i, st in where}
+                bits.append(f"{v:02x}x{len(where)}"
+                            f"[{'/'.join(sorted(states))}]")
+            print(f"    {a:#08x}: " + " ".join(bits))
+        if hi - lo + 1 > 8:
+            print(f"    ... {hi - lo + 1 - 8} more")
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -73,6 +126,9 @@ def main():
     p.add_argument("--diff", nargs=2, type=int, metavar=("A", "B"),
                    help="diff sweep A against sweep B (1-based)")
     p.add_argument("--dump", type=int, metavar="N", help="print sweep N")
+    p.add_argument("--changed", action="store_true",
+                   help="report every address that ever takes more than one "
+                        "value, across all sweeps, split idle vs call-bound")
     p.add_argument("--addr", type=lambda x: int(x, 0), help="restrict to this address")
     p.add_argument("--len", type=lambda x: int(x, 0), default=32,
                    help="length for --addr (default 32)")
@@ -82,6 +138,9 @@ def main():
     if not sweeps:
         print("no chip-memory replies found in that log", file=sys.stderr)
         return 1
+
+    if args.changed:
+        return report_changed(sweeps, args)
 
     if args.list or not (args.diff or args.dump):
         print(f"{len(sweeps)} sweeps")
