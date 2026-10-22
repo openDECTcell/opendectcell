@@ -288,6 +288,22 @@ struct stubd {
 		 */
 		const char *play_log;
 		/*
+		 * memdump=ADDR:LEN sweeps chip memory with the documented
+		 * read-any-address debug mail (0xFFF1 sub 0x07, 32 bytes a
+		 * time) [CR COMMAND_SET 7.1], logging each reply. Repeat the
+		 * key for several ranges. Polling runs from start-up, not from
+		 * the call bind, so one run captures an idle baseline and the
+		 * live state and we can diff them ourselves rather than relying
+		 * on another box's absolute byte values.
+		 *
+		 * Targets from [CR A-StockTrace-2]: the DSP vector table, the
+		 * per-slot DSP descriptor table and the media region.
+		 * READ ONLY -- A-RouteMedia-FINAL rules out writes to chip RAM.
+		 */
+		struct { uint32_t addr; uint32_t len; } memdump[8];
+		unsigned n_memdump;
+		unsigned memdump_ms;
+		/*
 		 * The cadence is right (8000 octets/s, phase taken from the
 		 * chip's own boundary) and the stream decodes to speech, yet
 		 * the handset hears loud noise -- which is what a G.722
@@ -445,6 +461,10 @@ struct stubd {
 	FILE       *play_log_fp;	/* -a playlog: the octets we transmit */
 	uint32_t    pl_frames, pl_adv, pl_rxchg;	/* cadence counters */
 	uint32_t    pl_held;		/* advances deferred by -a playslow */
+	unsigned    md_idx;		/* memdump: range being swept */
+	uint32_t    md_off;		/* memdump: offset within that range */
+	uint64_t    md_at;		/* memdump: last request */
+	unsigned    md_pass;		/* memdump: completed sweeps */
 	unsigned    play_slow_ctr;
 	int         play_locked;	/* playsync has seen its first transition */
 	int         sweep_inv, sweep_swap;	/* active combination */
@@ -1510,6 +1530,55 @@ static void play_sweep(struct stubd *s, uint64_t now)
 	s->rx_word_prev = 0xFFFFFFFFu;
 }
 
+/*
+ * One chip-memory read per tick, cycling through the configured ranges.
+ * The reply (0xFFF1 sub 0x08) carries the address and the bytes and is
+ * printed by the ordinary mail log, so no extra decoding lives here.
+ */
+static void mem_dump_tick(struct stubd *s, uint64_t now)
+{
+	struct dect_mail m;
+	uint32_t addr, left;
+	uint16_t count;
+
+	if (!s->audio.n_memdump)
+		return;
+	if (s->md_at && now - s->md_at < s->audio.memdump_ms)
+		return;
+	s->md_at = now;
+
+	addr = s->audio.memdump[s->md_idx].addr + s->md_off;
+	left = s->audio.memdump[s->md_idx].len - s->md_off;
+	count = (uint16_t)(left > 32u ? 32u : left);
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0xFFF1u;		/* DEBUG_REQUEST */
+	m.param[0] = 0x07u;		/* MEM_READ */
+	m.param[1] = (uint8_t)(addr & 0xFFu);
+	m.param[2] = (uint8_t)((addr >> 8) & 0xFFu);
+	m.param[3] = (uint8_t)((addr >> 16) & 0xFFu);
+	m.param[4] = (uint8_t)((addr >> 24) & 0xFFu);
+	m.param[5] = (uint8_t)(count & 0xFFu);
+	m.param[6] = (uint8_t)(count >> 8);
+	m.param_len = 7;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+
+	s->md_off += count;
+	if (s->md_off >= s->audio.memdump[s->md_idx].len) {
+		s->md_off = 0;
+		if (++s->md_idx >= s->audio.n_memdump) {
+			s->md_idx = 0;
+			printf("mem: sweep %u complete at t=%llu ms%s\n",
+			       ++s->md_pass,
+			       (unsigned long long)(now - g_start),
+			       s->reg.call_bound ? " (call bound)" : " (idle)");
+			fflush(stdout);
+		}
+	}
+}
+
 static void send_conn_status_req(struct stubd *s, uint64_t now)
 {
 	struct dect_mail m;
@@ -2432,6 +2501,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			ring_tick(s, now);
 			dsp_sweep(s, now);
 		}
+		if (s->sess.state == DECT_SESS_UP)
+			mem_dump_tick(s, now);
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
 			struct dect_mail cm;
 
@@ -2529,6 +2600,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
 			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
+			    !(klen == 7 && !memcmp(key, "memdump", 7)) &&
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
@@ -2584,6 +2656,21 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->play_inv = 1;
 		else if (!eq && klen == 8 && !memcmp(key, "playswap", 8))
 			a->play_swap = 1;
+		else if (klen == 9 && !memcmp(key, "memdumpms", 9))
+			a->memdump_ms = (unsigned)v;
+		else if (klen == 7 && !memcmp(key, "memdump", 7)) {
+			unsigned long len = 32;
+
+			if (a->n_memdump >= 8u || !eq)
+				return -1;
+			if (*end == ':')
+				len = strtoul(end + 1, &end, 0);
+			if (end != spec || !len || len > 0x10000u)
+				return -1;
+			a->memdump[a->n_memdump].addr = (uint32_t)v;
+			a->memdump[a->n_memdump].len = (uint32_t)len;
+			a->n_memdump++;
+		}
 		else if (klen == 9 && !memcmp(key, "playsweep", 9))
 			a->play_sweep_ms = (unsigned)v;
 		else if (klen == 8 && !memcmp(key, "playbyte", 8)) {
@@ -2829,6 +2916,12 @@ static void usage(void)
 		"           playsweep=MS walks all six lane layouts every MS ms\n"
 		"           during a call and prints which is active;\n"
 		"           playinv / playswap / playbyte pin one\n"
+		"           memdump=ADDR[:LEN] sweeps chip memory with the\n"
+		"           read-address debug mail, logging each reply; repeat\n"
+		"           the key for several ranges, memdumpms=N sets the\n"
+		"           interval (default 50). Polling starts at link-up, so\n"
+		"           one run gives an idle baseline and the live state.\n"
+		"           Read only; never writes chip memory.\n"
 		"           playslow=N holds every N-th word four frames, so the\n"
 		"           lane carries 1/N less than 8000 octets/s (N=100: 1 %%)\n"
 		"           playphase=MS alternates only the held-word parity\n"
@@ -2911,6 +3004,7 @@ int main(int argc, char **argv)
 	s.audio.cnip_alpha = DECT_CLIP_ALPHABET_UTF8;
 	s.sweep_byte = 0;
 	s.rx_word_prev = 0xFFFFFFFFu;	/* no word seen yet */
+	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN0;
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
