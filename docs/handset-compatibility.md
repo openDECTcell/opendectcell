@@ -214,3 +214,21 @@ we do not" comparison in this project is C430A-on-stock against A540-on-ours --
 different handsets. It remains possible that no base rings this handset the way
 a C4 or C430A is rung, and that its refusal is correct behaviour we have
 misread as our bug. Nothing yet distinguishes those two worlds.
+
+### Settled: stock rings the A540 (2026-10-22, maintainer)
+
+`[observed by the maintainer]` The Gigaset A540 CAT **rang without trouble**
+during the Freetz / FRITZ!OS sessions on **this same spare 7520**. So a stock
+base on this very hardware pages that handset and it alerts.
+
+That closes the doubt raised above. The comparison is no longer
+C430A-on-stock against A540-on-ours: it is **the same handset, on the same
+box, ringing under stock and refusing under ours**. The handset is not the
+problem and its capability declaration is not the problem. **Our base is.**
+
+Two consequences. There is no case for developing against the C4 instead, and
+no case for "offering the A540 what it can do" -- it demonstrably takes the
+ordinary incoming call. And the remaining difference must lie where the
+measurement already points: `[CR A-StockTrace-5 §15/§16]` a connection bearer
+exists ~360 ms before stock's CC-SETUP and its onset is **MAC-initiated**,
+while on our base **no traffic bearer ever appears at all**.
