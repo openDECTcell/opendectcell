@@ -128,6 +128,51 @@ static void send_auth_reply(struct dect_mm *mm, const uint8_t res2[4])
  * FIXED-IDENTITY (PARK) from the base RFPI. (The PARK encoding is the item still
  * to confirm against hardware.)
  */
+/*
+ * <<CODEC-LIST>> for wideband speech.
+ *
+ * ETSI TS 102 527-1 V1.5.1 7.3.1 is a "shall": equipment supporting New
+ * Generation DECT wideband speech adds this element to {ACCESS-RIGHTS-REQUEST},
+ * {ACCESS-RIGHTS-ACCEPT}, {LOCATE-REQUEST} and {LOCATE-ACCEPT}, it must contain
+ * at least G.722 and G.726, and the negotiation indicator must always say
+ * "codec negotiation possible". We were sending it in none of them, while the
+ * handset sent its own list in both of its messages -- so no codec was ever
+ * agreed, and 7.3.3 then explains the symptom: a CC-SETUP need not repeat the
+ * list "in case the most recent list sent during registration/location
+ * registration is still the valid one", so a wideband SETUP arrives with no
+ * agreed codec behind it, the PT cannot bring up the U-plane and rejects the
+ * call with "insufficient resources".
+ *
+ * Contents and coding per EN 300 175-5 7.7.54: octet 3 is the negotiation
+ * indicator (bit 8 set, bits 7-5 = 001 "codec negotiation"); each entry is
+ * three octets, {0 + codec identifier}, {direction + MAC/DLC service} and
+ * {ext + C-plane routing + slot size}, with the extension bit set on the last.
+ * G.722 is identifier 3 at 64 kbit/s on a long slot (j=640) and G.726 is
+ * identifier 2 at 32 kbit/s on a full slot -- the same pairing the A540 CAT
+ * offers us and the same one observed in a stock wideband call.
+ */
+#define CODEC_NEG_POSSIBLE	0x90u	/* bit 8 + 001 "codec negotiation" */
+
+static const uint8_t codec_list_wb[] = {
+	CODEC_NEG_POSSIBLE,
+	0x03u, 0x00u, 0x01u,	/* G.722, 64 kbit/s, long slot j=640  */
+	0x02u, 0x00u, 0x84u,	/* G.726, 32 kbit/s, full slot, last  */
+};
+
+static size_t put_codec_list(uint8_t *b, size_t off)
+{
+	size_t n = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+				   DECT_IE_CODEC_LIST, codec_list_wb,
+				   sizeof(codec_list_wb));
+
+	/*
+	 * put_ie returns 0 if the element would not fit, and the callers here
+	 * commit `off` unchecked -- so hand back the original offset rather
+	 * than 0, which would commit a zero-length message.
+	 */
+	return n ? n : off;
+}
+
 static void send_access_accept(struct dect_mm *mm)
 {
 	uint8_t fixed_id[2 + DECT_MM_RFPI_LEN];
@@ -147,6 +192,7 @@ static void send_access_accept(struct dect_mm *mm)
 	memcpy(&fixed_id[2], mm->cfg.rfpi, DECT_MM_RFPI_LEN);
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_FIXED_IDENTITY,
 			      fixed_id, sizeof(fixed_id));
+	off = put_codec_list(b, off);		/* TS 102 527-1 7.3.1 */
 	txq_commit(mm, idx, off);
 	mm->state = DECT_MM_REGISTERED;
 	mm->stats.accepted++;
@@ -202,6 +248,7 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	if (la && la_len)
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_LOCATION_AREA, la, la_len);
+	off = put_codec_list(b, off);		/* TS 102 527-1 7.3.1 */
 	txq_commit(mm, idx, off);
 	mm->stats.located++;
 }
