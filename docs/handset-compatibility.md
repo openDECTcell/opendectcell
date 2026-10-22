@@ -110,3 +110,54 @@ describe handset behaviour at all.
 
 Until then, every entry above is a to-do against the **standard**, not against
 a device.
+
+## The handsets declare different things about themselves
+
+`[observed]` parsed from our own registration and locate captures. This is the
+concrete, byte-level difference between the handset that has completed an
+FP-originated call and the one that refuses every one.
+
+| element | FRITZ!Fon C4 | Gigaset A540 CAT |
+|---|---|---|
+| `<<TERMINAL-CAPABILITY>>` `0x63` | **17 octets** `25 15 0a 00 30 09 10 81 02 00 00 00 00 40 92 c0 a0` | **15 octets** `25 35 0a 00 0c 01 8e 02 00 00 00 00 40 96 82` |
+| `<<MODEL-IDENTIFIER>>` `0x78` | **`0b 74 08`** | **absent** |
+| `<<ESCAPE-TO-PROPRIETARY>>` `0x7B` | present, EMC **`0x0B74`** | **absent, in every message we hold** |
+| `<<CODEC-LIST>>` `0x7C` | `90 03 00 01 02 00 84` | identical |
+
+Two things follow.
+
+**The A540 declares no model identifier and uses no proprietary channel.**
+Across every message in every log we hold it sends `0x05`, `0x0A`, `0x63` and
+`0x7C` and nothing else. The C4 additionally declares a MODEL-IDENTIFIER of
+`0b 74 08` and speaks `<<ESCAPE-TO-PROPRIETARY>>` under EMC `0x0B74` --
+evidently AVM's own code, since `0b 74` appears as both its MANIC and its EMC.
+
+**Stock keys per-handset behaviour on exactly that element.**
+`[CR A-StockTrace-5 §16]`: the stock FP reads `IE_MODEL_ID` from
+ACCESS-RIGHTS-REQUEST, matches it with a 7-byte `memcmp` against a stored
+signature plus a model-digit check, and for matching Siemens/Gigaset terminals
+`a stock capability adjustment` rewrites a capability field from 12 to
+14 when a sub-capability exceeds 13. So AVM's firmware **does** special-case
+handsets by declared model, at registration time.
+
+`[not established]` that this is why the A540 refuses our calls. The adjustment
+is a registration-time terminal-capability tweak and the causal chain to the
+missing traffic bearer is unproven -- the room is explicit about that. But the
+two handsets declare **different-length capability structures**, one of them is
+the family stock adjusts, and only one of them completes an FP-originated call.
+That is worth testing before anything more speculative.
+
+### This changes the recommendation at the top of this file
+
+The earlier conclusion was "implement the standard, not a device table, because
+every apparent quirk so far has been our own non-conformance". The first half
+stands. The second half is now **contradicted by evidence**: stock ships a
+model-keyed capability adjustment, so at least one real FP in the field found
+the standard insufficient and special-cased handsets by model.
+
+That does not resurrect a device table. The better form is still the one in the
+section above -- **detect, do not hardcode** -- and `<<MODEL-IDENTIFIER>>` is
+itself a declared capability, observable at registration, which fits that shape
+exactly. What changes is the expectation: **we should plan for per-model
+adjustment to be necessary eventually**, rather than treating it as a smell to
+be avoided. AVM did not do it for fun.
