@@ -99,6 +99,19 @@ static uint64_t mono_ms(void)
 struct stubd {
 	int fd;
 	unsigned int slots;
+	unsigned int fpb;		/* frames per DMA block (32 = 4 ms) */
+	/*
+	 * Downlink starvation, sampled once a second. The driver refills a
+	 * transmit block when the chip's clock asks for one and fills any
+	 * frame the queue cannot supply with the idle template, so
+	 * tx_blocks * fpb - tx_frames is the number of frames the handset
+	 * heard as idle pattern instead of audio. Printing it only at exit
+	 * could not separate starvation during playback from priming at
+	 * start-up [CR A-DSP-1 §9/§10].
+	 */
+	uint32_t pcm_tx_blocks_prev;
+	uint32_t pcm_tx_frames_prev;
+	int pcm_tx_primed;
 	int tx_slot;		/* -1 = unknown */
 	int rx_slot;		/* -1 = unknown */
 	uint16_t tx_seq;
@@ -1118,6 +1131,7 @@ static int bring_up(struct stubd *s, struct dect_pcm_config *cfg)
 		return -1;
 	}
 	s->slots = cfg->slots;
+	s->fpb = cfg->frames_per_block;
 	printf("config: slots %u rx_delay %u tx_delay %u frames %u desc %u tx\n",
 	       cfg->slots, cfg->rx_delay, cfg->tx_delay, cfg->frames_per_block,
 	       cfg->n_desc);
@@ -2441,6 +2455,54 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 }
 
 /*
+ * Downlink starvation for the last second: how many transmit frames the driver
+ * had to fill with the idle template because our queue had nothing ready.
+ *
+ * The DECT chip is the TDM clock master and the SoC its slave, so a transmit
+ * block is refilled when the chip asks for one, not when we are ready. Any
+ * frame the queue cannot supply is sent as the idle pattern [see pcm_tx_fill()
+ * in kernel/opendectcell_pcm.c], which is a discontinuity in the handset's ear. One
+ * DMA block is 32 frames of 125 us = 4 ms, the same block size stock's host
+ * side uses [CR A-DSP-1 §8].
+ *
+ * This is the direct readout for the clock-crossing reading of the downlink
+ * noise [CR A-DSP-1 §7/§10]: a free-running source should starve the queue at
+ * a measurable rate, a transition-paced one should not. It is a measurement,
+ * not a verdict -- the number has never been taken per-second, only summed at
+ * exit, where priming and playback could not be told apart.
+ */
+static void report_tx_starvation(struct stubd *s)
+{
+	struct dect_pcm_stats ps;
+	uint32_t d_blocks, d_frames, want, idle;
+
+	if (!s->fpb || ioctl(s->fd, DECT_IOC_PCM_STATS, &ps))
+		return;
+	if (!s->pcm_tx_primed) {
+		s->pcm_tx_primed = 1;
+		goto save;
+	}
+	d_blocks = ps.tx_blocks - s->pcm_tx_blocks_prev;
+	d_frames = ps.tx_frames - s->pcm_tx_frames_prev;
+	want = d_blocks * s->fpb;
+	if (!want)
+		goto save;
+	/*
+	 * d_frames can only exceed want if a counter wrapped or the ioctl
+	 * raced the refill; report nothing rather than a negative dressed up
+	 * as a huge unsigned.
+	 */
+	idle = d_frames > want ? 0u : want - d_frames;
+	printf("call: downlink starvation: %u of %u frames idle-filled "
+	       "(%u.%02u%%), %u blocks\n",
+	       idle, want, idle * 100u / want,
+	       (unsigned)((uint64_t)idle * 10000u / want % 100u), d_blocks);
+save:
+	s->pcm_tx_blocks_prev = ps.tx_blocks;
+	s->pcm_tx_frames_prev = ps.tx_frames;
+}
+
+/*
  * While a call is up, count per-slot sample changes. The STUB's audio-channel ->
  * TDM-slot mapping is not documented (docs/stub-pcm-control-channel.md), so find
  * the call's voice slot empirically: it is the one that keeps changing while the
@@ -2496,6 +2558,7 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 		s->vh_holds = 0;
 		s->vh_extra = 0;
 		s->vh_locked = 0;
+		report_tx_starvation(s);
 		if (s->audio.play && !s->audio.play_raw && s->reg.call_bound) {
 			/*
 			 * Expect frames ~8000, advances ~4000 and, with
