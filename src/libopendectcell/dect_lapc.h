@@ -156,6 +156,22 @@ int dect_lapc_send(struct dect_lapc *l, const uint8_t *msg, size_t len,
 int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 		 uint64_t now_ms, uint8_t *out, size_t out_cap);
 
+/*
+ * When dect_lapc_tick() next has work: last_tx_ms + retry_ms while an I-frame
+ * is outstanding, UINT64_MAX when nothing is pending. A caller driving several
+ * links can min() these and arm one timer instead of polling.
+ *
+ * The value is derived from retry_ms and will change: we currently use
+ * 1000 ms, but ETSI EN 300 175-4 A.1 specifies <DL.04> as 2 s for both FT and
+ * PT, and that is a known deviation. Read it from here rather than assuming a
+ * constant.
+ *
+ * LAPC is not the only clock a full stack needs -- CC has timers this library
+ * does not yet implement (F<CC.03> is mandatory, EN 300 175-5 9.3.2.2) -- so
+ * expect a stack-level "next deadline" alongside this one later.
+ */
+uint64_t dect_lapc_next_deadline(const struct dect_lapc *l);
+
 /* Advance the clock: retransmit an unacknowledged I-frame after retry_ms. */
 void dect_lapc_tick(struct dect_lapc *l, uint64_t now_ms);
 

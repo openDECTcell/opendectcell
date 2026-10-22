@@ -330,6 +330,13 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	}
 }
 
+uint64_t dect_lapc_next_deadline(const struct dect_lapc *l)
+{
+	if (!l->outstanding)
+		return UINT64_MAX;
+	return l->last_tx_ms + l->retry_ms;
+}
+
 void dect_lapc_tick(struct dect_lapc *l, uint64_t now_ms)
 {
 	if (l->outstanding && now_ms - l->last_tx_ms >= l->retry_ms) {

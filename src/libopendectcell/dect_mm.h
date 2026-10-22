@@ -69,6 +69,24 @@ struct dect_mm_cfg {
 	char    pin[DECT_MM_PIN_MAX];		/* decimal PIN (AC); "" = default */
 	uint8_t rfpi[DECT_MM_RFPI_LEN];		/* base identity for FIXED-IDENTITY */
 	uint8_t authenticate;			/* 1 = challenge the PP (default) */
+	/*
+	 * Chip subscription slot for this handset, 1..DECT_MM_MAX_SLOT.
+	 * 0 selects DECT_MM_REG_SLOT, which is what a single-cell base wants.
+	 */
+	uint8_t sub_slot;
+	/*
+	 * The 20-bit TPUI we assign in LOCATE-ACCEPT, as its three content
+	 * octets. All-zero derives {0x00, 0x11, sub_slot}, the historical
+	 * behaviour.
+	 *
+	 * Deriving the TPUI from the slot couples a handset's identity to a
+	 * chip index, and a TPUI is unique within a LOCATION AREA, not within
+	 * one RFP (EN 300 175-5): on a multi-cell FP, slot indices repeat, so
+	 * slot-derived TPUIs collide and paging reaches the wrong handset.
+	 * Assign them from an installation-wide pool and keep the slot private
+	 * to the cell. See openDECTcell issues #65 and #76.
+	 */
+	uint8_t tpui[3];
 };
 
 struct dect_mm_stats {
@@ -126,6 +144,16 @@ struct dect_mm {
 };
 
 void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg);
+
+/* The configured subscription slot, with the default already applied. */
+uint8_t dect_mm_sub_slot(const struct dect_mm *mm);
+
+/*
+ * The three content octets of the TPUI we assign, with the default already
+ * applied. Anything that pages this handset must use its low 16 bits, so take
+ * them from here rather than rebuilding them from the slot.
+ */
+void dect_mm_tpui(const struct dect_mm *mm, uint8_t out[3]);
 
 /*
  * Feed a decoded NWK message (the LAPC I-frame payload). rand_f supplies the

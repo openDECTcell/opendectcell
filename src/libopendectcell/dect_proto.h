@@ -8,6 +8,25 @@
 #ifndef OPENDECTCELL_DECT_PROTO_H
 #define OPENDECTCELL_DECT_PROTO_H
 
+/*
+ * libopendectcell API version. A single integer, bumped on ANY change to a public
+ * function signature or a public struct layout -- not on behaviour changes and
+ * not on comments. Consumers compiling against a pinned checkout can refuse to
+ * build against an API they were not written for:
+ *
+ *	#if OPENDECTCELL_API_VERSION != 1
+ *	#error libopendectcell API version mismatch
+ *	#endif
+ *
+ * It tells you the API SHAPE changed. It will not tell you that behaviour
+ * changed underneath a stable signature, and this project has produced several
+ * of those -- treat it as a build-time guard, not a change log.
+ *
+ * 1: first versioned API. Adds dect_lapc_next_deadline(); dect_mm_cfg gains a
+ *    configurable subscription slot.
+ */
+#define OPENDECTCELL_API_VERSION 1
+
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
 #define DECT_TASK_CONTACT_DST	0x02u	/* contact destination task [CR A-0003] */

@@ -1224,7 +1224,7 @@ static void sub_save(struct stubd *s)
 		return;
 	memset(&r, 0, sizeof(r));
 	r.magic = SUB_MAGIC;
-	r.slot = DECT_MM_REG_SLOT;
+	r.slot = dect_mm_sub_slot(&s->reg.mm);
 	memcpy(r.uak, s->uak, DECT_MM_UAK_LEN);
 	r.magic = SUB_MAGIC2;
 	r.port_id_len = (uint8_t)s->reg.mm.port_id_len;
@@ -1298,12 +1298,13 @@ static int sub_load(struct stubd *s)
 static void send_subscription(struct stubd *s)
 {
 	struct dect_mail m;
+	uint8_t slot = dect_mm_sub_slot(&s->reg.mm);
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0247u;
-	m.param[0] = DECT_MM_REG_SLOT;	/* slot */
+	m.param[0] = dect_mm_sub_slot(&s->reg.mm);	/* slot */
 	m.param[1] = 0x01u;		/* op: install/refresh */
 	m.param[2] = 0x00u;		/* status (unknown enumeration) */
 	m.param_len = 3;
@@ -1316,10 +1317,9 @@ static void send_subscription(struct stubd *s)
 	 * writer does not range-check it [CR A-SubscriberCapacity-7]. Refuse
 	 * rather than trust the caller; see DECT_MM_MAX_SLOT.
 	 */
-	if (DECT_MM_REG_SLOT < 1u || DECT_MM_REG_SLOT > DECT_MM_MAX_SLOT) {
+	if (slot < 1u || slot > DECT_MM_MAX_SLOT) {
 		fprintf(stderr, "sub: refusing 0x020A for slot %u "
-			"(valid 1..%u)\n",
-			(unsigned)DECT_MM_REG_SLOT, DECT_MM_MAX_SLOT);
+			"(valid 1..%u)\n", (unsigned)slot, DECT_MM_MAX_SLOT);
 		return;
 	}
 
@@ -1327,7 +1327,7 @@ static void send_subscription(struct stubd *s)
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x020Au;
-	m.param[0] = DECT_MM_REG_SLOT;	/* slot, one-based, 17-byte record stride */
+	m.param[0] = slot;		/* one-based, 17-byte record stride */
 	memcpy(&m.param[1], s->uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
 	m.param[1 + DECT_MM_UAK_LEN] = 0x00u;			/* extra (unknown) */
 	m.param_len = (uint16_t)(2 + DECT_MM_UAK_LEN);
@@ -1702,22 +1702,30 @@ static uint8_t ring_page_info(const struct stubd *s)
 static void send_page(struct stubd *s)
 {
 	struct dect_mail m;
+	uint8_t tpui[3];
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0300u;
+	/*
+	 * The page carries the low 16 bits of the TPUI we assigned, so take
+	 * them from MM rather than rebuilding them from the slot. With a
+	 * pool-assigned TPUI the two are no longer the same number, and a page
+	 * built from the slot would address the wrong handset.
+	 */
+	dect_mm_tpui(&s->reg.mm, tpui);
 	m.param[0] = ring_page_info(s);
-	m.param[1] = 0x11u;			/* TPUI prefix AVM uses */
-	m.param[2] = DECT_MM_REG_SLOT;		/* the handset's slot */
+	m.param[1] = tpui[1];
+	m.param[2] = tpui[2];
 	m.param_len = 3;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 	printf("ring: paged the handset, attempt %u of %u "
-	       "(0x0300 {%02x 11 %02x}, basic service %02x)\n",
+	       "(0x0300 {%02x %02x %02x}, basic service %02x)\n",
 	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
-	       DECT_MM_REG_SLOT, s->audio.basic_svc);
+	       tpui[1], tpui[2], s->audio.basic_svc);
 }
 
 /*
@@ -2223,7 +2231,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		send_mail_spec(s, "0x22:0x02:0x022c:01");
 		s->reg.persisted = 1;
 		printf("reg: subscription persisted + registration closed (slot %u)\n",
-		       DECT_MM_REG_SLOT);
+		       (unsigned)dect_mm_sub_slot(&s->reg.mm));
 	}
 
 	if (s->reg.mm.state == DECT_MM_REGISTERED)

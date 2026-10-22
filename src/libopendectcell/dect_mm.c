@@ -232,16 +232,40 @@ static void send_access_reject(struct dect_mm *mm)
 #define TPUI_ID_LEN	0x94u	/* octet 3a: ext + 20-bit identity length */
 #define TPUI_PREFIX	0x11u	/* AVM fixed prefix byte of the 20-bit TPUI */
 
+uint8_t dect_mm_sub_slot(const struct dect_mm *mm)
+{
+	uint8_t slot = mm->cfg.sub_slot;
+
+	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
+		return DECT_MM_REG_SLOT;
+	return slot;
+}
+
+void dect_mm_tpui(const struct dect_mm *mm, uint8_t out[3])
+{
+	const uint8_t *t = mm->cfg.tpui;
+
+	if (t[0] || t[1] || t[2]) {	/* configured: use it verbatim */
+		out[0] = t[0]; out[1] = t[1]; out[2] = t[2];
+		return;
+	}
+	out[0] = 0x00;			/* historical: derived from the slot */
+	out[1] = TPUI_PREFIX;
+	out[2] = dect_mm_sub_slot(mm);
+}
+
 static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_len)
 {
-	uint8_t tpui[5] = { TPUI_ID_TYPE, TPUI_ID_LEN, 0x00, TPUI_PREFIX,
-			    DECT_MM_REG_SLOT };
+	uint8_t id[3];
+	uint8_t tpui[5] = { TPUI_ID_TYPE, TPUI_ID_LEN, 0, 0, 0 };
 	unsigned idx;
 	uint8_t *b = txq_slot(mm, &idx);
 	size_t off;
 
 	if (!b)
 		return;
+	dect_mm_tpui(mm, id);
+	memcpy(&tpui[2], id, sizeof(id));
 	off = hdr(mm, b, DECT_TI_RESPONDER, DECT_MM_LOCATE_ACCEPT);
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_PORTABLE_IDENTITY,
 			      tpui, sizeof(tpui));
