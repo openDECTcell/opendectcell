@@ -124,3 +124,33 @@ The submodule checkout now uses a **read-only SSH deploy key** on `openDECTcell/
 repository, so it grants CI read on `opendectcell` and nothing else. Verified:
 `internal/dect/cdect` builds and tests in CI. If the secret is absent the job
 warns and skips that package rather than failing red.
+
+### 6. Correction to §4, same evening — the downlink DOES fail, in the direction you care about
+
+§4 above said the downlink-noise blocker "did not reproduce" and that the
+downlink was probably usable. **That was written after four
+handset-originated calls.** Two base-originated calls later the same evening
+reproduced it immediately, on a FRITZ!Fon C4, with the same binary and the same
+audio parameters:
+
+| call direction | audio |
+|---|---|
+| handset-originated (A540 ×2, C4 ×1) | clean |
+| **base-originated** (C4 ×2) | **wind noise** |
+
+**This is the direction the controller cares most about** — an inbound SIP call
+ringing a handset is a base-originated call. Treat downlink audio on
+base-originated calls as **broken**, not usable, until this file says otherwise.
+Handset-originated calls (a handset dialling out through SIP) are clean in every
+run we have.
+
+The cause is not the clock crossing §4 implied and not feeder starvation: the
+transmit queue never underruns in either case. On a base-originated bearer the
+chip holds lane words about twenty times as often (152/s against 7/s), so the
+lane is not consuming at the rate we write. Details, measurements and the
+remaining confounds are in `docs/call-g7.md`, "Bench session, 2026-10-22
+evening".
+
+Nothing here changes the controller's interface. It changes what you should
+expect to hear while testing, and it means an end-to-end inbound-call demo will
+sound broken for reasons that are ours, not yours.
