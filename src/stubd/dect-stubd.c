@@ -112,7 +112,9 @@ struct stubd {
 	 * miss, and the stock host guards each one with a 3 s timer, so page
 	 * again until the handset brings up a link or we give up.
 	 */
-	enum { RING_IDLE, RING_PAGING, RING_DONE } ring_state;
+	enum { RING_IDLE, RING_PAGING, RING_WAIT_PAGE_RESP,
+	       RING_DONE } ring_state;
+	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
 	unsigned    ring_pages;		/* pages sent for this attempt */
 	uint64_t    ring_last;		/* when the last one went out */
 	int sub_restored;	/* stored subscription already pushed to the chip */
@@ -1553,7 +1555,7 @@ static void mem_dump_tick(struct stubd *s, uint64_t now)
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
+	m.dst = DECT_TASK_PCM_REMOTE;	/* debug/management task, as for sub 0x09/0x0A */
 	m.prim = 0xFFF1u;		/* DEBUG_REQUEST */
 	m.param[0] = 0x07u;		/* MEM_READ */
 	m.param[1] = (uint8_t)(addr & 0xFFu);
@@ -1564,6 +1566,8 @@ static void mem_dump_tick(struct stubd *s, uint64_t now)
 	m.param[6] = (uint8_t)(count >> 8);
 	m.param_len = 7;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
 
 	s->md_off += count;
 	if (s->md_off >= s->audio.memdump[s->md_idx].len) {
@@ -1632,6 +1636,17 @@ static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
  */
 #define RING_PAGE_INFO	0x2Cu		/* CC page, wideband SETUP to follow */
 
+/*
+ * Pages before giving up. 4 (12 s) was far too short: run F1 (2026-10-22)
+ * paged at 45/48/51/54 s, gave up at 57 s, and the handset's first connection
+ * came at 75.8 s -- it was still re-synchronising after the base had been off
+ * the air between runs, which the handset shows as "Synchronisiere". Cover a
+ * realistic re-sync instead, since an unanswered page costs nothing.
+ */
+#define RING_PAGE_RETRIES	20u	/* pages before giving up (60 s) */
+#define RING_PAGE_INTERVAL	3000u	/* ms between them; the stock guard */
+#define RING_PAGE_RESP_MS	1500u	/* wait this long for the page response */
+
 static void send_page(struct stubd *s)
 {
 	struct dect_mail m;
@@ -1647,18 +1662,55 @@ static void send_page(struct stubd *s)
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
-	printf("ring: paged the handset, attempt %u (0x0300 {%02x 11 %02x})\n",
-	       s->ring_pages + 1u, RING_PAGE_INFO, DECT_MM_REG_SLOT);
+	printf("ring: paged the handset, attempt %u of %u "
+	       "(0x0300 {%02x 11 %02x})\n",
+	       s->ring_pages, RING_PAGE_RETRIES, RING_PAGE_INFO,
+	       DECT_MM_REG_SLOT);
 }
 
-#define RING_PAGE_RETRIES	4u	/* pages before giving up */
-#define RING_PAGE_INTERVAL	3000u	/* ms between them; the stock guard */
+/*
+ * Queue the FP-originated CC-SETUP.
+ *
+ * Run E1b (2026-10-22) showed why this must not be done the moment the chip
+ * reports the link up: we sent the SETUP as an I-frame at t=90166 and the
+ * handset's LCE page response was only parsed at t=90246, 80 ms later. The
+ * handset answered RR with N(R)=0 -- it had not received the frame -- so the
+ * I-frame was lost, LAPC retransmitted it a full second later, and the A540
+ * released the call with RELEASE-REASON 0x32 "Insufficient resources" as soon
+ * as the retransmission arrived. The SETUP therefore waits for the handset to
+ * answer the page, which is also the order the paging procedure prescribes.
+ */
+static void ring_queue_setup(struct stubd *s, const char *why)
+{
+	s->ring_state = RING_DONE;
+	s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
+	dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
+	if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id, s->cc_port_id_len,
+			     s->cc_fixed_id, s->cc_fixed_id_len,
+			     s->audio.basic_svc, &s->clip))
+		printf("ring: CC-SETUP could not be queued\n");
+	else
+		printf("ring: CC-SETUP queued (%s) -- the handset should ring\n",
+		       why);
+}
+
 
 static void ring_tick(struct stubd *s, uint64_t now)
 {
 	if (!s->audio.ring_ms || s->ring_state == RING_DONE ||
 	    s->sess.state != DECT_SESS_UP)
 		return;
+
+	/*
+	 * Waiting for the page response. Send the SETUP anyway once the
+	 * deadline passes, so a handset that never answers the page the way
+	 * we expect still gets a call rather than silence.
+	 */
+	if (s->ring_state == RING_WAIT_PAGE_RESP) {
+		if (now >= s->ring_resp_deadline)
+			ring_queue_setup(s, "no page response, deadline");
+		return;
+	}
 
 	if (s->ring_state == RING_IDLE) {
 		if (now - g_start < s->audio.ring_ms)
@@ -1676,16 +1728,7 @@ static void ring_tick(struct stubd *s, uint64_t now)
 		 * need paging at all and the SETUP can go straight out.
 		 */
 		if (s->reg.active) {
-			printf("ring: a link is already up -- sending CC-SETUP "
-			       "without paging\n");
-			s->ring_state = RING_DONE;
-			s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
-			dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
-			if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id,
-					     s->cc_port_id_len, s->cc_fixed_id,
-					     s->cc_fixed_id_len,
-					     s->audio.basic_svc, &s->clip))
-				printf("ring: CC-SETUP could not be queued\n");
+			ring_queue_setup(s, "a link was already up");
 			return;
 		}
 	}
@@ -2029,6 +2072,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		struct dect_nwk_hdr h;
 		const uint8_t *ies;
 		size_t ies_len;
+		int parsed;
 
 		if (s->verbose) {		/* local only: carries IPUI, never commit */
 			int i;
@@ -2038,9 +2082,19 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 				printf("%02x ", nwk[i]);
 			printf("\n");
 		}
-		/* Route by protocol discriminator: CC to call control, else MM. */
-		if (dect_nwk_parse(nwk, (size_t)nwk_len, &h, &ies, &ies_len) == 0 &&
-		    h.pd == DECT_PD_CC) {
+		/* Route by protocol discriminator: LCE, CC, else MM. */
+		parsed = dect_nwk_parse(nwk, (size_t)nwk_len,
+					&h, &ies, &ies_len) == 0;
+		if (parsed && h.pd == DECT_PD_LCE) {
+			/*
+			 * The handset's answer to our page. This is the point
+			 * at which an FP-originated CC-SETUP can be sent: see
+			 * ring_queue_setup() for the run that showed sending it
+			 * on link-up loses the frame.
+			 */
+			if (s->ring_state == RING_WAIT_PAGE_RESP)
+				ring_queue_setup(s, "page response received");
+		} else if (parsed && h.pd == DECT_PD_CC) {
 			dect_cc_rx(&s->reg.cc, nwk, (size_t)nwk_len);
 			/*
 			 * A call the handset places carries the two identities
@@ -2237,17 +2291,10 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * its 0x0242 handler is gated on a bound call.
 		 */
 		if (s->ring_state == RING_PAGING) {
-			s->ring_state = RING_DONE;
-			s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
-			dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
-			if (dect_cc_setup_id(&s->reg.cc, s->cc_port_id,
-					     s->cc_port_id_len, s->cc_fixed_id,
-					     s->cc_fixed_id_len,
-					     s->audio.basic_svc, &s->clip))
-				printf("ring: CC-SETUP could not be queued\n");
-			else
-				printf("ring: CC-SETUP queued -- the handset "
-				       "should ring\n");
+			s->ring_state = RING_WAIT_PAGE_RESP;
+			s->ring_resp_deadline = now + RING_PAGE_RESP_MS;
+			printf("ring: link up -- waiting for the handset's "
+			       "page response before the CC-SETUP\n");
 		}
 		if (s->audio.bind_early) {
 			printf("call: bindearly: assigning the audio channel "
