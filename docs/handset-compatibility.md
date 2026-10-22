@@ -161,3 +161,56 @@ itself a declared capability, observable at registration, which fits that shape
 exactly. What changes is the expectation: **we should plan for per-model
 adjustment to be necessary eventually**, rather than treating it as a smell to
 be avoided. AVM did not do it for fun.
+
+## `<<TERMINAL-CAPABILITY>>` decoded (EN 300 175-5 §7.7.41)
+
+`[observed]`, decoded from our own captures against the standard. This kills
+the capability lead and corrects two readings of it.
+
+| | C4 | C430A | A540 |
+|---|---|---|---|
+| tone / display | dial tone only / full display | same | same |
+| echo | minimum TCLw | minimum TCLw | **TCLw > 55 dB (VoIP)** |
+| **slot types (octet 3c)** | **`0x0a` long j=640 + full** | **`0x0a` identical** | **`0x0a` identical** |
+| stored display chars | 48 | 48 | **12** |
+| display lines | 9 | 3 | **1** |
+| characters per line | 16 | 16 | **14** |
+| PI_1 | GAP | GAP | GAP |
+| **PI_7** | Part 1 wideband, re-keying | same | **Part 1 wideband + NG-DECT Part 3, re-keying** |
+
+**1. All three declare the same slot capability.** Octet 3c is `0x0a` on every
+handset: long slot j=640 **and** full slot. **The A540 declares exactly the slot
+a wideband G.722 call needs.** So "the handset cannot do the slot" is false, and
+offering it something lesser is not the fix.
+
+**2. The octets stock keys on are display geometry, not service capability.**
+`[CR A-StockTrace-5 §17]` found `a stock capability adjustment`
+rewriting a field 12 -> 14 when `content[4]` exceeds 13, and the two Gigasets
+differ at `content[4]` (`0x30` = 48 vs `0x0c` = 12). Decoded, `content[3..4]` is
+**"number of stored display characters"** and `content[5]`/`content[6]` are
+**lines** and **characters per line**. The A540 is a 1-line, 14-character
+handset; the C430A is 3 lines of 16. So AVM's model-keyed adjustment is a
+**display-geometry fix** -- plausibly so their UI strings fit -- and has no
+visible connection to bearers or services.
+
+**3. The A540 declares MORE than the others, not less.** `[CR A-StockTrace-5
+§17]` described it as declaring "materially lower capabilities", and that
+reading came from `content[4]`, which is the display field. On the only octet
+that carries protocol support, PI_7, the **A540 is the only one of the three
+that declares NG-DECT Part 3** (TS 102 527-3, the CAT-iq 2.0 feature set); the
+C430A and the C4 declare Part 1 wideband voice only. It also declares the
+strictest echo class. **The A540 is the most capable handset we own on paper.**
+
+**So the capability lead is dead too.** Nothing in what the A540 declares
+explains a missing traffic bearer: it claims the right slot, more profile
+support than the handsets that work, and an identical codec list. What remains
+unexplained is still why the **bearer** never appears -- which `[CR
+A-StockTrace-5 §16]` established is **MAC-initiated**, with no DLC frame
+triggering it.
+
+**The caveat that should have been raised sessions ago, and is now recorded:**
+we have **never established that stock rings an A540.** Every "stock rings it,
+we do not" comparison in this project is C430A-on-stock against A540-on-ours --
+different handsets. It remains possible that no base rings this handset the way
+a C4 or C430A is rung, and that its refusal is correct behaviour we have
+misread as our bug. Nothing yet distinguishes those two worlds.
