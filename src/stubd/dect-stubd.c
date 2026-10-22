@@ -120,6 +120,15 @@ struct stubd {
 	const char *xmail[20];	/* extra mails to send once the session is up */
 	unsigned int n_xmail;
 	unsigned int xmail_idx;	/* next extra mail to send (one per loop tick) */
+	/*
+	 * Mails to send once a CALL is bound, rather than once the session is
+	 * up (-N). The DSP probes need this: a cross-connect naming a wideband
+	 * channel is meaningless until the chip has allocated one for a call.
+	 * Re-armed on every call, so a sweep can be repeated by redialling.
+	 */
+	const char *cmail[20];
+	unsigned int n_cmail;
+	unsigned int cmail_idx;
 	struct dect_rx rx;
 	struct dect_session sess;
 
@@ -2282,6 +2291,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * only drops whatever route the bind installed. Start at 1.
 		 */
 		s->reg.handover_sent = 0;
+		s->cmail_idx = 0;	/* re-arm the -N sweep for this call */
 		s->reg.sweep_idx = 1;
 		s->reg.sweep_ms = now;	/* let the call settle for one step */
 		s->reg.sweep_done = 0;
@@ -2738,6 +2748,16 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			else if (s->verbose)
 				log_mail(&cm, "tx  ", s->show_params);
 		}
+		/* Call-bound mails (-N), one per tick, re-armed per call. */
+		if (s->reg.call_bound && s->cmail_idx < s->n_cmail) {
+			if (send_mail_spec(s, s->cmail[s->cmail_idx]))
+				fprintf(stderr, "call mail %u (%s) failed\n",
+					s->cmail_idx, s->cmail[s->cmail_idx]);
+			else
+				printf("call: sent call-bound mail %u: %s\n",
+				       s->cmail_idx, s->cmail[s->cmail_idx]);
+			s->cmail_idx++;
+		}
 		/* Once up, send the extra mails in order, one per tick (~100 ms). */
 		if (s->sess.state == DECT_SESS_UP && s->xmail_idx < s->n_xmail) {
 			if (send_mail_spec(s, s->xmail[s->xmail_idx]))
@@ -3091,6 +3111,10 @@ static void usage(void)
 		"  -p       also log parameter bytes (may hold identity data; do\n"
 		"           not share such logs) -- implies -v\n"
 		"  -M SRC:DST:PRIM[:HEX]  after contact, send this mail (repeatable,\n"
+		"  -N SRC:DST:PRIM[:HEX]  send this mail once a CALL is bound\n"
+		"           (repeatable, one per ~100 ms tick, re-armed on every call).\n"
+		"           For DSP probes that name a channel the chip only allocates\n"
+		"           when a call exists, e.g. the Testton cross-connect.\n"
 		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n"
 		"  -g       GAP registration mode: bring up the radio + open\n"
 		"           registration, then run the host C-plane stack so a\n"
@@ -3243,7 +3267,7 @@ int main(int argc, char **argv)
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:Ca:h")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:N:gP:s:k:w:V:Ca:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -3252,6 +3276,13 @@ int main(int argc, char **argv)
 		case 't': run_seconds = (unsigned int)strtoul(optarg, NULL, 0); break;
 		case 'v': s.verbose = 1; break;
 		case 'p': s.verbose = 1; s.show_params = 1; break;
+		case 'N':
+			if (s.n_cmail >= sizeof(s.cmail) / sizeof(s.cmail[0])) {
+				fprintf(stderr, "too many -N mails\n");
+				return 2;
+			}
+			s.cmail[s.n_cmail++] = optarg;
+			break;
 		case 'M':
 			if (s.n_xmail >= sizeof(s.xmail) / sizeof(s.xmail[0])) {
 				usage();
