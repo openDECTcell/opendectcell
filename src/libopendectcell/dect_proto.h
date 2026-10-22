@@ -27,8 +27,13 @@
  * 2: adds dect_cc_tick() and dect_cc_next_deadline(); struct dect_cc gains
  *    setup_deadline_ms and struct dect_cc_stats gains setup_timeouts, both of
  *    which change a public struct layout.
+ * 3: adds dect_iwu.h (the <<IWU-TO-IWU>> session responder: dect_iwu_init(),
+ *    dect_iwu_set_open_params(), dect_iwu_reply()); struct dect_cc gains an
+ *    embedded struct dect_iwu, which changes its layout. {CC-IWU-INFO} is now
+ *    answered instead of dropped -- a behaviour change this number does not
+ *    capture, which is exactly the limitation noted above.
  */
-#define OPENDECTCELL_API_VERSION 2
+#define OPENDECTCELL_API_VERSION 3
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

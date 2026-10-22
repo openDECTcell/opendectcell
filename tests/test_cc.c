@@ -120,6 +120,71 @@ static void test_release_from_fp(void)
 }
 
 /* A non-CC message (MM PD) is ignored. */
+/*
+ * The exact {CC-IWU-INFO} a Gigaset A540 sends during call setup, copied from
+ * work/box-tmp/vT3nb.log: `03 60 77 04 c3 00 05 00`. The handset opens four of
+ * these per call and every one went unanswered before dect_iwu existed.
+ */
+static void test_answers_the_handsets_iwu_session_open(void)
+{
+	static const uint8_t a540_iwu_open[] = {
+		0x03, 0x60, 0x77, 0x04, 0xC3, 0x00, 0x05, 0x00
+	};
+	struct dect_cc cc;
+	struct dect_nwk_hdr h;
+	const uint8_t *ies, *body;
+	size_t ies_len, body_len, n;
+	uint8_t out[64];
+
+	dect_cc_init(&cc);
+	dect_cc_rx(&cc, a540_iwu_open, sizeof(a540_iwu_open));
+
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK(n > 0);
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_IWU_INFO);
+	CHECK(dect_nwk_parse(out, n, &h, &ies, &ies_len) == 0);
+
+	body = dect_nwk_find_ie(ies, ies_len, DECT_IE_IWU_TO_IWU, &body_len);
+	CHECK(body != NULL);
+	CHECK_EQ(body_len, 11u);
+	CHECK_EQ(body[0], 0xC3u);
+	CHECK_EQ(body[1], 0x01u);		/* open response */
+	CHECK_EQ(body[2], 0x05u);		/* the handset's session id */
+	CHECK_EQ(cc.iwu.stats.opened, 1u);
+}
+
+/*
+ * A session open is not call state: answering one must not disturb the FSM,
+ * or a dialog during setup would knock the call over.
+ */
+static void test_iwu_does_not_change_call_state(void)
+{
+	static const uint8_t a540_iwu_open[] = {
+		0x03, 0x60, 0x77, 0x04, 0xC3, 0x00, 0x05, 0x00
+	};
+	struct dect_cc cc;
+
+	dect_cc_init(&cc);
+	dect_cc_rx(&cc, a540_iwu_open, sizeof(a540_iwu_open));
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(cc.stats.setup, 0u);
+	CHECK_EQ(cc.stats.released, 0u);
+}
+
+/* An IWU-INFO with no <<IWU-TO-IWU>> is not something to answer. */
+static void test_iwu_info_without_the_ie_is_ignored(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_IWU_INFO);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+}
+
 static void test_ignores_non_cc(void)
 {
 	struct dect_cc cc;
@@ -372,6 +437,9 @@ int main(void)
 	test_incoming_setup();
 	test_release_from_pp();
 	test_release_from_fp();
+	test_answers_the_handsets_iwu_session_open();
+	test_iwu_does_not_change_call_state();
+	test_iwu_info_without_the_ie_is_ignored();
 	test_ignores_non_cc();
 	return CHECK_DONE();
 }

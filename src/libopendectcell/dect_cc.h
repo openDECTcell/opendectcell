@@ -31,6 +31,7 @@
 
 #include "dect_callinfo.h"	/* struct dect_callinfo */
 #include "dect_clip.h"	/* struct dect_clip */
+#include "dect_iwu.h"	/* struct dect_iwu */
 #include "dect_lapc.h"	/* DECT_LAPC_MSG_MAX */
 
 enum dect_cc_state {
@@ -107,6 +108,7 @@ struct dect_cc {
 	unsigned out_head, out_count;
 
 	struct dect_cc_stats stats;
+	struct dect_iwu iwu;	/* <<IWU-TO-IWU>> session responder */
 };
 
 void dect_cc_init(struct dect_cc *cc);

@@ -5,6 +5,7 @@
  * so our replies are responder-side (F=1) in the same transaction.
  */
 #include "dect_cc.h"
+#include "dect_iwu.h"
 #include "dect_nwk.h"
 
 #include <string.h>
@@ -14,6 +15,7 @@ void dect_cc_init(struct dect_cc *cc)
 	memset(cc, 0, sizeof(*cc));
 	cc->state = DECT_CC_ST_NULL;
 	cc->ti_flag = DECT_TI_RESPONDER;	/* until a call says otherwise */
+	dect_iwu_init(&cc->iwu);
 }
 
 /* Reserve the next free TX slot and return a pointer to build into, or NULL. */
@@ -42,6 +44,28 @@ static void queue_msg(struct dect_cc *cc, uint8_t ti_flag, uint8_t msg_type)
 		return;
 	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
 				 ti_flag, cc->ti_value, msg_type);
+	txq_commit(cc, idx, off);
+}
+
+/*
+ * Queue a {CC-IWU-INFO} carrying one <<IWU-TO-IWU>>, our reply to the peer's.
+ * The transaction is the peer's: these records ride the call's transaction,
+ * so we answer with the same TI value and our own flag.
+ */
+static void queue_iwu(struct dect_cc *cc, const uint8_t *body, size_t body_len)
+{
+	unsigned idx;
+	uint8_t *b = txq_slot(cc, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 cc->ti_flag, cc->ti_value, DECT_CC_IWU_INFO);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+			      DECT_IE_IWU_TO_IWU, body, body_len);
+	if (!off)
+		return;			/* would not fit; drop rather than truncate */
 	txq_commit(cc, idx, off);
 }
 
@@ -319,6 +343,26 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 	case DECT_CC_RELEASE:
 		on_release(cc);
 		break;
+	case DECT_CC_IWU_INFO: {
+		/*
+		 * <<IWU-TO-IWU>> session dialog. The peer opens sessions during
+		 * call setup and we used to drop every one; see dect_iwu.h.
+		 * Answered on any state, because the records ride whatever
+		 * transaction is up and a session open is not call state.
+		 */
+		size_t n;
+		const uint8_t *p = dect_nwk_find_ie(ies, ies_len,
+						    DECT_IE_IWU_TO_IWU, &n);
+		uint8_t reply[DECT_IWU_REPLY_MAX];
+		size_t reply_len;
+
+		if (!p)
+			break;
+		reply_len = dect_iwu_reply(&cc->iwu, p, n, reply, sizeof(reply));
+		if (reply_len)
+			queue_iwu(cc, reply, reply_len);
+		break;
+	}
 	case DECT_CC_RELEASE_COM:
 		cc->state = DECT_CC_ST_RELEASED;
 		break;
