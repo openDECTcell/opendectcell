@@ -2686,6 +2686,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		/* Drive LAPC retransmission timers for the registration link. */
 		if (s->do_register && s->reg.active) {
 			dect_lapc_tick(&s->reg.lapc, now);
+			dect_cc_tick(&s->reg.cc, now);
 			pump_lapc(s);
 		}
 		if (run_seconds && now - start >= (uint64_t)run_seconds * 1000u)

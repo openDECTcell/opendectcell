@@ -52,6 +52,7 @@ struct dect_cc_stats {
 	uint32_t connected;	/* reached ACTIVE */
 	uint32_t released;
 	uint32_t alerting;	/* ALERTING received: the handset is ringing */
+	uint32_t setup_timeouts;	/* F<CC.03> expiries */
 };
 
 struct dect_cc {
@@ -87,6 +88,18 @@ struct dect_cc {
 	 */
 	struct dect_callinfo callinfo;
 	uint8_t  next_ti;		/* transaction value for the next SETUP */
+	/*
+	 * F<CC.03>, the CC setup timer: 20 s, FT and PT (EN 300 175-5 A.1).
+	 * Started when we send a {CC-SETUP}; on expiry the FT shall reject the
+	 * call with {CC-RELEASE-COM} and release reason "timer expiry", and
+	 * enter NULL (9.3.2.2). 0 means not running.
+	 *
+	 * Without it a call the handset never answers leaves the entity stuck
+	 * in CALL PRESENT for ever, which is what happened all through the
+	 * 2026-10-22 ring tests: every refused call left a transaction behind
+	 * and only a daemon restart cleared it.
+	 */
+	uint64_t setup_deadline_ms;
 
 	/* FIFO of outbound NWK messages (e.g. CALL-PROC then CONNECT). */
 	uint8_t  out[DECT_CC_TXQ][DECT_LAPC_MSG_MAX];
@@ -101,6 +114,18 @@ void dect_cc_init(struct dect_cc *cc);
 /* Feed a decoded NWK message (the LAPC I-frame payload). Non-CC messages are
  * ignored. Any responses are queued; pull them with dect_cc_poll(). */
 void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len);
+
+/*
+ * Advance the clock. Expires F<CC.03> and queues the abnormal release the
+ * specification requires. Call it alongside dect_lapc_tick().
+ */
+void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms);
+
+/*
+ * When dect_cc_tick() next has work, or UINT64_MAX if no CC timer is running.
+ * Pair it with dect_lapc_next_deadline() and arm one timer on the minimum.
+ */
+uint64_t dect_cc_next_deadline(const struct dect_cc *cc);
 
 /*
  * Start an incoming call: queue an FP-originated CC-SETUP towards the handset,

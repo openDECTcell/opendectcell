@@ -126,7 +126,14 @@ size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
 
 /* ---- class-A acknowledged-link state machine ---- */
 
-#define DEFAULT_RETRY_MS	1000u	/* retransmit an unacked I-frame */
+/*
+ * ETSI EN 300 175-4 A.1 specifies <DL.04>, the retransmission timer, as 2 s
+ * for both FT and PT. We used 1000 ms, which retransmits at twice the
+ * permitted rate and risks duplicate I-frames on a slow link. A healthy
+ * exchange never reaches either value -- stock is acknowledged in about
+ * 150 ms -- so this only changes behaviour when something is already wrong.
+ */
+#define DEFAULT_RETRY_MS	2000u	/* <DL.04>, EN 300 175-4 A.1 */
 #define CR_CMD			1u	/* FT commands (our I-frames) */
 #define CR_RSP			0u	/* FT responses (our RR/UA) */
 #define SEG_MAX			DECT_LC_INFO_MAX	/* info octets per I-frame */

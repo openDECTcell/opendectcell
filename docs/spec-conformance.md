@@ -41,7 +41,7 @@ we modelled "4 of 10 states". That was taken from a partial grep and is wrong.
 The states were there; the defect was elsewhere. This is the same
 reason-from-one-sample error the project has hit before.
 
-### Gap 1 -- no CC timers at all (conformance, not today's bug)
+### ~~Gap 1 -- no CC timers at all~~ **FIXED: F<CC.03> implemented**
 
 `[observed]` `dect_cc.c` contains no timer of any kind. The spec requires:
 
@@ -71,7 +71,7 @@ is why auditing CC alone would never have found it.
 
 ## DLC / LAPC, Part 4
 
-### Gap 3 -- the retransmission timer is half the specified value
+### ~~Gap 3 -- the retransmission timer is half the specified value~~ **FIXED**
 
 `[CR EN 300 175-4 §A.1 Table A.1.1]` `<DL.04>`, the retransmission timer, is
 **2 s** for both FT and PT, started when an I-frame is transmitted and stopped
@@ -132,3 +132,40 @@ semantics.
 Audit against the **standard**, not against a handset. Every difference between
 the C4 and the Gigasets examined so far has been our own non-conformance that
 the C4 tolerated. See `handset-compatibility.md`.
+
+
+## Gaps 1 and 3 closed (2026-10-22)
+
+**Gap 3**, the easy one: `DEFAULT_RETRY_MS` was `1000`, where EN 300 175-4 §A.1
+specifies `<DL.04>` as **2 s** for both FT and PT. Now 2000. A healthy exchange
+never reaches either value -- stock is acknowledged in about 150 ms -- so this
+only changes behaviour when something is already wrong, which is also why it
+was invisible.
+
+**Gap 1**, `F<CC.03>`: implemented as `dect_cc_tick()`, with
+`dect_cc_next_deadline()` beside it so a caller can arm one timer across LAPC
+and CC together. 20 s, FT and PT alike (EN 300 175-5 §A.1). On expiry it sends
+`{CC-RELEASE-COM}` carrying `<<RELEASE-REASON>>` **"timer expiry"** (`0x0D`)
+and enters NULL, as §9.3.2.2 requires.
+
+Three details worth recording:
+
+- **The state is the stop condition.** §A.1 says the timer stops when "a
+  response message has been received", and every response moves the entity out
+  of `CALL_PRESENT` -- to `RINGING` on CC-ALERTING, `ACTIVE` on CC-CONNECT,
+  `RELEASED` on a release. So the tick clears the deadline whenever the state
+  is not `CALL_PRESENT`, and no separate stop is needed.
+- **It is armed in the tick, not where the SETUP is queued**, so
+  `dect_cc_setup_id()` keeps its signature. The tick runs every loop pass, so
+  the start is late by well under a millisecond against 20 seconds.
+- **It only runs for FP-originated calls** (`cc->incoming`), because `F<CC.03>`
+  starts when *we* send a SETUP.
+
+**Why it mattered in practice:** every refused ring in the 2026-10-22 tests
+left a transaction stuck in `CALL_PRESENT`, and only a daemon restart cleared
+it. That is also why `ring_queue_setup()` could be refused by a busy CC entity
+-- the entity was busy with a call that had already failed.
+
+Still open: **Gap 2** (no lower-layer connection, the live defect) and **Gap 4**
+(`IWU-INFO` never sent or answered, deferred since the registration-time codec
+list turned out not to be the cause).

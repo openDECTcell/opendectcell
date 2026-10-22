@@ -45,6 +45,31 @@ static void queue_msg(struct dect_cc *cc, uint8_t ti_flag, uint8_t msg_type)
 	txq_commit(cc, idx, off);
 }
 
+/*
+ * Queue a {CC-RELEASE-COM} carrying a <<RELEASE-REASON>>. The bare queue_msg()
+ * form sends no reason, which is legal but tells the peer nothing; an abnormal
+ * release should say why.
+ */
+static void queue_release_com(struct dect_cc *cc, uint8_t reason)
+{
+	unsigned idx;
+	uint8_t *b = txq_slot(cc, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 cc->ti_flag, cc->ti_value,
+				 DECT_CC_RELEASE_COM);
+	if (!off)
+		return;
+	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
+				    DECT_IE_RELEASE_REASON, reason);
+	if (!off)
+		return;
+	txq_commit(cc, idx, off);
+}
+
 /* Append both identity IEs; either may be omitted, neither may fail the call. */
 static size_t put_identity(uint8_t *b, size_t off, const struct dect_clip *id)
 {
@@ -203,6 +228,47 @@ static void on_release(struct dect_cc *cc)
 	queue_msg(cc, cc->ti_flag, DECT_CC_RELEASE_COM);
 	cc->state = DECT_CC_ST_RELEASED;
 	cc->stats.released++;
+}
+
+
+/* EN 300 175-5 A.1: CC setup timer, 20 s for FT and PT alike. */
+#define CC_SETUP_TIMER_MS	20000u
+/* Release reason "timer expiry" (EN 300 175-5 7.7.18). */
+#define RELEASE_REASON_TIMER_EXPIRY	0x0Du
+
+void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
+{
+	/*
+	 * The timer runs only while an FP-originated SETUP is unanswered.
+	 * "Stop: a response message has been received" (A.1), and the first
+	 * response moves us out of CALL PRESENT -- to RINGING on CC-ALERTING,
+	 * to ACTIVE on CC-CONNECT, to RELEASED on a release -- so the state is
+	 * the stop condition and no separate clearing is needed.
+	 *
+	 * It is armed here rather than where the SETUP is queued so that
+	 * dect_cc_setup_id() keeps its signature; the tick runs every loop
+	 * pass, so the start is late by well under a millisecond against a
+	 * 20 second timer.
+	 */
+	if (!cc->incoming || cc->state != DECT_CC_ST_CALL_PRESENT) {
+		cc->setup_deadline_ms = 0;
+		return;
+	}
+	if (!cc->setup_deadline_ms) {
+		cc->setup_deadline_ms = now_ms + CC_SETUP_TIMER_MS;
+		return;
+	}
+	if (now_ms < cc->setup_deadline_ms)
+		return;
+	cc->setup_deadline_ms = 0;
+	queue_release_com(cc, RELEASE_REASON_TIMER_EXPIRY);
+	cc->state = DECT_CC_ST_NULL;
+	cc->stats.setup_timeouts++;
+}
+
+uint64_t dect_cc_next_deadline(const struct dect_cc *cc)
+{
+	return cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
 }
 
 void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)

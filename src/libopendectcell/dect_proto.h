@@ -23,9 +23,12 @@
  * of those -- treat it as a build-time guard, not a change log.
  *
  * 1: first versioned API. Adds dect_lapc_next_deadline(); dect_mm_cfg gains a
- *    configurable subscription slot.
+ *    configurable subscription slot and TPUI.
+ * 2: adds dect_cc_tick() and dect_cc_next_deadline(); struct dect_cc gains
+ *    setup_deadline_ms and struct dect_cc_stats gains setup_timeouts, both of
+ *    which change a public struct layout.
  */
-#define OPENDECTCELL_API_VERSION 1
+#define OPENDECTCELL_API_VERSION 2
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
