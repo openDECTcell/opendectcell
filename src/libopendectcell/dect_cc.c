@@ -109,10 +109,22 @@ static void queue_release_com(struct dect_cc *cc, uint8_t reason)
  * vF423 measured that: twelve 85-octet {CC-FACILITY} messages in sixty
  * seconds, each reassembled correctly and each ignored.
  *
- * So close what we cannot answer. The reply carries the PEER's transaction
- * value with the flag inverted -- we are the responding side of their
- * transaction -- and leaves cc->ti_* alone, because a call of ours may be
- * live in a different transaction at the same time.
+ * So close what we cannot answer. EN 300 175-5 V2.9.1 §17.3.2.1 says exactly
+ * how: on a message carrying a transaction identifier that does not relate to
+ * an active call, clearing is initiated with a {CC-RELEASE-COM} carrying
+ * release reason "unknown transaction identifier", returning the same unknown
+ * transaction identifier. Note {CC-RELEASE-COM}, not {CC-RELEASE}: the
+ * completion message declares the transaction closed, where a {CC-RELEASE}
+ * invites a confirmation the peer has no reason to send. We shipped 0x4d
+ * first, from [CR A-0055], and the C4 answered it by dropping the link and
+ * starting over -- which is what "I asked you to confirm and you had nothing
+ * to confirm" looks like. [CR A-0060] traced stock's 0x4d to its
+ * {CC-SERVICE-CHANGE} handler, the one case §17.3.2.1 excludes.
+ *
+ * The reply carries the PEER's transaction value with the flag inverted -- we
+ * are the responding side of their transaction -- and leaves cc->ti_* alone,
+ * because a call of ours may be live in a different transaction at the same
+ * time.
  */
 static void queue_release_other(struct dect_cc *cc, uint8_t peer_ti_flag,
 				uint8_t peer_ti_value, uint8_t reason)
@@ -127,7 +139,7 @@ static void queue_release_other(struct dect_cc *cc, uint8_t peer_ti_flag,
 	flag = peer_ti_flag == DECT_TI_ORIGINATOR ? DECT_TI_RESPONDER
 						  : DECT_TI_ORIGINATOR;
 	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
-				 flag, peer_ti_value, DECT_CC_RELEASE);
+				 flag, peer_ti_value, DECT_CC_RELEASE_COM);
 	if (!off)
 		return;
 	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,

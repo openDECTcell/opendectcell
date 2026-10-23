@@ -11,6 +11,48 @@ openDECTcell turns used AVM FRITZ!Boxes into open DECT base stations under OpenW
 
 First target: FRITZ!Box 7520 (since 2026-10-17; previously the 7412). See `README.md` and `ROADMAP.md`.
 
+## 1a. Scope: the standard is the product, the chip is the unknown
+
+**We are building a standards-compliant DECT base. GAP (EN 300 444) and
+CAT-iq (TS 102 527) are the goal; AVM's behaviour is not.** The FRITZ!Fon C4
+speaks GAP and CAT-iq, and it works against base stations from other
+manufacturers, so a correct implementation of the standard is sufficient to
+serve it. Anything beyond the standard is a bonus.
+
+This sets what we reverse engineer and what we read:
+
+- **Reverse engineer the chip, not the protocol.** The split (`[CR A-0057]`):
+  MAC and DLC run in the chip; **all of NWK -- LCE, CC, MM -- runs in our
+  host code**. The chip's mail interface is undocumented and is the only
+  thing that genuinely requires reverse engineering. Everything that goes
+  over the air is specified, and we have the specifications.
+- **Spec first, always, for anything on the air.** Message types, information
+  elements, procedures, timers, state machines, error handling: look it up in
+  `docs/specs/` before asking the clean room. We have EN 300 175 parts 3/4/5,
+  EN 300 444 and TS 102 527. Asking the room an envelope question wastes a
+  round trip, and a traced answer from one code path can be narrower or
+  simply wrong where the standard is clear -- that has happened
+  (`A-0055` -> `A-0060`: a close built from a stock handler that the standard
+  explicitly excludes).
+- **Ask the clean room for:** which chip mail performs a given operation, its
+  parameters, the chip's state machines and events, memory layouts, and
+  **where AVM deviates from the standard** -- the last one matters because a
+  deviation tells us what handsets in the wild may expect.
+- **Do not implement AVM-proprietary protocol in `libopendectcell`.** Until the
+  standard works end to end, proprietary messages get the **standard
+  decline** and nothing more: an unknown CC transaction is cleared with
+  `{CC-RELEASE-COM}` and the reason the standard names (EN 300 175-5
+  §17.3.2.1). We do not invent replies to proprietary content, and we do not
+  chase a vendor feature because a handset asked for it.
+- **Manufacturer behaviour belongs in a device profile**, not in the general
+  library -- a later, separate layer keyed on the handset, carrying quirks
+  and vendor extensions. The library stays the standard.
+
+**The practical test for any new question:** can it be answered from a
+specification we already hold? Then read it. Does it concern a mail number, a
+chip register, a chip event, or a divergence from the standard? Then ask the
+room.
+
 ## 2. Clean-room and blob rules (non-negotiable)
 
 1. **Never commit AVM material:** no binaries, `.ko` modules, `.hex` firmware, images, device-tree source, calibration data or analysed code. All of that lives in `work/`, which is git-ignored, and stays local.

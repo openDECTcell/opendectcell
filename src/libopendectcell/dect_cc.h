@@ -49,11 +49,14 @@ enum dect_cc_state {
 #define DECT_CC_ID_MAX	20u		/* PORTABLE-/FIXED-IDENTITY contents */
 
 /*
- * Release reason for a transaction we have no state for. [CR A-0055]:
- * stock sends {CC-RELEASE} with this reason for any CC transaction it cannot
- * handle, which is how a base closes a proprietary message it does not speak.
+ * Release reasons, EN 300 175-5 V2.9.1 Annex (release reason coding). Verified
+ * against the table rather than taken from a trace: [CR A-0055] gave 0x01 for
+ * an unhandled transaction, but 0x01 is "unexpected message" and the reason
+ * the standard names for this case is 0x02. [CR A-0060] agreed and corrected.
  */
-#define DECT_CC_REASON_UNKNOWN_TRANSACTION	0x01u
+#define DECT_CC_REASON_UNEXPECTED_MESSAGE	0x01u
+#define DECT_CC_REASON_UNKNOWN_TRANSACTION	0x02u
+#define DECT_CC_REASON_INCOMPATIBLE_SERVICE	0x05u
 
 struct dect_cc_stats {
 	uint32_t setup;		/* CC-SETUP received */

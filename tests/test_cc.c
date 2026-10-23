@@ -447,7 +447,7 @@ static void test_closes_a_facility_transaction(void)
 	/* A {CC-RELEASE} goes out, in the handset's transaction, flag flipped. */
 	m = dect_cc_poll(&cc, out, sizeof(out));
 	CHECK_EQ(m, 4u);
-	CHECK_EQ(out[1], DECT_CC_RELEASE);
+	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
 	CHECK_EQ(out[2], DECT_IE_RELEASE_REASON);
 	CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_TRANSACTION);
 	CHECK_EQ(cc.stats.closed_unknown, 1u);
