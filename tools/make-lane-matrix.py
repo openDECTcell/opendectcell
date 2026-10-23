@@ -19,7 +19,7 @@ recording a clean boundary to align on whatever the format turns out to be.
 Every window carries the SAME audio content, so envelopes can be compared
 across windows directly.
 
-Usage:  tools/make-lane-matrix.py SPEECH.lin SPEECH.g722 OUT.raw
+Usage:  tools/make-lane-matrix.py [--plan format|duplex] SPEECH.lin SPEECH.g722 OUT.raw
 """
 import array, math, sys
 
@@ -66,7 +66,13 @@ def normalise(x, dbfs=DBFS):
 
 # (label, 0x0230 flags:codec for this window or None for "leave the bind alone",
 #  how the window's bytes are laid out)
-PLAN = [
+# "format" walks lane formats against chip modes: what does the downlink want?
+# "duplex" holds mode 2 and alternates a silent downlink with a speech one, so
+# the uplink can be captured clean in the silent windows while the speech
+# windows show whether the downlink persists over a long call. One window
+# detours through mode 9 and the next returns to mode 2, testing whether the
+# configuration recovers after being disturbed.
+PLAN_FORMAT = [
     ("bind default          ", None,    "g722_held"),
     ("mode 8 (41:01)        ", "41:01", "g722_held"),
     ("mode 8, one octet/frame", "41:01", "g722_one"),
@@ -77,25 +83,44 @@ PLAN = [
     ("mode 9, A-law low     ", "41:03", "alaw_lo"),
 ]
 
+PLAN_DUPLEX = [
+    ("mode 2 (bind+remode)  ", None,    "silence"),
+    ("mode 2, downlink on   ", "01:03", "speech"),
+    ("mode 2, uplink clean  ", "01:03", "silence"),
+    ("mode 2, downlink on   ", "01:03", "speech"),
+    ("mode 9 detour         ", "41:03", "g722_held"),
+    ("mode 2 recovery       ", "01:03", "silence"),
+    ("mode 2, downlink on   ", "01:03", "speech"),
+    ("mode 2, uplink clean  ", "01:03", "silence"),
+]
+
+PLANS = {"format": (PLAN_FORMAT, 8.0), "duplex": (PLAN_DUPLEX, 25.0)}
+
 
 def lay(kind, pcm, g722, frames, out):
     """Append `frames` frames of this window's content."""
     if kind == "g722_held":
         # two octets per word, each word written into two frames
         for i in range(0, frames, 2):
-            k = i  # octet pair index advances once per two frames
+            k = i % (len(g722) - 1)   # tiled, so a window may outlast the source
             lo, hi = g722[k], g722[k + 1]
             out.append(lo); out.append(hi)
             out.append(lo); out.append(hi)
     elif kind == "g722_one":
         for i in range(frames):
-            out.append(g722[i]); out.append(0)
+            out.append(g722[i % len(g722)]); out.append(0)
     elif kind == "alaw_lo":
         for i in range(frames):
             out.append(enc_alaw(pcm[i])); out.append(0)
     elif kind == "alaw_hi":
         for i in range(frames):
             out.append(0); out.append(enc_alaw(pcm[i]))
+    elif kind == "silence":
+        out.extend(b'\0\0' * frames)
+    elif kind == "speech":
+        for i in range(frames):            # linear, one sample/frame, tiled
+            v = pcm[i % len(pcm)] & 0xFFFF
+            out.append(v & 0xFF); out.append((v >> 8) & 0xFF)
     elif kind == "lin16":
         for i in range(frames):
             v = pcm[i] & 0xFFFF
@@ -105,9 +130,15 @@ def lay(kind, pcm, g722, frames, out):
 
 
 def main(argv):
-    if len(argv) != 4:
+    plan_name, argv = "format", list(argv)
+    if "--plan" in argv:
+        i = argv.index("--plan")
+        plan_name = argv[i + 1]
+        del argv[i:i + 2]
+    if len(argv) != 4 or plan_name not in PLANS:
         sys.stderr.write(__doc__)
         return 2
+    plan, window_s = PLANS[plan_name]
     pcm = array.array('h')
     pcm.frombytes(open(argv[1], 'rb').read())
     if sys.byteorder == 'big':
@@ -115,27 +146,27 @@ def main(argv):
     g722 = open(argv[2], 'rb').read()
 
     gap = int(GAP_S * SR)
-    body = int(WINDOW_S * SR) - gap
-    if len(pcm) < body or len(g722) < body + 2:
-        sys.stderr.write("need at least %.1f s of both inputs\n" % WINDOW_S)
+    body = int(window_s * SR) - gap
+    if len(pcm) < SR or len(g722) < SR:
+        sys.stderr.write("need at least 1 s of each input\n")
         return 1
-    speech = normalise(list(pcm[:body]))
+    speech = normalise(list(pcm[:min(body, len(pcm))]))
 
     out = array.array('B')
     steps = []
     print("window  starts  mode            lane format")
-    for n, (label, step, kind) in enumerate(PLAN):
+    for n, (label, step, kind) in enumerate(plan):
         out.extend(b'\0\0' * gap)
         lay(kind, speech, g722, body, out)
         print("  %d     %5.1f s  %-14s  %s"
-              % (n, n * WINDOW_S, step or "(bind default)", kind))
+              % (n, n * window_s, step or "(bind default)", kind))
         if n:                      # window 0 carries no re-assign
             steps.append(step)
     open(argv[3], 'wb').write(out.tobytes())
     print("\n%s: %d frames, %.1f s, %d windows of %.1f s"
-          % (argv[3], len(out) // 2, len(out) / 2 / SR, len(PLAN), WINDOW_S))
+          % (argv[3], len(out) // 2, len(out) / 2 / SR, len(plan), window_s))
     print("\n-a fragment (keep this with the file -- they must match):")
-    print("  seq=%d," % int(WINDOW_S * 1000)
+    print("  seq=%d," % int(window_s * 1000)
           + ",".join("seqstep=" + x for x in steps))
     return 0
 
