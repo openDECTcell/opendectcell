@@ -2966,27 +2966,40 @@ static void dsp_sweep(struct stubd *s, uint64_t now)
  *
  * The eight event counters are per-interval, not cumulative -- zero in 94-99%
  * of samples, otherwise 1 or 2, and they fall as well as rise. [CR A-0089]
- * confirms the shape: each is a per-slot receive-status counter that
- * increments when its trigger bit is **clear**, so each counts the rare
- * failing frames. The trigger bits are known and named in the table below;
- * what each BIT means (A-CRC, X-CRC, sync, ...) is not, and is deliberately
- * not guessed here. Our own corpus cannot name them either: every pair of
- * counters is enriched 4.5x-29x over independence, because errors cluster in
- * time and a bad interval lights several columns at once. Naming them needs a
- * directed bench test, designed in docs/diagnostics.md.
+ * confirms the shape: these are per-slot receive FIELD-INTEGRITY counters,
+ * gating on a validator that runs field-length checks and a CRC-style
+ * complement over the slot buffer. Each counts the rare failing slots.
+ *
+ * That also explains why our corpus cannot name them: a bad slot fails
+ * field-length AND CRC AND sync together, so every pair of counters is
+ * enriched 4.5x-29x over independence. The clustering is the signature of
+ * integrity counters sharing one quality factor, not evidence about which
+ * column is which. What each status BIT means (A-CRC, X-CRC, sync, ...) is a
+ * recorded gap: A-0090 traced the status byte and could not pin its source,
+ * and declined to label the bits rather than guess. [28] is likewise unknown.
+ *
+ * Naming them needs a directed bench test, designed in docs/diagnostics.md,
+ * whose control -- clean link, five minutes, all eight zero -- is the room's
+ * prediction as well as ours.
  */
 static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 {
 	/*
 	 * Where the eight event counters sit, in parameter-byte offsets, with
-	 * the receive-status bit that drives each one [CR A-0089]. The label
-	 * names the TRIGGER, not the error: "s12b6" is "status[0x12] bit 6 was
-	 * clear", and what that bit means is still open.
+	 * the condition that drives each one [CR A-0089, CR A-0090]. The label
+	 * names the TRIGGER, not the error: "s12b6" is "receive status[0x12]
+	 * bit 6 was clear", and what that bit means is still open -- A-0090
+	 * traced the status byte and could not pin its source, so the per-bit
+	 * names are a recorded gap, not a guess.
+	 *
+	 * "hdrb4"/"hdrb0" are a different kind: they gate on the received
+	 * frame's byte 0 (the slot header) rather than on the status byte --
+	 * bit 4 SET and bit 0 CLEAR respectively [CR A-0090].
 	 */
 	static const unsigned ev[8] = { 0x10u, 0x12u, 0x14u, 0x16u,
 					0x18u, 0x1Cu, 0x1Eu, 0x20u };
 	static const char *const evname[8] = { "s12b6", "s12b1", "s12b0",
-					       "drv1", "drv2", "unmapped",
+					       "hdrb4", "hdrb0", "unmapped",
 					       "s13hi", "s12b7" };
 	const uint8_t *p = m->param;
 	unsigned n = m->param_len;

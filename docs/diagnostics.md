@@ -343,8 +343,8 @@ error columns, confirmed in shape.
 | `[16]` | receive status `[0x12]` bit 6 clear |
 | `[18]` | receive status `[0x12]` bit 1 clear |
 | `[20]` | receive status `[0x12]` bit 0 clear |
-| `[22]` | a derived condition |
-| `[24]` | a derived condition |
+| `[22]` | a derived condition — resolved by `[CR A-0090]` to frame byte 0 bit 4 set |
+| `[24]` | a derived condition — resolved by `[CR A-0090]` to frame byte 0 bit 0 clear |
 | `[28]` | did not map cleanly |
 | `[30]` | receive status `[0x13]` high nibble nonzero |
 | `[32]` | receive status `[0x12]` bit 7 clear |
@@ -401,3 +401,84 @@ of an existing bench session.
 **Blocked on the maintainer**, not on the clean room: no DECT transmission
 happens unattended in this project, and the first two need somebody walking
 around with a handset.
+
+## The counters: shape confirmed, bits left unnamed `[CR A-0090]` `[2026-10-23]`
+
+`[CR A-0090]` took the receive-status bits to ground and **declined to name
+them**, which is the right outcome and worth recording as one.
+
+### What resolved
+
+**The counters are per-slot receive field-integrity counters.** They gate on a
+receive-slot validator that reads the slot buffer and runs field-length checks
+(10-bit and 9-bit field masks) plus a CRC-style complement.
+
+That **explains our confound rather than merely coexisting with it**: a bad
+slot fails field-length *and* CRC *and* sync at once, so the columns co-fire on
+a single "this slot was bad" factor. The 4.5×–29× enrichment of every pair is
+the signature of integrity counters sharing a quality factor — not noise, and
+not evidence of any relationship between specific fields. The thing that made
+the corpus useless for naming them is the same thing that confirms what they
+are.
+
+**`[22]` and `[24]` are a different kind.** They do not gate on the status byte
+at all but on the received frame's byte 0, the slot header:
+
+| counter | increments when |
+|---|---|
+| `[22]` | frame byte 0 **bit 4 set** |
+| `[24]` | frame byte 0 **bit 0 clear** |
+
+Which header bits those are in DECT terms is not pinned, so "header-bit
+condition" is the honest level.
+
+### What did not resolve, and stays a gap
+
+Bits 0, 1, 6, 7 of receive status `[0x12]` and the `[0x13]` high nibble are
+**unnamed**. The room traced the status byte toward the validator and hit an
+inconsistency it could not clear — the writer it can see produces a value
+inconsistent with the counters responding to that byte's low bits, so the
+byte's true source is not pinned. Labelling them "A-CRC / X-CRC / sync" from
+there would be a guess dressed as a trace, and this page would then carry it
+as a prediction. **`[28]` likewise stays explicitly unknown.**
+
+Per-bit names are available as a dedicated deep pass if there is ever a reason.
+There is not one now: the directed tests that would use them are blocked on the
+maintainer anyway.
+
+### Our corpus corroborates the two-kinds split
+
+A-0090's split makes a prediction the corpus *can* test, unlike the naming
+question: counters of the **same kind** should co-fire more than counters of
+different kinds, because they fail together on one bad slot. Pooling joint
+occurrences against their independence expectations across 511 samples:
+
+| group | joint | expected | pooled enrichment |
+|---|---|---|---|
+| within integrity (`[16] [18] [20] [30]`) | 36 | 2.67 | **13.5×** |
+| within header (`[22]`&`[24]`) | 12 | 1.56 | 7.7× |
+| **across integrity × header** | 46 | 7.97 | **5.8×** |
+
+**Same-kind counters co-fire about 2.3× more than different-kind counters.**
+That is a behavioural check on a firmware claim, from the one direction that
+does not depend on the trace being right, and it holds.
+
+Two things fell out that the room may want to revisit — both **suggestive, not
+established**, because the expectations are small:
+
+- **`[32]` does not behave like the integrity counter it is gated as.** It is
+  described as status `[0x12]` bit 7, but against the other integrity counters
+  it pools to 1.4× (1 joint, 0.74 expected) and against the header pair to
+  5.8× (4 joint, 0.69 expected). It fires 6 times in 511, so this is thin —
+  but the *contrast* is the signal, not the zeros.
+- **`[28]`, the one that did not map, behaves like a header counter:** 9.8×
+  with `[22]`/`[24]` (25 joint, 2.54 expected) against 5.7× with the integrity
+  group (17 joint, 2.97 expected). A hint about where it belongs, nothing more.
+
+### The control prediction is now stronger
+
+Every one of the eight is gated on a receive-integrity failure or a header-bit
+condition that a clean slot does not produce. So the F4.37 control —
+**clean link, strong signal, five minutes, all eight read zero** — is no longer
+just a sanity check on our reading; it is the room's prediction too. A nonzero
+column on a genuinely clean link means one of them is not an error counter.
