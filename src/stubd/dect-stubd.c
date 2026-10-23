@@ -268,6 +268,18 @@ struct stubd {
 		int      no_connect;
 		unsigned tone_hz;	/* transmit test tone (0 = off); multiple of 125 */
 		uint8_t  tone_word;	/* raw DMA word to write it into (default 0) */
+		/*
+		 * playslot=MS walks the lane across every transmit slot, MS ms
+		 * each, during a call. Which transmit slot the chip reads as the
+		 * downlink bearer is not established: the v22 capture shows the
+		 * bearer in slot 0 of the chip's OWN frames, which says nothing
+		 * about the direction we write. On 2026-10-23 a correctly rated
+		 * G.722 lane in slot 0 produced handset audio with 3.8 dB of
+		 * envelope range against the source's 52.9 dB, and no envelope
+		 * correlation at any offset -- the chip was not reading our data
+		 * at all, which is a slot question, not a format question.
+		 */
+		unsigned play_slot_ms;
 		int      tone_high;	/* high byte lane instead of low */
 		int      tone16;	/* 16-bit linear in the whole word (default profile) */
 		int      tone16be;	/* ... big-endian within the word */
@@ -538,6 +550,8 @@ struct stubd {
 	uint64_t    sweep_at;
 	uint64_t    pl_last_ms;
 	size_t      play_pos;		/* byte offset into audio.play */
+	uint32_t    slot_sweep_frames;	/* frames elapsed in a playslot sweep */
+	int         slot_sweep_cur;	/* slot being written now, -1 = none yet */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
 	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
 	uint8_t     next_ti;		/* rotates per FP-originated call */
@@ -771,6 +785,23 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		 */
 		if (s->audio.play && s->audio.play_raw && s->reg.call_bound) {
 			unsigned int w = s->audio.tone_word;
+
+			if (s->audio.play_slot_ms && s->slots) {
+				unsigned int span = s->audio.play_slot_ms * 8u;
+				unsigned int k;
+
+				k = (s->slot_sweep_frames / span) % s->slots;
+				s->slot_sweep_frames++;
+				/* the control slot is not a lane */
+				if (k == (unsigned int)s->tx_slot)
+					k = (k + 1u) % s->slots;
+				w = k;
+				if ((int)k != s->slot_sweep_cur) {
+					s->slot_sweep_cur = (int)k;
+					printf("play: lane slot %u\n", k);
+					fflush(stdout);
+				}
+			}
 
 			/* Verbatim lane: two bytes every frame, no cadence. */
 			if (w < s->slots && w != (unsigned int)s->tx_slot) {
@@ -3028,6 +3059,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->tone_hz = (unsigned)v;
 		} else if (klen == 8 && !memcmp(key, "toneword", 8))
 			a->tone_word = (uint8_t)v;
+		else if (klen == 8 && !memcmp(key, "playslot", 8))
+			a->play_slot_ms = (unsigned)v;
 		else if (klen == 3 && !memcmp(key, "dsp", 3)) {
 			/* dsp=DST:SRC -- the generic check above let the ':' through */
 			unsigned long src;
@@ -3207,6 +3240,9 @@ static void usage(void)
 		"           playsync advances the coded stream on the received\n"
 		"           lane's word boundary instead of a cadence of our own;\n"
 		"           required for anything but a steady tone\n"
+		"           playslot=MS walks the lane across every transmit slot,\n"
+		"           MS ms each, logging 'play: lane slot N'. Which slot the\n"
+		"           chip reads as the downlink bearer is not established.\n"
 		"           playraw=FILE replays a verbatim TDM lane instead (two\n"
 		"           bytes per frame, 16000 B/s, as -w captures it): no\n"
 		"           cadence logic, nothing interpreted\n"
@@ -3263,6 +3299,7 @@ int main(int argc, char **argv)
 	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));
 	s.sub_path = "/etc/opendectcell-sub";	/* overridden by -s */
+	s.slot_sweep_cur = -1;
 	s.voice_slot = -1;		/* capture every slot unless -V says one */
 	s.audio.sel = 1;		/* simple single-channel case [CR A-0029] */
 	/*
