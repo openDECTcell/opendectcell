@@ -101,3 +101,63 @@ has no diagnostics message today.
 
 Step 1 is worth doing before step 2 lands: it is the half that does not depend
 on an answer, and it gives the chip values somewhere to go when they arrive.
+
+## `0xF625` decoded from our own corpus `[2026-10-23]`
+
+`[CR A-0087]` says the Monitor does not infer anything: the host sends
+**`0xF624` with the link number**, and the chip answers **`0xF625`** carrying
+the whole per-handset row. **We have been sending that request since G7** —
+`-a status=8000` polls it every 8 s during a call — and have been throwing the
+answer away except for one byte.
+
+554 answers are in the corpus. Two fields fall out without needing the room.
+
+### `[3]` is the carrier in use, and `[6..15]` are the ten per-carrier levels
+
+DECT has ten carriers; bytes 6..15 are ten values. If `[3]` names the carrier
+in use, the level at index `[3]` should be the strongest of the ten. Across
+every sample we hold:
+
+| RSSI spread (max − min) | samples | `[3]` is the strongest |
+|---|---|---|
+| any | 554 | 74.2 % |
+| ≥ 8 | 509 | 79.8 % |
+| ≥ 12 | 438 | 88.1 % |
+| ≥ 16 | 389 | 94.6 % |
+| **≥ 20** | **325** | **97.2 %** |
+
+**The correlation appears exactly as a peak appears.** Where the spectrum is
+flat — mean spread 8.0, no carrier dominant — "which index is largest" is
+arbitrary and the match drops to chance. Where there is a real peak, it sits
+on `[3]` 97 times in 100. A field that correlates only when there is something
+to correlate with is the signature of a true identification rather than a
+coincidence.
+
+Worked example, `vF418`:
+
+```
+t= 50.84  [3]=06   rssi = 1e 1e 20 20 1f 1d 2c 24 1d 1f    index 6 = 0x2c
+t= 58.84  [3]=06   rssi = 1f 1f 1f 20 1f 1f 38 24 1e 1f    index 6 = 0x38
+t= 66.84  [3]=01   rssi = 1e 2f 1f 20 1e 1e 1d 24 1e 1e    index 1 = 0x2f
+t=256.73  [3]=07   rssi = 1f 20 1f 1f 1f 1f 24 3b 1f 1e    index 7 = 0x3b
+```
+
+The peak moves with `[3]`, call by call.
+
+**Units, partly answered:** the in-use carrier reads ~`0x2c`–`0x3b` against a
+floor of ~`0x1e`–`0x20`, so **larger is stronger** — a level, not an inverted
+quality. The absolute scale is still unknown.
+
+**A free observation:** `vF413` shows a persistent ~`0x24`–`0x27` on two
+carriers that are never the one in use. That is almost certainly another base
+in the house, which is what a spectrum view is for.
+
+### Fields still wanted from the clean room
+
+`[0]` echoes the link number we asked for. `[2]` takes only even values
+(`00 02 04 06 08`) and changes between calls — a slot candidate, unproven.
+`[5]` is the byte `A-0077` traced to record `+0x116` bit 1, which
+`[CR A-0087]` now says is one bit of a multi-bit computed value.
+
+So what we still need traced is **Mode (long vs full slot)** and **the time
+slot** — not the carrier or the level, which we now have.
