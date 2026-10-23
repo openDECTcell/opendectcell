@@ -364,3 +364,40 @@ it for an afternoon.
 `<<BASIC-SERVICE>>` at all, and a planted `0xE0` inside a portable identity —
 the last one because the obvious implementation scans for the byte, and
 `dect_nwk_find_fixed_ie()` walks the element list instead.
+
+## Diagnostics are now on both roadmaps `[2026-10-23]`
+
+The maintainer asked for diagnostic features in the library, the LuCI app and
+the controller. Design and field list: **`docs/diagnostics.md`** in this repo.
+Your side is in your `ROADMAP.md` under C2 (transport), C5 (joining air
+quality to RTP quality) and C7 (the cross-cell view).
+
+**Why it became a feature rather than a debugging aid.** AVM's stock firmware
+ships a **DECT Monitor** showing, per handset: identity, in range / connected,
+model, field strength, signal quality, **long slot vs full slot**, the time
+slot in use, the carrier, codecs offered and in use, and encryption state. We
+spent a week inferring several of those through hypotheses that were withdrawn
+twice. A shipping product prints them.
+
+The user-facing argument is the same one: *"why does this handset drop in the
+kitchen"* is the same question as *"why will the A540 not attach"*, and the
+answer comes from the same place.
+
+**The one that affects C5 directly.** Your RTCP statistics cover
+controller↔PBX. They say nothing about the air. **A call that sounded bad
+because the handset was at the edge of range is indistinguishable in RTCP from
+one that lost packets** — and those have opposite fixes. Joining the two needs
+the cell to send its DECT-side quality, which is the C2 transport item.
+
+**Do not design the field semantics yourself.** `libopendectcell` will carry a
+`struct dect_diag`, and the LuCI page and your admin view should mean the same
+thing by "quality". The struct is not written yet; its protocol half needs no
+new facts and its radio half is blocked on a clean-room answer (`Q-0054`),
+so treat the field list in `docs/diagnostics.md` as the contract and the
+struct as pending.
+
+**Already real, and feeding it when it exists:** the chip subscription slot
+audit (`sub: chip slot audit: 1=OURS 2=- ...`) and the UAK read-back, both
+landed 2026-10-23. "Does the chip actually hold this handset's subscription"
+is answerable today, per cell, and is exactly the sort of thing your alerting
+item wants.
