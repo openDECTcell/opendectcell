@@ -39,8 +39,22 @@
  *    layout changed, so a consumer that does not use it needs no edit --
  *    but it SHOULD, because the glue it replaces is protocol behaviour that
  *    two hand-kept copies would drift on.
+ *
+ * 5: struct dect_cc grows `peer_basic_service` (the <<BASIC-SERVICE>> octet of
+ *    the peer's own {CC-SETUP}, DECT_CC_SVC_NONE when it sent none), and two
+ *    functions arrive: dect_cc_peer_is_speech() and dect_nwk_find_fixed_ie().
+ *    The struct layout change is why this is a bump rather than an addition.
+ *
+ *    CONSUMERS MUST ACT. Not every call a handset places is a speech call: a
+ *    CAT-iq handset opens list-access calls to read the phonebook, and in our
+ *    corpus one handset placed 145 of those against 2 voice calls. Anything
+ *    that arms an audio path, allocates a media resource or reports "call
+ *    connected" on an incoming {CC-SETUP} must ask dect_cc_peer_is_speech()
+ *    first. BOTH nibbles have to agree -- a list-access call carries call
+ *    class 0010 with basic service 1000 "wideband speech", so testing the
+ *    service nibble alone calls a phonebook read a wideband voice call.
  */
-#define OPENDECTCELL_API_VERSION 4
+#define OPENDECTCELL_API_VERSION 5
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

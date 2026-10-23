@@ -308,3 +308,59 @@ Six tests ship with it (`tests/test_link.c`), including one asserting two
 links are independent and one asserting an unusable segment still lets your
 own queue drain — the bug that once left a queued `{CC-SETUP}` sitting for
 ever.
+
+## API 5, and one thing you have to act on `[2026-10-23 night]`
+
+`OPENDECTCELL_API_VERSION` is **5**. The bump is a struct layout change:
+`struct dect_cc` grows `peer_basic_service`. Two functions arrive with it,
+`dect_cc_peer_is_speech()` and `dect_nwk_find_fixed_ie()`.
+
+### Not every call a handset places is a speech call
+
+This is the part that needs your attention, and it is a defect we shipped and
+have now fixed on our side.
+
+A CAT-iq handset opens **list-access calls** to read the phonebook and the
+call list: `{CC-SETUP}` with `<<BASIC-SERVICE>>` call class `0010`, answered
+over `{CC-IWU-INFO}` carrying `<<IWU-TO-IWU>>`, with **no U-plane anywhere in
+it**. In our capture corpus one handset placed **145 of those against 2 voice
+calls**.
+
+Our daemon bound the audio path to every one, because the bind triggered on CC
+reaching connect without looking at what kind of call it was. If your media
+engine arms a path, allocates an RTP or PCM resource, or reports "call
+connected" on an incoming `{CC-SETUP}`, it has the same bug.
+
+```c
+if (cc->incoming || dect_cc_peer_is_speech(cc))
+        /* ... arm audio ... */
+```
+
+`incoming` means *we* originated towards the PP; there is no peer
+`<<BASIC-SERVICE>>` to read on those.
+
+**Do not test the service nibble yourself.** That is the trap: a list-access
+call carries call class `0010` with basic service `1000` "wideband speech", so
+reading the low nibble alone calls a phonebook read a wideband voice call.
+`dect_cc_peer_is_speech()` requires **both** nibbles — speech classes are
+normal (`1000`), internal (`1001`), emergency (`1010`) and external handover
+(`1100`); everything else is declined whatever its service nibble says.
+EN 300 175-5 §7.7.5, figure 18.
+
+The call itself is still answered either way, so **list access keeps working**
+— you only decline to arm media.
+
+### While you are in there: `<<BASIC-SERVICE>>` values
+
+If you build a `{CC-SETUP}` anywhere, check the byte. We were sending `0x40`,
+which that table makes **"message call setup"**. A normal narrowband voice
+call is `0x80`; wideband is `0x88`. External handover is `0xC0`, not `0x80` —
+an earlier clean-room answer had the class numbering wrong and we propagated
+it for an afternoon.
+
+### Nine tests ship with this
+
+`tests/test_cc.c` covers the class/service matrix, a `{CC-SETUP}` with no
+`<<BASIC-SERVICE>>` at all, and a planted `0xE0` inside a portable identity —
+the last one because the obvious implementation scans for the byte, and
+`dect_nwk_find_fixed_ie()` walks the element list instead.
