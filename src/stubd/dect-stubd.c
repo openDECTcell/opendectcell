@@ -782,7 +782,9 @@ struct stubd {
 		uint8_t  remode_handle;	/* handle the call bound on; 0 is valid */
 		uint64_t bind_ms;	/* when 0x0230 went out, for the fallback */
 		uint64_t status_ms;	/* when the last 0xF624 poll went out */
-		uint16_t counter[10];	/* previous 0xF625 counters, for deltas */
+		uint16_t counter[11];	/* previous 0xF625 counters, for deltas */
+		uint16_t frames_last;	/* previous [36..37], for wrap detection */
+		uint64_t frames_total;	/* unwrapped frame count for this call */
 		int have_counters;
 		int handover_sent;	/* -a handover fired for this call */
 		unsigned sweep_idx;	/* next GenDSP source for -a dspsweep */
@@ -2902,61 +2904,132 @@ static void dsp_sweep(struct stubd *s, uint64_t now)
 }
 
 /*
- * Decode the 0xF625 answer. The ten RSSI bytes are the anchor that fixes the
- * offsets: they sit at the same place in the chip's DECT-status answer
- * 0xF623, and the whole record is 45 bytes [CR the hardware-analysis notes
- * §5 4.4]:
+ * Decode the 0xF625 answer: the per-link row AVM's DECT Monitor displays.
  *
- *   [0]        link handle      [1]        the selector we asked with
- *   [2]        MAC slot         [3]        RF carrier
- *   [5]        codec / bearer slot type (0 = full slot, 1..3 = long slot)
- *   [6..0x0F]  ten RSSI bytes, one per carrier
- *   [0x10..]   ten u16 counters [0x28..] u32 BER
+ * The record is 45 bytes. Offsets below are indices into the parameter bytes,
+ * i.e. the chip's answer[N+2] [CR A-0088]. Two independent sources agree on
+ * the shape -- the clean room's read of the producer
+ * [CR the hardware-analysis notes 5 4.4, CR COMMAND_SET 8.1, CR A-0088] and
+ * 554 answers already sitting in our own capture corpus, which the daemon has
+ * been collecting since G7 and throwing away. Where they disagree, the note
+ * on [5] below says so rather than picking a winner quietly.
  *
- * The host's column order for this record is duration, received B-field
- * frames, Q1/Q2 errors, slide errors, sync errors, handovers and the A/X/Z
- * CRC counts -- but the same source says the host *reorders* them when it
- * builds that view [CR the hardware-analysis notes §5 4.4], so the wire order
- * is not known. We print them by index and interpret them in the doc rather
- * than baking a guessed mapping into the output.
+ *   [0]        link handle, echoing the 0xF624 request
+ *   [1]        0x0a in all 554 samples: the number of carrier entries
+ *   [2]        MAC time slot (or slot x 2 -- only 00/02/04/06/08 observed)
+ *   [3]        RF carrier in use, 0..9
+ *   [5]        01 or 02; meaning open, see below
+ *   [6..0x0F]  ten RSSI bytes, one per carrier, LARGER = STRONGER
+ *   [0x10..0x23] eight u16 LE per-interval event counters, at 0x10 0x12 0x14
+ *              0x16 0x18 0x1C 0x1E 0x20, plus the interval frame count at
+ *              0x1A (mirrored at 0x22)
+ *   [0x24..0x25] frames since this link was established, u16 LE
+ *   [0x26..0x2C] zero in all 554 samples
  *
- * The B-field frame counter is the one that matters: it separates "a bearer
- * exists" from "voice frames are actually arriving", which is the distinction
- * A-0038 §5 names as the crucial missing stage. Deltas are what count, so we
- * print the change since the previous poll.
+ * Two of those were settled by our own corpus rather than by a trace, because
+ * they validate themselves:
+ *
+ *   [3] names the carrier in use. If so, the RSSI at that index must be the
+ *   strongest of the ten -- and it is, in 97.2% of the 325 samples whose
+ *   spectrum has a peak at all (spread >= 20), falling to chance when the
+ *   spectrum is flat and "which is largest" is arbitrary. A correlation that
+ *   appears exactly when there is something to correlate with is the
+ *   signature of a true identification.
+ *
+ *   [0x24..0x25] advances at a median of 100.00 per second against wall clock
+ *   over 365 consecutive poll intervals (10th pct 99.92, 90th 100.05). The
+ *   DECT TDMA frame is 10 ms and nothing else here ticks at 100 Hz. It starts
+ *   near zero at establishment, so it is the call duration -- free, with no
+ *   timer of ours. It is 16 bits and wraps at 65536 frames (10 min 55 s), so
+ *   we unwrap it here; our poll interval is far shorter than the wrap period,
+ *   which makes that safe.
+ *
+ * The interval count at 0x1A closes the arithmetic: the running sum
+ * total(n) = total(n-1) + interval(n) is exact in 347 of 365 consecutive
+ * pairs, the misses all new-call restarts.
+ *
+ * **[5] is NOT the slot type.** This function used to label it
+ * "0 = full slot, 1..3 = long slot" on the clean room's reading. Our corpus
+ * has [5] in {01, 02} and never 00, which under that reading would make every
+ * link we have ever had a long slot -- while the independent downlink
+ * instrument 0x11718 reads 0x28 (full slot) in all 57 reads we have ever
+ * taken, across nine runs. The two contradict; 0x11718 is the measurement we
+ * trust, so the label is withdrawn and [5] is printed raw. The slot type is
+ * (received bearer byte0 & 0x0E) == 0x0A [CR A-0088], and which answer byte
+ * carries it cannot be found until a long-slot call exists on the bench
+ * (F4.37). See docs/diagnostics.md.
+ *
+ * The eight event counters are per-interval, not cumulative -- zero in 94-99%
+ * of samples, otherwise 1 or 2, and they fall as well as rise. They are the
+ * shape of the Monitor's error columns (Q1/Q2, slide, sync, handover, CRC),
+ * but the clean room says the host reorders them when it builds that view, so
+ * the wire order is unknown and we print them by index rather than baking in
+ * a guessed mapping.
  */
 static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 {
+	/* Where the eight event counters sit, in parameter-byte offsets. */
+	static const unsigned ev[8] = { 0x10u, 0x12u, 0x14u, 0x16u,
+					0x18u, 0x1Cu, 0x1Eu, 0x20u };
 	const uint8_t *p = m->param;
 	unsigned n = m->param_len;
-	uint16_t c[10];
-	uint32_t ber;
-	unsigned i;
+	uint16_t c[11];
+	uint16_t frames, interval;
+	unsigned i, peak;
 
-	if (n < 6u) {
+	if (n < 0x10u) {
 		printf("call: status: short 0xF625 (%u bytes)\n", n);
 		return;
 	}
-	printf("call: status: mac slot %u carrier %u codec/slottype 0x%02x (%s)",
-	       p[2], p[3], p[5],
-	       p[5] == 0u ? "full slot, G.726" :
-	       (p[5] <= 3u ? "long slot, wideband" : "unknown"));
-	if (n < 0x2Cu) {
-		printf(" -- no counters (%u bytes)\n", n);
+
+	/* Slot, carrier, and how strong the carrier we are on actually is. */
+	peak = 0u;
+	for (i = 1u; i < 10u; i++)
+		if (p[6u + i] > p[6u + peak])
+			peak = i;
+	printf("call: status: slot %u carrier %u", p[2], p[3]);
+	if (p[3] < 10u)
+		printf(" level 0x%02x%s", p[6u + p[3]],
+		       p[3] == peak ? "" : " (NOT the strongest carrier)");
+	printf(" b5 0x%02x\ncall: status: rssi", p[5]);
+	for (i = 0u; i < 10u; i++)
+		printf(" %02x%s", p[6u + i], i == p[3] ? "*" : "");
+	printf("\n");
+
+	if (n < 0x26u) {
+		printf("call: status: no counters (%u bytes)\n", n);
 		return;
 	}
-	for (i = 0; i < 10u; i++)
+	for (i = 0u; i < 11u; i++)
 		c[i] = (uint16_t)(p[0x10u + 2u * i] | (p[0x11u + 2u * i] << 8));
-	ber = (uint32_t)p[0x28] | ((uint32_t)p[0x29] << 8) |
-	      ((uint32_t)p[0x2A] << 16) | ((uint32_t)p[0x2B] << 24);
+	interval = c[5];			/* 0x1A */
+	frames   = c[10];			/* 0x24 */
 
-	printf("\ncall: status: counters");
-	for (i = 0; i < 10u; i++) {
-		int d = (int)c[i] - (int)s->reg.counter[i];
-		printf(" c%u=%u%+d", i, c[i],
+	/*
+	 * Unwrap. A counter that went backwards without the call restarting
+	 * has wrapped; a real restart shows up as a drop to near zero, which
+	 * reset_call_state() clears have_counters for anyway.
+	 */
+	if (!s->reg.have_counters) {
+		s->reg.frames_total = frames;
+	} else {
+		uint16_t d = (uint16_t)(frames - s->reg.frames_last);
+		s->reg.frames_total += d;
+	}
+	s->reg.frames_last = frames;
+
+	printf("call: status: up %llu frames (%.2f s), %u this interval\n",
+	       (unsigned long long)s->reg.frames_total,
+	       (double)s->reg.frames_total / 100.0, interval);
+
+	printf("call: status: events");
+	for (i = 0u; i < 8u; i++) {
+		unsigned k = (ev[i] - 0x10u) / 2u;
+		int d = (int)c[k] - (int)s->reg.counter[k];
+		printf(" e%u@%02x=%u%+d", i, ev[i], c[k],
 		       s->reg.have_counters ? d : 0);
 	}
-	printf(" ber=%u\n", ber);
+	printf("\n");
 	memcpy(s->reg.counter, c, sizeof(c));
 	s->reg.have_counters = 1;
 }
@@ -3370,6 +3443,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.bind_ms = now;
 		s->reg.status_ms = 0;
 		s->reg.have_counters = 0;
+		s->reg.frames_total = 0;
+		s->reg.frames_last = 0;
 		/*
 		 * Source 0 leaves the destination disconnected (measured with
 		 * the radio off), so it carries no information during a call and
