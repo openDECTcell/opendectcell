@@ -52,6 +52,7 @@
 #define DECT_CC_CONNECT			0x07u
 #define DECT_CC_SETUP_ACK		0x0Du
 #define DECT_CC_CONNECT_ACK		0x0Fu
+#define DECT_CC_FACILITY		0x62u	/* [CR A-0055] supplementary services */
 #define DECT_CC_RELEASE			0x4Du
 #define DECT_CC_RELEASE_COM		0x5Au
 #define DECT_CC_IWU_INFO		0x60u

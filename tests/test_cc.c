@@ -426,6 +426,57 @@ static void test_setup_carries_line_identifier(void)
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), plain);
 }
 
+
+/*
+ * [CR A-0055] The handset sends {CC-FACILITY} (0x62) with AVM proprietary
+ * content. We cannot answer it, and silence is not neutral: vF423 measured
+ * twelve retransmissions in sixty seconds, which keeps the link busy forever
+ * and is why no call on a linked handset ever got audio. Close it instead.
+ */
+static void test_closes_a_facility_transaction(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n, m;
+
+	dect_cc_init(&cc);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       6, DECT_CC_FACILITY);
+	dect_cc_rx(&cc, buf, n);
+
+	/* A {CC-RELEASE} goes out, in the handset's transaction, flag flipped. */
+	m = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(m, 4u);
+	CHECK_EQ(out[1], DECT_CC_RELEASE);
+	CHECK_EQ(out[2], DECT_IE_RELEASE_REASON);
+	CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_TRANSACTION);
+	CHECK_EQ(cc.stats.closed_unknown, 1u);
+	/* Our own call state is untouched. */
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+}
+
+/* Closing an unknown transaction must never disturb a live call of ours. */
+static void test_facility_does_not_disturb_a_live_call(void)
+{
+	static const uint8_t port_id[] = { 0x10, 0x20, 0x30 };
+	static const uint8_t fixed_id[] = { 0x11, 0x22, 0x33, 0x44, 0x55 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[128];
+	size_t n;
+
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id), fixed_id,
+			       sizeof(fixed_id), 0x88), 0);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;			/* drain the SETUP */
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       6, DECT_CC_FACILITY);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.stats.closed_unknown, 1u);
+	CHECK_EQ(dect_cc_busy(&cc), 1);		/* the call is still up */
+}
+
 int main(void)
 {
 	test_setup_carries_line_identifier();
@@ -441,5 +492,7 @@ int main(void)
 	test_iwu_does_not_change_call_state();
 	test_iwu_info_without_the_ie_is_ignored();
 	test_ignores_non_cc();
+	test_closes_a_facility_transaction();
+	test_facility_does_not_disturb_a_live_call();
 	return CHECK_DONE();
 }

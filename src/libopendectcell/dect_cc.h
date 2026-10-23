@@ -48,11 +48,19 @@ enum dect_cc_state {
 #define DECT_CC_TXQ	3u		/* pending outbound NWK messages */
 #define DECT_CC_ID_MAX	20u		/* PORTABLE-/FIXED-IDENTITY contents */
 
+/*
+ * Release reason for a transaction we have no state for. [CR A-0055]:
+ * stock sends {CC-RELEASE} with this reason for any CC transaction it cannot
+ * handle, which is how a base closes a proprietary message it does not speak.
+ */
+#define DECT_CC_REASON_UNKNOWN_TRANSACTION	0x01u
+
 struct dect_cc_stats {
 	uint32_t setup;		/* CC-SETUP received */
 	uint32_t connected;	/* reached ACTIVE */
 	uint32_t released;
 	uint32_t alerting;	/* ALERTING received: the handset is ringing */
+	uint32_t closed_unknown;/* transactions we closed with {CC-RELEASE} */
 	uint32_t setup_timeouts;	/* F<CC.03> expiries */
 };
 

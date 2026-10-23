@@ -94,6 +94,50 @@ static void queue_release_com(struct dect_cc *cc, uint8_t reason)
 	txq_commit(cc, idx, off);
 }
 
+/*
+ * Close a transaction we have no state for, without disturbing ours.
+ *
+ * [CR A-0055]: the C4 sends {CC-FACILITY} (type 0x62) carrying a <<FACILITY>>
+ * IE of AVM proprietary data. Stock does not answer it in the kernel either --
+ * it hands the content to a FRITZ userspace app that makes the proprietary
+ * reply. We have no such app, and silence is not a neutral choice: an
+ * unanswered CC transaction is retransmitted for as long as the handset cares
+ * to, the link never goes quiescent, no disconnect can complete, the handset
+ * is never idle-locked, it never answers a page, the chip never allocates a
+ * traffic bearer, and no call ever gets a configured audio path.
+ *
+ * vF423 measured that: twelve 85-octet {CC-FACILITY} messages in sixty
+ * seconds, each reassembled correctly and each ignored.
+ *
+ * So close what we cannot answer. The reply carries the PEER's transaction
+ * value with the flag inverted -- we are the responding side of their
+ * transaction -- and leaves cc->ti_* alone, because a call of ours may be
+ * live in a different transaction at the same time.
+ */
+static void queue_release_other(struct dect_cc *cc, uint8_t peer_ti_flag,
+				uint8_t peer_ti_value, uint8_t reason)
+{
+	unsigned idx;
+	uint8_t *b = txq_slot(cc, &idx);
+	size_t off;
+	uint8_t flag;
+
+	if (!b)
+		return;
+	flag = peer_ti_flag == DECT_TI_ORIGINATOR ? DECT_TI_RESPONDER
+						  : DECT_TI_ORIGINATOR;
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 flag, peer_ti_value, DECT_CC_RELEASE);
+	if (!off)
+		return;
+	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
+				    DECT_IE_RELEASE_REASON, reason);
+	if (!off)
+		return;
+	txq_commit(cc, idx, off);
+	cc->stats.closed_unknown++;
+}
+
 /* Append both identity IEs; either may be omitted, neither may fail the call. */
 static size_t put_identity(uint8_t *b, size_t off, const struct dect_clip *id)
 {
@@ -367,6 +411,16 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		cc->state = DECT_CC_ST_RELEASED;
 		break;
 	default:
+		/*
+		 * A transaction we do not implement. Close it rather than
+		 * ignoring it -- see queue_release_other(). Guarded so we
+		 * never release our own live transaction, and never answer a
+		 * release with a release.
+		 */
+		if (cc->state == DECT_CC_ST_NULL ||
+		    h.ti_value != cc->ti_value || h.ti_flag != cc->ti_flag)
+			queue_release_other(cc, h.ti_flag, h.ti_value,
+					    DECT_CC_REASON_UNKNOWN_TRANSACTION);
 		break;
 	}
 }
