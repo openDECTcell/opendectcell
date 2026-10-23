@@ -141,6 +141,14 @@ struct dect_lapc {
 void dect_lapc_init(struct dect_lapc *l, uint32_t retry_ms);
 
 /*
+ * Queue a DISC command, releasing the acknowledged link. The frame leaves
+ * through dect_lapc_poll_tx() like any other. See the note in the .c file:
+ * releasing the link is what returns a handset to idle-locked, and an
+ * idle-locked handset is the only kind that answers a page.
+ */
+void dect_lapc_disconnect(struct dect_lapc *l);
+
+/*
  * Submit a NWK message for acknowledged transmission. Returns 0, or -1 if a
  * message is still in flight (window 1) or msg is too large. The first
  * segment is queued immediately.

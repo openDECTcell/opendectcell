@@ -159,8 +159,9 @@ struct stubd {
 	 * miss, and the stock host guards each one with a 3 s timer, so page
 	 * again until the handset brings up a link or we give up.
 	 */
-	enum { RING_IDLE, RING_PAGING, RING_WAIT_PAGE_RESP,
+	enum { RING_IDLE, RING_RELEASING, RING_PAGING, RING_WAIT_PAGE_RESP,
 	       RING_DONE } ring_state;
+	uint64_t ring_release_until;	/* give the link time to go down */
 	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
 	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
 	unsigned    ring_pages;		/* pages sent for this attempt */
@@ -1944,6 +1945,9 @@ static uint8_t ring_page_info(const struct stubd *s)
  * the air between runs, which the handset shows as "Synchronisiere". Cover a
  * realistic re-sync instead, since an unanswered page costs nothing.
  */
+static void pump_lapc(struct stubd *s);
+
+#define RING_RELEASE_WAIT_MS	3000u	/* [CR A-0053] DLC arms a ~5 s guard */
 #define RING_PAGE_RETRIES	20u	/* pages before giving up (60 s) */
 #define RING_PAGE_INTERVAL	3000u	/* ms between them; the stock guard */
 #define RING_PAGE_RESP_MS	1500u	/* wait this long for the page response */
@@ -2091,10 +2095,45 @@ static void ring_tick(struct stubd *s, uint64_t now)
 		 * attaches a second after the base comes up and holds the link
 		 * indefinitely, so the wait never fired and could not have.
 		 */
-		if (s->reg.active)
-			printf("ring: a link is already up (the attachment) -- "
-			       "paging anyway; the page is what makes the chip "
-			       "allocate a traffic bearer\n");
+		/*
+		 * [CR A-0053]: stock never pages a linked handset. It releases
+		 * the link first and always pages from idle-locked, and the
+		 * release does NOT un-attach the handset -- attachment and
+		 * location registration are persistent and separate from the
+		 * CC/DLC link, so the handset returns to idle-locked and
+		 * pageable without re-registering. Release once per call.
+		 *
+		 * vF423 is the measurement behind this: with the link up, 16
+		 * pages went unanswered, where vF411 -- same build, same mails,
+		 * no link up -- got a page response on attempt 1.
+		 */
+		if (s->reg.active) {
+			printf("ring: releasing the link before paging -- a "
+			       "linked handset does not answer pages, and the "
+			       "page is what makes the chip allocate a traffic "
+			       "bearer\n");
+			dect_lapc_disconnect(&s->reg.lapc);
+			pump_lapc(s);
+			s->ring_release_until = now + RING_RELEASE_WAIT_MS;
+			s->ring_state = RING_RELEASING;
+			return;
+		}
+		s->ring_state = RING_PAGING;
+	}
+
+	/*
+	 * Wait for the link to actually go down before paging. reg.active is
+	 * cleared on the chip's CONN_DOWN, so this is the chip telling us the
+	 * link is gone, not a guess. Page anyway when the wait expires: a page
+	 * that goes unanswered costs one ring attempt, and the fallback below
+	 * still rings the handset over the old link.
+	 */
+	if (s->ring_state == RING_RELEASING) {
+		if (s->reg.active && now < s->ring_release_until)
+			return;
+		printf("ring: link %s -- paging now\n",
+		       s->reg.active ? "did not go down in time, paging anyway"
+				     : "released");
 		s->ring_state = RING_PAGING;
 	}
 
