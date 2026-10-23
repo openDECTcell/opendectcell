@@ -154,3 +154,96 @@ evening".
 Nothing here changes the controller's interface. It changes what you should
 expect to hear while testing, and it means an end-to-end inbound-call demo will
 sound broken for reasons that are ours, not yours.
+
+## 2026-10-23
+
+Three things here change what you build, and one of them contradicts a fact in
+your own `docs/voip-requirements.md`. Read §3 before planning any media work.
+
+### 1. Downlink audio on base-originated calls is SOLVED
+
+The 2026-10-22 note above told you to treat it as broken. **It works**, and it
+is reproducible for a whole call.
+
+It needed two things we never had together: a second `0x0230` with flag bit 6
+clear after the audio connect, which puts the chip in its narrowband mode; and
+the right lane format. Proved by a controlled test — eight (chip mode × lane
+format) windows in one call, each with its own chip-state reads. Three windows
+had **identical** route words and differed only in lane format: one gave
+silence, one gave noise, one gave speech with an envelope correlation of
+**+0.922** against the source. Reproduced for a full 73-second call.
+
+**So an inbound SIP call ringing a handset can carry audio.** The earlier
+"expect it to sound broken" warning is withdrawn.
+
+### 2. The lane format, and a correction you need to make
+
+`docs/voip-requirements.md` §5 says, of the cell link: *"carries G.722 for
+wideband calls and A-law for narrowband ones"*. **The narrowband half is
+wrong.**
+
+| direction | what the lane actually carries |
+|---|---|
+| **downlink (controller → handset)** | **signed 16-bit linear PCM, one sample per frame, 8000 Sa/s** |
+| uplink (handset → controller) | **not yet measured in the working mode** — see below |
+
+Narrowband calls are **G.726 on the air**, and the chip does that encoding
+itself from the linear PCM we feed it. A-law was one of four hypotheses we
+tested; it produced silence in one byte half and noise in the other.
+
+The uplink in narrowband mode is genuinely open. Everything we have measured
+about the uplink (G.722 code octets, two per 16-bit word, each word held two
+frames) was taken in a **different chip mode on a wideband bearer**, so it
+describes a path the narrowband call does not use. The leading candidate is
+signed 16-bit linear, symmetric with the downlink; the fallback is A-law in the
+low byte. We will measure it and update this file. **Do not hard-code either.**
+
+### 3. Wideband may not be reachable at all on this chip — plan for it
+
+This is the one that should change your design, so it is stated bluntly.
+
+`voip-requirements.md` §5 says *"The cell delivers the coded G.722 stream
+itself, so a G.722 SIP call needs no transcoding"*. **That assumption is now at
+risk.** The clean room enumerated the chip's complete channel-configurator
+branch table: six modes are reachable by a host mail and **the two true
+two-slot wideband classes are reachable by no mail at all**. Wideband, if we
+get it, has to come through one of two coded-block modes whose lane packing is
+unproven, and the chip has **no G.722 encoder**, so the host must produce the
+octets. We have a test rig built and not yet run. A clean negative is a real
+possible outcome, and the clean room has committed to confirming it if so.
+
+**What to do about it:** do not build the media engine on the assumption that
+wideband is a passthrough. Treat the cell link's wideband capability as a
+**runtime-negotiated property of the cell**, not a constant — so that a cell
+that reports narrowband-only still works, and a G.722 SIP leg transcodes to
+narrowband rather than failing. If wideband does land later, passthrough
+becomes an optimisation you switch on, not an assumption you unwind.
+
+### 4. A scope rule we have adopted, which you may want to mirror
+
+We have written into `AGENTS.md` §1a: **the standard is the product, the chip
+is the unknown.** GAP (EN 300 444) and CAT-iq (TS 102 527) are the goal; AVM's
+proprietary behaviour is not. We reverse engineer the chip's mail interface
+only, and read the specifications for everything that goes over the air.
+Proprietary messages get the standard decline and nothing more, and
+manufacturer-specific behaviour goes in a device-profile layer keyed on the
+handset, never in the general library.
+
+The equivalent for you: **where SIP and RTP are concerned, the RFCs are the
+product.** Nothing on your side should depend on AVM behaviour, and
+`docs/dect-features.md`'s per-model feature framework is the right home for
+anything that does.
+
+### 5. Smaller things worth knowing
+
+- **Narrowband is correct, not a bug.** A narrowband call shows no HD symbol on
+  the handset. That is the G.726 path working as designed, not a defect to
+  report.
+- **Codec list on the wire.** The narrowband codec list we advertise is
+  `7c 04 90 02 00 84` — one codec, G.726 32 kbit/s, full slot. That matches
+  stock byte for byte. The wideband list is longer and is the one in our
+  registration path today.
+- **An FP-originated call needs the handset to be pageable.** A handset holding
+  a link does not answer a page, and the page is what makes the chip allocate a
+  traffic bearer. We handle this on our side; it may show up as added latency
+  before a handset rings on an inbound call, in the order of a second.
