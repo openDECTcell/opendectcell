@@ -159,3 +159,59 @@ hardware either — we did not fail to build something it has.
 What we now *can* do is settle one candidate: dump
 `0x9518 + (slot − 1) × 0x11` after the A540 registers. If its UAK is not
 there, that is the answer.
+
+
+## The subscriptions themselves, and a correction `[2026-10-23, later]`
+
+The maintainer pushed back on the conclusion above: *what about the handset
+subscriptions, since they have been problematic?* Checking it found that the
+reasoning behind "general verification is unneeded" **does not apply to us.**
+
+### Stock re-asserts. We do not.
+
+`[CR A-0086]`'s argument is that stock gets away without verifying because it
+periodically re-asserts subscription state, so a silently lost write
+self-heals. True of stock. **But `0x017C`, the re-assert, is on our own list
+of mails we deliberately do not send** -- `send_subscription()` has said so in
+a comment since G6.
+
+So: **stock does not verify but does re-assert. We did neither.** The
+subscription table is simultaneously the thing that has caused us the most
+trouble and the place we were least like the design we were reassuring
+ourselves with.
+
+### What the chip has actually been holding
+
+`vF426` is what this looks like when nobody checks: slot 1 ours, slots 2–6
+untouched from earlier sessions, **51 connections, every one from a handset
+our store did not contain**. We added a clear for foreign slots in response.
+`0x0247` has no reply and no error path, so "cleared" has meant "asked" ever
+since.
+
+Now audited. After the clear, all six slots are read back from
+`0x9518 + (slot − 1) × 0x11` and reported:
+
+```
+sub: chip slot audit: 1=OURS 2=- 3=- 4=- 5=- 6=-
+sub: slot table is as we intend it
+```
+
+and, when it is not:
+
+- `*** OUR OWN SLOT n IS EMPTY ***` — the subscription did not land, the
+  handset will not attach.
+- `*** n FOREIGN SLOT(S) STILL HELD ***` — the clear did not take, and a
+  handset we hold no record for can attach.
+
+Occupancy only: a slot holds key material or it does not. **We never print the
+key.** `0x0247` moves from "not verified" to verified-by-read-back, and a
+clean run now reads `8 state-changing commands sent, 7 verified by read-back`
+where an hour ago it read `NONE`.
+
+### Still missing: which handset
+
+We can say a slot is occupied, not *whose* it is. The identity lives in the
+per-handset config above `0x957E`, whose layout we do not have. `Q-0054` asks
+for it. With that, the audit could name the intruder instead of counting it --
+and the A540 question becomes answerable directly: is its record there, under
+its own identity, after it registers?

@@ -757,6 +757,13 @@ struct stubd {
 	 */
 	uint32_t uak_check_addr;
 	uint8_t  uak_check_slot;
+	/*
+	 * Slot audit: which slots we are still waiting to hear about, and
+	 * which came back holding something. Bit (slot-1).
+	 */
+	uint8_t  sub_audit_pending;
+	uint8_t  sub_audit_occupied;
+	uint8_t  sub_audit_mine;	/* the slot we believe is ours */
 
 	/* Per-run tally of commands sent, by verification class. */
 	uint32_t verify_n[17];
@@ -860,6 +867,13 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
  *     field for years -- but it periodically **re-asserts** most subscription
  *     state, so a silently lost write self-heals. That is how it gets away
  *     with it, and it is a better design than checking.
+ *
+ *     **That reassurance does not transfer to us.** `0x017C`, the re-assert,
+ *     is on the list of mails we deliberately do not send. Stock does not
+ *     verify but does re-assert; we did neither. So the subscription table --
+ *     the thing that has actually caused us trouble -- is where we were most
+ *     exposed and least like stock, which is why it now gets an audit as well
+ *     as the UAK read-back.
  *   - **The UAK is the exception**: written once at enrolment, never
  *     re-asserted, and it is the credential a handset needs to attach. Stock
  *     has that hole too.
@@ -884,7 +898,7 @@ static const struct {
 	{ 0xFFF1u, VERIFY_QUERY,     "memory read",            "the reply is the result" },
 	{ 0xF624u, VERIFY_QUERY,     "status poll",            "answered by 0xF625" },
 	{ 0x020Au, VERIFY_READBACK,  "subscription record",    "read back at 0x9518 + (slot-1)*0x11 [A-0085]" },
-	{ 0x0247u, VERIFY_NONE,      "subscription slot op",   "stock re-asserts this state, so a lost write self-heals [A-0086]" },
+	{ 0x0247u, VERIFY_READBACK,  "subscription slot op",   "slot occupancy audited at 0x9518 after every clear" },
 	{ 0x0230u, VERIFY_READABLE,  "assign audio channel",   "0x0242 is 'processed', NOT 'applied' [A-0075]; real gate is record +0x116 bit 5" },
 	{ 0x016Au, VERIFY_READABLE,  "channel config",         "matrix is readable; we do not check" },
 	{ 0x0251u, VERIFY_READABLE,  "set channel params",     "matrix is readable; we do not check" },
@@ -1741,6 +1755,9 @@ static int sub_load(struct stubd *s)
 }
 
 static void uak_verify_send(struct stubd *s, uint8_t slot);
+static void sub_audit_reply(struct stubd *s, uint32_t addr,
+			    const uint8_t *rec, size_t len);
+static void sub_audit_send(struct stubd *s, uint8_t mine);
 
 /*
  * Persist the just-enrolled handset in the chip so it holds standby and is
@@ -1792,6 +1809,12 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep)
 	printf("sub: cleared chip subscription slots other than %u -- the chip "
 	       "keeps them across runs and would otherwise still admit a "
 	       "handset we have no record of\n", keep);
+	/*
+	 * ...and now check it actually happened. The clear is 0x0247, which
+	 * has no reply and no error path, so until today "cleared" meant
+	 * "asked". vF426 is what asking without checking looks like.
+	 */
+	sub_audit_send(s, keep);
 }
 
 static void send_subscription(struct stubd *s)
@@ -1902,11 +1925,14 @@ static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
 {
 	uint32_t addr;
 
-	if (!s->uak_check_addr || m->param_len < 7u || m->param[0] != 0x08u)
+	if (m->param_len < 7u || m->param[0] != 0x08u)
 		return;
 	addr = (uint32_t)m->param[1] | ((uint32_t)m->param[2] << 8)
 	     | ((uint32_t)m->param[3] << 16) | ((uint32_t)m->param[4] << 24);
-	if (addr != s->uak_check_addr)
+	if (s->sub_audit_pending)
+		sub_audit_reply(s, addr, &m->param[7],
+				(size_t)(m->param_len - 7u));
+	if (!s->uak_check_addr || addr != s->uak_check_addr)
 		return;			/* some other read */
 	s->uak_check_addr = 0;
 
@@ -1933,6 +1959,110 @@ static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
 		       s->uak_check_slot, addr);
 	}
 	fflush(stdout);
+}
+
+/*
+ * Audit every subscription slot the chip holds, and say so out loud.
+ *
+ * This is the one that has actually bitten us. The chip's subscription table
+ * **survives our daemon**: we write one slot, and a handset enrolled in some
+ * earlier session stays reachable in another slot for ever. `vF426` measured
+ * it -- 51 connections, every one from a handset our store did not contain.
+ * We now clear foreign slots at bring-up, and until today we never checked
+ * that the clear worked.
+ *
+ * `[CR A-0086]` says stock gets away without verifying because it
+ * periodically **re-asserts** subscription state, so a lost write self-heals.
+ * **That reassurance does not transfer to us**: `0x017C`, the re-assert, is
+ * on the list of mails we deliberately do not send. Stock does not verify but
+ * does re-assert; we do neither. Of the two of us, we are the one exposed.
+ *
+ * Occupancy only -- a slot holds key material or it does not. We never print
+ * the key, and we cannot yet say WHICH handset a slot belongs to: that is the
+ * per-handset config above 0x957E, whose layout we do not have (Q-0054).
+ */
+static void sub_audit_send(struct stubd *s, uint8_t mine)
+{
+	uint8_t slot;
+
+	s->sub_audit_pending = 0;
+	s->sub_audit_occupied = 0;
+	s->sub_audit_mine = mine;
+	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
+		struct dect_mail m;
+		uint32_t addr = SUB_UAK_BASE
+			      + (uint32_t)(slot - 1u) * SUB_UAK_STRIDE;
+
+		memset(&m, 0, sizeof(m));
+		m.src = DECT_TASK_PCM;
+		m.dst = DECT_TASK_PCM_REMOTE;
+		m.prim = 0xFFF1u;
+		m.param[0] = 0x07u;		/* MEM_READ */
+		m.param[1] = (uint8_t)(addr & 0xFFu);
+		m.param[2] = (uint8_t)((addr >> 8) & 0xFFu);
+		m.param[3] = (uint8_t)((addr >> 16) & 0xFFu);
+		m.param[4] = (uint8_t)((addr >> 24) & 0xFFu);
+		m.param[5] = SUB_UAK_STRIDE;
+		m.param[6] = 0x00u;
+		m.param_len = 7;
+		s->sub_audit_pending |= (uint8_t)(1u << (slot - 1u));
+		send_mail(s, (unsigned int)s->tx_slot, &m);
+	}
+}
+
+static void sub_audit_reply(struct stubd *s, uint32_t addr,
+			    const uint8_t *rec, size_t len)
+{
+	uint8_t slot, bit, i;
+	int occupied = 0;
+
+	if (addr < SUB_UAK_BASE)
+		return;
+	if ((addr - SUB_UAK_BASE) % SUB_UAK_STRIDE)
+		return;
+	slot = (uint8_t)((addr - SUB_UAK_BASE) / SUB_UAK_STRIDE + 1u);
+	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
+		return;
+	bit = (uint8_t)(1u << (slot - 1u));
+	if (!(s->sub_audit_pending & bit))
+		return;
+	s->sub_audit_pending &= (uint8_t)~bit;
+
+	for (i = 0; i < DECT_MM_UAK_LEN && i < len; i++)
+		if (rec[i])
+			occupied = 1;
+	if (occupied)
+		s->sub_audit_occupied |= bit;
+
+	if (s->sub_audit_pending)
+		return;			/* wait for the rest */
+
+	{
+		uint8_t mine_bit = s->sub_audit_mine >= 1u &&
+				   s->sub_audit_mine <= DECT_MM_MAX_SLOT
+			? (uint8_t)(1u << (s->sub_audit_mine - 1u)) : 0u;
+		uint8_t foreign = (uint8_t)(s->sub_audit_occupied & ~mine_bit);
+
+		printf("sub: chip slot audit:");
+		for (i = 1u; i <= DECT_MM_MAX_SLOT; i++)
+			printf(" %u=%s", i,
+			       (s->sub_audit_occupied & (1u << (i - 1u)))
+				       ? (i == s->sub_audit_mine ? "OURS" : "held")
+				       : "-");
+		printf("\n");
+		if (mine_bit && !(s->sub_audit_occupied & mine_bit))
+			printf("sub: *** OUR OWN SLOT %u IS EMPTY *** the "
+			       "subscription did not land; the handset will "
+			       "not attach\n", s->sub_audit_mine);
+		if (foreign)
+			printf("sub: *** %u FOREIGN SLOT(S) STILL HELD *** "
+			       "the clear did not take. A handset we hold no "
+			       "record for can attach [vF426]\n",
+			       (unsigned)__builtin_popcount(foreign));
+		if (!foreign && (!mine_bit || (s->sub_audit_occupied & mine_bit)))
+			printf("sub: slot table is as we intend it\n");
+		fflush(stdout);
+	}
 }
 
 /*
