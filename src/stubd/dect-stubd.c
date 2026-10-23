@@ -634,6 +634,7 @@ struct stubd {
 		int call_bound;		/* audio channel bound for the active call */
 		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
 		uint64_t remode_at;	/* when to send the mode-2 re-assign, 0 = off */
+		int      remode_done;	/* the mode-2 re-assign has been sent */
 		uint64_t seq_t0;	/* when the call bound, 0 = no call */
 		unsigned seq_idx;
 		uint8_t  remode_handle;
@@ -855,7 +856,16 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		 * precedence over the loopback, which it exists to replace as a
 		 * source whose glitches cannot be blamed on the uplink.
 		 */
-		if (s->audio.play && s->audio.play_raw && s->reg.call_bound) {
+		/*
+		 * Hold the lane silent until the mode-2 re-assign has gone out.
+		 * Between 0x022D and the re-assign the chip is still in mode 9,
+		 * where linear PCM decodes as noise -- audible as a burst of
+		 * white noise at the start of every call (reported 2026-10-23,
+		 * and visible in vF411 as dir1 8001 -> 0000 one second in).
+		 * There is nothing useful to send in that window.
+		 */
+		if (s->audio.play && s->audio.play_raw && s->reg.call_bound &&
+		    (!s->audio.remode_ms || s->reg.remode_done)) {
 			unsigned int w = s->audio.tone_word;
 
 			if (s->audio.play_slot_ms && s->slots) {
@@ -1742,6 +1752,7 @@ static void remode_tick(struct stubd *s, uint64_t now)
 	if (!s->reg.remode_at || now < s->reg.remode_at)
 		return;
 	s->reg.remode_at = 0;
+	s->reg.remode_done = 1;
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
@@ -2487,6 +2498,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	     s->reg.cc.state == DECT_CC_ST_ACTIVE)) {
 		s->reg.audio_connected = 0;
 		s->reg.remode_at = 0;
+		s->reg.remode_done = 0;
 		s->reg.seq_t0 = 0;
 		s->reg.seq_idx = 0;
 		s->reg.bind_ms = now;
