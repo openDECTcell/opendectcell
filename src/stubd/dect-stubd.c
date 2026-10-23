@@ -657,7 +657,7 @@ struct stubd {
 		int      remode_done;	/* the mode-2 re-assign has been sent */
 		uint64_t seq_t0;	/* when the call bound, 0 = no call */
 		unsigned seq_idx;
-		uint8_t  remode_handle;
+		uint8_t  remode_handle;	/* handle the call bound on; 0 is valid */
 		uint64_t bind_ms;	/* when 0x0230 went out, for the fallback */
 		uint64_t status_ms;	/* when the last 0xF624 poll went out */
 		uint16_t counter[10];	/* previous 0xF625 counters, for deltas */
@@ -1731,10 +1731,9 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 	m.prim = 0x022Du;		/* AUDIO_PATH_ON_OFF */
 	m.param[0] = handle;
 	m.param[1] = 0x00u;		/* bit 7 = 0: connect */
-	if (a->remode_ms) {
+	s->reg.remode_handle = handle;
+	if (a->remode_ms)
 		s->reg.remode_at = mono_ms() + a->remode_ms;
-		s->reg.remode_handle = handle;
-	}
 	m.param_len = 2;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
@@ -1882,7 +1881,16 @@ static void remode_tick(struct stubd *s, uint64_t now)
 	fflush(stdout);
 }
 
-/* Walk the seqstep list, one 0x0230 per window. See audio_cfg.seq_ms. */
+/*
+ * Walk the seqstep list, one 0x0230 per window. See audio_cfg.seq_ms.
+ *
+ * The handle comes from the bind, not from a literal. vF418 sent every window
+ * to handle 1 while the call was on handle 0 -- handle 0 is a valid handle and
+ * the old fallback could not tell it from "no call" -- and the chip answered
+ * 0x0242 with channel 0x0f each time. Two rows of that run's codec table are
+ * unusable because of it. seq_t0 is only nonzero while a call is bound, so by
+ * the time we get here remode_handle is always the handle of that call.
+ */
 static void seq_tick(struct stubd *s, uint64_t now)
 {
 	const struct audio_cfg *a = &s->audio;
@@ -1906,7 +1914,7 @@ static void seq_tick(struct stubd *s, uint64_t now)
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0230u;
-	m.param[0] = s->reg.remode_handle ? s->reg.remode_handle : 1u;
+	m.param[0] = s->reg.remode_handle;
 	m.param[1] = (uint8_t)flags;
 	m.param[2] = (uint8_t)(a->mask & 0xFFu);
 	m.param[3] = (uint8_t)(a->mask >> 8);
