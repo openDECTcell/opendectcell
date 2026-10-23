@@ -113,11 +113,82 @@ decoding it. **Do not invent the payload** -- a wrong reply is likely worse
 than no reply, and the handset's own frames give us the shape but not the
 semantics.
 
+## Gap 5 -- the page never says what the call needs `[2026-10-23 night]`
+
+**Audited:** clause 8.2 (the `{LCE-REQUEST-PAGE}` message) and clause 14.2.3
+(indirect FT-initiated link establishment). This is the first audit entry that
+may explain a live defect, so it is written out in full.
+
+### What the standard provides
+
+`{LCE-REQUEST-PAGE}` has a **short** format and a **full** format, and the
+full format *with TPUI address structure* (W = 1) carries three fields the
+other forms do not (§8.2.4.2):
+
+| field | octet | values |
+|---|---|---|
+| **1 -- slot type** | 2, bits 8..5 | `0000` half · `0001` **long slot j=640** · `0010` **long slot j=672** · `0100` full · `0101` double |
+| **2 -- setup info** | 5, bits 8..5 | `0000` none · `0001` MT basic, attributes negotiation optional · `0010` MT basic, mandatory · `0011` MT advanced, mandatory · `0100`/`0101` B-field signalling |
+| 3 | 5, bits 4..1 | reserved, or the LCN for a DPRS resume |
+
+§8.2.2: with a nonzero info field 2, *"the PP shall use the setup method and
+the slot type indicated in the paging message"*. Without one -- short page,
+full-with-IPUI page, or info field 2 = `0000` -- the PP falls back to the
+default table 80b, keyed on the **3-bit LCE header**:
+
+| LCE header | default behaviour on a short page |
+|---|---|
+| `000` no U-plane | MT basic, full slot, no negotiation, **MAC service = no MAC service** |
+| `001` unknown + ringing | MT basic, full slot, PP **does** negotiate attributes |
+| `010`/`011` general purpose | MT basic, full slot, PP **does** negotiate attributes |
+| `100` voice -- the GAP code | MT basic, full slot, no negotiation, MAC service = IN_min_delay |
+| `101` auxiliary | MT advanced, full slot, no negotiation, IN_normal_delay |
+
+And §14.2.3, on what the PT does when the page carries no service detail:
+*"In all other cases, the responding PT shall only establish the minimum MAC
+layer service needed for a single C-plane link (i.e. a single duplex
+bearer)."*
+
+### Why this is a gap for us
+
+We page with `0x0300 {page info, TPUI hi, TPUI lo}` -- three bytes, page info
+`0x0C`, or `0x2C` when the `{CC-SETUP}` will carry `<<BASIC-SERVICE>>` service
+8. The chip builds the actual message. **We have never known which format it
+builds or which LCE header `0x0C` becomes**, so we have never known which row
+of table 80b every handset we page has been following.
+
+Two things follow if the answer is the unfavourable one, and both are open:
+
+- **The A540 refusal.** Under header `000` the PT establishes a link with *no
+  MAC service*. A speech `{CC-SETUP}` on that link, answered with
+  `{CC-RELEASE-COM}` / `<<RELEASE-REASON>>` `0x32` "insufficient resources",
+  is then **the correct behaviour**, not a fault. It is the first hypothesis
+  that fits the whole shape: page answered, SETUP delivered and ACKed at DLC,
+  call refused on resources, and only by the stricter handset. The four
+  hypotheses excluded by experiment (stale bearer, missing `<<CODEC-LIST>>`,
+  wideband basic service, external-handover call class) do not fit it.
+- **Wideband.** §8.2.4.1 on the GAP voice code `100`: *"full paging format is
+  mandatory if the slot is different of a full slot."* A short page can only
+  ask for a full slot. Put that beside `[CR A-0069]` -- the chip does not
+  choose the slot type, it reads it from the handset's own bearer-request
+  attributes -- and **nobody in the system is choosing a long slot**: not us,
+  not the chip, and the handset was never told to ask for one.
+
+### Status
+
+**Not a finding yet.** We have not verified that our page is short format or
+that its header is `000`; that is `Q-0051` to the clean room, which asks what
+the chip builds from `0x0300`, how the page-info byte maps to the LCE header,
+what bit `0x20` changes on the air, and whether any path exists to a
+full-format TPUI page with info field 1 = long slot. A plain "there is none"
+is a complete answer and retires the wideband thread on this STUB.
+
 ## Still to audit
 
 - **Clause 14 (LCE).** Link establishment and the "short LCE confirm" that
   stock sends between the page response and the SETUP, which we do not send.
-  Bytes are in hand from the the hardware-analysis step (`00 91 21 01 45`).
+  Bytes are in hand from the the hardware-analysis step (`00 91 21 01 45`). Clause 8.2 and
+  §14.2.3 are now audited -- see Gap 5.
 - **Part 4 (DLC / LAPC).** Timer values done (Gap 3). Still to check: the
   class A/B establishment procedures and the NLF handling.
 - **Clause 13 (MM).** Registration passes on two vendors' handsets, so this is
