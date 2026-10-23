@@ -3379,8 +3379,16 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * FP-originated {CC-SETUP} can be sent: see ring_queue_setup() for the
 	 * run that showed sending it on link-up loses the frame.
 	 */
-	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP)
+	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP) {
 		ring_queue_setup(s, now, "page response received");
+		/*
+		 * Push it out in the same breath. The main loop would now get
+		 * it within POLL_MS anyway, but the handset has just answered
+		 * the page and is listening: the whole point of waiting for
+		 * the page response is to hit that window.
+		 */
+		drain_nwk(s, now);
+	}
 
 	/*
 	 * The handset dialled. GAP N.4 is mandatory for an FT and we did not
@@ -4099,8 +4107,32 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		}
 		/* Drive LAPC retransmission timers for the registration link. */
 		if (s->do_register && s->reg.active) {
-			dect_lapc_tick(&s->reg.link.lapc, now);
-			dect_cc_tick(&s->reg.link.cc, now);
+			/*
+			 * dect_link_tick() and not the two timers it contains.
+			 * This loop used to call dect_lapc_tick() and
+			 * dect_cc_tick() directly, which open-codes two of the
+			 * four duties dect_link_tick() has and silently drops
+			 * the other two: dect_mm_tick() (<MM_ident.1>) and,
+			 * far worse, drain_nwk().
+			 *
+			 * Without the drain, a NWK message queued outside an
+			 * inbound-segment context never reached LAPC until the
+			 * handset happened to send us something. An
+			 * FP-originated {CC-SETUP} is exactly such a message:
+			 * ring_queue_setup() runs after dect_link_rx_segment()
+			 * has already drained, so the SETUP sat in the CC
+			 * output queue until the next inbound frame.
+			 *
+			 * Measured in vBR01: queued at t=21464 ms, on the wire
+			 * at t=25324 ms. 3 860 ms late -- by which time the
+			 * A540 had given up waiting and opened a CAT-iq
+			 * service call of its own, so our stale SETUP landed
+			 * as a {CC-SETUP} collision and the handset released
+			 * it with "insufficient resources" exactly as
+			 * EN 300 175-5 §9.5.2.3 requires. See
+			 * docs/spec-conformance.md.
+			 */
+			dect_link_tick(&s->reg.link, now);
 			/*
 			 * The call has gone away: release the audio channel.
 			 * Without this it stays armed for the life of the link

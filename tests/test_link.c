@@ -94,6 +94,43 @@ static void test_only_one_message_is_outstanding(void)
 	CHECK_EQ(sent, 1);			/* only the first went out */
 }
 
+/*
+ * A queued NWK message does NOT reach the wire without a tick.
+ *
+ * This is the trap that cost us every FP-originated call to a Gigaset A540
+ * for a week. dect-stubd's poll loop open-coded dect_link_tick() as
+ * dect_lapc_tick() + dect_cc_tick(), which looks equivalent and is not: it
+ * drops drain_nwk(). A {CC-SETUP} queued by the ring state machine therefore
+ * sat in the CC output queue until the handset happened to send us a segment,
+ * because dect_link_rx_segment() is the only other caller of the drain.
+ *
+ * Measured at 3 860 ms late on hardware, which is long enough for the handset
+ * to start a call of its own and turn ours into a {CC-SETUP} collision.
+ *
+ * So: polling the transmit queue is not enough on its own, and this test says
+ * so out loud rather than leaving it to be rediscovered.
+ */
+static void test_a_queued_message_needs_a_tick(void)
+{
+	static const uint8_t port_id[] = { 0x10, 0x20, 0x30 };
+	static const uint8_t fixed_id[] = { 0x11, 0x22, 0x33, 0x44, 0x55 };
+	struct dect_link l;
+	struct dect_mail m;
+
+	init(&l);
+	CHECK_EQ(dect_cc_setup(&l.cc, port_id, sizeof(port_id), fixed_id,
+			       sizeof(fixed_id), 0x40), 0);
+
+	/* Polling alone moves nothing: the message is still in CC. */
+	CHECK_EQ(dect_link_poll_append_mail(&l, &m), 0);
+	CHECK_EQ(l.lapc.outstanding, 0u);
+
+	/* One tick drains it, and only then is there a frame to send. */
+	dect_link_tick(&l, 0);
+	CHECK_EQ(dect_link_poll_append_mail(&l, &m), 1);
+	CHECK_EQ(m.prim, 0x0244u);
+}
+
 /* A segment that is not C-plane is rejected without disturbing the link. */
 static void test_non_cplane_mail_is_rejected(void)
 {
@@ -142,6 +179,7 @@ int main(void)
 	test_init_is_quiet();
 	test_two_links_are_independent();
 	test_outbound_message_becomes_an_append_mail();
+	test_a_queued_message_needs_a_tick();
 	test_only_one_message_is_outstanding();
 	test_non_cplane_mail_is_rejected();
 	test_unusable_segment_still_drains_the_queue();
