@@ -19,7 +19,7 @@ recording a clean boundary to align on whatever the format turns out to be.
 Every window carries the SAME audio content, so envelopes can be compared
 across windows directly.
 
-Usage:  tools/make-lane-matrix.py [--plan format|duplex] SPEECH.lin SPEECH.g722 OUT.raw
+Usage:  tools/make-lane-matrix.py [--plan format|duplex|wideband] SPEECH.lin SPEECH.g722 OUT.raw
 """
 import array, math, sys
 
@@ -94,7 +94,28 @@ PLAN_DUPLEX = [
     ("mode 2, uplink clean  ", "01:03", "silence"),
 ]
 
-PLANS = {"format": (PLAN_FORMAT, 8.0), "duplex": (PLAN_DUPLEX, 25.0)}
+# "wideband" tests the lane packing the coded (transparent) block wants, in
+# the only two modes that arm it ([CR A-0043]: modes 8 and 9; the true 2-slot
+# classes 6/7 are unreachable by any host mail). The room's leading candidate
+# was two octets per frame, but the arithmetic puts that at twice the rate the
+# air can take: the 80-byte long-slot B-field is 80 bytes per 10 ms DECT frame
+# = 8000 octets/s, and the TDM lane runs at 8000 frames/s, so ONE octet per
+# frame is the rate-matched packing -- and it is also the rate we measured on
+# the uplink. So `g722_one` leads here and `g722_full` is tested second, not
+# first. `g722_held` (word held two frames) is NOT retried: vF413 falsified it.
+PLAN_WIDEBAND = [
+    ("bind default          ", None,    "g722_one"),
+    ("mode 8, one octet/frame", "41:01", "g722_one"),
+    ("mode 8, octet in high  ", "41:01", "g722_one_hi"),
+    ("mode 8, two octets/frame", "41:01", "g722_full"),
+    ("mode 8, one octet, swap", "41:01", "g722_one_swap"),
+    ("mode 9, one octet/frame", "41:03", "g722_one"),
+    ("mode 9, two octets/frame", "41:03", "g722_full"),
+    ("mode 9, octet in high  ", "41:03", "g722_one_hi"),
+]
+
+PLANS = {"format": (PLAN_FORMAT, 8.0), "duplex": (PLAN_DUPLEX, 25.0),
+         "wideband": (PLAN_WIDEBAND, 10.0)}
 
 
 def lay(kind, pcm, g722, frames, out):
@@ -107,8 +128,26 @@ def lay(kind, pcm, g722, frames, out):
             out.append(lo); out.append(hi)
             out.append(lo); out.append(hi)
     elif kind == "g722_one":
+        # one octet per frame, low byte: 8000 octets/s, the long slot's rate
         for i in range(frames):
             out.append(g722[i % len(g722)]); out.append(0)
+    elif kind == "g722_one_hi":
+        for i in range(frames):
+            out.append(0); out.append(g722[i % len(g722)])
+    elif kind == "g722_one_swap":
+        # the eor #2 pairing [CR A-DSP-7]: adjacent 16-bit words swapped, so
+        # the octets reach the chip in the other order of each pair
+        for i in range(0, frames, 2):
+            a, b = g722[i % len(g722)], g722[(i + 1) % len(g722)]
+            out.append(b); out.append(0)
+            out.append(a); out.append(0)
+    elif kind == "g722_full":
+        # two octets per 16-bit word, a new word every frame: 16000 octets/s,
+        # twice the long slot's rate. [CR A-0043]'s leading candidate; kept
+        # because it costs one window, not because the arithmetic supports it.
+        for i in range(frames):
+            k = (2 * i) % (len(g722) - 1)
+            out.append(g722[k]); out.append(g722[k + 1])
     elif kind == "alaw_lo":
         for i in range(frames):
             out.append(enc_alaw(pcm[i])); out.append(0)
