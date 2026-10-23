@@ -280,6 +280,7 @@ struct stubd {
 		 * selects mode 2: PCM out(k) <- channel k, channel k <- PCM
 		 * in(k), and a NOP over the chain, i.e. enabled.
 		 */
+		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
 		/*
 		 * remodebit6 keeps flag bit 6 SET in the re-assign, which asks
@@ -3076,8 +3077,18 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				       s->cmail_idx, s->cmail[s->cmail_idx]);
 			s->cmail_idx++;
 		}
-		/* Once up, send the extra mails in order, one per tick (~100 ms). */
-		if (s->sess.state == DECT_SESS_UP && s->xmail_idx < s->n_xmail) {
+		/*
+		 * Once up, send the extra mails in order, one per tick
+		 * (~100 ms) -- but not before xmail_ms, if one is given.
+		 *
+		 * Extra mails fire as soon as the session is up, which is far
+		 * too early for anything aimed at a HANDSET: in vF424 they went
+		 * out at t = 28..36 ms, before the handset had locked to the
+		 * base and before the stored subscription was reloaded into the
+		 * chip. xmailms holds them until the given point instead.
+		 */
+		if (s->sess.state == DECT_SESS_UP && s->xmail_idx < s->n_xmail &&
+		    now - g_start >= s->audio.xmail_ms) {
 			if (send_mail_spec(s, s->xmail[s->xmail_idx]))
 				fprintf(stderr, "extra mail %u (%s) failed\n",
 					s->xmail_idx, s->xmail[s->xmail_idx]);
@@ -3090,8 +3101,16 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		 * the way AVM restores saved handsets at boot [CR A-0026], so the
 		 * handset stays known across daemon restarts.
 		 */
-		if (s->sess.state == DECT_SESS_UP && s->xmail_idx >= s->n_xmail &&
-		    s->uak_valid && !s->sub_restored) {
+		/*
+		 * Normally this waits for the extra mails, so a -M sequence can
+		 * run before the chip knows any handset. With xmailms the order
+		 * is deliberately the other way round: the mails are being held
+		 * BACK so the handset is already known and locked when they go
+		 * out, so the reload must not wait for them.
+		 */
+		if (s->sess.state == DECT_SESS_UP && s->uak_valid &&
+		    !s->sub_restored &&
+		    (s->xmail_idx >= s->n_xmail || s->audio.xmail_ms)) {
 			send_subscription(s);
 			s->sub_restored = 1;
 			printf("sub: stored subscription reloaded into the chip\n");
@@ -3329,6 +3348,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->tone_word = (uint8_t)v;
 		else if (klen == 8 && !memcmp(key, "playslot", 8))
 			a->play_slot_ms = (unsigned)v;
+		else if (klen == 7 && !memcmp(key, "xmailms", 7))
+			a->xmail_ms = (unsigned)v;
 		else if (klen == 6 && !memcmp(key, "remode", 6))
 			a->remode_ms = (unsigned)v;
 		else if (!eq && klen == 8 && !memcmp(key, "noremode", 8))
