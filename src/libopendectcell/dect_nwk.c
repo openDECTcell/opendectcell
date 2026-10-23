@@ -67,6 +67,30 @@ size_t dect_nwk_put_fixed_ie(uint8_t *out, size_t cap, size_t off, uint8_t id,
 	return off + 2;
 }
 
+int dect_nwk_find_fixed_ie(const uint8_t *ies, size_t ies_len, uint8_t id)
+{
+	size_t pos = 0;
+
+	while (pos < ies_len) {
+		uint8_t ie = ies[pos];
+
+		if (ie & IE_FIXED) {
+			int dbl = (ie & IE_DOUBLE_MASK) == IE_DOUBLE;
+
+			if (ie == id && dbl)
+				return (pos + 1 < ies_len) ? ies[pos + 1] : -1;
+			pos += dbl ? 2 : 1;
+			continue;
+		}
+		if (pos + 2 > ies_len)
+			break;
+		if (pos + 2 + ies[pos + 1] > ies_len)
+			break;
+		pos += 2 + ies[pos + 1];
+	}
+	return -1;
+}
+
 const uint8_t *dect_nwk_find_ie(const uint8_t *ies, size_t ies_len, uint8_t id,
 				size_t *out_len)
 {

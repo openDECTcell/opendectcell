@@ -67,6 +67,9 @@ struct dect_cc_stats {
 	uint32_t setup_timeouts;	/* F<CC.03> expiries */
 };
 
+/* No <<BASIC-SERVICE>> was present in the peer's {CC-SETUP}. */
+#define DECT_CC_SVC_NONE	0xFFu
+
 struct dect_cc {
 	enum dect_cc_state state;
 	uint8_t ti_value;		/* transaction value from the PP's SETUP */
@@ -85,6 +88,16 @@ struct dect_cc {
 	size_t  peer_port_id_len;
 	uint8_t peer_fixed_id[DECT_CC_ID_MAX];
 	size_t  peer_fixed_id_len;
+
+	/*
+	 * The <<BASIC-SERVICE>> octet of the peer's own {CC-SETUP}, or
+	 * DECT_CC_SVC_NONE if it sent none. High nibble call class, low
+	 * nibble basic service (EN 300 175-5 §7.7.5). Worth keeping because
+	 * not every call the handset places is a speech call: a CAT-iq
+	 * handset opens list-access (call class 0010) calls to read the
+	 * phonebook, and binding an audio path to one of those is wrong.
+	 */
+	uint8_t peer_basic_service;
 
 	/*
 	 * Optional <<SIGNAL>> for an FP-originated SETUP: the alerting
@@ -143,6 +156,15 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len);
  * specification requires. Call it alongside dect_lapc_tick().
  */
 void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms);
+
+/*
+ * Is the peer's call a speech call? True for basic speech (0000), wideband
+ * speech (1000) and DTAM wideband speech (1011); false for list access, ULE,
+ * message calls and anything else, and false when the peer sent no
+ * <<BASIC-SERVICE>> at all. Use it before binding an audio path to an
+ * incoming call.
+ */
+int dect_cc_peer_is_speech(const struct dect_cc *cc);
 
 /*
  * When dect_cc_tick() next has work, or UINT64_MAX if no CC timer is running.

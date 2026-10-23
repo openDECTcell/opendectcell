@@ -154,6 +154,14 @@ size_t dect_nwk_put_fixed_ie(uint8_t *out, size_t cap, size_t off, uint8_t id,
  * pointer to its contents and writes the content length to *out_len, or NULL if
  * absent. Single-octet fixed IEs (bit 8 = 1) are skipped.
  */
+/*
+ * Find a double-octet fixed-format element (0xE0-0xEF: <<BASIC-SERVICE>>,
+ * <<RELEASE-REASON>>, ...) and return its value octet, or -1 if absent. Walks
+ * the list the same way dect_nwk_find_ie() does, so a byte inside another
+ * element's payload cannot be mistaken for an element id.
+ */
+int dect_nwk_find_fixed_ie(const uint8_t *ies, size_t ies_len, uint8_t id);
+
 const uint8_t *dect_nwk_find_ie(const uint8_t *ies, size_t ies_len, uint8_t id,
 				size_t *out_len);
 

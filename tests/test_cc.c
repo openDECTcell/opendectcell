@@ -31,15 +31,20 @@ static uint8_t ti_flag_of(const uint8_t *msg, size_t len)
 }
 
 /* PP CC-SETUP: BASIC-SERVICE (double-octet) + PORTABLE-IDENTITY (IPUI-like). */
-static size_t pp_setup(uint8_t *out, size_t cap, uint8_t ti)
+static size_t pp_setup_svc(uint8_t *out, size_t cap, uint8_t ti, uint8_t svc)
 {
 	uint8_t pid[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x44 };
 	size_t off = dect_nwk_build_hdr(out, cap, DECT_PD_CC, DECT_TI_ORIGINATOR,
 					ti, DECT_CC_SETUP);
 
 	out[off++] = DECT_IE_BASIC_SERVICE;	/* 0xE0: double-octet element */
-	out[off++] = 0x00;			/* call class 0, basic speech */
+	out[off++] = svc;
 	return dect_nwk_put_ie(out, cap, off, DECT_IE_PORTABLE_IDENTITY, pid, sizeof(pid));
+}
+
+static size_t pp_setup(uint8_t *out, size_t cap, uint8_t ti)
+{
+	return pp_setup_svc(out, cap, ti, 0x00);  /* call class 0, basic speech */
 }
 
 /* The handset dials: SETUP -> we take the call (CALL-PROC, CONNECT), it acks. */
@@ -477,6 +482,85 @@ static void test_facility_does_not_disturb_a_live_call(void)
 	CHECK_EQ(dect_cc_busy(&cc), 1);		/* the call is still up */
 }
 
+/*
+ * The handset's own calls are not all speech calls. A CAT-iq handset opens
+ * list-access calls (call class 0010) to read the phonebook; binding an audio
+ * path to one of those is wrong, and we did it 145 times in one corpus.
+ * EN 300 175-5 Â§7.7.5 figure 18: high nibble call class, low nibble service.
+ */
+static void test_peer_basic_service_decides_speech(void)
+{
+	static const struct { uint8_t svc; int speech; } cases[] = {
+		{ 0x80, 1 },	/* normal call, basic speech */
+		{ 0x88, 1 },	/* normal call, wideband speech */
+		{ 0x8B, 1 },	/* normal call, DTAM wideband speech */
+		{ 0x28, 0 },	/* LiA service call -- the A540's phonebook read */
+		{ 0x20, 0 },	/* LiA, basic speech nibble: still not a speech call */
+		{ 0x40, 0 },	/* message call setup */
+		{ 0x39, 0 },	/* ULE, light data services */
+		{ 0xC8, 1 },	/* external handover of a wideband call */
+		{ 0x90, 1 },	/* internal call, basic speech */
+		{ 0xB0, 0 },	/* service call setup: not a speech call */
+		{ 0x80 | 0x9u, 0 },	/* normal class, SUOTA data service */
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		struct dect_cc cc;
+		uint8_t buf[64];
+		size_t n;
+
+		dect_cc_init(&cc);
+		n = pp_setup_svc(buf, sizeof(buf), 0, cases[i].svc);
+		dect_cc_rx(&cc, buf, n);
+		CHECK_EQ(cc.peer_basic_service, cases[i].svc);
+		CHECK_EQ(dect_cc_peer_is_speech(&cc), cases[i].speech);
+		/* The call itself is answered either way -- list access works. */
+		CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	}
+}
+
+/* No <<BASIC-SERVICE>> at all is not a speech call, and must not read as one. */
+static void test_setup_without_basic_service_is_not_speech(void)
+{
+	uint8_t pid[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_cc cc;
+	uint8_t buf[64];
+	size_t off, n;
+
+	dect_cc_init(&cc);
+	CHECK_EQ(cc.peer_basic_service, DECT_CC_SVC_NONE);
+	off = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC,
+				 DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+	n = dect_nwk_put_ie(buf, sizeof(buf), off, DECT_IE_PORTABLE_IDENTITY,
+			    pid, sizeof(pid));
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.peer_basic_service, DECT_CC_SVC_NONE);
+	CHECK_EQ(dect_cc_peer_is_speech(&cc), 0);
+}
+
+/*
+ * 0xE0 also occurs inside other elements' payloads. The portable identity
+ * below carries one, and a byte scan would read the octet after it as the
+ * basic service; the element walk must not.
+ */
+static void test_basic_service_is_not_found_inside_a_payload(void)
+{
+	uint8_t pid[7] = { 0x80, 0xB4, 0xE0, 0x88, 0x22, 0x33, 0x44 };
+	struct dect_cc cc;
+	uint8_t buf[64];
+	size_t off, n;
+
+	dect_cc_init(&cc);
+	off = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC,
+				 DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+	n = dect_nwk_put_ie(buf, sizeof(buf), off, DECT_IE_PORTABLE_IDENTITY,
+			    pid, sizeof(pid));
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.peer_basic_service, DECT_CC_SVC_NONE);
+	CHECK_EQ(dect_cc_peer_is_speech(&cc), 0);
+}
+
 int main(void)
 {
 	test_setup_carries_line_identifier();
@@ -494,5 +578,8 @@ int main(void)
 	test_ignores_non_cc();
 	test_closes_a_facility_transaction();
 	test_facility_does_not_disturb_a_live_call();
+	test_peer_basic_service_decides_speech();
+	test_setup_without_basic_service_is_not_speech();
+	test_basic_service_is_not_found_inside_a_payload();
 	return CHECK_DONE();
 }

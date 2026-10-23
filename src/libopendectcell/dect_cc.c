@@ -14,6 +14,7 @@ void dect_cc_init(struct dect_cc *cc)
 {
 	memset(cc, 0, sizeof(*cc));
 	cc->state = DECT_CC_ST_NULL;
+	cc->peer_basic_service = DECT_CC_SVC_NONE;
 	cc->ti_flag = DECT_TI_RESPONDER;	/* until a call says otherwise */
 	dect_iwu_init(&cc->iwu);
 }
@@ -306,6 +307,51 @@ static void learn_id(const uint8_t *ies, size_t ies_len, uint8_t id,
 	*dst_len = n;
 }
 
+static void learn_basic_service(struct dect_cc *cc, const uint8_t *ies,
+				size_t ies_len)
+{
+	int v = dect_nwk_find_fixed_ie(ies, ies_len, DECT_IE_BASIC_SERVICE);
+
+	cc->peer_basic_service = (v < 0) ? DECT_CC_SVC_NONE : (uint8_t)v;
+}
+
+/*
+ * EN 300 175-5 §7.7.5 figure 18. BOTH nibbles have to agree before a call
+ * gets an audio path.
+ *
+ * The low nibble alone is not enough, and that is the whole point of this
+ * function: a CAT-iq handset's list-access call carries call class 0010 with
+ * basic service 1000 "wideband speech", so reading the service nibble by
+ * itself calls a phonebook read a wideband voice call. Ours did, 145 times.
+ *
+ * Call classes that carry speech: normal (1000), internal (1001), emergency
+ * (1010) and external handover (1100). The rest -- LiA (0010), ULE (0011),
+ * message call (0100), DECT/ISDN IIP (0111), service call (1011),
+ * supplementary service (1101) and OA&M (1110) -- do not, whatever their
+ * service nibble says. DECT_CC_SVC_NONE is 0xFF, whose class nibble is
+ * reserved, so an absent element falls through to 0 on its own.
+ */
+int dect_cc_peer_is_speech(const struct dect_cc *cc)
+{
+	switch (cc->peer_basic_service >> 4) {
+	case 0x8u:	/* normal call setup */
+	case 0x9u:	/* internal call setup */
+	case 0xAu:	/* emergency call setup */
+	case 0xCu:	/* external handover call setup */
+		break;
+	default:
+		return 0;
+	}
+	switch (cc->peer_basic_service & 0x0Fu) {
+	case 0x0u:	/* basic speech, default setup attributes */
+	case 0x8u:	/* wideband speech, default setup attributes */
+	case 0xBu:	/* DTAM wideband speech */
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 static void on_setup(struct dect_cc *cc)
 {
 	cc->stats.setup++;
@@ -394,6 +440,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 				 cc->peer_port_id, &cc->peer_port_id_len);
 			learn_id(ies, ies_len, DECT_IE_FIXED_IDENTITY,
 				 cc->peer_fixed_id, &cc->peer_fixed_id_len);
+			learn_basic_service(cc, ies, ies_len);
 			on_setup(cc);
 		}
 		break;

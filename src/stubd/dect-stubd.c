@@ -75,13 +75,26 @@ static uint64_t fs_free_bytes(const char *path)
 }
 
 
-#define RING_BASIC_SVC	0x40u		/* call class 4 (normal call), basic speech.
-					 * 0x88 was call class 8 (EXTERNAL HANDOVER)
-					 * plus service 8 (wideband speech) -- wrong
-					 * on both nibbles for an ordinary call, and
-					 * almost certainly copied from a handset-
-					 * originated capture [CR A-0069]. Does NOT
-					 * fix the A540 refusal, but it is correct. */
+/*
+ * <<BASIC-SERVICE>>: high nibble call class, low nibble basic service, per
+ * EN 300 175-5 §7.7.5 figure 18. The class table is NOT what we were told:
+ *
+ *   0010 LiA service   0011 ULE   0100 Message call   0111 DECT/ISDN IIP
+ *   1000 NORMAL CALL   1001 Internal   1010 Emergency   1011 Service call
+ *   1100 EXTERNAL HANDOVER   1101 Supplementary service   1110 OA&M
+ *
+ * and the service table: 0000 basic speech, 1000 wideband speech.
+ *
+ * So 0x80 is a normal narrowband call and 0x88 a normal wideband one.
+ * `[CR A-0069]` read 0x88 as "call class 8 = external handover" and had us
+ * send 0x40 instead -- which this table makes "**Message call setup** plus
+ * basic speech". External handover is 1100, i.e. 0xC0, and class 8 was right
+ * all along. Read out of the spec, 2026-10-23 night; the room is told.
+ *
+ * None of the three values changes the A540 refusal (0x88, 0x80 and 0x40 all
+ * drew {CC-RELEASE-COM} 0x32), so this is a conformance fix, not a defect fix.
+ */
+#define RING_BASIC_SVC	0x80u		/* normal call setup, basic speech */
 #include "dect_g722.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
@@ -652,6 +665,7 @@ struct stubd {
 		int active;
 		int persisted;		/* chip subscription written this connection */
 		int call_bound;		/* audio channel bound for the active call */
+		int nonspeech_noted;	/* logged "not a speech call" once */
 		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
 		uint64_t remode_at;	/* when to send the mode-2 re-assign, 0 = off */
 		int      remode_done;	/* the mode-2 re-assign has been sent */
@@ -2535,6 +2549,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.active = 1;
 	s->reg.persisted = 0;
 	s->reg.call_bound = 0;
+	s->reg.nonspeech_noted = 0;
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
 	s->reg.handle = handle;
@@ -2678,10 +2693,34 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	/*
 	 * Bind the voice path once we have answered the call (CONNECT sent). The
 	 * C4 treats CONNECT as answered even though it does not send CONNECT-ACK.
+	 *
+	 * Only speech calls get an audio path. A CAT-iq handset opens
+	 * list-access calls to read the phonebook and the call list -- call
+	 * class 0010 in <<BASIC-SERVICE>>, answered over {CC-IWU-INFO}, no
+	 * U-plane anywhere in it -- and the A540 placed 145 of those in our
+	 * corpus against 2 voice calls. We were binding the audio path to
+	 * every one of them, which is both wrong and the reason the chip
+	 * state in vF413/vF418 was measured on connections that carried no
+	 * speech service at all. `incoming` means we originated towards the
+	 * PP; there is no peer <<BASIC-SERVICE>> to read on those and we only
+	 * ever originate speech calls, so they bind as before.
 	 */
-	if (!s->reg.call_bound &&
+	if (!s->reg.call_bound && !s->reg.nonspeech_noted &&
+	    !s->reg.link.cc.incoming &&
+	    !dect_cc_peer_is_speech(&s->reg.link.cc) &&
 	    (s->reg.link.cc.state == DECT_CC_ST_CONNECT_PENDING ||
 	     s->reg.link.cc.state == DECT_CC_ST_ACTIVE)) {
+		s->reg.nonspeech_noted = 1;
+		printf("call: not a speech call (<<BASIC-SERVICE>> %02x) -- "
+		       "no audio path bound\n",
+		       s->reg.link.cc.peer_basic_service);
+	}
+
+	if (!s->reg.call_bound &&
+	    (s->reg.link.cc.state == DECT_CC_ST_CONNECT_PENDING ||
+	     s->reg.link.cc.state == DECT_CC_ST_ACTIVE) &&
+	    (s->reg.link.cc.incoming ||
+	     dect_cc_peer_is_speech(&s->reg.link.cc))) {
 		s->reg.audio_connected = 0;
 		s->reg.remode_at = 0;
 		s->reg.remode_done = 0;
@@ -2704,6 +2743,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.sweep_done = 0;
 		send_audio_bind(s, s->reg.handle);
 		s->reg.call_bound = 1;
+		s->reg.nonspeech_noted = 0;
 		/* take the phase from this call's first received transition */
 		s->play_locked = 0;
 		s->rx_word_prev = 0xFFFFFFFFu;
@@ -3221,6 +3261,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				s->reg.call_bound = 0;
 				send_audio_disconnect(s, s->reg.handle);
 			}
+			if (!dect_cc_busy(&s->reg.link.cc))
+				s->reg.nonspeech_noted = 0;
 			pump_lapc(s);
 		}
 		if (run_seconds && now - start >= (uint64_t)run_seconds * 1000u)
