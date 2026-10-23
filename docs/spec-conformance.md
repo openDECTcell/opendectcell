@@ -728,3 +728,30 @@ from the one `f4.sh 41` still refuses — every other byte comes from A-0095's
 map. `work/7520/lab/sweep15e.sh` runs eight phases including a **DISARM
 control** (`flags 0x20`) which must *not* ring; if it does, the flag map is
 wrong and nothing else in the sweep counts.
+
+#### `[CR A-0096]`: both axes resolved, and the sweep re-aimed
+
+- **`mail[8:9]` is LITTLE-endian** — a native word load on a little-endian
+  chip. Index 0 (`0x0196`) is bytes **`96 01`**.
+- **`mail[3:4]` TPUI is BIG-endian**, assembled by hand as
+  `(mail[3] << 8) | mail[4]`. **The two 16-bit fields in the same mail have
+  opposite byte order**; copying one to the other is a trap.
+- **The ordering is already right.** Stock sends `0x015E` around every page,
+  *before* the handset responds and before any link exists — exactly where we
+  send it. `0x965d` is not cleared per connection, so an arm persists. Moving
+  it later would diverge from stock, not match it. This was the failure mode
+  I thought most likely, and it is ruled out.
+- Unarmed, the MAC reader "writes a refuse-shaped `0x10`" — which is our
+  `0x32` arriving from below the air layer. So the arm is genuinely required.
+
+**What A-0096 declined to assert**, and it is the right call: that arming
+index 0 hits the slot the MAC later reads for *our* connection. The range
+checks on both sides are branches that room has misread repeatedly this week.
+So the index is the real unknown, and the sweep now spends its phases there
+rather than on endianness.
+
+**The sweep is self-verifying now.** It dumps `0x965d:80` — all 40 indices —
+at 20 ms, so each phase reports whether the arm bit actually took hold,
+independent of whether the handset rings. A silent phase that nonetheless
+armed a slot is still a result; before this change it would have looked
+identical to a phase that did nothing.
