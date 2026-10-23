@@ -2918,7 +2918,7 @@ static void dsp_sweep(struct stubd *s, uint64_t now)
  *   [1]        0x0a in all 554 samples: the number of carrier entries
  *   [2]        MAC time slot (or slot x 2 -- only 00/02/04/06/08 observed)
  *   [3]        RF carrier in use, 0..9
- *   [5]        01 or 02; meaning open, see below
+ *   [5]        (record +0x116 bit 1) ? 2 : 1 [CR A-0089]; not the slot type
  *   [6..0x0F]  ten RSSI bytes, one per carrier, LARGER = STRONGER
  *   [0x10..0x23] eight u16 LE per-interval event counters, at 0x10 0x12 0x14
  *              0x16 0x18 0x1C 0x1E 0x20, plus the interval frame count at
@@ -2948,29 +2948,46 @@ static void dsp_sweep(struct stubd *s, uint64_t now)
  * total(n) = total(n-1) + interval(n) is exact in 347 of 365 consecutive
  * pairs, the misses all new-call restarts.
  *
- * **[5] is NOT the slot type.** This function used to label it
- * "0 = full slot, 1..3 = long slot" on the clean room's reading. Our corpus
- * has [5] in {01, 02} and never 00, which under that reading would make every
- * link we have ever had a long slot -- while the independent downlink
- * instrument 0x11718 reads 0x28 (full slot) in all 57 reads we have ever
- * taken, across nine runs. The two contradict; 0x11718 is the measurement we
- * trust, so the label is withdrawn and [5] is printed raw. The slot type is
- * (received bearer byte0 & 0x0E) == 0x0A [CR A-0088], and which answer byte
- * carries it cannot be found until a long-slot call exists on the bench
- * (F4.37). See docs/diagnostics.md.
+ * **[5] is NOT the slot type**, and both sides now agree on that. This
+ * function used to label it "0 = full slot, 1..3 = long slot" on an early
+ * clean-room reading. Our corpus has [5] in {01, 02} and never 00, which
+ * under that reading would make every link we have ever had a long slot --
+ * while 0x11718, the independent downlink instrument, reads 0x28 (full slot)
+ * in all 57 reads this project has ever taken, across nine runs. [CR A-0089]
+ * then settled it from the chip: [5] is written as (+0x116 bit 1) ? 2 : 1,
+ * the bit A-0077 traced and A-0087 withdrew, which is set in ordinary bearer
+ * flow regardless of slot width.
+ *
+ * The slot type is (received bearer byte0 & 0x0E) == 0x0A, and it is **not
+ * copied into 0xF625 at all** [CR A-0089] -- it lives in the per-handset
+ * record at +0x0C. So our "no byte satisfies & 0x0E == 0x0A" across 554
+ * samples was not a sampling limit; the byte is genuinely absent. 0x11718 is
+ * and always was our instrument for Mode. See docs/diagnostics.md.
  *
  * The eight event counters are per-interval, not cumulative -- zero in 94-99%
- * of samples, otherwise 1 or 2, and they fall as well as rise. They are the
- * shape of the Monitor's error columns (Q1/Q2, slide, sync, handover, CRC),
- * but the clean room says the host reorders them when it builds that view, so
- * the wire order is unknown and we print them by index rather than baking in
- * a guessed mapping.
+ * of samples, otherwise 1 or 2, and they fall as well as rise. [CR A-0089]
+ * confirms the shape: each is a per-slot receive-status counter that
+ * increments when its trigger bit is **clear**, so each counts the rare
+ * failing frames. The trigger bits are known and named in the table below;
+ * what each BIT means (A-CRC, X-CRC, sync, ...) is not, and is deliberately
+ * not guessed here. Our own corpus cannot name them either: every pair of
+ * counters is enriched 4.5x-29x over independence, because errors cluster in
+ * time and a bad interval lights several columns at once. Naming them needs a
+ * directed bench test, designed in docs/diagnostics.md.
  */
 static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 {
-	/* Where the eight event counters sit, in parameter-byte offsets. */
+	/*
+	 * Where the eight event counters sit, in parameter-byte offsets, with
+	 * the receive-status bit that drives each one [CR A-0089]. The label
+	 * names the TRIGGER, not the error: "s12b6" is "status[0x12] bit 6 was
+	 * clear", and what that bit means is still open.
+	 */
 	static const unsigned ev[8] = { 0x10u, 0x12u, 0x14u, 0x16u,
 					0x18u, 0x1Cu, 0x1Eu, 0x20u };
+	static const char *const evname[8] = { "s12b6", "s12b1", "s12b0",
+					       "drv1", "drv2", "unmapped",
+					       "s13hi", "s12b7" };
 	const uint8_t *p = m->param;
 	unsigned n = m->param_len;
 	uint16_t c[11];
@@ -3022,11 +3039,11 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 	       (unsigned long long)s->reg.frames_total,
 	       (double)s->reg.frames_total / 100.0, interval);
 
-	printf("call: status: events");
+	printf("call: status: errors");
 	for (i = 0u; i < 8u; i++) {
 		unsigned k = (ev[i] - 0x10u) / 2u;
 		int d = (int)c[k] - (int)s->reg.counter[k];
-		printf(" e%u@%02x=%u%+d", i, ev[i], c[k],
+		printf(" %s=%u%+d", evname[i], c[k],
 		       s->reg.have_counters ? d : 0);
 	}
 	printf("\n");

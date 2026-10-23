@@ -34,11 +34,11 @@ Per registered handset:
 | manufacturer, model | NWK `<<MODEL-IDENTIFIER>>` (0x78) | available, not captured |
 | codecs offered / in use | `<<CODEC-LIST>>` we send, `0x0230` codec byte | available |
 | encryption on this call | we run with `-C`; chip side is `Q-0049` | not available |
-| **slot type (long / full)** | `dir1+6` = `0x11718`, `0x28`/`0x50` `[CR A-0079]`; semantics `[CR A-0088]`, byte not yet locatable | candidate |
+| **slot type (long / full)** | `dir1+6` = `0x11718`, `0x28`/`0x50` `[CR A-0079]`; not in `0xF625` at all `[CR A-0089]` | **available** |
 | **time slot in use** | `0xF625` `[2]` — moves in lockstep with the carrier | **decoded** |
 | **carrier (Tx/Rx frequency)** | `0xF625` `[3]` | **decoded** |
 | **field strength** | `0xF625` `[6..15]`, ten per-carrier levels, larger = stronger | **decoded** `[CR A-0088]` |
-| **signal quality** | `0xF625` eight per-interval event counters; which is which is open | **received** |
+| **signal quality** | `0xF625` eight per-interval error counters `[CR A-0089]`; which is which is open | **decoded, unnamed** |
 | **call duration** | `0xF625` `[36..37]`, frames since establishment at 100 Hz | **decoded** |
 
 Per base: RFPI (have), radio parked/up (have), the dummy bearer's slot,
@@ -296,3 +296,108 @@ a guess.
 
 **Offset note** `[CR A-0088]`: our `[N]` is the chip's `answer[N+2]`; we index
 the payload after the 2-octet primitive.
+
+## `0xF625` closed from both sides `[CR A-0089]` `[2026-10-23]`
+
+`[CR A-0089]` answered the two traces asked for above, and confirmed the
+corpus decode from the chip side. What follows is what changed.
+
+### `[5]` is named, and it is not Mode
+
+**`[5]` is written as `(+0x116 bit 1) ? 2 : 1`** — the exact bit `A-0077`
+traced and `[CR A-0087]` then withdrew as a slot-type indicator.
+
+That closes the loop on our own measurement. `[5]` takes `01` and `02` across
+our corpus while `0x11718` reads `0x28` (full slot) in all 57 reads: the bit
+is set in ordinary bearer flow regardless of slot width, so `[5]` tracks
+something else entirely. The corpus and the firmware now say the same thing
+from opposite directions.
+
+**And the authoritative slot type is not in `0xF625` at all.** It lives in the
+per-handset record at `+0x0C`, as `(received bearer byte0 & 0x0E) == 0x0A`
+`[CR A-0088]`. So our "no byte satisfies `& 0x0E == 0x0A`" was not a sampling
+limitation after all — the byte genuinely is not there.
+
+Two consequences, and the first is the good one:
+
+1. **Mode is not blocked on anything.** `0x11718` (`dir1+6`) is our instrument
+   and always was; `0xF625` was never going to carry it. The diagnostics table
+   above is updated accordingly.
+2. The `0xF625` diff on `F4.37` changes from a search into a **falsification
+   with a pre-committed expectation: nothing moves.** It costs nothing — the
+   daemon already polls — and if a byte *does* move on a long slot, the clean
+   room's record-offset reading is wrong and we want to know.
+
+A note worth keeping: if AVM's Monitor does display Mode from `[5]`, it would
+mis-label some full-slot links as long. Not a thing to copy.
+
+### The eight event counters: per-slot receive-status, and each one's trigger
+
+`[CR A-0089]` mapped each counter to the bit that drives it. Every one
+increments when its bit is **clear**, and since the bit is set in 94–99 % of
+intervals (our zeros), **each counter counts the rare failing frames** — the
+error columns, confirmed in shape.
+
+| our byte | increments when |
+|---|---|
+| `[16]` | receive status `[0x12]` bit 6 clear |
+| `[18]` | receive status `[0x12]` bit 1 clear |
+| `[20]` | receive status `[0x12]` bit 0 clear |
+| `[22]` | a derived condition |
+| `[24]` | a derived condition |
+| `[28]` | did not map cleanly |
+| `[30]` | receive status `[0x13]` high nibble nonzero |
+| `[32]` | receive status `[0x12]` bit 7 clear |
+
+**What is deliberately absent is which bit means what** — A-CRC vs X-CRC vs
+sync. The room declined to label them from a reading it had not taken to
+ground, which after this week is the right call.
+
+### Our corpus cannot name them either, and the reason matters
+
+Before asking for anything further I ran the obvious check: do the counters
+separate by *when* they fire, or by *which fire together*? Across 511
+full-length samples:
+
+| pair | joint | expected if independent | enrichment |
+|---|---|---|---|
+| `[24]`&`[28]` | 13 | 0.90 | **14.4×** |
+| `[16]`&`[30]` | 7 | 0.47 | 15.0× |
+| `[16]`&`[18]` | 8 | 0.74 | 10.8× |
+| `[22]`&`[24]` | 12 | 1.56 | 7.7× |
+| `[22]`&`[28]` | 12 | 1.64 | 7.3× |
+| *(every other pair with n ≥ 3)* | | | 4.5×–29× |
+
+**Every pair is enriched.** That is the tell: errors cluster in time, a bad
+interval lights several counters at once, and the co-occurrence is dominated
+by one common "this interval was bad" factor rather than by any relationship
+between specific fields. The same confound as the spectrum-quality test
+earlier on this page, and it has to be called the same way: **the result is
+not evidence about which counter is which.**
+
+The call-phase split is no better — the apparent setup-vs-steady-state
+separation rests on counts of 1 to 8 out of 146 first polls, which is nothing.
+
+So the corpus is exhausted on this question. Naming these needs either a
+**directed** test — drive one known cause and watch one column — or a trace of
+the receive-status byte format. Not more mining.
+
+### The directed test, designed now so it discriminates
+
+Written before any run, per the project's own rule. A counter is named only if
+it moves **alone**, because the clustering above means "several went up" tells
+us nothing.
+
+| cause to drive | predicted | falsifies |
+|---|---|---|
+| handset carried to the range edge, call held | the signal/CRC columns climb steadily; sync columns stay near zero | if everything climbs together, the test cannot name anything and must be redesigned |
+| microwave oven / 2.4 GHz interferer near the base | a CRC column climbs while RSSI on the in-use carrier stays high | if RSSI drops too, the cause is not separable from range |
+| handset at rest, strong signal, long call | all eight stay at zero over ≥ 5 min | if any column ticks on a clean link, it is not an error counter |
+
+The third is the control and is the one to run first, because it is free: it
+needs no movement, and it is the only one of the three that can be run as part
+of an existing bench session.
+
+**Blocked on the maintainer**, not on the clean room: no DECT transmission
+happens unattended in this project, and the first two need somebody walking
+around with a handset.
