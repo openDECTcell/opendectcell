@@ -12,7 +12,9 @@ first dump as much as read:
 
   0x2269  live beacon base; the first 0x37 bytes are header and identity
   0x22a0  rotating A-field tail slots, stride 8, roughly 12 of them
-          a slot is ACTIVE when its marker byte is 0xe0
+          slot byte 0      = marker, ACTIVE when 0xe0
+          slot bytes 1..5  = the on-air 5-octet A-field tail
+          slot bytes 6..7  = spare/internal
   0x2459  FP_CONFIG broadcast buffer (what 0x022B stages)
   0x2477  the active length of that buffer
 
@@ -102,12 +104,18 @@ def main(argv):
         if s is None:
             print("  slot %-2d 0x%05x  (not read)" % (i, a))
             continue
+        # [CR A-0073]: marker at byte 0, the on-air tail at bytes 1..5,
+        # bytes 6..7 spare. Checking the wrong offset would report "no
+        # markers" and falsely condemn the map, so this is explicit.
         mark = "ACTIVE" if s[0] == ACTIVE else "      "
         if s[0] == ACTIVE:
             active += 1
-        print("  slot %-2d 0x%05x  %s  %s" % (i, a, mark, s.hex(" ")))
+        print("  slot %-2d 0x%05x  %s  marker %02x  tail %s  spare %s"
+              % (i, a, mark, s[0], s[1:6].hex(" "), s[6:8].hex(" ")))
+    print("\n  %d of %d slots active" % (active, SLOT_COUNT))
     if active == 0:
-        print("\n  NO ACTIVE SLOTS. Either the map is wrong for this build or "
+        print("\n  NO ACTIVE SLOTS AT BYTE 0. Either the map is wrong for "
+              "this build or "
               "the builder had not filled them. Send the room these bytes "
               "rather than guessing -- one wrong address is cheap to fix from "
               "a real dump.")
