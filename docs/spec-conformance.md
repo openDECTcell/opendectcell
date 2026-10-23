@@ -907,3 +907,54 @@ We send one anyway: `90 02 00 84` = codec negotiation, G.726 32 kbit/s,
 LU1/INA, full slot, CS only. The A540's own list is `90 03 00 01 02 00 84` --
 G.722 64 kbit/s on a **long slot** first, G.726 full slot second. We offer
 only its fallback.
+
+### The content sweep: it is not the message `[2026-10-24]`
+
+Eight phases with the timing fixed. Phases 1–2 were void (the handset had not
+re-attached inside a 60 s settle); the rest all refused identically.
+
+| # | variable | result |
+| --- | --- | --- |
+| 3 | no `<<CODEC-LIST>>` | `0x32` |
+| 4 | **exactly EN 300 444 table 21**: `<<SIGNAL>>` 40H, no codec list | `0x32` |
+| 5 | page header 4 (GAP voice code) | `0x32` |
+| 6 | page header 1 (PP negotiates attributes) | `0x32` |
+| 7 | the handset's own codec list + `<<BASIC-SERVICE>>` 0x88 | `0x32` |
+| 8 | baseline again | `0x32` |
+
+Phase 8 matches the earlier baseline, so the sweep is sound. **The GAP
+mandatory message, with nothing added and nothing missing, is refused.**
+
+### `[CR A-0076]` corrected: the page info byte is not inert
+
+A-0076 said the chip never reads `mail[2]` of `0x0300`, so `0x0C` and `0x2C`
+produce byte-identical pages, and told us never to treat it as an experimental
+variable again. That is wrong, and phase 7 shows it. `COMMAND_SET §8.2` gives
+`0x0200` CONNECTION_ESTABLISHED as `{handle, wideband}`:
+
+| phase | page byte | page-response connection |
+| --- | --- | --- |
+| 3, 4, 5, 6, 8 and vFIX | `0c` | `0x0200 {01, **00**}` |
+| **7** (`basicsvc=0x88`) | `2c` | `0x0200 {01, **01**}` |
+
+One byte in the page, one bit in the connection the handset then establishes.
+**We can steer the connection type from the page after all** — which is a
+capability we thought we did not have, even though it did not make the call
+succeed.
+
+### The U-plane sweep: the audio channel is not it either
+
+`earlybind` assigns the audio channel on the page response instead of on
+`{CC-CONNECT}` — which an unanswered incoming call never reaches — following
+`COMMAND_SET §9.2`, where the host's assignment comes straight after "radio
+connection up", and `[CR A-StockTrace-5 §15]`, where stock has a bearer
+~360 ms before its setup.
+
+It works, and it does not help. In `vBIND01` the connection came up at
+`t=75459` as `{01, 00}`, our early `0x0230` went out, and the chip confirmed
+at `t=75607` with `0x0242 {01, 41, 02, 00}` — channel 1, wideband bit set,
+slot mask 2. **The connection had an assigned audio channel before the
+`{CC-SETUP}` and the handset still refused.**
+
+So "the handset is being offered speech on a connection with no U-plane" is
+not the explanation, or at least not one the host can fix with `0x0230`.

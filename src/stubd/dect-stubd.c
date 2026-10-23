@@ -262,7 +262,8 @@ struct stubd {
 	 * again until the handset brings up a link or we give up.
 	 */
 	enum { RING_IDLE, RING_RELEASING, RING_PAGING, RING_WAIT_PAGE_RESP,
-	       RING_DONE } ring_state;
+	       RING_SETUP_DELAY, RING_DONE } ring_state;
+	uint64_t ring_setup_at;		/* when setupdelay=N expires */
 	uint64_t ring_release_until;	/* give the link time to go down */
 	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
 	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
@@ -400,6 +401,14 @@ struct stubd {
 		 * {handle, 0x40}.
 		 */
 		int earlybind;
+		/*
+		 * setupdelay=N: wait N ms after the page response before the
+		 * {CC-SETUP}. [CR A-StockTrace-5 §15] measured a connection
+		 * bearer on stock ~360 ms before its setup; we send ours
+		 * ~120 ms after the connection comes up, which may simply be
+		 * before the MAC has finished bringing the bearer up.
+		 */
+		unsigned setup_delay_ms;
 		/*
 		 * codeclist=HEX replaces the <<CODEC-LIST>> contents (the IE
 		 * value, without tag or length). EN 300 175-5 §7.7.54: one
@@ -2815,6 +2824,12 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	 * deadline passes, so a handset that never answers the page the way
 	 * we expect still gets a call rather than silence.
 	 */
+	if (s->ring_state == RING_SETUP_DELAY) {
+		if (now >= s->ring_setup_at)
+			ring_queue_setup(s, now, "setupdelay elapsed");
+		return;
+	}
+
 	if (s->ring_state == RING_WAIT_PAGE_RESP) {
 		if (now >= s->ring_resp_deadline)
 			ring_queue_setup(s, now, s->ring_setup_tries
@@ -3421,14 +3436,23 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			send_audio_bind(s, s->reg.handle);
 			s->reg.call_bound = 1;
 		}
-		ring_queue_setup(s, now, "page response received");
-		/*
-		 * Push it out in the same breath. The main loop would now get
-		 * it within POLL_MS anyway, but the handset has just answered
-		 * the page and is listening: the whole point of waiting for
-		 * the page response is to hit that window.
-		 */
-		drain_nwk(s, now);
+		if (s->audio.setup_delay_ms) {
+			s->ring_state = RING_SETUP_DELAY;
+			s->ring_setup_at = now + s->audio.setup_delay_ms;
+			printf("ring: page answered -- holding the CC-SETUP "
+			       "for %u ms to let the MAC finish the bearer\n",
+			       s->audio.setup_delay_ms);
+		} else {
+			ring_queue_setup(s, now, "page response received");
+			/*
+			 * Push it out in the same breath. The main loop would
+			 * now get it within POLL_MS anyway, but the handset
+			 * has just answered the page and is listening: the
+			 * whole point of waiting for the page response is to
+			 * hit that window.
+			 */
+			drain_nwk(s, now);
+		}
 	}
 
 	/*
@@ -4270,6 +4294,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->nocodeclist = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "earlybind", 9))
 			a->earlybind = 1;
+		else if (eq && klen == 10 && !memcmp(key, "setupdelay", 10)) {
+			if (v > 5000u)
+				return -1;
+			a->setup_delay_ms = (unsigned)v;
+		}
 		else if (eq && klen == 9 && !memcmp(key, "codeclist", 9)) {
 			const char *h = eq + 1;
 			size_t n = 0;
@@ -4698,6 +4727,7 @@ static void usage(void)
 		"           setuptries=N re-offers a refused CC-SETUP N times\n"
 		"           codeclist=HEX <<CODEC-LIST>> value octets\n"
 		"           earlybind    assign audio on the page response\n"
+		"           setupdelay=N hold the CC-SETUP N ms after the page\n"
 		"           (default 8; the default 16 s budget is SHORTER than\n"
 		"           our own F<CC.03> timer, so it gives up first)\n"
 		"           pagehdr=N appends a FOURTH byte to the 0x0300 page\n"
