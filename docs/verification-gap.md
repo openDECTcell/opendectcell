@@ -215,3 +215,50 @@ per-handset config above `0x957E`, whose layout we do not have. `Q-0054` asks
 for it. With that, the audit could name the intruder instead of counting it --
 and the A540 question becomes answerable directly: is its record there, under
 its own identity, after it registers?
+
+## The diagnostic we did not know existed `[2026-10-23, later still]`
+
+The maintainer pointed at AVM's public help page for the **DECT Monitor**, a
+feature of stock FRITZ!OS. It displays, per registered handset: `IPUI`,
+connected/disconnected, manufacturer and model, **field strength**,
+**signal quality**, **`Mode` — "Long Slot" (HD, two slots) or "Full Slot"**,
+**Tx/Rx frequency**, **the time slot in use**, supported and active codecs,
+whether the call is encrypted, and DECT Eco support. For the base: RFPI, the
+slot in use (including the **dummy bearer's** when no call is up), Tx
+frequency and radio power.
+
+**Every hard question of the last week is a field on that screen.**
+
+| what we did | what the Monitor does |
+|---|---|
+| spent an evening inferring long-slot from `0xF625` byte 5, then record `+0x116` bit 1 (withdrawn), then `dir1+6` | prints `Mode` |
+| declined the air-slot question for lack of a consumer | prints the slot in use |
+| have a handset that will not attach, and no way to see why | prints field strength and signal quality |
+| audit slot occupancy but cannot say whose slot it is | prints the IPUI per handset |
+
+That the information is displayed means **the host can get it from the chip**.
+We have been inferring what a shipping product reads directly.
+
+### One thing we already receive and have never used
+
+`0xF623` streams while the radio is on:
+
+```
+09 0a 1d 1e 1e 1f 1e 1d 25 21 1e 1e 37 00
+      '--------- ten values, 0x1d..0x27 ---------'
+```
+
+**Ten values, and DECT has ten carriers.** Our guess is a per-carrier RSSI
+scan — which would also be how the base picks its quietest carrier, something
+`mac-bringup.md` has recorded as "the STUB picks the quietest carrier itself"
+since G5 without anyone asking how it knows.
+
+Asked as `Q-0054`, with the guess stated so it is cheap to correct.
+
+### A position withdrawn
+
+Earlier the same day I declined to have the air slot traced, on the grounds
+that it had no consumer and the room had four open items that did. That was
+right at the time and is wrong now: the Monitor is the consumer, and it shows
+the slot, the carrier and the level together. Recorded because the reasoning
+was sound and the conclusion still expired within hours.
