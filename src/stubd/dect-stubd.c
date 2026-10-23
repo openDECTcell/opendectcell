@@ -279,6 +279,20 @@ struct stubd {
 		 */
 		unsigned remode_ms;
 		/*
+		 * remodebit6 keeps flag bit 6 SET in the re-assign, which asks
+		 * for mode 9 rather than mode 2: the channel's codec-side input
+		 * variant B (dest 11+k-1) instead of variant A (dest k).
+		 *
+		 * [CR A-0039] marks variant A as the likely G.726 encoder input
+		 * and variant B as the likely transparent (already-coded) path.
+		 * A wideband call cannot use the encoder: [CR A-DSP-8] found no
+		 * G.722 encoder in either STUB build, so wideband downlink audio
+		 * has to arrive on the lane already coded. Measured 2026-10-23:
+		 * with variant A routed and a G.722 lane we got white noise,
+		 * which is what an encoder fed coded octets would produce.
+		 */
+		int      remode_bit6;
+		/*
 		 * noconnect: never send 0x022D. The stock connect sequence is
 		 * exactly 0x0251 then 0x0230 [CR A-0034]; 0x022D is the stock
 		 * mute control (0x80 = mute), never sent at connect. Whether
@@ -1698,7 +1712,8 @@ static void remode_tick(struct stubd *s, uint64_t now)
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0230u;
 	m.param[0] = s->reg.remode_handle;
-	m.param[1] = (uint8_t)(a->flags & ~0x40u);	/* bit 6 CLEAR */
+	m.param[1] = a->remode_bit6 ? a->flags
+				    : (uint8_t)(a->flags & ~0x40u);
 	m.param[2] = (uint8_t)(a->mask & 0xFFu);
 	m.param[3] = (uint8_t)(a->mask >> 8);
 	m.param[4] = a->mode;
@@ -1707,7 +1722,8 @@ static void remode_tick(struct stubd *s, uint64_t now)
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
-	printf("call: re-assign for mode 2: 0x0230 {%02x %04x %02x %02x}\n",
+	printf("call: re-assign for mode %d: 0x0230 {%02x %04x %02x %02x}\n",
+	       a->remode_bit6 ? 9 : 2,
 	       m.param[1], a->mask, a->mode, a->codec);
 	fflush(stdout);
 }
@@ -3124,6 +3140,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->play_slot_ms = (unsigned)v;
 		else if (klen == 6 && !memcmp(key, "remode", 6))
 			a->remode_ms = (unsigned)v;
+		else if (!eq && klen == 10 && !memcmp(key, "remodebit6", 10))
+			a->remode_bit6 = 1;
 		else if (klen == 3 && !memcmp(key, "dsp", 3)) {
 			/* dsp=DST:SRC -- the generic check above let the ':' through */
 			unsigned long src;
@@ -3306,6 +3324,10 @@ static void usage(void)
 		"           remode=MS sends a second 0x0230 with flag bit 6 clear\n"
 		"           MS ms after 0x022D, which asks the chip's channel\n"
 		"           configurator for mode 2 (PCM out <- channel, chain\n"
+		"           remodebit6 keeps bit 6 set instead: mode 9, which uses\n"
+		"           the channel's input variant B (the transparent path a\n"
+		"           wideband call needs, since the chip has no G.722\n"
+		"           encoder) rather than variant A (the G.726 encoder)\n"
 		"           enabled) instead of the mode 1 our bind leaves it in,\n"
 		"           where PCM out is the silence constant [CR A-0039]\n"
 		"           playslot=MS walks the lane across every transmit slot,\n"
