@@ -34,11 +34,12 @@ Per registered handset:
 | manufacturer, model | NWK `<<MODEL-IDENTIFIER>>` (0x78) | available, not captured |
 | codecs offered / in use | `<<CODEC-LIST>>` we send, `0x0230` codec byte | available |
 | encryption on this call | we run with `-C`; chip side is `Q-0049` | not available |
-| **slot type (long / full)** | `dir1+6` = `0x11718`, `0x28`/`0x50` `[CR A-0079]`; `Q-0054` §3 asks what the Monitor uses | candidate |
-| **time slot in use** | `Q-0054` §2/§5 | not available |
-| **carrier (Tx/Rx frequency)** | `Q-0054` §2/§5 | not available |
-| **field strength** | `0xF623`, ten values ≈ per-carrier RSSI; `Q-0054` §4 | received, undecoded |
-| **signal quality** | `Q-0054` §4 | not available |
+| **slot type (long / full)** | `dir1+6` = `0x11718`, `0x28`/`0x50` `[CR A-0079]`; semantics `[CR A-0088]`, byte not yet locatable | candidate |
+| **time slot in use** | `0xF625` `[2]` — moves in lockstep with the carrier | **decoded** |
+| **carrier (Tx/Rx frequency)** | `0xF625` `[3]` | **decoded** |
+| **field strength** | `0xF625` `[6..15]`, ten per-carrier levels, larger = stronger | **decoded** `[CR A-0088]` |
+| **signal quality** | `0xF625` eight per-interval event counters; which is which is open | **received** |
+| **call duration** | `0xF625` `[36..37]`, frames since establishment at 100 Hz | **decoded** |
 
 Per base: RFPI (have), radio parked/up (have), the dummy bearer's slot,
 carrier, radio power, DECT Eco state.
@@ -161,3 +162,137 @@ in the house, which is what a spectrum view is for.
 
 So what we still need traced is **Mode (long vs full slot)** and **the time
 slot** — not the carrier or the level, which we now have.
+
+## `0xF625`, second pass: the counter block, and a negative on Mode `[2026-10-23]`
+
+`[CR A-0088]` confirmed `[6..15]` from the chip side (ten values copied from a
+base array, stride 2, low byte each) and gave the **semantic** key for Mode —
+`(received bearer byte0 & 0x0E) == 0x0A` means Long Slot — deliberately
+leaving *which* answer byte carries it to our data, since we hold 554 answers
+and they do not.
+
+### The Mode test cannot run on this corpus, and that is a fact about the corpus
+
+The proposed cross-check was: find the answer byte whose `& 0x0E` is `0x0A`
+exactly when `dir1+6` (`0x11718`) reads `0x50`, and not when it reads `0x28`.
+
+**Every read of `0x11718` we have ever taken reads `0x28`.** 57 reads, across
+nine runs (`cap_A/B/C`, `sv_D/E/F/G`, `h0x10000`, `vF435`), two different base
+addresses covering the byte. Not one `0x50`.
+
+So every link in the corpus is a full slot, the independent variable never
+moves, and no amount of mining can separate the Mode byte from the 25 other
+bytes that are also constant. **The test is not negative; it is unrunnable,**
+and it stays unrunnable until a long slot exists on the bench — which is
+exactly what `F4.37` is for.
+
+What the corpus *can* say is a bound on where Mode is **not**:
+
+> Across all 554 answers, **no byte except `[1]` ever satisfies
+> `(b & 0x0E) == 0x0A`**, and `[1]` is `0x0a` in all 554 — constant, and the
+> obvious reading of a constant ten beside ten RSSI entries is "number of
+> entries", not a bearer attribute.
+
+Which leaves two possibilities, and they are worth stating because they need
+different next steps:
+
+1. Mode is one of the bytes that is **constant at `0x00`** here (`[4]`, or one
+   of the high halves of the counter fields below) — consistent, since
+   `0x00 & 0x0E = 0x00`, i.e. "not Long". A long-slot call settles it in one
+   poll.
+2. Mode is **not copied into `0xF625` at all**, and the Monitor reads it from
+   the per-handset record directly. Also settled by the same run — if nothing
+   moves, it is not here.
+
+Either way the next move is a long-slot call, not a trace. Recorded so that
+the room does not spend a trace on a question our data cannot answer yet.
+
+### What the corpus *did* give up: the answer is a counter block
+
+Bytes `[16..37]` are **eleven 16-bit little-endian counters** — every odd
+index from 17 to 35 is `0x00` in all 511 full-length samples, which is what a
+16-bit field with small values looks like. `[38..44]` are always zero.
+
+**`[36..37]` is a frame counter for the link.** Measured against wall clock
+across 365 consecutive poll intervals:
+
+| | frames per second |
+|---|---|
+| median | **100.00** |
+| 10th percentile | 99.92 |
+| 90th percentile | 100.05 |
+
+The DECT TDMA frame is 10 ms. **Nothing else in this system ticks at 100 Hz**,
+and the agreement holds to ~0.01 s over 88 s of call:
+
+```
+vC4T4d, link 1:
+  t= 93.71  @36=  343
+  t=101.71  @36= 1142   (+799 frames = 7.99 s, elapsed 8.00 s)
+  ...
+  t=181.71  @36= 9143   (+8800 frames = 88.00 s, elapsed 88.00 s)
+```
+
+It starts near zero when the link comes up, so it is **frames since
+establishment — the call duration, free, with no timer of our own**. It is 16
+bits, so it wraps at 65 536 frames ≈ **10 min 55 s**; a consumer must track
+wraps for longer calls.
+
+**`[26..27]` is the frame count for the polling interval**, mirrored at
+`[34..35]` (equal in 505 of 511). `0x0320` = 800 = 8 s × 100 Hz is the modal
+value, matching our `status=8000` poll. And the running sum closes:
+`@36(n) = @36(n−1) + @26(n)` is **exact in 347 of 365 consecutive pairs**; the
+18 misses are all new-call restarts that my session-splitting did not catch,
+not drift.
+
+The other eight — `[16] [18] [20] [22] [24] [28] [30] [32]` — are **per-interval
+event counters**: zero in 94–99 % of samples, otherwise 1 or 2, and they go
+both up and down between polls, so they are not cumulative. These are the
+shape of a Monitor's error columns (lost frames, handovers, CRC failures). Our
+corpus cannot name them individually — we have too few events, and the obvious
+test against spectrum quality came back **confounded**, not supporting:
+samples with a *strong* carrier show more events (19 %) than flat ones (0 %),
+because flat-spectrum samples are mostly idle links where nothing happens at
+all. Naming these is a reasonable thing to ask the room for, later.
+
+### `[2]` is promoted: it is the other half of the physical channel
+
+`[2]` takes only `00 02 04 06 08`. The decisive observation is not its values
+but **when it moves**. Across consecutive polls within one call:
+
+| | count |
+|---|---|
+| neither `[2]` nor carrier `[3]` changed | 328 |
+| **both changed together** | **32** |
+| `[2]` alone | 3 |
+| `[3]` alone | 2 |
+
+**86 % of all changes to either byte are simultaneous changes to both.** A
+DECT bearer handover moves to a new *physical channel*, which is a (slot,
+carrier) pair — both halves change at once, by construction. A byte that is
+constant through a call and jumps in lockstep with the carrier is the other
+half of that designation. That is much stronger than "even values and it
+varies", which was all we had.
+
+Still unexplained: why only five even values. Either the chip reports
+`slot × 2`, or it allocates only even slots. Not resolved here, and not worth
+a guess.
+
+### Revised field map
+
+| bytes | meaning | confidence |
+|---|---|---|
+| `[0]` | link number (echo of the `0xF624` request) | certain |
+| `[1]` | `0x0a` always — count of carrier entries | strong |
+| `[2]` | **time slot**, or slot × 2 | strong (moves with `[3]`) |
+| `[3]` | **carrier in use** | certain |
+| `[4]` | `0x00` always | — |
+| `[5]` | `01`/`02`; the `+0x116`-derived byte of `A-0077` | unknown |
+| `[6..15]` | **per-carrier RSSI, larger = stronger** | certain `[CR A-0088]` |
+| `[16..25]`, `[28..33]` | eight 16-bit LE per-interval event counters | strong |
+| `[26..27]`, `[34..35]` | frames in this polling interval | certain |
+| `[36..37]` | **frames since link establishment** (wraps at ~10m55s) | certain |
+| `[38..44]` | zero | — |
+
+**Offset note** `[CR A-0088]`: our `[N]` is the chip's `answer[N+2]`; we index
+the payload after the 2-octet primitive.
