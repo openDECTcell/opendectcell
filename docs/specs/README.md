@@ -27,7 +27,27 @@ curl -sL -A "$UA" -o docs/specs/en_300444v020501p.pdf \
 ```
 
 `etsi.org` returns 403 without a browser `User-Agent`; that is what `-A` is for.
-To search them, `pdftotext -layout FILE -` and grep the text.
+
+**Reading them: `-layout` for prose, `-raw` for tables.** `pdftotext -layout`
+is right for clause text, and **wrong for the coding tables** — it emits them
+column-wise, so all the "bit 8" values come out in one block, then all the
+"bit 7" values, and reassembling them by hand is guesswork. On 2026-10-23 that
+produced three confident, wrong answers in a row (`<<MULTI-KEYPAD>>` as `0x32`,
+`<<DURATION>>` as `0x6E`, and an MM table in which not one of ten known values
+survived calibration).
+
+`pdftotext -raw -f PAGE -l PAGE FILE -` renders the same tables correctly, one
+element per line with its bits and its clause reference:
+
+```
+Multi-Keypad               0 0 1 0 1 1 0 0   7.7.27
+Calling Party Number       0 1 1 0 1 1 0 0   7.7.9
+```
+
+**Calibrate anyway.** Whatever the method, check the result against identifiers
+already verified on the wire (`0x05` portable identity, `0x7C` codec list,
+`0x77` IWU-to-IWU) before trusting a new one. That check is what caught all
+three errors.
 
 **GAP was missing until 2026-10-23**, which is worth recording: the project's
 standing rule is "GAP and CAT-iq are the product", and we had been inferring

@@ -257,3 +257,60 @@ it. That is also why `ring_queue_setup()` could be refused by a busy CC entity
 Still open: **Gap 2** (no lower-layer connection, the live defect) and **Gap 4**
 (`IWU-INFO` never sent or answered, deferred since the registration-time codec
 list turned out not to be the cause).
+
+## CLIP / CNIP audit `[2026-10-23]`
+
+Audited `dect_clip.c` and the `{CC-SETUP}` builder against EN 300 175-5 §7.7.9
+(figure 33), §7.7.53 (figure 98b) and §7.6, because no handset has ever been
+shown either element and we wanted to know whether what we emit is even right.
+
+**The encoder is correct.** Every field checked against the figures:
+
+| field | spec | ours |
+|---|---|---|
+| `<<CALLING-PARTY-NUMBER>>` id | `0110 1100` = `0x6C` | `0x6C` |
+| `<<CALLING-PARTY-NAME>>` id | `0110 1101` = `0x6D` | `0x6D` |
+| number octet 3 | ext bit 8, type bits 7–5, NPI bits 4–1 | `(ton & 7) << 4 \| (npi & 15)` |
+| number octet 3a | ext bit 8 set, presentation bits 7–6, spare 5–3 zero, screening 2–1 | `0x80 \| (pres & 3) << 5 \| (scr & 3)` |
+| name octet 3 | bit 8 zero, presentation 7–6, alphabet 5–3, screening 2–1 | `(pres & 3) << 5 \| (alpha & 7) << 2 \| (scr & 3)` |
+| enums | TON 0/1/2/3/4/6, NPI 0/1/3/7/8/9/10/11/12/13/14/15, presentation 0–3, screening 0–3, alphabet 0/1/7 | all present, all matching |
+
+Our omit-rather-than-guess policy also matches §7.7.53 note 3: when the
+network provides no CNIP indication the element "should not be used", and the
+"name not available" indicator "should not be used to cover this case".
+
+**A defect found, and it was ours and one day old.** §7.6:
+
+> "The variable-length information elements are transmitted over the air
+> according to the ascending numerical order of their identifiers. This allows
+> receiving equipment to detect the presence or absence of a particular
+> information element without scanning through an entire message."
+
+A receiver may therefore **stop looking once it has passed** the identifier it
+wants. Our `{CC-SETUP}` was emitting `<<CODEC-LIST>>` (`0x7C`) **before** the
+caller identity (`0x6C`, `0x6D`) — a descending step immediately before the
+caller ID, which is exactly the shape that makes a conforming handset skip it.
+
+Introduced by `893a70e` earlier the same day, when the codec list was added to
+fix the A540 refusal. Fixed: the identity now precedes the codec list, and
+`tests/test_cc.c` carries an **invariant** over the whole built message rather
+than a check of one pair — verified by reinstating the bug, watching the test
+fail, and restoring the fix.
+
+**It is not the explanation for the original symptom**, and the comment in
+`dect_clip.h` that implied it has been corrected. The C4 ignored byte-exact
+`0x6C`/`0x6D` in v28/v29, which predate the codec list by days; the order was
+ascending then. That remains open, and the leading candidate is still that the
+call was not marked external (`<<CALL-INFORMATION>>`, test card #73) — the C4
+displayed "Intern".
+
+**Two notes for whoever runs the bench test:**
+
+- Figure 98b numbers the name's last octet `L+1`, where figure 33 numbers the
+  number's `L+2`. §7.6 settles it — "the length is calculated starting from
+  octet 3" — so `L+2` is right and the figure is a typo. We follow the general
+  rule, which is what `dect_nwk_put_ie()` does for every element.
+- §7.7.53 note 1 is a feature we do not have yet: if the calling number matches
+  an entry in the FP contact list, the name from that list should be sent with
+  screening "user-provided, verified and passed". That belongs with the
+  controller's contact list, not here.

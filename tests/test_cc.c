@@ -5,6 +5,8 @@
  */
 #include "check.h"
 #include "../src/libopendectcell/dect_cc.h"
+#include "../src/libopendectcell/dect_clip.h"
+#include "../src/libopendectcell/dect_callinfo.h"
 #include "../src/libopendectcell/dect_nwk.h"
 
 #include <string.h>
@@ -705,6 +707,108 @@ static void test_keypad_outside_a_call_is_ignored(void)
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
 }
 
+/*
+ * EN 300 175-5 §7.6: "the variable-length information elements are
+ * transmitted over the air according to the ascending numerical order of
+ * their identifiers. This allows receiving equipment to detect the presence
+ * or absence of a particular information element without scanning through an
+ * entire message."
+ *
+ * So a receiver may stop looking once it has passed the identifier it wants,
+ * and a descending step can make a conforming handset skip everything after
+ * it. We shipped exactly that for part of 2026-10-23 -- the codec list
+ * (0x7C) went out ahead of the caller identity (0x6C) -- which is why this is
+ * an invariant over the whole built message rather than a check of one pair.
+ *
+ * Fixed-length elements (bit 8 set) are a separate class and do not take part
+ * in the ordering, so they are skipped here exactly as dect_nwk_find_ie()
+ * skips them.
+ */
+static void check_ie_order_ascending(const uint8_t *msg, size_t len)
+{
+	struct dect_nwk_hdr h;
+	const uint8_t *ies;
+	size_t ies_len, pos = 0;
+	int last = -1;
+
+	CHECK(dect_nwk_parse(msg, len, &h, &ies, &ies_len) == 0);
+	while (pos < ies_len) {
+		uint8_t ie = ies[pos];
+
+		if (ie & 0x80u) {		/* fixed length: 1 or 2 octets */
+			pos += ((ie & 0xF0u) == 0xE0u) ? 2 : 1;
+			continue;
+		}
+		if (pos + 2 > ies_len)
+			break;
+		CHECK(ie > last);		/* strictly ascending */
+		last = (int)ie;
+		pos += 2 + ies[pos + 1];
+	}
+}
+
+/* The full FP-originated SETUP: identities, basic service, signal, caller
+ * identity, codec list and call information, all at once. */
+static void test_setup_ie_order_is_ascending(void)
+{
+	static const uint8_t port_id[] = { 0x10, 0x20, 0x30 };
+	static const uint8_t fixed_id[] = { 0x11, 0x22, 0x33, 0x44, 0x55 };
+	static const uint8_t codecs[] = { 0x90, 0x02, 0x00, 0x84 };
+	struct dect_callinfo ci;
+	struct dect_clip id;
+	struct dect_cc cc;
+	uint8_t out[256];
+	size_t n;
+	int hint;
+
+	for (hint = 0; hint <= 1; hint++) {
+		dect_cc_init(&cc);
+		dect_cc_set_codec_list(&cc, codecs, sizeof(codecs));
+		dect_cc_set_signal(&cc, 1, DECT_SIGNAL_ALERT_PATTERN0);
+
+		dect_callinfo_init(&ci);
+		ci.has_line = 1;
+		ci.line_id = 1;
+		dect_cc_set_callinfo(&cc, &ci);
+
+		memset(&id, 0, sizeof(id));
+		dect_clip_set_number(&id, "0123456789",
+				     DECT_CLIP_TON_NATIONAL,
+				     DECT_CLIP_NPI_E164,
+				     DECT_CLIP_PRES_ALLOWED,
+				     DECT_CLIP_SCR_NETWORK);
+		dect_clip_set_name(&id, "Ada Lovelace",
+				   DECT_CLIP_ALPHABET_DECT,
+				   DECT_CLIP_PRES_ALLOWED,
+				   DECT_CLIP_SCR_NETWORK);
+		id.emit_before_basic_service = (uint8_t)hint;
+
+		CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+					  fixed_id, sizeof(fixed_id),
+					  0x80, &id), 0);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		CHECK(n > 0);
+		check_ie_order_ascending(out, n);
+
+		/* and the caller identity really is in there */
+		{
+			struct dect_nwk_hdr h;
+			const uint8_t *ies, *p;
+			size_t ies_len, plen;
+
+			dect_nwk_parse(out, n, &h, &ies, &ies_len);
+			p = dect_nwk_find_ie(ies, ies_len,
+					     DECT_IE_CALLING_PARTY_NUMBER,
+					     &plen);
+			CHECK(p != NULL);
+			p = dect_nwk_find_ie(ies, ies_len,
+					     DECT_IE_CALLING_PARTY_NAME,
+					     &plen);
+			CHECK(p != NULL);
+		}
+	}
+}
+
 int main(void)
 {
 	test_setup_carries_line_identifier();
@@ -730,5 +834,6 @@ int main(void)
 	test_keypad_overflow_is_bounded_and_flagged();
 	test_keypad_in_the_setup_is_collected();
 	test_keypad_outside_a_call_is_ignored();
+	test_setup_ie_order_is_ascending();
 	return CHECK_DONE();
 }

@@ -251,6 +251,26 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 	 * One codec, G.726 32 kbit/s, full slot: the same list stock
 	 * advertises, byte for byte [CR A-0059].
 	 */
+	/*
+	 * ORDER MATTERS, and this block used to get it wrong. EN 300 175-5
+	 * §7.6: "the variable-length information elements are transmitted
+	 * over the air according to the ascending numerical order of their
+	 * identifiers. This allows receiving equipment to detect the presence
+	 * or absence of a particular information element without scanning
+	 * through an entire message." A receiver is therefore entitled to
+	 * stop looking once it has passed the identifier it wants.
+	 *
+	 * The identity is 0x6C/0x6D and the codec list is 0x7C, so the
+	 * identity goes FIRST. Emitting the codec list first -- which this
+	 * did between 893a70e and now, both landing 2026-10-23 -- puts a
+	 * descending step in the message right before the caller ID, which is
+	 * exactly the shape that makes a conforming handset skip it.
+	 *
+	 * Neither IE is fatal: if either does not fit, the call still rings.
+	 */
+	if (id && !id->emit_before_basic_service)
+		off = put_identity(b, off, id);
+
 	if (cc->codec_list_len) {
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_CODEC_LIST,
@@ -259,10 +279,7 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 			return -1;
 	}
 
-	if (id && !id->emit_before_basic_service)
-		off = put_identity(b, off, id);
-
-	/* Line and call identifiers, last as in the stock order. */
+	/* <<CALL-INFORMATION>> is 0x7E, so it is last and stays last. */
 	off = put_callinfo(b, off, &cc->callinfo);
 
 	txq_commit(cc, idx, off);
