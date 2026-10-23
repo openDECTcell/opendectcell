@@ -1462,10 +1462,55 @@ static int sub_load(struct stubd *s)
  * 0xF605 / 0x015F / 0x017C are intentionally NOT sent (not on AVM's ordinary
  * voice-handset path).
  */
+/*
+ * Clear every subscription slot we do not own.
+ *
+ * The chip keeps a subscription table of its own and it SURVIVES our daemon:
+ * we only ever write one slot, so a handset enrolled in an earlier session
+ * stays reachable in another slot for ever. Measured 2026-10-23:
+ *
+ *   vF426  slot 1 = handset A, slots 2..6 untouched -> 51 connections, every
+ *          one of them from handset B, which our store did not contain
+ *   vF427  slot 1 = handset A, slots 2..6 cleared   -> 0 connections, no
+ *          C-plane traffic at all
+ *
+ * So the base was accepting a handset it had no record of, which is wrong
+ * under GAP -- an FP serves subscribed handsets -- and it made every identity
+ * question this week ambiguous, because the store said one thing and the air
+ * another. [CR A-0065] decodes 0x0247 as {slot, op (0 = clear, 1 = set),
+ * flag}, which is what makes the fix a three-byte mail per slot.
+ */
+static void clear_foreign_slots(struct stubd *s, uint8_t keep)
+{
+	struct dect_mail m;
+	uint8_t slot;
+
+	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
+		if (slot == keep)
+			continue;
+		memset(&m, 0, sizeof(m));
+		m.src = DECT_TASK_PCM;
+		m.dst = DECT_TASK_CONTACT_DST;
+		m.prim = 0x0247u;
+		m.param[0] = slot;
+		m.param[1] = 0x00u;	/* op: clear */
+		m.param[2] = 0x00u;
+		m.param_len = 3;
+		send_mail(s, (unsigned int)s->tx_slot, &m);
+		if (s->verbose)
+			log_mail(&m, "tx M", s->show_params);
+	}
+	printf("sub: cleared chip subscription slots other than %u -- the chip "
+	       "keeps them across runs and would otherwise still admit a "
+	       "handset we have no record of\n", keep);
+}
+
 static void send_subscription(struct stubd *s)
 {
 	struct dect_mail m;
 	uint8_t slot = dect_mm_sub_slot(&s->reg.mm);
+
+	clear_foreign_slots(s, slot);
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
