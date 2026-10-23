@@ -752,6 +752,12 @@ struct stubd {
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
 	uint32_t    voice_bytes;
 	uint32_t    voice_space_checked;
+	/*
+	 * Outstanding UAK read-back, 0 = none. See uak_verify_send().
+	 */
+	uint32_t uak_check_addr;
+	uint8_t  uak_check_slot;
+
 	/* Per-run tally of commands sent, by verification class. */
 	uint32_t verify_n[17];
 	uint32_t verify_other;
@@ -844,14 +850,29 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
  * reply; and `[CR A-0075]` says 0x0242 is emitted on the no-act early-out, so
  * the one reply we had been treating as a confirmation never was one.
  *
- * We cannot fix that here -- a read-back needs the address of the subscription
- * table, which is Q-0052. What we can do is stop the gap being invisible, so
- * nobody again reads a quiet log as a working base.
+ * `[CR A-0086]` then settled how much of it matters, and the answer is: less
+ * than it looks, with one exception.
+ *
+ *   - **The chip has no NAK and no error indication of any kind**, so a
+ *     read-back is the only check that can exist. There is nothing to listen
+ *     for, and we were not missing a mechanism.
+ *   - **Stock does not verify either**, and stock has run this chip in the
+ *     field for years -- but it periodically **re-asserts** most subscription
+ *     state, so a silently lost write self-heals. That is how it gets away
+ *     with it, and it is a better design than checking.
+ *   - **The UAK is the exception**: written once at enrolment, never
+ *     re-asserted, and it is the credential a handset needs to attach. Stock
+ *     has that hole too.
+ *
+ * So we check the UAK (uak_verify_send) and deliberately do not build general
+ * command verification. This table stays because it keeps the assumption
+ * visible -- a quiet log should not read as a verified one.
  */
 enum verify_class {
-	VERIFY_BY_REPLY,	/* the reply IS the result; nothing to assume */
-	VERIFY_READABLE,	/* the effect sits in chip memory we could read */
-	VERIFY_NONE,		/* no observable effect we know of */
+	VERIFY_QUERY,		/* a read or poll: the reply IS the result */
+	VERIFY_READBACK,	/* a state change we verify by reading it back */
+	VERIFY_READABLE,	/* a state change, readable, that we do not check */
+	VERIFY_NONE,		/* a state change with nothing to read */
 };
 
 static const struct {
@@ -860,10 +881,10 @@ static const struct {
 	const char *what;
 	const char *note;
 } verify_tbl[] = {
-	{ 0xFFF1u, VERIFY_BY_REPLY,  "memory read",            "the reply is the result" },
-	{ 0xF624u, VERIFY_BY_REPLY,  "status poll",            "answered by 0xF625" },
-	{ 0x020Au, VERIFY_READABLE,  "subscription record",    "address unknown -- Q-0052" },
-	{ 0x0247u, VERIFY_READABLE,  "subscription slot op",   "address unknown -- Q-0052" },
+	{ 0xFFF1u, VERIFY_QUERY,     "memory read",            "the reply is the result" },
+	{ 0xF624u, VERIFY_QUERY,     "status poll",            "answered by 0xF625" },
+	{ 0x020Au, VERIFY_READBACK,  "subscription record",    "read back at 0x9518 + (slot-1)*0x11 [A-0085]" },
+	{ 0x0247u, VERIFY_NONE,      "subscription slot op",   "stock re-asserts this state, so a lost write self-heals [A-0086]" },
 	{ 0x0230u, VERIFY_READABLE,  "assign audio channel",   "0x0242 is 'processed', NOT 'applied' [A-0075]; real gate is record +0x116 bit 5" },
 	{ 0x016Au, VERIFY_READABLE,  "channel config",         "matrix is readable; we do not check" },
 	{ 0x0251u, VERIFY_READABLE,  "set channel params",     "matrix is readable; we do not check" },
@@ -875,7 +896,7 @@ static const struct {
 	{ 0x015Bu, VERIFY_NONE,      "radio on/park",          "no known readable effect" },
 	{ 0x022Bu, VERIFY_NONE,      "enable token",           "no known readable effect" },
 	{ 0x022Cu, VERIFY_NONE,      "close registration",     "no known readable effect" },
-	{ 0xF600u, VERIFY_BY_REPLY,  "contact",                "answered by 0xF601" },
+	{ 0xF600u, VERIFY_QUERY,     "contact",                "answered by 0xF601" },
 	{ 0x0244u, VERIFY_NONE,      "transmit C-plane",       "DLC acks the frame; the chip never says it sent it" },
 };
 
@@ -916,11 +937,17 @@ static void verify_report(const struct stubd *s)
 	size_t i;
 
 	for (i = 0; i < VERIFY_TBL_N; i++) {
-		if (verify_tbl[i].cls == VERIFY_BY_REPLY) {
+		switch (verify_tbl[i].cls) {
+		case VERIFY_QUERY:
 			reads += s->verify_n[i];
-			verified += s->verify_n[i];
-		} else {
+			break;
+		case VERIFY_READBACK:
 			changes += s->verify_n[i];
+			verified += s->verify_n[i];
+			break;
+		default:
+			changes += s->verify_n[i];
+			break;
 		}
 	}
 	changes += s->verify_other;
@@ -933,8 +960,9 @@ static void verify_report(const struct stubd *s)
 			continue;
 		printf("chip:   0x%04X x%-5u %-22s %s (%s)\n",
 		       verify_tbl[i].prim, s->verify_n[i], verify_tbl[i].what,
-		       verify_tbl[i].cls == VERIFY_BY_REPLY ? "verified"
-							   : "NOT VERIFIED",
+		       (verify_tbl[i].cls == VERIFY_QUERY ||
+			verify_tbl[i].cls == VERIFY_READBACK) ? "verified"
+							      : "NOT VERIFIED",
 		       verify_tbl[i].note);
 	}
 	if (s->verify_other)
@@ -945,13 +973,14 @@ static void verify_report(const struct stubd *s)
 	 * when every state change is unchecked, which is the opposite of the
 	 * truth. A summary that flatters is worse than no summary.
 	 */
-	printf("chip: %lu state-changing command%s sent, %s verified. "
-	       "%lu read%s (self-verifying, nothing assumed).\n",
-	       changes, changes == 1 ? "" : "s",
-	       changes ? "NONE" : "none", reads, reads == 1 ? "" : "s");
-	if (changes)
-		printf("chip: every state change above was sent and assumed. "
-		       "See docs/verification-gap.md\n");
+	printf("chip: %lu state-changing command%s sent, %lu verified by "
+	       "read-back. %lu query/read%s.\n",
+	       changes, changes == 1 ? "" : "s", verified,
+	       reads, reads == 1 ? "" : "s");
+	if (changes > verified)
+		printf("chip: the other %lu were sent and assumed -- the chip "
+		       "has no error indication to have missed [A-0086]. "
+		       "See docs/verification-gap.md\n", changes - verified);
 	fflush(stdout);
 }
 
@@ -1711,6 +1740,8 @@ static int sub_load(struct stubd *s)
 	return 1;
 }
 
+static void uak_verify_send(struct stubd *s, uint8_t slot);
+
 /*
  * Persist the just-enrolled handset in the chip so it holds standby and is
  * reachable: 0x0247 {slot, op=1, status} then 0x020A {slot, UAK[16], extra},
@@ -1804,6 +1835,104 @@ static void send_subscription(struct stubd *s)
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)			/* params carry the UAK: -p is local only */
 		log_mail(&m, "tx M", s->show_params);
+	uak_verify_send(s, slot);	/* [CR A-0085] the only check that exists */
+}
+
+/*
+ * Read back the subscription record we just wrote, and say whether it landed.
+ *
+ * `[CR A-0085]`: 0x020A copies the 16-byte UAK to
+ *
+ *	0x9518 + (slot - 1) * 0x11
+ *
+ * with a flag at +0x10, six slots, ending at 0x957E. The handler is a direct
+ * memcpy that returns immediately, and the chip processes mails in order, so
+ * a read issued after the write sees the finished result.
+ *
+ * `[CR A-0086]` is why this one command gets a check when we decided the
+ * others do not need one:
+ *
+ *   - The chip has **no rejection path and no error indication at all.** Not
+ *     for this command, not for any of them. Accepted and dropped look
+ *     identical, so a read-back is the only verification that can exist.
+ *   - Stock does not verify either -- but stock periodically **re-asserts**
+ *     most subscription state, so a lost write self-heals. The UAK is the
+ *     exception: written once at enrolment and never re-asserted. Stock has
+ *     our exact failure mode here and no way to notice it.
+ *
+ * So: one write-once, unprotected, silently-droppable command, carrying the
+ * credential the handset needs to attach. That is worth one read.
+ *
+ * The UAK is key material. We compare it and report the verdict; the bytes
+ * are never printed, not even under -p.
+ */
+#define SUB_UAK_BASE	0x9518u
+#define SUB_UAK_STRIDE	0x11u
+
+static void uak_verify_send(struct stubd *s, uint8_t slot)
+{
+	struct dect_mail m;
+	uint32_t addr;
+
+	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
+		return;
+	addr = SUB_UAK_BASE + (uint32_t)(slot - 1u) * SUB_UAK_STRIDE;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_PCM_REMOTE;
+	m.prim = 0xFFF1u;
+	m.param[0] = 0x07u;			/* MEM_READ */
+	m.param[1] = (uint8_t)(addr & 0xFFu);
+	m.param[2] = (uint8_t)((addr >> 8) & 0xFFu);
+	m.param[3] = (uint8_t)((addr >> 16) & 0xFFu);
+	m.param[4] = (uint8_t)((addr >> 24) & 0xFFu);
+	m.param[5] = SUB_UAK_STRIDE;		/* 16 key bytes + the flag */
+	m.param[6] = 0x00u;
+	m.param_len = 7;
+	s->uak_check_addr = addr;
+	s->uak_check_slot = slot;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+}
+
+/* Match a 0xFFF1 sub 0x08 reply against an outstanding read-back. */
+static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
+{
+	uint32_t addr;
+
+	if (!s->uak_check_addr || m->param_len < 7u || m->param[0] != 0x08u)
+		return;
+	addr = (uint32_t)m->param[1] | ((uint32_t)m->param[2] << 8)
+	     | ((uint32_t)m->param[3] << 16) | ((uint32_t)m->param[4] << 24);
+	if (addr != s->uak_check_addr)
+		return;			/* some other read */
+	s->uak_check_addr = 0;
+
+	if (m->param_len < 7u + DECT_MM_UAK_LEN) {
+		printf("sub: UAK read-back for slot %u came back short "
+		       "(%u bytes) -- CANNOT VERIFY\n",
+		       s->uak_check_slot, (unsigned)m->param_len);
+		return;
+	}
+	if (!memcmp(&m->param[7], s->uak, DECT_MM_UAK_LEN)) {
+		printf("sub: UAK read-back slot %u at 0x%05X: MATCHES "
+		       "(16 bytes, flag %02x)\n", s->uak_check_slot, addr,
+		       m->param_len > 7u + DECT_MM_UAK_LEN
+			       ? m->param[7 + DECT_MM_UAK_LEN] : 0u);
+	} else {
+		/*
+		 * The chip took the mail and did not store it, or stored it
+		 * somewhere else. There is no error indication to have
+		 * missed: this is the only way the failure is visible.
+		 */
+		printf("sub: *** UAK READ-BACK MISMATCH *** slot %u at "
+		       "0x%05X -- the subscription did NOT land. The handset "
+		       "will not attach. [CR A-0085/A-0086]\n",
+		       s->uak_check_slot, addr);
+	}
+	fflush(stdout);
 }
 
 /*
@@ -3298,6 +3427,9 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			if (chan >= 1u && chan <= 9u)
 				send_audio_connect(s, s->reg.handle, chan);
 		}
+		break;
+	case 0xFFF1u:
+		uak_verify_reply(s, m);
 		break;
 	case 0xF625:
 		if (s->reg.call_bound)
