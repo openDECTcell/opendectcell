@@ -53,8 +53,23 @@
  *    first. BOTH nibbles have to agree -- a list-access call carries call
  *    class 0010 with basic service 1000 "wideband speech", so testing the
  *    service nibble alone calls a phonebook read a wideband voice call.
+ *
+ * 6: GAP N.4, dialled digits -- the one mandatory GAP feature this project
+ *    was missing (EN 300 444 table 1; audit in docs/gap-conformance.md).
+ *    {CC-INFO} is now dispatched, <<MULTI-KEYPAD>> (0x2C) is collected into
+ *    `struct dect_cc`, and `struct dect_link_ind` grows a `keypad` bit.
+ *    New: dect_cc_keypad(), dect_cc_clear_keypad(), DECT_IE_MULTI_KEYPAD,
+ *    DECT_CC_KEYPAD_MAX. Two struct layouts changed, hence the bump.
+ *
+ *    CONSUMERS: a handset dialling on the base sends its digits in one or
+ *    several {CC-INFO} messages, and before this they were silently dropped
+ *    -- seven runs in our capture corpus hold a handset sending "12345" past
+ *    a base that ignored it. Read them with dect_cc_keypad() when
+ *    `ind.keypad` is set. They are RAW and lossless: GAP's basic set is 0-9,
+ *    * and #, but control codes (pause, register recall, go-to-pulse) may
+ *    appear, and deciding what to do with those is policy.
  */
-#define OPENDECTCELL_API_VERSION 5
+#define OPENDECTCELL_API_VERSION 6
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

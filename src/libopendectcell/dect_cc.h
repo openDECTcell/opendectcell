@@ -65,9 +65,13 @@ struct dect_cc_stats {
 	uint32_t alerting;	/* ALERTING received: the handset is ringing */
 	uint32_t closed_unknown;/* transactions we closed with {CC-RELEASE} */
 	uint32_t setup_timeouts;	/* F<CC.03> expiries */
+	uint32_t keypad;	/* {CC-INFO} messages that carried keypad input */
 };
 
 /* No <<BASIC-SERVICE>> was present in the peer's {CC-SETUP}. */
+/* Keypad characters held per transaction; longer input sets keypad_overflow. */
+#define DECT_CC_KEYPAD_MAX	32u
+
 #define DECT_CC_SVC_NONE	0xFFu
 
 struct dect_cc {
@@ -98,6 +102,25 @@ struct dect_cc {
 	 * phonebook, and binding an audio path to one of those is wrong.
 	 */
 	uint8_t peer_basic_service;
+
+	/*
+	 * Keypad information the peer has sent, in order, as received.
+	 *
+	 * GAP N.4 "dialled digits (basic)" is MANDATORY for an FT
+	 * (EN 300 444 table 1) and we did not implement it until 2026-10-23:
+	 * a handset dialling on our base sent {CC-INFO} with
+	 * <<MULTI-KEYPAD>> and we dropped every one. Seven runs in the
+	 * capture corpus hold the digits "12345" going past us.
+	 *
+	 * Stored RAW and lossless. GAP's basic set is 0-9, * and #, but a
+	 * handset may also send control codes (pause 0x05, register recall
+	 * 0x15, go-to-pulse 0x12 -- all optional features we do not claim).
+	 * Deciding what to do with those is policy, so it belongs to the
+	 * caller, not here.
+	 */
+	uint8_t  keypad[DECT_CC_KEYPAD_MAX];
+	size_t   keypad_len;
+	unsigned keypad_overflow:1;	/* more arrived than we can hold */
 
 	/*
 	 * Optional <<SIGNAL>> for an FP-originated SETUP: the alerting
@@ -165,6 +188,16 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms);
  * incoming call.
  */
 int dect_cc_peer_is_speech(const struct dect_cc *cc);
+
+/*
+ * Keypad information collected on this transaction, oldest first, and its
+ * length. The buffer is NOT NUL-terminated -- use the length. Returns NULL
+ * when nothing has been received.
+ */
+const uint8_t *dect_cc_keypad(const struct dect_cc *cc, size_t *len);
+
+/* Drop the collected keypad input, e.g. once it has been acted on. */
+void dect_cc_clear_keypad(struct dect_cc *cc);
 
 /*
  * When dect_cc_tick() next has work, or UINT64_MAX if no CC timer is running.

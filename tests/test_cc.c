@@ -561,6 +561,150 @@ static void test_basic_service_is_not_found_inside_a_payload(void)
 	CHECK_EQ(dect_cc_peer_is_speech(&cc), 0);
 }
 
+/*
+ * GAP N.4, "dialled digits (basic)", procedure 8.10 -- mandatory for an FT
+ * (EN 300 444 table 1) and absent from this project until 2026-10-23.
+ *
+ * The frame below is not constructed: it is the exact byte sequence a handset
+ * sent us, captured in seven runs in the corpus and dropped every time.
+ *   03 7b 2c 05 31 32 33 34 35
+ *   |  |  |  |  '-- "12345"
+ *   |  |  |  '----- length 5
+ *   |  |  '-------- <<MULTI-KEYPAD>>
+ *   |  '----------- {CC-INFO}
+ *   '-------------- TI 0, PD 3 (CC)
+ */
+static void test_collects_the_dialled_digits_from_a_real_capture(void)
+{
+	static const uint8_t cc_info[] = {
+		0x03, 0x7B, 0x2C, 0x05, 0x31, 0x32, 0x33, 0x34, 0x35
+	};
+	struct dect_cc cc;
+	uint8_t buf[64];
+	const uint8_t *kp;
+	size_t n, len;
+
+	dect_cc_init(&cc);
+	CHECK(dect_cc_keypad(&cc, &len) == NULL);
+	CHECK_EQ(len, 0u);
+
+	/* The handset dials: its SETUP first, so we are in a call. */
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	while (dect_cc_poll(&cc, buf, sizeof(buf)) > 0)
+		;		/* drain CALL-PROC and CONNECT */
+
+	dect_cc_rx(&cc, cc_info, sizeof(cc_info));
+	CHECK_EQ(cc.stats.keypad, 1u);
+	kp = dect_cc_keypad(&cc, &len);
+	CHECK(kp != NULL);
+	CHECK_EQ(len, 5u);
+	CHECK_EQ(memcmp(kp, "12345", 5), 0);
+	CHECK_EQ(cc.keypad_overflow, 0u);
+
+	/* No reply: 8.10 leaves the FT in the same state, LAPC has acked. */
+	CHECK_EQ(dect_cc_poll(&cc, buf, sizeof(buf)), 0);
+	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+}
+
+/* "in one or several {CC-INFO} messages" -- digits append in arrival order. */
+static void test_digits_accumulate_across_messages(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64];
+	const uint8_t *kp;
+	size_t n, len, off;
+
+	dect_cc_init(&cc);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+
+	for (off = 0; off < 4; off++) {
+		uint8_t m[8];
+		size_t k = dect_nwk_build_hdr(m, sizeof(m), DECT_PD_CC,
+					      DECT_TI_ORIGINATOR, 0,
+					      DECT_CC_INFO);
+		uint8_t d = (uint8_t)('0' + off);
+
+		k = dect_nwk_put_ie(m, sizeof(m), k, DECT_IE_MULTI_KEYPAD,
+				    &d, 1);
+		dect_cc_rx(&cc, m, k);
+	}
+	kp = dect_cc_keypad(&cc, &len);
+	CHECK_EQ(len, 4u);
+	CHECK_EQ(memcmp(kp, "0123", 4), 0);
+	CHECK_EQ(cc.stats.keypad, 4u);
+
+	dect_cc_clear_keypad(&cc);
+	CHECK(dect_cc_keypad(&cc, &len) == NULL);
+	CHECK_EQ(len, 0u);
+}
+
+/* More than the buffer holds is truncated and flagged, never overrun. */
+static void test_keypad_overflow_is_bounded_and_flagged(void)
+{
+	uint8_t big[DECT_CC_KEYPAD_MAX + 8];
+	struct dect_cc cc;
+	uint8_t m[128];
+	size_t k, len;
+
+	memset(big, '7', sizeof(big));
+	dect_cc_init(&cc);
+	k = pp_setup(m, sizeof(m), 0);
+	dect_cc_rx(&cc, m, k);
+
+	k = dect_nwk_build_hdr(m, sizeof(m), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_INFO);
+	k = dect_nwk_put_ie(m, sizeof(m), k, DECT_IE_MULTI_KEYPAD,
+			    big, sizeof(big));
+	dect_cc_rx(&cc, m, k);
+
+	dect_cc_keypad(&cc, &len);
+	CHECK_EQ(len, (size_t)DECT_CC_KEYPAD_MAX);
+	CHECK_EQ(cc.keypad_overflow, 1u);
+}
+
+/* En-bloc: EN 300 175-5 9.3.1.5 allows the element in the {CC-SETUP} itself. */
+static void test_keypad_in_the_setup_is_collected(void)
+{
+	uint8_t pid[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_cc cc;
+	uint8_t buf[64];
+	size_t off, n, len;
+
+	dect_cc_init(&cc);
+	off = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC,
+				 DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+	off = dect_nwk_put_ie(buf, sizeof(buf), off, DECT_IE_PORTABLE_IDENTITY,
+			      pid, sizeof(pid));
+	n = dect_nwk_put_ie(buf, sizeof(buf), off, DECT_IE_MULTI_KEYPAD,
+			    (const uint8_t *)"*21#", 4);
+	dect_cc_rx(&cc, buf, n);
+
+	CHECK(dect_cc_keypad(&cc, &len) != NULL);
+	CHECK_EQ(len, 4u);
+	CHECK_EQ(memcmp(dect_cc_keypad(&cc, &len), "*21#", 4), 0);
+}
+
+/* A {CC-INFO} on a dead transaction is ignored -- and must not close it. */
+static void test_keypad_outside_a_call_is_ignored(void)
+{
+	static const uint8_t cc_info[] = {
+		0x03, 0x7B, 0x2C, 0x05, 0x31, 0x32, 0x33, 0x34, 0x35
+	};
+	struct dect_cc cc;
+	uint8_t out[64];
+	size_t len;
+
+	dect_cc_init(&cc);
+	dect_cc_rx(&cc, cc_info, sizeof(cc_info));
+	CHECK(dect_cc_keypad(&cc, &len) == NULL);
+	CHECK_EQ(cc.stats.keypad, 0u);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+}
+
 int main(void)
 {
 	test_setup_carries_line_identifier();
@@ -581,5 +725,10 @@ int main(void)
 	test_peer_basic_service_decides_speech();
 	test_setup_without_basic_service_is_not_speech();
 	test_basic_service_is_not_found_inside_a_payload();
+	test_collects_the_dialled_digits_from_a_real_capture();
+	test_digits_accumulate_across_messages();
+	test_keypad_overflow_is_bounded_and_flagged();
+	test_keypad_in_the_setup_is_collected();
+	test_keypad_outside_a_call_is_ignored();
 	return CHECK_DONE();
 }

@@ -352,6 +352,45 @@ int dect_cc_peer_is_speech(const struct dect_cc *cc)
 	}
 }
 
+/*
+ * Collect <<MULTI-KEYPAD>> from a received message. GAP §8.10: the PT sends
+ * keypad information "in one or several {CC-INFO} messages", and the FT is
+ * mandated to accept it in states F-02 (call present) and F-10 (active).
+ * EN 300 175-5 §9.3.1.5 also allows it in the initial {CC-SETUP}, so we take
+ * it from both and simply append in arrival order.
+ */
+static void learn_keypad(struct dect_cc *cc, const uint8_t *ies, size_t ies_len)
+{
+	size_t n, room;
+	const uint8_t *p = dect_nwk_find_ie(ies, ies_len,
+					    DECT_IE_MULTI_KEYPAD, &n);
+
+	if (!p || !n)
+		return;
+	room = sizeof(cc->keypad) - cc->keypad_len;
+	if (n > room) {
+		n = room;
+		cc->keypad_overflow = 1;
+	}
+	if (!n)
+		return;
+	memcpy(cc->keypad + cc->keypad_len, p, n);
+	cc->keypad_len += n;
+}
+
+const uint8_t *dect_cc_keypad(const struct dect_cc *cc, size_t *len)
+{
+	if (len)
+		*len = cc->keypad_len;
+	return cc->keypad_len ? cc->keypad : NULL;
+}
+
+void dect_cc_clear_keypad(struct dect_cc *cc)
+{
+	cc->keypad_len = 0;
+	cc->keypad_overflow = 0;
+}
+
 static void on_setup(struct dect_cc *cc)
 {
 	cc->stats.setup++;
@@ -441,6 +480,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_id(ies, ies_len, DECT_IE_FIXED_IDENTITY,
 				 cc->peer_fixed_id, &cc->peer_fixed_id_len);
 			learn_basic_service(cc, ies, ies_len);
+			learn_keypad(cc, ies, ies_len);
 			on_setup(cc);
 		}
 		break;
@@ -490,6 +530,28 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			queue_iwu(cc, reply, reply_len);
 		break;
 	}
+	case DECT_CC_INFO:
+		/*
+		 * GAP N.4 "dialled digits (basic)", procedure §8.10 -- the one
+		 * mandatory GAP feature this project was missing. No reply is
+		 * sent: §8.10's figure shows the FT staying in the same state,
+		 * and LAPC has already acknowledged the frame.
+		 *
+		 * Accepted in CALL PRESENT and ACTIVE, which are F-02 and
+		 * F-10. Outside those the message is ignored rather than
+		 * closed, because {CC-INFO} is a legitimate message on a live
+		 * transaction and closing it would drop the call.
+		 */
+		if (cc->state == DECT_CC_ST_CALL_PRESENT ||
+		    cc->state == DECT_CC_ST_CONNECT_PENDING ||
+		    cc->state == DECT_CC_ST_ACTIVE) {
+			size_t before = cc->keypad_len;
+
+			learn_keypad(cc, ies, ies_len);
+			if (cc->keypad_len != before)
+				cc->stats.keypad++;
+		}
+		break;
 	case DECT_CC_RELEASE_COM:
 		cc->state = DECT_CC_ST_RELEASED;
 		break;

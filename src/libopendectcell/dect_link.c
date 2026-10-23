@@ -126,8 +126,19 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			ind->page_response = 1;
 		} else if (dect_nwk_parse(ind->nwk, ind->nwk_len, &h, &ies,
 					  &ies_len) == 0 && h.pd == DECT_PD_CC) {
+			uint32_t kp_before = l->cc.stats.keypad;
+
 			ind->cc_message = 1;
 			dect_cc_rx(&l->cc, ind->nwk, ind->nwk_len);
+			/*
+			 * Report that dialled digits arrived, so the caller
+			 * does not have to poll. What they mean -- a number to
+			 * dial, a feature code, a control character -- is
+			 * policy and stays with the caller; read them with
+			 * dect_cc_keypad().
+			 */
+			if (l->cc.stats.keypad != kp_before)
+				ind->keypad = 1;
 		} else {
 			ind->mm_message = 1;
 			dect_mm_rx(&l->mm, ind->nwk, ind->nwk_len, rand_f, rs);

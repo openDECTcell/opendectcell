@@ -70,6 +70,7 @@ struct dect_link_ind {
 	unsigned cc_message    : 1;
 	unsigned mm_message    : 1;
 	unsigned lapc_parse_failed : 1;	/* a segment we could not use */
+	unsigned keypad        : 1;	/* the peer sent dialled digits */
 	int      lc_rc;			/* dect_lc_rx_fragment() return */
 	uint8_t  seg_head[3];		/* first 3 octets: addr/ctrl/li */
 	struct dect_lapc_frame frame;	/* valid when lc_rc > 0 */

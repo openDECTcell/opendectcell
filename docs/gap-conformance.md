@@ -20,17 +20,21 @@ materially weaker than the public one. Two conditionals matter:
 
 | feature | procedures (clause) | status |
 |---|---|---|
-| **N.1 Outgoing call** | 8.2 request, 8.6 connection, **8.10 sending keypad information** | **incomplete** — 8.10 missing |
+| **N.1 Outgoing call** | 8.2 request, 8.6 connection, 8.10 sending keypad information | **procedures complete** 2026-10-23; the collected digits still need a consumer |
 | **N.2 Off hook** | 8.2 outgoing call request, 8.15 incoming call connection | done |
 | **N.3 On hook (full release)** | 8.7 normal call release, 8.8 abnormal call release | done |
-| **N.4 Dialled digits (basic)** | **8.10 sending keypad information** | **NOT IMPLEMENTED** |
+| **N.4 Dialled digits (basic)** | 8.10 sending keypad information | **implemented 2026-10-23**, not yet seen on hardware |
 | **N.8 Incoming call** | 8.12 request, 8.13 confirmation, 8.14 PT alerting, 8.15 connection | done, verified on the C4 |
 | **N.15 Alerting** | — | done |
 | **N.18 Subscription registration on-air** | 8.30 obtaining access rights | done, verified on two vendors' handsets |
 | **N.19 Link control** | 8.35 indirect FT-initiated establishment, 8.36 direct PT-initiated, 8.37 normal release, 8.38 abnormal release | done |
 
-**Eight mandatory features. Seven are implemented; one is missing, and it
-breaks a second.**
+**Eight mandatory features. As of 2026-10-23 all eight are implemented**, and
+seven of the eight are verified on hardware — N.4 is the exception and gets
+its first live test on `F4.37`, where the maintainer dials out from the A540.
+
+> *Audited and found missing on 2026-10-23; implemented the same day. The
+> table below is kept as written so the gap and its closure are both legible.*
 
 ## The gap: N.4, dialled digits
 
@@ -58,7 +62,21 @@ either — 8.10 is listed as mandatory under N.1 as well as N.4.
 It is also squarely on the critical path for the controller: SIP calls *out*
 cannot be placed until the digits arrive.
 
-**Scope of the fix** (hardware-free up to final verification): the
+**Fixed 2026-10-23** (API 6). `{CC-INFO}` is dispatched, `<<MULTI-KEYPAD>>`
+is collected across messages and from an en-bloc `{CC-SETUP}`, bounded at 32
+characters with an overflow flag, surfaced through `ind.keypad` and
+`dect_cc_keypad()`, and printed by the daemon. Five tests, one of which
+replays the exact nine bytes captured from a handset. No reply is sent:
+§8.10's figure leaves the FT in the same state and LAPC has already
+acknowledged the frame.
+
+**The identifier came from our own captures, not from the spec's coding
+table** — `pdftotext` renders that table column-wise and a first
+reconstruction of it gave `0x32`, which failed its own calibration against
+IE values we already knew. The corpus settled it:
+`03 7b 2c 05 31 32 33 34 35`.
+
+**What the original fix note said** (kept for the record): the
 `<<MULTI-KEYPAD>>` IE codec, a `{CC-INFO}` dispatch case, digit accumulation
 on the CC entity with the collected string exposed through `dect_link_ind`,
 and the DECT 8-bit character codings from EN 300 175-5 annex D. Overlap

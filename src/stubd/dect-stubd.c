@@ -2672,6 +2672,43 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		ring_queue_setup(s, now, "page response received");
 
 	/*
+	 * The handset dialled. GAP N.4 is mandatory for an FT and we did not
+	 * implement it until 2026-10-23 -- seven runs in the capture corpus
+	 * hold a handset sending "12345" past a base that dropped it.
+	 *
+	 * Printing is all the daemon does with it: routing a dialled number
+	 * is the controller's job, and this build has no line to dial out on.
+	 * The digits stay on the CC entity until someone takes them.
+	 *
+	 * GAP's basic set is 0-9, * and #. Anything else is shown as a hex
+	 * escape rather than written raw to a terminal -- a handset may send
+	 * control codes (pause, register recall, go-to-pulse), and those are
+	 * data, not formatting.
+	 */
+	if (ind.keypad) {
+		size_t n, i;
+		const uint8_t *kp = dect_cc_keypad(&s->reg.link.cc, &n);
+		char show[DECT_CC_KEYPAD_MAX * 4 + 1];
+		size_t o = 0;
+
+		for (i = 0; i < n && o + 5 < sizeof(show); i++) {
+			uint8_t c = kp[i];
+
+			if ((c >= '0' && c <= '9') || c == '*' || c == '#')
+				show[o++] = (char)c;
+			else
+				o += (size_t)snprintf(show + o,
+						      sizeof(show) - o,
+						      "\\x%02x", c);
+		}
+		show[o] = '\0';
+		printf("call: handset dialled: %s (%zu character%s)%s\n",
+		       show, n, n == 1 ? "" : "s",
+		       s->reg.link.cc.keypad_overflow ? " [TRUNCATED]" : "");
+		fflush(stdout);
+	}
+
+	/*
 	 * A call the handset places carries the two identities an
 	 * FP-originated SETUP needs, in the handset's own encoding. Keep the
 	 * first pair we see and persist it, so calling the handset later needs

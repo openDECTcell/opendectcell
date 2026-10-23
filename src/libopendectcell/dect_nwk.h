@@ -66,6 +66,19 @@
 #define DECT_IE_FIXED_IDENTITY		0x06u
 #define DECT_IE_LOCATION_AREA		0x07u
 #define DECT_IE_NWK_ASSIGNED_IDENTITY	0x09u
+/*
+ * <<MULTI-KEYPAD>>: a list of DECT standard characters (EN 300 175-5 §7.7.27,
+ * annex D -- closely based on IA5), variable length, carried in {CC-INFO}.
+ * This is how a handset sends the number it dialled.
+ *
+ * The identifier is read off our own captures rather than off the spec's
+ * coding table, which pdftotext renders column-wise and which I reconstructed
+ * wrongly once: seven runs in the corpus hold
+ *   03 7b 2c 05 31 32 33 34 35
+ * = CC {CC-INFO} <<0x2C>> len 5 "12345". Bit 8 = 0 marks a variable-length
+ * element, which 0x2C satisfies.
+ */
+#define DECT_IE_MULTI_KEYPAD		0x2Cu
 #define DECT_IE_AUTH_TYPE		0x0Au
 #define DECT_IE_ALLOCATION_TYPE		0x0Bu
 #define DECT_IE_RAND			0x0Cu
