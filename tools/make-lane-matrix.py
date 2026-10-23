@@ -103,15 +103,25 @@ PLAN_DUPLEX = [
 # frame is the rate-matched packing -- and it is also the rate we measured on
 # the uplink. So `g722_one` leads here and `g722_full` is tested second, not
 # first. `g722_held` (word held two frames) is NOT retried: vF413 falsified it.
+# Mode 3 leads. It is the ONLY mode in [CR A-0043]'s table with the coded
+# block ARMED and the enable word at 1 -- mode 8 arms it with enable 0, mode 9
+# with enable 3, and mode 2 has enable 1 with the block off. Since enable = 1
+# is the value that carries our working narrowband audio, mode 3 is the only
+# candidate that looks like "the working state plus the coded block", and we
+# have never reached it. It needs bit 6 set with a codec byte that is neither
+# 1 nor 2-4, so 0x05 and 0x00 both select it; both are included, which also
+# confirms the branch itself.
 PLAN_WIDEBAND = [
-    ("bind default          ", None,    "g722_one"),
+    ("bind default           ", None,    "g722_one"),
+    ("mode 3 (41:05), one/fr ", "41:05", "g722_one"),
+    ("mode 3 (41:05), two/fr ", "41:05", "g722_full"),
+    ("mode 3 (41:00), one/fr ", "41:00", "g722_one"),
     ("mode 8, one octet/frame", "41:01", "g722_one"),
     ("mode 8, octet in high  ", "41:01", "g722_one_hi"),
     ("mode 8, two octets/frame", "41:01", "g722_full"),
     ("mode 8, one octet, swap", "41:01", "g722_one_swap"),
     ("mode 9, one octet/frame", "41:03", "g722_one"),
     ("mode 9, two octets/frame", "41:03", "g722_full"),
-    ("mode 9, octet in high  ", "41:03", "g722_one_hi"),
 ]
 
 PLANS = {"format": (PLAN_FORMAT, 8.0), "duplex": (PLAN_DUPLEX, 25.0),
