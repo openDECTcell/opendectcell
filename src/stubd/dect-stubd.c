@@ -2825,8 +2825,20 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	 * we expect still gets a call rather than silence.
 	 */
 	if (s->ring_state == RING_SETUP_DELAY) {
-		if (now >= s->ring_setup_at)
+		if (now >= s->ring_setup_at) {
 			ring_queue_setup(s, now, "setupdelay elapsed");
+			/*
+			 * ring_queue_setup() leaves the state alone when the
+			 * CC entity was busy, so without this we would come
+			 * straight back here on the next tick with the
+			 * deadline already past and burn the whole retry
+			 * budget in a few hundred milliseconds. Hand the
+			 * retry back to RING_WAIT_PAGE_RESP, which owns the
+			 * RING_SETUP_RETRY_MS spacing.
+			 */
+			if (s->ring_state == RING_SETUP_DELAY)
+				s->ring_state = RING_WAIT_PAGE_RESP;
+		}
 		return;
 	}
 
