@@ -755,3 +755,42 @@ at 20 ms, so each phase reports whether the arm bit actually took hold,
 independent of whether the handset rings. A silent phase that nonetheless
 armed a slot is still a result; before this change it would have looked
 identical to a phase that did nothing.
+
+#### Result: the arm works, and it is not the cause `[2026-10-24]`
+
+The sweep ran all eight phases. **Every one produced the same three
+`e2 32` refusals.** But the `0x965d` dump turned a silent sweep into a
+decisive one, and two facts came out of it.
+
+**1. The `0x015E` field map is confirmed on hardware.** Phase 8 sent
+`flags 0x20` (DISARM) with bearer id `96 01` at `t=15003 ms`:
+
+| t (ms) | `0x965d` word 0 |
+| --- | --- |
+| 55 … 15015 | `00 80` (armed) |
+| 15075 … end | `00 00` (cleared) |
+
+One mail, one write, 72 ms later, exactly the word A-0095 named. Phases 2
+and 3 left indices 1 and 2 armed and they were **still armed when phase 8
+started**, confirming A-0096's "an arm persists across connections" —
+these are chip-RAM writes that survive a daemon restart. Little-endian
+`mail[8:9]`, `index = value - 0x196`, `0x10` arm / `0x20` disarm: all four
+now rest on observation rather than on a read of a branch.
+
+**2. The premise was wrong.** Index 0 reads `00 80` at **`t=56 ms`** in
+phase 1 — before the first page, and before we had ever sent `0x015E` in
+the history of this project. **The chip arms index 0 by itself during
+bring-up.** So the model's central claim — "nothing else arms `0x965d`,
+so skipping `0x015E` leaves the MAC with no bearer" — is false for index
+0, which is the one index that matters. Our ARM in phase 1 was a no-op on
+an already-armed slot, which is why it changed nothing.
+
+Phase 8 is the sharper result. It *cleared* the bit the chip had set, and
+the two pages after the disarm were still answered and still refused with
+`e2 32` — identical to the armed case. **Arming state at index 0 does not
+influence the refusal in either direction.**
+
+**`0x015E` is closed as the cause.** Twelve air-side theories and six
+bearer-table theories now produce one byte-identical outcome. That
+consistency is itself the finding: we are not varying the thing that
+matters.
