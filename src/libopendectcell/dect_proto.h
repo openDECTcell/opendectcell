@@ -32,8 +32,15 @@
  *    embedded struct dect_iwu, which changes its layout. {CC-IWU-INFO} is now
  *    answered instead of dropped -- a behaviour change this number does not
  *    capture, which is exactly the limitation noted above.
+ * 4: adds dect_link.h -- the per-connection C-plane stack (openDECTcell#67):
+ *    dect_link_init(), dect_link_rx_segment(), dect_link_tick(),
+ *    dect_link_drain(), dect_link_poll_append_mail(), struct dect_link and
+ *    struct dect_link_ind. Purely additive: no existing signature or struct
+ *    layout changed, so a consumer that does not use it needs no edit --
+ *    but it SHOULD, because the glue it replaces is protocol behaviour that
+ *    two hand-kept copies would drift on.
  */
-#define OPENDECTCELL_API_VERSION 3
+#define OPENDECTCELL_API_VERSION 4
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

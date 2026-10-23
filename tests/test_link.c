@@ -1,0 +1,149 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * dect_link: the per-connection C-plane stack (openDECTcell#67).
+ *
+ * These tests pin the behaviour that used to live in dect-stubd.c and that a
+ * second consumer would otherwise have to reimplement from prose -- which is
+ * the whole reason the glue moved into the library.
+ */
+#include <string.h>
+
+#include "check.h"
+#include "dect_link.h"
+
+static void init(struct dect_link *l)
+{
+	struct dect_mm_cfg cfg;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_link_init(l, 1, &cfg);
+}
+
+/* A fresh link owns its own state and has nothing to send. */
+static void test_init_is_quiet(void)
+{
+	struct dect_link l;
+	struct dect_mail m;
+
+	init(&l);
+	CHECK_EQ(l.handle, 1u);
+	CHECK_EQ(l.lapc.outstanding, 0u);
+	CHECK_EQ(dect_link_poll_append_mail(&l, &m), 0);
+}
+
+/*
+ * Two links are independent. The single global connection in dect-stubd.c is
+ * exactly what #67 exists to remove, and it is what made two handsets on one
+ * base indistinguishable in our 2026-10-23 captures.
+ */
+static void test_two_links_are_independent(void)
+{
+	struct dect_link a, b;
+	struct dect_mm_cfg cfg;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_link_init(&a, 1, &cfg);
+	dect_link_init(&b, 2, &cfg);
+
+	a.lapc.vs = 1;
+	CHECK_EQ(b.lapc.vs, 0u);
+	CHECK_EQ(a.handle, 1u);
+	CHECK_EQ(b.handle, 2u);
+}
+
+/*
+ * An outbound NWK message leaves as an APPEND_CONNECTION_DATA mail addressed
+ * to this link's handle -- not to some global one.
+ */
+static void test_outbound_message_becomes_an_append_mail(void)
+{
+	static const uint8_t port_id[] = { 0x10, 0x20, 0x30 };
+	static const uint8_t fixed_id[] = { 0x11, 0x22, 0x33, 0x44, 0x55 };
+	struct dect_link l;
+	struct dect_mail m;
+
+	init(&l);
+	CHECK_EQ(dect_cc_setup(&l.cc, port_id, sizeof(port_id), fixed_id,
+			       sizeof(fixed_id), 0x40), 0);
+	dect_link_tick(&l, 0);			/* drains CC into LAPC */
+	CHECK_EQ(dect_link_poll_append_mail(&l, &m), 1);
+	CHECK_EQ(m.prim, 0x0244u);
+	CHECK_EQ(m.param[0], 1u);		/* the link's handle */
+	CHECK_EQ(l.lapc.outstanding, 1u);	/* class A window of one */
+}
+
+/*
+ * The LAPC window is one. A second message must wait: queueing both would
+ * lose the first, and that is protocol, not policy.
+ */
+static void test_only_one_message_is_outstanding(void)
+{
+	static const uint8_t port_id[] = { 0x10, 0x20, 0x30 };
+	static const uint8_t fixed_id[] = { 0x11, 0x22, 0x33, 0x44, 0x55 };
+	struct dect_link l;
+	struct dect_mail m;
+	int sent = 0;
+
+	init(&l);
+	dect_cc_setup(&l.cc, port_id, sizeof(port_id), fixed_id,
+		      sizeof(fixed_id), 0x40);
+	dect_cc_release(&l.cc);			/* a second message, queued */
+	dect_link_tick(&l, 0);
+	while (dect_link_poll_append_mail(&l, &m))
+		sent++;
+	CHECK_EQ(sent, 1);			/* only the first went out */
+}
+
+/* A segment that is not C-plane is rejected without disturbing the link. */
+static void test_non_cplane_mail_is_rejected(void)
+{
+	struct dect_link l;
+	struct dect_mail m;
+	struct dect_link_ind ind;
+
+	init(&l);
+	memset(&m, 0, sizeof(m));
+	m.prim = 0x0242u;			/* channel status, not C-plane */
+	CHECK_EQ(dect_link_rx_segment(&l, &m, 0, NULL, NULL, &ind), -1);
+	CHECK_EQ(l.lapc.outstanding, 0u);
+}
+
+/*
+ * A segment we cannot use must still let our own queue drain. An incoming
+ * call queues its {CC-SETUP} before the peer's first frame arrives, and an
+ * early return once left it sitting in the queue for ever.
+ */
+static void test_unusable_segment_still_drains_the_queue(void)
+{
+	static const uint8_t port_id[] = { 0x10, 0x20, 0x30 };
+	static const uint8_t fixed_id[] = { 0x11, 0x22, 0x33, 0x44, 0x55 };
+	struct dect_link l;
+	struct dect_mail m, out;
+	struct dect_link_ind ind;
+
+	init(&l);
+	dect_cc_setup(&l.cc, port_id, sizeof(port_id), fixed_id,
+		      sizeof(fixed_id), 0x40);
+
+	/* A C-plane mail carrying a fragment that cannot complete a frame. */
+	memset(&m, 0, sizeof(m));
+	m.prim = 0x0203u;
+	m.param_len = 15;
+	m.param[0] = 1;
+	m.param[1] = 0x01;
+	dect_link_rx_segment(&l, &m, 0, NULL, NULL, &ind);
+
+	CHECK_EQ(dect_link_poll_append_mail(&l, &out), 1);
+	CHECK_EQ(out.prim, 0x0244u);
+}
+
+int main(void)
+{
+	test_init_is_quiet();
+	test_two_links_are_independent();
+	test_outbound_message_becomes_an_append_mail();
+	test_only_one_message_is_outstanding();
+	test_non_cplane_mail_is_rejected();
+	test_unusable_segment_still_drains_the_queue();
+	return CHECK_DONE();
+}

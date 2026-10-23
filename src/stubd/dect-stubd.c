@@ -43,6 +43,7 @@
 #include "dect_nwk.h"
 #include "dect_mm.h"
 #include "dect_cc.h"
+#include "dect_link.h"
 #include "dect_audio.h"
 #include "dect_callinfo.h"
 #include "dect_clip.h"
@@ -668,10 +669,14 @@ struct stubd {
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
 		uint8_t handle;
-		struct dect_lc_rx lc;
-		struct dect_lapc lapc;
-		struct dect_mm mm;
-		struct dect_cc cc;
+		/*
+		 * The C-plane stack, one per connection, from libopendectcell
+		 * (openDECTcell#67). The glue that used to live here -- segment
+		 * decode, LAPC drive, NWK routing -- is protocol behaviour and
+		 * belongs in the library where the controller can use the same
+		 * code rather than a second copy written from prose.
+		 */
+		struct dect_link link;
 	} reg;
 };
 
@@ -1331,27 +1336,6 @@ static void gen_rand(struct stubd *s, uint8_t *buf, size_t n)
 	}
 }
 
-/*
- * Wrap a LAPC frame in an Lc Cs frame and send it via APPEND_CONNECTION_DATA
- * (0x0244) only. AVM's host driver transmits C-plane replies this way and does
- * NOT follow with 0x0202; in AVM's code 0x0202 is sent on an abnormal link
- * release, which matches the ~40 ms connection drop we saw when we triggered it
- * [CR AVM]. LSIG = 0: the PP has no assigned PMID during registration.
- */
-static void send_cplane(struct stubd *s, uint8_t handle,
-			const uint8_t *lapc, size_t lapc_len)
-{
-	uint8_t cs[DECT_LC_FRAME_MAX];
-	struct dect_mail m;
-	/* Sign with the link's signature (0 while unregistered, the PP's PMID-
-	 * derived LSIG once learned from its establishment frame). */
-	size_t flen = dect_lc_build(lapc, lapc_len, s->reg.lc.lsig, cs, sizeof(cs));
-
-	if (flen == 0)
-		return;
-	if (dect_cs_append_mail(&m, DECT_TASK_PCM, handle, cs, flen) == 0)
-		send_mail(s, (unsigned int)s->tx_slot, &m);
-}
 
 /*
  * Host-side subscription store.
@@ -1406,11 +1390,11 @@ static void sub_save(struct stubd *s)
 		return;
 	memset(&r, 0, sizeof(r));
 	r.magic = SUB_MAGIC;
-	r.slot = dect_mm_sub_slot(&s->reg.mm);
+	r.slot = dect_mm_sub_slot(&s->reg.link.mm);
 	memcpy(r.uak, s->uak, DECT_MM_UAK_LEN);
 	r.magic = SUB_MAGIC2;
-	r.port_id_len = (uint8_t)s->reg.mm.port_id_len;
-	memcpy(r.port_id, s->reg.mm.port_id, sizeof(r.port_id));
+	r.port_id_len = (uint8_t)s->reg.link.mm.port_id_len;
+	memcpy(r.port_id, s->reg.link.mm.port_id, sizeof(r.port_id));
 	r.cc_port_id_len = (uint8_t)s->cc_port_id_len;
 	memcpy(r.cc_port_id, s->cc_port_id, sizeof(r.cc_port_id));
 	r.cc_fixed_id_len = (uint8_t)s->cc_fixed_id_len;
@@ -1551,7 +1535,7 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep)
 static void send_subscription(struct stubd *s)
 {
 	struct dect_mail m;
-	uint8_t slot = dect_mm_sub_slot(&s->reg.mm);
+	uint8_t slot = dect_mm_sub_slot(&s->reg.link.mm);
 
 	clear_foreign_slots(s, slot);
 
@@ -1559,7 +1543,7 @@ static void send_subscription(struct stubd *s)
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0247u;
-	m.param[0] = dect_mm_sub_slot(&s->reg.mm);	/* slot */
+	m.param[0] = dect_mm_sub_slot(&s->reg.link.mm);	/* slot */
 	m.param[1] = 0x01u;		/* op: install/refresh */
 	m.param[2] = 0x00u;		/* status (unknown enumeration) */
 	m.param_len = 3;
@@ -2088,7 +2072,7 @@ static void send_page(struct stubd *s)
 	 * pool-assigned TPUI the two are no longer the same number, and a page
 	 * built from the slot would address the wrong handset.
 	 */
-	dect_mm_tpui(&s->reg.mm, tpui);
+	dect_mm_tpui(&s->reg.link.mm, tpui);
 	m.param[0] = ring_page_info(s);
 	m.param[1] = tpui[1];
 	m.param[2] = tpui[2];
@@ -2129,8 +2113,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 		s->next_ti = (uint8_t)s->audio.ti_fixed;
 	else
 		s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
-	dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
-	if (!dect_cc_setup_id(&s->reg.cc, s->cc_port_id, s->cc_port_id_len,
+	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
+	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
 			      s->cc_fixed_id, s->cc_fixed_id_len,
 			      s->audio.basic_svc, &s->clip)) {
 		s->ring_state = RING_DONE;
@@ -2231,7 +2215,7 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			       "linked handset does not answer pages, and the "
 			       "page is what makes the chip allocate a traffic "
 			       "bearer\n");
-			dect_lapc_disconnect(&s->reg.lapc);
+			dect_lapc_disconnect(&s->reg.link.lapc);
 			pump_lapc(s);
 			s->ring_release_until = now + RING_RELEASE_WAIT_MS;
 			s->ring_state = RING_RELEASING;
@@ -2459,7 +2443,7 @@ static void send_chip_cipher(struct stubd *s)
 	uint8_t dck[DECT_MM_DCK_LEN];
 	size_t n = 0, i;
 
-	if (!dect_mm_cipher_dck(&s->reg.mm, dck))
+	if (!dect_mm_cipher_dck(&s->reg.link.mm, dck))
 		return;
 
 	memset(&m, 0, sizeof(m));
@@ -2477,12 +2461,12 @@ static void send_chip_cipher(struct stubd *s)
 	/* mail[11..14]: computed 4-byte result (RES), reversed. */
 	for (i = 0; i < 4u; i++)
 		m.param[n + i] = s->chip_cipher.no_reverse
-			? s->reg.mm.cipher_res[i] : s->reg.mm.cipher_res[3u - i];
+			? s->reg.link.mm.cipher_res[i] : s->reg.link.mm.cipher_res[3u - i];
 	n += 4u;
 
 	/* mail[15..22]: second half of the 16-byte input, copied intact. */
-	memcpy(&m.param[n], s->chip_cipher.use_rs ? s->reg.mm.rs
-						  : s->reg.mm.rand_f, 8);
+	memcpy(&m.param[n], s->chip_cipher.use_rs ? s->reg.link.mm.rs
+						  : s->reg.link.mm.rand_f, 8);
 	n += 8u;
 
 	m.param[n++] = 0x00u;		/* zeroed by the producer */
@@ -2510,17 +2494,21 @@ static void send_chip_cipher(struct stubd *s)
 }
 
 /* Flush any LAPC frames the FSM wants to transmit. */
+/*
+ * Move whatever the link has queued onto the wire. The framing, the Lc
+ * signature and the 0x0244 mail are the library's (openDECTcell#67); ours is only
+ * the transport.
+ */
 static void pump_lapc(struct stubd *s)
 {
-	uint8_t frame[DECT_LC_LAPC_MAX];
-	size_t n;
+	struct dect_mail m;
 
-	while ((n = dect_lapc_poll_tx(&s->reg.lapc, frame, sizeof(frame))) > 0) {
+	while (dect_link_poll_append_mail(&s->reg.link, &m)) {
 		if (s->verbose)
-			printf("[%5llu] reg: tx cplane %zu bytes (addr %02x ctrl %02x)\n",
-			       (unsigned long long)(mono_ms() - g_start), n,
-			       frame[0], frame[1]);
-		send_cplane(s, s->reg.handle, frame, n);
+			printf("[%5llu] reg: tx cplane %u bytes\n",
+			       (unsigned long long)(mono_ms() - g_start),
+			       (unsigned)m.param_len);
+		send_mail(s, (unsigned int)s->tx_slot, &m);
 	}
 }
 
@@ -2542,19 +2530,17 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
 	s->reg.handle = handle;
-	dect_lc_rx_init(&s->reg.lc, 0);
-	dect_lapc_init(&s->reg.lapc, 0);
-	dect_mm_init(&s->reg.mm, &mcfg);
+	dect_link_init(&s->reg.link, handle, &mcfg);
 	/*
 	 * Hand the MM state machine the identity we are subscribed to, so a
 	 * location registration from a handset we do not hold is rejected.
 	 * Must come AFTER dect_mm_init(), which clears it.
 	 */
 	if (s->sub_port_id_len) {
-		memcpy(s->reg.mm.port_id, s->sub_port_id, s->sub_port_id_len);
-		s->reg.mm.port_id_len = s->sub_port_id_len;
+		memcpy(s->reg.link.mm.port_id, s->sub_port_id, s->sub_port_id_len);
+		s->reg.link.mm.port_id_len = s->sub_port_id_len;
 	}
-	dect_cc_init(&s->reg.cc);
+	dect_cc_init(&s->reg.link.cc);
 	/*
 	 * Advertise a codec in FP-originated setups. The A540 answers our page,
 	 * takes a codec-less {CC-SETUP} and returns release reason 0x32, which
@@ -2566,144 +2552,100 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		static const uint8_t cl[] = { 0x90u, 0x02u, 0x00u, 0x84u };
 
 		if (!s->audio.nocodeclist)
-			dect_cc_set_codec_list(&s->reg.cc, cl, sizeof(cl));
+			dect_cc_set_codec_list(&s->reg.link.cc, cl, sizeof(cl));
 	}
-	dect_cc_set_signal(&s->reg.cc, s->audio.signal_on,
+	dect_cc_set_signal(&s->reg.link.cc, s->audio.signal_on,
 			   s->audio.signal_value);
-	dect_cc_set_callinfo(&s->reg.cc, &s->audio.callinfo);
+	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
 	/* a fresh transaction per call; see dect_cc_set_next_ti() */
-	dect_cc_set_next_ti(&s->reg.cc, s->next_ti);
+	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
 }
 
 /* Drain queued NWK responses (MM and CC) into LAPC, one per free window. */
 static void drain_nwk(struct stubd *s, uint64_t now)
 {
-	uint8_t msg[DECT_LAPC_MSG_MAX];
-	size_t mlen;
-
-	while (!s->reg.lapc.outstanding) {
-		mlen = dect_mm_poll(&s->reg.mm, msg, sizeof(msg));
-		if (mlen == 0)
-			mlen = dect_cc_poll(&s->reg.cc, msg, sizeof(msg));
-		if (mlen == 0)
-			break;
-		if (s->verbose) {
-			size_t i;
-
-			printf("reg: nwk out --> ");
-			for (i = 0; i < mlen; i++)
-				printf("%02x ", msg[i]);
-			printf("\n");
-		}
-		if (dect_lapc_send(&s->reg.lapc, msg, mlen, now) != 0)
-			break;
-		pump_lapc(s);
-	}
+	dect_link_drain(&s->reg.link, now);
+	pump_lapc(s);
 }
 
-/* Feed one 0x0203 signalling segment up the stack; send any responses. */
+/*
+ * One received C-plane segment.
+ *
+ * The protocol work -- Cs decode, Lc reassembly, LAPC, NWK routing, queuing
+ * the replies -- is the library's since openDECTcell#67. What is left here is
+ * policy the library deliberately does not own: when a page response may
+ * release a queued {CC-SETUP}, and learning the identities an FP-originated
+ * call needs.
+ */
 static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now)
 {
-	struct dect_cs_seg seg;
-	uint8_t lapcbuf[DECT_LC_LAPC_MAX], nwk[DECT_LAPC_MSG_MAX];
-	struct dect_lapc_frame f;
-	int lapc_len, nwk_len;
+	uint8_t rand_f[8], rs[16];
+	struct dect_link_ind ind;
 
-	if (dect_cs_decode_segment(m, &seg) < 0)
+	gen_rand(s, rand_f, sizeof(rand_f));
+	gen_rand(s, rs, sizeof(rs));
+
+	if (dect_link_rx_segment(&s->reg.link, m, now, rand_f, rs, &ind) < 0)
 		return;
-	lapc_len = dect_lc_rx_fragment(&s->reg.lc, seg.data, lapcbuf, sizeof(lapcbuf));
-	if (s->verbose)
+	pump_lapc(s);			/* at least the LAPC ack */
+
+	if (s->verbose) {
 		printf("reg: cs in %02x %02x %02x (addr/ctrl/li), lc_rc=%d\n",
-		       seg.data[0], seg.data[1], seg.data[2], lapc_len);
-	/*
-	 * A segment we cannot use must not stop our own queued messages: an
-	 * incoming call queues the CC-SETUP before the handset's first frame
-	 * arrives, and returning here left it sitting in the queue for ever.
-	 */
-	if (lapc_len <= 0) {
-		drain_nwk(s, now);
-		return;
-	}
-	if (dect_lapc_parse(lapcbuf, (size_t)lapc_len, &f) < 0) {
-		if (s->verbose)
-			printf("reg: lapc parse failed (len %d)\n", lapc_len);
-		drain_nwk(s, now);
-		return;
-	}
-	if (s->verbose)
-		printf("reg: lapc type=%d ns=%u nr=%u more=%u infolen=%zu\n",
-		       f.type, f.ns, f.nr, f.more, f.info_len);
-	nwk_len = dect_lapc_rx(&s->reg.lapc, &f, now, nwk, sizeof(nwk));
-	if (s->verbose)
-		printf("reg: nwk_len=%d\n", nwk_len);
-	pump_lapc(s);				/* at least the LAPC ack */
-	if (nwk_len > 0) {
-		struct dect_nwk_hdr h;
-		const uint8_t *ies;
-		size_t ies_len;
-		int parsed;
+		       ind.seg_head[0], ind.seg_head[1], ind.seg_head[2],
+		       ind.lc_rc);
+		if (ind.lapc_parse_failed)
+			printf("reg: lapc parse failed\n");
+		else if (ind.lc_rc > 0)
+			printf("reg: lapc type=%d ns=%u nr=%u more=%u infolen=%zu\n",
+			       ind.frame.type, ind.frame.ns, ind.frame.nr,
+			       ind.frame.more, ind.frame.info_len);
+		if (ind.nwk_len) {
+			size_t i;
 
-		if (s->verbose) {		/* local only: carries IPUI, never commit */
-			int i;
-
+			/* local only: carries IPUI, never commit */
 			printf("reg: nwk in  <-- ");
-			for (i = 0; i < nwk_len; i++)
-				printf("%02x ", nwk[i]);
+			for (i = 0; i < ind.nwk_len; i++)
+				printf("%02x ", ind.nwk[i]);
 			printf("\n");
 		}
-		/* Route by protocol discriminator: LCE, CC, else MM. */
-		parsed = dect_nwk_parse(nwk, (size_t)nwk_len,
-					&h, &ies, &ies_len) == 0;
-		if (parsed && h.pd == DECT_PD_LCE) {
-			/*
-			 * The handset's answer to our page. This is the point
-			 * at which an FP-originated CC-SETUP can be sent: see
-			 * ring_queue_setup() for the run that showed sending it
-			 * on link-up loses the frame.
-			 */
-			if (s->ring_state == RING_WAIT_PAGE_RESP)
-				ring_queue_setup(s, now, "page response received");
-		} else if (parsed && h.pd == DECT_PD_CC) {
-			dect_cc_rx(&s->reg.cc, nwk, (size_t)nwk_len);
-			/*
-			 * A call the handset places carries the two identities
-			 * an FP-originated SETUP needs, in the handset's own
-			 * encoding. Keep the first pair we see and persist it,
-			 * so calling the handset later needs no guesswork about
-			 * identity types, bit lengths or padding.
-			 */
-			if (!s->cc_fixed_id_len && s->reg.cc.peer_fixed_id_len) {
-				memcpy(s->cc_port_id, s->reg.cc.peer_port_id,
-				       sizeof(s->cc_port_id));
-				s->cc_port_id_len = s->reg.cc.peer_port_id_len;
-				memcpy(s->cc_fixed_id, s->reg.cc.peer_fixed_id,
-				       sizeof(s->cc_fixed_id));
-				s->cc_fixed_id_len = s->reg.cc.peer_fixed_id_len;
-				printf("call: learned the identities for calling "
-				       "the handset (%zu + %zu bytes), saving\n",
-				       s->cc_port_id_len, s->cc_fixed_id_len);
-				sub_save(s);
-			}
-		} else {
-			uint8_t rand_f[8], rs[16];
-
-			gen_rand(s, rand_f, sizeof(rand_f));
-			gen_rand(s, rs, sizeof(rs));
-			dect_mm_rx(&s->reg.mm, nwk, (size_t)nwk_len, rand_f, rs);
-		}
 	}
 
-	/* The next message goes out when the handset acknowledges the previous one. */
-	drain_nwk(s, now);
+	/*
+	 * The handset's answer to our page. This is the point at which an
+	 * FP-originated {CC-SETUP} can be sent: see ring_queue_setup() for the
+	 * run that showed sending it on link-up loses the frame.
+	 */
+	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP)
+		ring_queue_setup(s, now, "page response received");
+
+	/*
+	 * A call the handset places carries the two identities an
+	 * FP-originated SETUP needs, in the handset's own encoding. Keep the
+	 * first pair we see and persist it, so calling the handset later needs
+	 * no guesswork about identity types, bit lengths or padding.
+	 */
+	if (ind.cc_message && !s->cc_fixed_id_len &&
+	    s->reg.link.cc.peer_fixed_id_len) {
+		memcpy(s->cc_port_id, s->reg.link.cc.peer_port_id,
+		       sizeof(s->cc_port_id));
+		s->cc_port_id_len = s->reg.link.cc.peer_port_id_len;
+		memcpy(s->cc_fixed_id, s->reg.link.cc.peer_fixed_id,
+		       sizeof(s->cc_fixed_id));
+		s->cc_fixed_id_len = s->reg.link.cc.peer_fixed_id_len;
+		printf("call: learned the identities for calling the handset "
+		       "(%zu + %zu bytes), saving\n",
+		       s->cc_port_id_len, s->cc_fixed_id_len);
+		sub_save(s);
+	}
 
 	/*
 	 * Once the handset is authenticated (UAK valid) and we have answered its
 	 * LOCATE-REQUEST, install the subscription in the chip, once per connection.
 	 */
-	if (!s->reg.persisted && s->reg.mm.subscribed && s->reg.mm.stats.located) {
+	if (!s->reg.persisted && s->reg.link.mm.subscribed && s->reg.link.mm.stats.located) {
 		/* Keep the UAK for the later call's ciphering, and across restarts. */
-		memcpy(s->uak, s->reg.mm.uak, DECT_MM_UAK_LEN);
+		memcpy(s->uak, s->reg.link.mm.uak, DECT_MM_UAK_LEN);
 		s->uak_valid = 1;
 		send_subscription(s);
 		sub_save(s);
@@ -2717,12 +2659,12 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		send_mail_spec(s, "0x22:0x02:0x022c:01");
 		s->reg.persisted = 1;
 		printf("reg: subscription persisted + registration closed (slot %u)\n",
-		       (unsigned)dect_mm_sub_slot(&s->reg.mm));
+		       (unsigned)dect_mm_sub_slot(&s->reg.link.mm));
 	}
 
-	if (s->reg.mm.state == DECT_MM_REGISTERED)
+	if (s->reg.link.mm.state == DECT_MM_REGISTERED)
 		printf("reg: handset registered\n");
-	else if (s->reg.mm.state == DECT_MM_FAILED)
+	else if (s->reg.link.mm.state == DECT_MM_FAILED)
 		printf("reg: registration rejected\n");
 
 	/*
@@ -2730,8 +2672,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * C4 treats CONNECT as answered even though it does not send CONNECT-ACK.
 	 */
 	if (!s->reg.call_bound &&
-	    (s->reg.cc.state == DECT_CC_ST_CONNECT_PENDING ||
-	     s->reg.cc.state == DECT_CC_ST_ACTIVE)) {
+	    (s->reg.link.cc.state == DECT_CC_ST_CONNECT_PENDING ||
+	     s->reg.link.cc.state == DECT_CC_ST_ACTIVE)) {
 		s->reg.audio_connected = 0;
 		s->reg.remode_at = 0;
 		s->reg.remode_done = 0;
@@ -2779,11 +2721,11 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			s->reg.cipher_started = 1;
 			printf("call: cipher: suppressed (-C), call stays in the clear\n");
 		} else if (s->uak_valid && !s->reg.cipher_started) {
-			uint8_t rand_f[8], rs[16];
+			uint8_t crand[8], crs[16];
 
-			gen_rand(s, rand_f, sizeof(rand_f));
-			gen_rand(s, rs, sizeof(rs));
-			dect_mm_start_cipher(&s->reg.mm, s->uak, rand_f, rs);
+			gen_rand(s, crand, sizeof(crand));
+			gen_rand(s, crs, sizeof(crs));
+			dect_mm_start_cipher(&s->reg.link.mm, s->uak, crand, crs);
 			s->reg.cipher_started = 1;
 			printf("call: cipher: authenticating handset\n");
 			drain_nwk(s, now);
@@ -2793,7 +2735,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	}
 
 	/* Never log key material: state only. */
-	if (s->reg.mm.cipher_state == DECT_MM_CIPHER_READY && !s->reg.cipher_done) {
+	if (s->reg.link.mm.cipher_state == DECT_MM_CIPHER_READY && !s->reg.cipher_done) {
 		s->reg.cipher_done = 1;
 		/*
 		 * Key material first, then the over-air request: A-0027 Q5 makes
@@ -2804,11 +2746,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		if (s->chip_cipher.enabled)
 			send_chip_cipher(s);
 		printf("call: cipher: DCK derived, CIPHER-REQUEST sent\n");
-	} else if (s->reg.mm.cipher_state == DECT_MM_CIPHER_FAILED &&
+	} else if (s->reg.link.mm.cipher_state == DECT_MM_CIPHER_FAILED &&
 		   !s->reg.cipher_done) {
 		s->reg.cipher_done = 1;
 		printf("call: cipher: authentication FAILED (RES mismatch)\n");
 	}
+
+	pump_lapc(s);
 }
 
 /* Route a received mail into the registration stack (when -g). */
@@ -2847,7 +2791,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * fresh link.
 		 */
 		if (s->reg.active && h == s->reg.handle
-		    && (s->reg.call_bound || dect_cc_busy(&s->reg.cc))) {
+		    && (s->reg.call_bound || dect_cc_busy(&s->reg.link.cc))) {
 			printf("reg: connection up (handle %u) repeated while "
 			       "a call is in progress -- keeping call state\n",
 			       h);
@@ -3257,15 +3201,15 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		}
 		/* Drive LAPC retransmission timers for the registration link. */
 		if (s->do_register && s->reg.active) {
-			dect_lapc_tick(&s->reg.lapc, now);
-			dect_cc_tick(&s->reg.cc, now);
+			dect_lapc_tick(&s->reg.link.lapc, now);
+			dect_cc_tick(&s->reg.link.cc, now);
 			/*
 			 * The call has gone away: release the audio channel.
 			 * Without this it stays armed for the life of the link
 			 * and the next call starts on top of the last one's
 			 * state.
 			 */
-			if (s->reg.call_bound && !dect_cc_busy(&s->reg.cc)) {
+			if (s->reg.call_bound && !dect_cc_busy(&s->reg.link.cc)) {
 				s->reg.call_bound = 0;
 				send_audio_disconnect(s, s->reg.handle);
 			}
