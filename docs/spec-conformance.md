@@ -95,6 +95,79 @@ adjusting the SETUP. Four of our attempted fixes so far -- codec list, basic
 service in three forms -- were all inside the SETUP, which is the layer that
 was never wrong.
 
+### 2026-10-23, later: the standard names the value we should be sending
+
+Everything above was argued from one NWK clause plus a chip inference. The
+profile and the LCE clause settle it directly, and they correct one of our own
+sentences while they are at it. All of this is from
+`docs/specs/`, re-extracted with `pdftotext -raw` and calibrated row by row.
+
+**EN 300 444 Table 66** -- the GAP profile's own table for
+`{LCE-REQUEST-PAGE}` -- permits exactly two values of `<LCE-header>`:
+
+> `0, 4`. "Indicates the U-plane services (MAC) required. **The '0' value
+> shall be used when only C-plane is required (e.g. MM procedures).** The PT
+> shall support a follow on call on the same link even if value '0' was used
+> during initial paging."
+
+**EN 300 175-5 §8.2.4.1** gives `4` = `100` its name:
+
+> Code "100" = Voice Service code (former IN_min_delay) **is the traditional
+> code used in GAP voice devices.** When used as short paging, this code shall
+> cause a **Basic connection MT bearer setup with full slot and MAC service
+> IN_min_delay.**
+
+So `F4.36` is no longer "read it and see". **The expected value for a voice
+call is `100`; `000` is the value reserved for C-plane-only procedures.**
+
+**Correction to this page.** Gap 2 above says we "omit both and establish
+nothing". That is wrong, and Table 80b says so plainly -- both relevant rows
+describe a basic connection being set up:
+
+| LCE | short paging, full slot | default behaviour |
+|---|---|---|
+| `000` | MT **basic connection setup on full slot**, PP does not initiate attributes negotiation. **MAC service = no MAC service** |
+| `100` | MT **basic connection setup on full slot**, PP does not initiate attributes negotiation. **Initial MAC service = IN_min_delay** |
+
+A basic connection is established either way. What `000` withholds is the
+**MAC service** -- there is no U-plane on the connection, not no connection.
+That matters because it is the only reading consistent with what we actually
+observe: we exchange LAPC frames with the handset perfectly well, which a
+link that was never established could not do. "No bearer at all" never fitted
+that and should not have been written.
+
+**And it explains the handset split without either handset being at fault.**
+GAP requires the PT to "support a follow on call on the same link even if
+value '0' was used" -- i.e. to acquire a U-plane later, by MAC service
+modification, on a link paged as C-plane-only. The C4 does that. The A540
+apparently does not, which makes the A540 the stricter reading of a
+requirement it arguably fails. Either way the remedy on our side is the same
+and is not a workaround: **page with `4` for a voice call**, which is what the
+profile calls the traditional GAP value and what makes the U-plane present
+from the start instead of depending on behaviour one of our two handsets does
+not implement.
+
+**A second thing falls out, about wideband.** §8.2.4.1 adds that `100` "is the
+standard code for Wideband voice ... but **full paging format is mandatory if
+the slot is different of a full slot**", while GAP §8.35 says "FT and PT shall
+**only support short format** for the {LCE-REQUEST-PAGE} message". Those
+combine into a profile-level fact we had been attributing to AVM:
+
+> A GAP FP cannot page for a long slot **at all**. Short paging can only ask
+> for a full slot, and GAP permits nothing but short paging.
+
+`[CR A-0076]` §4 found no full-format page builder on this STUB and we recorded
+that as a limitation of the chip. It is not -- it is GAP conformance. The
+conclusion (`F4.30`–`F4.33` retired, the handset must ask for wideband itself)
+is unchanged and was right; the reason is better than the one we wrote down.
+
+**What this does not settle.** Whether the compiled header at `0x96ad+4` is
+`000` or `100` is still a measurement, and whether anything host-side selects
+it is still unknown -- `[CR A-0076]` found `mail[2]` of `0x0300` unreferenced
+in the page path. If `F4.36` reads `100`, this whole line of reasoning is
+wrong and the A540's refusal is something else. That is the useful shape of
+the test.
+
 ## DLC / LAPC, Part 4
 
 ### ~~Gap 3 -- the retransmission timer is half the specified value~~ **FIXED**
