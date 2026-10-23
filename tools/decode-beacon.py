@@ -20,7 +20,14 @@ Identity material lives at 0x2285/0x228a/0x228f/0x2294. This script does not
 print it: it is our chip's RFPI and must not leave the device. Pass --identity
 only if you are looking at it locally and know why.
 
-Usage:  tools/decode-beacon.py work/box-tmp/vF429.log [--identity]
+The 0x2477 length is derived from the MAIL's payload-length field
+(payload_len-2, clamped to 30), not from capability bytes -- [CR A-0074] --
+and it is written by exactly two paths: 0x022B sets it, 0x022C clears it. So
+a bare 0x022B(0x41) can itself arm a nonzero length. F4.29 and F4.29b differ
+by exactly that mail, which is what makes a nonzero attributable.
+
+Usage:  tools/decode-beacon.py vF429.log [--identity]
+        tools/decode-beacon.py vF429.log --diff vF429b.log
 """
 import collections
 import re
@@ -133,6 +140,29 @@ def main(argv):
     else:
         print("\n(identity region not printed; pass --identity if you need it "
               "locally -- it must never be committed or sent to the room)")
+
+    if "--diff" in argv:
+        other = argv[argv.index("--diff") + 1]
+        omem = assemble(read_dumps(other))
+        print("\n--- diff against %s (the 0x022B A/B) ---" % other)
+        both = sorted(set(mem) & set(omem))
+        diff = [a for a in both if mem[a] != omem[a]]
+        print("  %d of %d shared bytes differ" % (len(diff), len(both)))
+        for a in diff[:40]:
+            where = ""
+            if SLOTS <= a < SLOTS + SLOT_COUNT * SLOT_STRIDE:
+                where = "  slot %d" % ((a - SLOTS) // SLOT_STRIDE)
+            elif a == FP_CONFIG_LEN:
+                where = "  <- FP_CONFIG length"
+            elif FP_CONFIG <= a < FP_CONFIG + 0x20:
+                where = "  <- FP_CONFIG body"
+            print("    0x%05x  %02x -> %02x%s" % (a, mem[a], omem[a], where))
+        if len(diff) > 40:
+            print("    ... and %d more" % (len(diff) - 40))
+        if not diff:
+            print("  IDENTICAL -- 0x022B changes nothing in this region, so "
+                  "whatever is announced is the chip's default and our "
+                  "bring-up adds nothing to it.")
 
     print("\n--- byte stability across sweeps ---")
     per = collections.defaultdict(set)
