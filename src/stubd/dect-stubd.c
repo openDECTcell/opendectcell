@@ -610,6 +610,28 @@ struct stubd {
 		 */
 		uint8_t  basic_svc;
 		/*
+		 * pagehdr=N: a FOURTH payload byte on the 0x0300 page.
+		 *
+		 * [CR A-0091] corrects [CR A-0076] §2. The page builder does
+		 * not compile the LCE header in: it builds page+4 as
+		 * bit0 | ((mail[5] & 0x0F) << 1) | (bits 5-7 preserved), and
+		 * mail[5] is the 0x0300 body byte AFTER the TPUI -- our
+		 * param[3]. (A-0076 was still right that mail[2], our page
+		 * info byte, is never read.)
+		 *
+		 * Neither we nor stock has ever written mail[5]: stock's
+		 * sender emits three payload bytes exactly as ours does. So
+		 * the builder has been reading a byte past what the sender
+		 * wrote -- whatever chip buffer state happens to be there.
+		 * That means the on-air LCE header is not known to be stable,
+		 * let alone correct, and it is NOT a constant we are stuck
+		 * with.
+		 *
+		 * -1 keeps the three-byte page we have always sent, so the
+		 * default changes nothing. 0..15 appends the byte.
+		 */
+		int	 page_hdr;
+		/*
 		 * timesync: 0 = auto (send only when the kernel says the
 		 * clock is disciplined), 1 = force (send anyway), 2 = off.
 		 *
@@ -2623,9 +2645,24 @@ static void send_page(struct stubd *s)
 	m.param[1] = tpui[1];
 	m.param[2] = tpui[2];
 	m.param_len = 3;
+	/*
+	 * The optional fourth byte -- mail[5] -- from which [CR A-0091] says
+	 * the builder takes bits 1-4 of the page header byte at 0x96ad+4.
+	 * Off by default: the three-byte page is what every run so far has
+	 * sent and what stock sends.
+	 */
+	if (s->audio.page_hdr >= 0) {
+		m.param[3] = (uint8_t)s->audio.page_hdr;
+		m.param_len = 4;
+	}
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
+	if (s->audio.page_hdr >= 0)
+		printf("ring: page carries mail[5] = 0x%02x -> expect LCE "
+		       "header %u at 0x96ad+4 (A-0091)\n",
+		       (unsigned)s->audio.page_hdr,
+		       (unsigned)(s->audio.page_hdr & 0x07));
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
 	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
@@ -4143,6 +4180,16 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		}
 		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
 			a->basic_svc = (uint8_t)v;
+		else if (klen == 7 && !memcmp(key, "pagehdr", 7)) {
+			/*
+			 * Only the low nibble reaches the page, and bits 6-7
+			 * are rejected rather than masked so a typo is not
+			 * silently accepted as something else.
+			 */
+			if (v > 0x0Fu)
+				return -1;
+			a->page_hdr = (int)v;
+		}
 		else if (klen == 8 && !memcmp(key, "timesync", 8)) {
 			if (!eq)
 				return -1;
@@ -4456,6 +4503,13 @@ static void usage(void)
 		"           little-endian PCM, encoding it to G.722 at start-up\n"
 		"           signal=N adds <<SIGNAL>> N to the SETUP (0x40..0x47 =\n"
 		"           alerting pattern 0..7); omitted, the handset picks\n"
+		"           pagehdr=N appends a FOURTH byte to the 0x0300 page\n"
+		"           (mail[5], 0..15). [CR A-0091]: the chip builds the\n"
+		"           page header byte at 0x96ad+4 from it, so the low 3\n"
+		"           bits select the on-air LCE header -- 4 is the GAP\n"
+		"           voice code, 0 is C-plane only. Neither we nor stock\n"
+		"           has ever set this byte, so the builder has been\n"
+		"           reading whatever was in the buffer. OFF by default.\n"
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech)\n"
 		"           playbyte=0|1|2 lane layout: 0 = a 16-bit word held\n"
@@ -4584,6 +4638,13 @@ int main(int argc, char **argv)
 	s.rx_word_prev = 0xFFFFFFFFu;	/* no word seen yet */
 	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
+	/*
+	 * -1, not 0: the struct is memset to zero above, and a zero here
+	 * would append a fourth page byte of 0x00 on every run -- changing
+	 * what we transmit by default on the strength of one trace. Off
+	 * unless asked.
+	 */
+	s.audio.page_hdr = -1;
 	s.audio.ti_fixed = -1;
 	s.audio.remode_codec = -1;	/* keep the bind's codec byte unless asked */
 	/*
