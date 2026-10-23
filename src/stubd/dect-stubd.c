@@ -3430,8 +3430,9 @@ static void usage(void)
 		"           lane's word boundary instead of a cadence of our own;\n"
 		"           required for anything but a steady tone\n"
 		"           remode=MS changes when the second 0x0230 with flag bit 6\n"
-		"           clear goes out after 0x022D (default 150), asking the\n"
-		"           chip's channel configurator for mode 2 (the narrowband\n"
+		"           clear goes out after 0x022D (default 500; less than\n"
+		"           that races the chip's own pass and is overwritten),\n"
+		"           asking for mode 2 (the narrowband\n"
 		"           G.726 path, which takes signed 16-bit linear PCM at one\n"
 		"           sample per frame on the lane; chain\n"
 		"           noremode suppresses the mode-2 re-assign, which is ON by\n"
@@ -3539,11 +3540,18 @@ int main(int argc, char **argv)
 	 * The mode-2 re-assign is ON by default since 2026-10-23: without it
 	 * the chip stays in mode 9 after the bind and no downlink audio of any
 	 * format reaches the handset. With it, and linear PCM on the lane, a
-	 * whole call is audible (vF411). 150 ms is comfortably after the
-	 * 0x0242 that triggers 0x022D and short enough that the silent gap at
-	 * the start of a call is not noticeable.
+	 * whole call is audible (vF411).
+	 *
+	 * 500 ms, and not less. This was briefly defaulted to 150 ms on the
+	 * reasoning that it is comfortably after the 0x0242 which triggers
+	 * 0x022D; vF414 then failed with the enable word never reaching 1 and
+	 * dest 6 falling back to silence 4 s in, while vF411 at 500 ms held
+	 * for a whole call. The two runs differ in nothing else. The MAC-side
+	 * bearer handler evidently runs its own configurator pass after
+	 * 0x022D, and a re-assign that arrives before it is simply
+	 * overwritten. 500 ms is the only value with evidence behind it.
 	 */
-	s.audio.remode_ms = 150;
+	s.audio.remode_ms = 500;
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN0;
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
