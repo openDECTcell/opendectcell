@@ -125,8 +125,21 @@ PLAN_WIDEBAND = [
     ("mode 3 (41:05) check   ", "41:05", "g722_one"),
 ]
 
+
+# One packing per call. [vF418, 2026-10-23] showed the matrix method is dead
+# for mode 8: the configuration collapsed after the first window and five
+# further re-assigns changed nothing, so eight of nine windows tested a dead
+# channel. These plans hold ONE packing for the whole call and re-assert mode
+# 8 every window, so every second of the call is testing the thing named.
+PLAN_WB_ONE  = [("mode 8, one octet/frame ", "41:01", "g722_one")] * 6
+PLAN_WB_HI   = [("mode 8, octet in high    ", "41:01", "g722_one_hi")] * 6
+PLAN_WB_SWAP = [("mode 8, one octet, eor#2 ", "41:01", "g722_one_swap")] * 6
+PLAN_WB_HELD = [("mode 8, word held 2 fr   ", "41:01", "g722_held")] * 6
+
 PLANS = {"format": (PLAN_FORMAT, 8.0), "duplex": (PLAN_DUPLEX, 25.0),
-         "wideband": (PLAN_WIDEBAND, 10.0)}
+         "wideband": (PLAN_WIDEBAND, 10.0),
+         "wb-one": (PLAN_WB_ONE, 10.0), "wb-hi": (PLAN_WB_HI, 10.0),
+         "wb-swap": (PLAN_WB_SWAP, 10.0), "wb-held": (PLAN_WB_HELD, 10.0)}
 
 
 def lay(kind, pcm, g722, frames, out):
