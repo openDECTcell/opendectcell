@@ -309,6 +309,118 @@ static void test_locate_request_from_our_handset_is_accepted(void)
 	CHECK_EQ(mm.stats.locate_rej, 0u);
 }
 
+/*
+ * Drive MM to the point where a {LOCATE-ACCEPT} has gone out carrying a TPUI
+ * -- which is what starts the temporary-identity assignment procedure.
+ */
+static void mm_setup_located(struct dect_mm *mm, uint8_t *out, size_t cap)
+{
+	static struct dect_mm_cfg cfg = { .pin = "1234",
+					  .rfpi = { 1, 2, 3, 4, 5 } };
+	uint8_t la[1] = { 0x64 };
+	uint8_t buf[64];
+	size_t n;
+
+	dect_mm_init(mm, &cfg);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+			       DECT_TI_ORIGINATOR, 0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_LOCATION_AREA,
+			    la, sizeof(la));
+	dect_mm_rx(mm, buf, n, NULL, NULL);
+	n = dect_mm_poll(mm, out, cap);
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+}
+
+/*
+ * <MM_ident.1>, the temporary-identity assignment timer (EN 300 175-5
+ * §13.2.2, §A.2). A TPUI in our {LOCATE-ACCEPT} starts the assignment
+ * procedure; the FT runs a 10 s timer and stops it on the PT's
+ * {TEMPORARY-IDENTITY-ASSIGN-ACK}.
+ *
+ * The ack is `05 5d` -- two octets, no elements -- which is how it appears in
+ * our own captures, unidentified and ignored, before 2026-10-23.
+ */
+static void test_tpui_assignment_is_confirmed_by_the_ack(void)
+{
+	static const uint8_t ack[] = { 0x05, 0x5D };
+	struct dect_mm mm;
+	uint8_t out[128];
+
+	mm_setup_located(&mm, out, sizeof(out));
+	/* The assignment has gone out and is not yet confirmed. */
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
+
+	dect_mm_tick(&mm, 1000);			/* arms the deadline */
+	CHECK_EQ(dect_mm_next_deadline(&mm), 11000u);	/* 10 s, FT value */
+
+	dect_mm_rx(&mm, ack, sizeof(ack), NULL, NULL);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 1);
+	CHECK_EQ(mm.stats.tpui_acked, 1u);
+	CHECK_EQ(mm.stats.tpui_timeouts, 0u);
+
+	/* Timer stopped: no deadline, and later ticks change nothing. */
+	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+	dect_mm_tick(&mm, 999999);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 1);
+	CHECK_EQ(mm.stats.tpui_timeouts, 0u);
+}
+
+/* No ack within 10 s: the assignment is recorded as unconfirmed, not retried. */
+static void test_tpui_assignment_times_out_at_ten_seconds(void)
+{
+	struct dect_mm mm;
+	uint8_t out[128];
+
+	mm_setup_located(&mm, out, sizeof(out));
+	dect_mm_tick(&mm, 1000);
+	dect_mm_tick(&mm, 10999);		/* one millisecond early */
+	CHECK_EQ(mm.stats.tpui_timeouts, 0u);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
+
+	dect_mm_tick(&mm, 11000);		/* due */
+	CHECK_EQ(mm.stats.tpui_timeouts, 1u);
+	CHECK_EQ(mm.tpui_timed_out, 1u);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
+	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+
+	/* It fires once, not every tick. */
+	dect_mm_tick(&mm, 30000);
+	CHECK_EQ(mm.stats.tpui_timeouts, 1u);
+}
+
+/* An ack arriving late, after the timeout, does not resurrect the assignment
+ * silently -- it is counted, and the caller can still see it timed out. */
+static void test_a_late_ack_is_visible_as_late(void)
+{
+	static const uint8_t ack[] = { 0x05, 0x5D };
+	struct dect_mm mm;
+	uint8_t out[128];
+
+	mm_setup_located(&mm, out, sizeof(out));
+	dect_mm_tick(&mm, 1000);
+	dect_mm_tick(&mm, 11000);
+	CHECK_EQ(mm.tpui_timed_out, 1u);
+
+	dect_mm_rx(&mm, ack, sizeof(ack), NULL, NULL);
+	CHECK_EQ(mm.stats.tpui_acked, 1u);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 1);
+	CHECK_EQ(mm.tpui_timed_out, 1u);	/* the history is kept */
+}
+
+/* With no assignment outstanding the timer never arms. */
+static void test_no_assignment_means_no_timer(void)
+{
+	struct dect_mm_cfg cfg = { .pin = "1234", .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tick(&mm, 1000);
+	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+	dect_mm_tick(&mm, 999999);
+	CHECK_EQ(mm.stats.tpui_timeouts, 0u);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
+}
+
 int main(void)
 {
 	test_locate_request_from_a_stranger_is_rejected();
@@ -317,5 +429,9 @@ int main(void)
 	test_register_bad_pin();
 	test_locate();
 	test_cipher();
+	test_tpui_assignment_is_confirmed_by_the_ack();
+	test_tpui_assignment_times_out_at_ten_seconds();
+	test_a_late_ack_is_visible_as_late();
+	test_no_assignment_means_no_timer();
 	return CHECK_DONE();
 }

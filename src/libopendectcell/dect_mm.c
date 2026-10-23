@@ -291,6 +291,16 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	off = put_codec_list(mm, b, off);	/* TS 102 527-1 7.3.1 */
 	txq_commit(mm, idx, off);
 	mm->stats.located++;
+
+	/*
+	 * This message carries a TPUI, so per EN 300 175-5 §13.2.2 it starts
+	 * the temporary-identity assignment procedure and the FT starts
+	 * <MM_ident.1>. The deadline is armed in the tick (we have no clock
+	 * here); until the PT acks, the assignment is NOT confirmed.
+	 */
+	mm->tpui_confirmed = 0;
+	mm->tpui_timed_out = 0;
+	mm->ident_pending = 1;
 }
 
 /*
@@ -541,9 +551,62 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		mm->ti_value = h.ti_value;	/* new PP-initiated transaction */
 		on_locate_request(mm, ies, ies_len);
 		break;
+	case DECT_MM_TEMP_IDENTITY_ASSIGN_ACK:
+		/*
+		 * The PT has taken the TPUI we assigned. Stop <MM_ident.1>.
+		 * No reply: EN 300 175-5 §13.2.2 has the FT issue a local
+		 * confirm primitive, nothing on the air.
+		 */
+		mm->ident_pending = 0;
+		mm->ident_deadline_ms = 0;
+		mm->tpui_confirmed = 1;
+		mm->stats.tpui_acked++;
+		break;
 	default:
 		break;
 	}
+}
+
+/* <MM_ident.1>: FT value 10 seconds (EN 300 175-5 §A.2). */
+#define MM_IDENT1_MS	10000u
+
+void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
+{
+	if (!mm->ident_pending) {
+		mm->ident_deadline_ms = 0;
+		return;
+	}
+	if (!mm->ident_deadline_ms) {
+		mm->ident_deadline_ms = now_ms + MM_IDENT1_MS;
+		return;
+	}
+	if (now_ms < mm->ident_deadline_ms)
+		return;
+	/*
+	 * "If timer <MM_ident.1> expires, the FT shall abort the procedure and
+	 * release the transaction" (§13.2.2, the {LOCATE-ACCEPT} path -- the
+	 * retransmission in the standalone {TEMPORARY-IDENTITY-ASSIGN} path
+	 * does not apply, because the assignment rode in the LOCATE-ACCEPT and
+	 * there is no separate message to repeat).
+	 *
+	 * We record it rather than tearing the link down: the registration
+	 * itself succeeded, and only the TPUI is in doubt. The caller decides
+	 * what an unconfirmed TPUI is worth -- see dect_mm_tpui_confirmed().
+	 */
+	mm->ident_pending = 0;
+	mm->ident_deadline_ms = 0;
+	mm->tpui_timed_out = 1;
+	mm->stats.tpui_timeouts++;
+}
+
+uint64_t dect_mm_next_deadline(const struct dect_mm *mm)
+{
+	return mm->ident_deadline_ms ? mm->ident_deadline_ms : UINT64_MAX;
+}
+
+int dect_mm_tpui_confirmed(const struct dect_mm *mm)
+{
+	return mm->tpui_confirmed;
 }
 
 size_t dect_mm_poll(struct dect_mm *mm, uint8_t *out, size_t cap)

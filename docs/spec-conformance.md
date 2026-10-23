@@ -191,9 +191,26 @@ is a complete answer and retires the wideband thread on this STUB.
   §14.2.3 are now audited -- see Gap 5.
 - **Part 4 (DLC / LAPC).** Timer values done (Gap 3). Still to check: the
   class A/B establishment procedures and the NLF handling.
-- **Clause 13 (MM).** Registration passes on two vendors' handsets, so this is
-  lower priority, but the `0x5D` message we receive and ignore after
-  LOCATE-ACCEPT is unidentified.
+- ~~**Clause 13 (MM).** … the `0x5D` message we receive and ignore after
+  LOCATE-ACCEPT is unidentified.~~ **IDENTIFIED AND FIXED 2026-10-23** — it is
+  `{TEMPORARY-IDENTITY-ASSIGN-ACK}`, the handset confirming the TPUI our
+  `{LOCATE-ACCEPT}` assigned (EN 300 175-5 §13.2.2). Three agreeing lines of
+  evidence: the capture is `05 5d`, two octets with no elements; table 62
+  gives the ack as P⇒F with only PD, TI and type mandatory, the only MM
+  message of that shape here; and `reg4.log` shows it arriving right after our
+  `85 55 … a0 94 00 11 01` LOCATE-ACCEPT. **The numeric value is not read off
+  the coding table** — pdftotext renders it column-wise and two
+  reconstructions failed their own calibration — so treat it as very probable
+  rather than certain.
+
+  **It was a real gap, not just an unknown.** §13.2.2 requires the FT to start
+  `<MM_ident.1>` (10 s) when it assigns a TPUI, stop it on the ack, and abort
+  the procedure on expiry. We ran no timer and ignored the ack, so an
+  assignment counted as successful the moment we sent it — **and we page by
+  that TPUI.** A handset that never took it would be paged on an identity it
+  is not listening for, silently. Implemented in API 7 with
+  `dect_mm_tpui_confirmed()`, and `dect-stubd` now prints
+  `WARNING: TPUI never acknowledged` on any page in that state.
 - **Clause 9.5 (release).** We have `RELEASE` and `RELEASE_COM`; the normal vs
   abnormal release distinction and the LCE "NLR" notifications are not
   implemented.

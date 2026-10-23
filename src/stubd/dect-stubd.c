@@ -2132,9 +2132,19 @@ static void send_page(struct stubd *s)
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 	printf("ring: paged the handset, attempt %u of %u "
-	       "(0x0300 {%02x %02x %02x}, basic service %02x)\n",
+	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
 	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
-	       tpui[1], tpui[2], s->audio.basic_svc);
+	       tpui[1], tpui[2], s->audio.basic_svc,
+	       /*
+		* We page BY the TPUI we assigned. If the handset never
+		* acknowledged the assignment (EN 300 175-5 §13.2.2,
+		* {TEMPORARY-IDENTITY-ASSIGN-ACK}) it may not be listening for
+		* it, and the page is silent in a way that looks exactly like a
+		* handset that will not answer -- which we have chased more
+		* than once. Say so rather than letting it look normal.
+		*/
+	       dect_mm_tpui_confirmed(&s->reg.link.mm)
+		       ? "" : " -- WARNING: TPUI never acknowledged");
 }
 
 /*

@@ -118,6 +118,8 @@ struct dect_mm_stats {
 	uint32_t locate_req;
 	uint32_t locate_rej;	/* rejected: not the handset we hold */	/* PP LOCATE-REQUEST seen */
 	uint32_t located;	/* LOCATE-ACCEPT sent */
+	uint32_t tpui_acked;	/* {TEMPORARY-IDENTITY-ASSIGN-ACK} received */
+	uint32_t tpui_timeouts;	/* <MM_ident.1> expiries */
 };
 
 struct dect_mm {
@@ -125,6 +127,25 @@ struct dect_mm {
 	enum dect_mm_state state;
 
 	uint8_t ti_value;			/* transaction from the PP */
+
+	/*
+	 * <MM_ident.1>, the temporary-identity assignment timer. EN 300 175-5
+	 * §13.2.2 and §A.2: a TPUI in our {LOCATE-ACCEPT} *starts the identity
+	 * assignment procedure*, the FT shall start this timer (FT value
+	 * **10 s**), stop it on {TEMPORARY-IDENTITY-ASSIGN-ACK}, and on expiry
+	 * "abort the procedure and release the transaction".
+	 *
+	 * We ran neither until 2026-10-23: the handset's ack arrived as the
+	 * unidentified `05 5d` and we ignored it, so an assignment was treated
+	 * as successful the moment we sent it. That matters because we page by
+	 * the assigned TPUI -- if a handset never took it, every page goes to
+	 * an identity it is not listening for, which is silent and looks
+	 * exactly like a handset that will not answer.
+	 */
+	uint64_t ident_deadline_ms;		/* 0 = not running */
+	unsigned tpui_confirmed : 1;		/* the PT acked the assignment */
+	unsigned tpui_timed_out : 1;		/* <MM_ident.1> expired */
+	unsigned ident_pending  : 1;		/* assignment awaiting its ack */
 	uint8_t rand_f[8];			/* our challenge (RAND_F) */
 	/*
 	 * Random seed (RS). AVM's mode-2 KEY-ALLOCATE carries a 16-octet RS IE
@@ -173,6 +194,23 @@ uint8_t dect_mm_sub_slot(const struct dect_mm *mm);
  * them from here rather than rebuilding them from the slot.
  */
 void dect_mm_tpui(const struct dect_mm *mm, uint8_t out[3]);
+
+/*
+ * Run the MM timers. Currently only <MM_ident.1>; safe to call every pass.
+ */
+void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms);
+
+/* Earliest MM deadline, or UINT64_MAX when no timer is running. */
+uint64_t dect_mm_next_deadline(const struct dect_mm *mm);
+
+/*
+ * Has the handset acknowledged the TPUI we assigned it?
+ *
+ * Paging uses that TPUI, so an unconfirmed assignment is a page the handset
+ * may never hear. Returns 0 before any assignment, after a timeout, and
+ * while the acknowledgement is still outstanding.
+ */
+int dect_mm_tpui_confirmed(const struct dect_mm *mm);
 
 /*
  * Feed a decoded NWK message (the LAPC I-frame payload). rand_f supplies the

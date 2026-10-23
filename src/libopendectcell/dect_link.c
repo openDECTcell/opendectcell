@@ -49,6 +49,7 @@ void dect_link_tick(struct dect_link *l, uint64_t now)
 {
 	dect_lapc_tick(&l->lapc, now);
 	dect_cc_tick(&l->cc, now);
+	dect_mm_tick(&l->mm, now);	/* <MM_ident.1> */
 	drain_nwk(l, now);
 }
 

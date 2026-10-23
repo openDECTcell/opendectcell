@@ -68,8 +68,20 @@
  *    `ind.keypad` is set. They are RAW and lossless: GAP's basic set is 0-9,
  *    * and #, but control codes (pause, register recall, go-to-pulse) may
  *    appear, and deciding what to do with those is policy.
+ *
+ * 7: <MM_ident.1>, the temporary-identity assignment timer. `struct dect_mm`
+ *    grows the deadline and three flags, `struct dect_mm_stats` two counters,
+ *    and dect_mm_tick() / dect_mm_next_deadline() / dect_mm_tpui_confirmed()
+ *    arrive. dect_link_tick() runs the MM timer, so a consumer already
+ *    calling it needs no change.
+ *
+ *    CONSUMERS: a TPUI in {LOCATE-ACCEPT} starts an assignment procedure the
+ *    handset must acknowledge, and we page BY that TPUI. Check
+ *    dect_mm_tpui_confirmed() before treating a handset as reachable: an
+ *    unacknowledged assignment means pages may go to an identity it is not
+ *    listening for, which fails silently.
  */
-#define OPENDECTCELL_API_VERSION 6
+#define OPENDECTCELL_API_VERSION 7
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

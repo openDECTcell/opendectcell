@@ -44,6 +44,24 @@
 #define DECT_MM_LOCATE_REQUEST		0x54u
 #define DECT_MM_LOCATE_ACCEPT		0x55u
 #define DECT_MM_LOCATE_REJECT		0x57u
+/*
+ * {TEMPORARY-IDENTITY-ASSIGN-ACK}: the PT confirming a TPUI we assigned.
+ *
+ * Identified 2026-10-23 from three agreeing lines of evidence, because the
+ * spec's message-type table does not survive pdftotext (two reconstructions
+ * of it failed their own calibration against values we already use):
+ *   - our corpus holds the message as exactly `05 5d` -- PD 5 (MM), two
+ *     octets, no information elements;
+ *   - EN 300 175-5 table 62 gives {TEMPORARY-IDENTITY-ASSIGN-ACK} as P=>F
+ *     with only PD, TI and message type mandatory, i.e. two octets with no
+ *     elements. It is the only MM message of that shape in this exchange;
+ *   - it arrives immediately after our {LOCATE-ACCEPT}, which carries a
+ *     TPUI -- and §13.2.2 says a TPUI in {LOCATE-ACCEPT} starts exactly this
+ *     assignment procedure.
+ * The numeric value is not read off the coding table; treat it as very
+ * probable rather than certain, and say so if it ever misbehaves.
+ */
+#define DECT_MM_TEMP_IDENTITY_ASSIGN_ACK	0x5Du
 
 /* CC (Call Control) message types (§7.4.1; octet 2). */
 #define DECT_CC_ALERTING		0x01u
