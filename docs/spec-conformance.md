@@ -794,3 +794,116 @@ influence the refusal in either direction.**
 bearer-table theories now produce one byte-identical outcome. That
 consistency is itself the finding: we are not varying the thing that
 matters.
+
+## 2026-10-24: the {CC-SETUP} was 3.9 seconds late, and everything before this is void
+
+### The defect
+
+`dect-stubd`'s poll loop open-coded `dect_link_tick()` as `dect_lapc_tick()`
++ `dect_cc_tick()`. Those are two of that function's four duties; it silently
+dropped `dect_mm_tick()` and, decisively, `drain_nwk()` -- the step that moves
+a queued NWK message from the CC output queue into LAPC.
+
+`dect_link_rx_segment()` was then the only remaining caller of the drain. So a
+message queued **outside** an inbound-segment context had nothing to push it.
+An FP-originated `{CC-SETUP}` is exactly that: `reg_segment()` calls
+`ring_queue_setup()` *after* `rx_segment()` has already drained.
+
+Measured in `vBR01`:
+
+| t (ms) | event |
+| --- | --- |
+| 21464 | page response parsed, `{CC-SETUP}` queued |
+| 21464 | `tx cplane 7 bytes` -- the LAPC ack, and nothing else |
+| 22892 … 25300 | **silence: no C-plane transmit for 3 860 ms** |
+| 25324 | the handset sends a `{CC-SETUP}` of its own |
+| 25324 | our stale `{CC-SETUP}` finally goes out, woken by that inbound frame |
+| 25744 | `93 5a e2 32` |
+
+Every `reg: tx cplane` line in the corpus immediately follows an inbound
+`prim 0203`. The transmit path was **purely reactive**: nothing left the base
+until something arrived.
+
+### Why that produced exactly the symptom we chased
+
+EN 300 175-5 §9.5.2.3 "Abnormal release in case of call setup collision":
+
+> The PT shall perform abnormal release of the FT-initiated call (incoming
+> call), by sending a {CC-RELEASE-COM} … **using release reason 'Insufficient
+> resources'**.
+
+So `0x32` was not a complaint about our message. It was the **spec-mandated
+answer to a collision**, and the collision was manufactured by our own
+latency. The corpus agrees without exception:
+
+- every log with a refusal has a handset `{CC-SETUP}` within **100 ms** of
+  ours, and the refusal lands **220 ms** after ours -- the same two numbers in
+  every run;
+- every log where the handset's own setup is seconds away has **no refusal**;
+- `vSW08`, which never sent a setup, has no refusal.
+
+### Consequence: eighteen theories are void, not eliminated
+
+Page header 0/1/3/4, `<<BASIC-SERVICE>>` 0x88/0x80/0x28/0x40, `<<SIGNAL>>`,
+`<<CALL-INFORMATION>>`, CLIP, ciphering, the retry budget, TPUI
+acknowledgement, and the six `0x015E` bearer-arm phases were **all** measured
+while the setup arrived ~3.9 s late and was answered by a collision. None of
+them was ever read by the handset's attribute check. They are back in play.
+
+Two of them were worse than void:
+
+- **the ciphering phase tested nothing.** Call ciphering is started in the
+  `{CC-CONNECT}` branch, which an unanswered incoming call never reaches, so
+  `-C` and no `-C` produce an identical incoming call.
+- **the `<<BASIC-SERVICE>>` phases also moved the page byte**, because
+  `ring_page_info()` keys on the service nibble. That was already recorded.
+
+### The fix
+
+`dect_link_tick()` in the poll loop, as `dect_link.h` has always said
+("Call once per poll loop"), plus a drain in `reg_segment()` right after
+`ring_queue_setup()` so the setup leaves in the same breath as the page
+response rather than up to `POLL_MS` later.
+
+`vFIX` confirms it: queued at `t=76514`, on the wire at `t=76514`. **Latency
+3 860 ms → 0 ms.** The handset's own setup came 2 660 ms later, so there was
+no collision, and no call was in progress at the time (the previous service
+call closed at `t=74654`, the next opened at `t=79274`).
+
+**And the handset still refused, in 240 ms.** So the collision was real, was
+ours, and was not the whole story. What it bought us is a clean instrument:
+for the first time the handset's attribute check is actually reading what we
+send.
+
+### Corrected along the way
+
+- `<<BASIC-SERVICE>>` call class **8 is "Normal call setup"** (EN 300 175-5
+  §7.6.4 figure 18); external handover is **12**. Our
+  `docs/autonomous-2026-10-23.md` table mislabelled every row, and A-0069's
+  prescribed `0x40` is call class 4, **"Message call setup"** -- not a voice
+  call. `RING_BASIC_SVC` was already `0x80` and is correct.
+- `0x015E` is **ACCESS_MANAGEMENT** `[CR COMMAND_SET §6.3]`, not bearer
+  allocation; `0x196–0x1BD` is a special **handset-number** range with an
+  enable flag, and the MAC reject codes `0x0D`/`0x10`/`0x12` it gates are
+  MAC-layer codes, not the NWK `<<RELEASE-REASON>>` we receive. A-0096's
+  identification of the two was a layer confusion.
+
+### What EN 300 444 actually requires of the message
+
+Table 21, the mandatory content of an FT `{CC-SETUP}` for an incoming call:
+
+| IE | value | ours |
+| --- | --- | --- |
+| `<<PORTABLE-IDENTITY>>` | type 0 IPUI | ✓ |
+| `<<FIXED-IDENTITY>>` | type 32 PARK, whole PARK | ✓ `a0 a5 …` |
+| `<<BASIC-SERVICE>>` | call class 8, basic service 0 | ✓ `e0 80` |
+| `<<SIGNAL>>` | 40H–47H, 48H, 4FH | **omitted** |
+| `<<CALLING-PARTY-NUMBER>>` | only with feature [N.30] | optional |
+
+`<<CODEC-LIST>>` is **not** in table 21, and EN 300 175-5 §9.3.2.1 says that
+when `<<BASIC-SERVICE>>` indicates default attributes the service is defined
+by the annex E defaults and no further attribute elements shall be included.
+We send one anyway: `90 02 00 84` = codec negotiation, G.726 32 kbit/s,
+LU1/INA, full slot, CS only. The A540's own list is `90 03 00 01 02 00 84` --
+G.722 64 kbit/s on a **long slot** first, G.726 full slot second. We offer
+only its fallback.

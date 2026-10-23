@@ -383,6 +383,31 @@ struct stubd {
 		 * in(k), and a NOP over the chain, i.e. enabled.
 		 */
 		int nocodeclist;	/* omit <<CODEC-LIST>> from CC-SETUP */
+		/*
+		 * earlybind: assign the audio channel the moment the handset
+		 * answers the page, BEFORE the {CC-SETUP}, instead of waiting
+		 * for {CC-CONNECT}.
+		 *
+		 * COMMAND_SET §9.2 puts the audio assignment straight after
+		 * "radio connection up", and [CR A-StockTrace-5 §15] measured a
+		 * connection bearer on stock ~360 ms BEFORE its {CC-SETUP}. We
+		 * assign on {CC-CONNECT}, which for an incoming call never
+		 * arrives -- so the handset is offered speech on a connection
+		 * that has no U-plane, and "insufficient resources" is the
+		 * honest answer. The chip says as much: a page-response
+		 * connection reports 0x0200 {handle, 0} / 0x0242 {handle, 0x00}
+		 * where a handset-originated one reports {handle, 1} /
+		 * {handle, 0x40}.
+		 */
+		int earlybind;
+		/*
+		 * codeclist=HEX replaces the <<CODEC-LIST>> contents (the IE
+		 * value, without tag or length). EN 300 175-5 §7.7.54: one
+		 * negotiation octet then 3 octets per codec
+		 * {identifier, direction+MAC/DLC service, routing+slot size}.
+		 */
+		uint8_t  codeclist[31];
+		size_t   codeclist_len;
 		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
 		/*
@@ -3314,7 +3339,13 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	{
 		static const uint8_t cl[] = { 0x90u, 0x02u, 0x00u, 0x84u };
 
-		if (!s->audio.nocodeclist)
+		if (s->audio.nocodeclist)
+			dect_cc_set_codec_list(&s->reg.link.cc, NULL, 0);
+		else if (s->audio.codeclist_len)
+			dect_cc_set_codec_list(&s->reg.link.cc,
+					       s->audio.codeclist,
+					       s->audio.codeclist_len);
+		else
 			dect_cc_set_codec_list(&s->reg.link.cc, cl, sizeof(cl));
 	}
 	dect_cc_set_signal(&s->reg.link.cc, s->audio.signal_on,
@@ -3380,6 +3411,16 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * run that showed sending it on link-up loses the frame.
 	 */
 	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP) {
+		/*
+		 * Give the connection a U-plane before offering speech over
+		 * it. See the earlybind comment in struct audio_cfg.
+		 */
+		if (s->audio.earlybind && !s->reg.call_bound) {
+			printf("ring: early audio bind on handle %u, before "
+			       "the CC-SETUP\n", s->reg.handle);
+			send_audio_bind(s, s->reg.handle);
+			s->reg.call_bound = 1;
+		}
 		ring_queue_setup(s, now, "page response received");
 		/*
 		 * Push it out in the same breath. The main loop would now get
@@ -4215,6 +4256,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 7 && !memcmp(key, "memdump", 7)) &&
 			    !(klen == 8 && !memcmp(key, "timesync", 8)) &&
 			    !(klen == 8 && !memcmp(key, "pagemail", 8)) &&
+			    !(klen == 9 && !memcmp(key, "codeclist", 9)) &&
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
@@ -4226,6 +4268,31 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->no_gain = 1;
 		else if (!eq && klen == 11 && !memcmp(key, "nocodeclist", 11))
 			a->nocodeclist = 1;
+		else if (!eq && klen == 9 && !memcmp(key, "earlybind", 9))
+			a->earlybind = 1;
+		else if (eq && klen == 9 && !memcmp(key, "codeclist", 9)) {
+			const char *h = eq + 1;
+			size_t n = 0;
+
+			while (h < spec && n < sizeof(a->codeclist)) {
+				char buf[3];
+				char *he;
+
+				if (spec - h < 2)
+					return -1;
+				buf[0] = h[0];
+				buf[1] = h[1];
+				buf[2] = 0;
+				a->codeclist[n] = (uint8_t)strtoul(buf, &he, 16);
+				if (*he)
+					return -1;
+				n++;
+				h += 2;
+			}
+			if (h != spec || n < 4)
+				return -1;	/* a list needs at least one codec */
+			a->codeclist_len = n;
+		}
 		else if (!eq && klen == 9 && !memcmp(key, "noconnect", 9))
 			a->no_connect = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nowait", 6))
@@ -4629,6 +4696,8 @@ static void usage(void)
 		"           order. For 0x015E, which stock sends twice around\n"
 		"           every page and we never send at all.\n"
 		"           setuptries=N re-offers a refused CC-SETUP N times\n"
+		"           codeclist=HEX <<CODEC-LIST>> value octets\n"
+		"           earlybind    assign audio on the page response\n"
 		"           (default 8; the default 16 s budget is SHORTER than\n"
 		"           our own F<CC.03> timer, so it gives up first)\n"
 		"           pagehdr=N appends a FOURTH byte to the 0x0300 page\n"
