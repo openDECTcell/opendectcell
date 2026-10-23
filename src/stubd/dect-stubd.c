@@ -752,6 +752,9 @@ struct stubd {
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
 	uint32_t    voice_bytes;
 	uint32_t    voice_space_checked;
+	/* Per-run tally of commands sent, by verification class. */
+	uint32_t verify_n[17];
+	uint32_t verify_other;
 	struct reg_ctx {
 		int active;
 		int persisted;		/* chip subscription written this connection */
@@ -831,6 +834,127 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
  * Send a mail: encode the transmit element (libopendectcell) and spread its two
  * bytes per frame into the transmit control slot, idle (0xFF) elsewhere.
  */
+/*
+ * What we can and cannot know about a command after we send it.
+ *
+ * The maintainer asked whether we check that anything we tell the chip
+ * actually took effect. We do not, almost anywhere, and two findings make
+ * that worse than it sounds: `[CR A-0070]` says the dispatcher SILENTLY DROPS
+ * anything that is not a command, so a wrong primitive gives no error and no
+ * reply; and `[CR A-0075]` says 0x0242 is emitted on the no-act early-out, so
+ * the one reply we had been treating as a confirmation never was one.
+ *
+ * We cannot fix that here -- a read-back needs the address of the subscription
+ * table, which is Q-0052. What we can do is stop the gap being invisible, so
+ * nobody again reads a quiet log as a working base.
+ */
+enum verify_class {
+	VERIFY_BY_REPLY,	/* the reply IS the result; nothing to assume */
+	VERIFY_READABLE,	/* the effect sits in chip memory we could read */
+	VERIFY_NONE,		/* no observable effect we know of */
+};
+
+static const struct {
+	uint16_t prim;
+	enum verify_class cls;
+	const char *what;
+	const char *note;
+} verify_tbl[] = {
+	{ 0xFFF1u, VERIFY_BY_REPLY,  "memory read",            "the reply is the result" },
+	{ 0xF624u, VERIFY_BY_REPLY,  "status poll",            "answered by 0xF625" },
+	{ 0x020Au, VERIFY_READABLE,  "subscription record",    "address unknown -- Q-0052" },
+	{ 0x0247u, VERIFY_READABLE,  "subscription slot op",   "address unknown -- Q-0052" },
+	{ 0x0230u, VERIFY_READABLE,  "assign audio channel",   "0x0242 is 'processed', NOT 'applied' [A-0075]; real gate is record +0x116 bit 5" },
+	{ 0x016Au, VERIFY_READABLE,  "channel config",         "matrix is readable; we do not check" },
+	{ 0x0251u, VERIFY_READABLE,  "set channel params",     "matrix is readable; we do not check" },
+	{ 0x022Du, VERIFY_READABLE,  "audio path on",          "record +0x116 bit 6; we do not check" },
+	{ 0x0233u, VERIFY_READABLE,  "audio disconnect",       "record +0x116 bit 6; we do not check" },
+	{ 0x0208u, VERIFY_NONE,      "cipher enable",          "field mapping unproven [A-0028]" },
+	{ 0x0300u, VERIFY_NONE,      "page a handset",         "a page response is a NWK event, not a confirmation we paged" },
+	{ 0xF626u, VERIFY_NONE,      "DSP route",              "no known readable effect" },
+	{ 0x015Bu, VERIFY_NONE,      "radio on/park",          "no known readable effect" },
+	{ 0x022Bu, VERIFY_NONE,      "enable token",           "no known readable effect" },
+	{ 0x022Cu, VERIFY_NONE,      "close registration",     "no known readable effect" },
+	{ 0xF600u, VERIFY_BY_REPLY,  "contact",                "answered by 0xF601" },
+	{ 0x0244u, VERIFY_NONE,      "transmit C-plane",       "DLC acks the frame; the chip never says it sent it" },
+};
+
+#define VERIFY_TBL_N	(sizeof(verify_tbl) / sizeof(verify_tbl[0]))
+
+/*
+ * The tally lives on struct stubd, which is declared before this table, so
+ * its size is written out by hand. Catch a mismatch at compile time rather
+ * than overflowing it -- it would be a poor joke to get this wrong in the
+ * change whose whole point is checking things.
+ */
+_Static_assert(VERIFY_TBL_N <= sizeof(((struct stubd *)0)->verify_n)
+			       / sizeof(((struct stubd *)0)->verify_n[0]),
+	       "verify_n[] is smaller than verify_tbl[]");
+
+static void verify_count(struct stubd *s, uint16_t prim)
+{
+	size_t i;
+
+	for (i = 0; i < VERIFY_TBL_N; i++) {
+		if (verify_tbl[i].prim == prim) {
+			if (s->verify_n[i] < UINT32_MAX)
+				s->verify_n[i]++;
+			return;
+		}
+	}
+	if (s->verify_other < UINT32_MAX)
+		s->verify_other++;
+}
+
+/*
+ * One block per run. Turns "we never check anything" from a fact buried in
+ * the source into a line somebody reads after every bench run.
+ */
+static void verify_report(const struct stubd *s)
+{
+	unsigned long reads = 0, changes = 0, verified = 0;
+	size_t i;
+
+	for (i = 0; i < VERIFY_TBL_N; i++) {
+		if (verify_tbl[i].cls == VERIFY_BY_REPLY) {
+			reads += s->verify_n[i];
+			verified += s->verify_n[i];
+		} else {
+			changes += s->verify_n[i];
+		}
+	}
+	changes += s->verify_other;
+	if (!reads && !changes)
+		return;
+
+	printf("chip: command verification summary\n");
+	for (i = 0; i < VERIFY_TBL_N; i++) {
+		if (!s->verify_n[i])
+			continue;
+		printf("chip:   0x%04X x%-5u %-22s %s (%s)\n",
+		       verify_tbl[i].prim, s->verify_n[i], verify_tbl[i].what,
+		       verify_tbl[i].cls == VERIFY_BY_REPLY ? "verified"
+							   : "NOT VERIFIED",
+		       verify_tbl[i].note);
+	}
+	if (s->verify_other)
+		printf("chip:   (%u other command%s, not classified)\n",
+		       s->verify_other, s->verify_other == 1 ? "" : "s");
+	/*
+	 * Count reads separately. Lumping them in reads as "88 % verified"
+	 * when every state change is unchecked, which is the opposite of the
+	 * truth. A summary that flatters is worse than no summary.
+	 */
+	printf("chip: %lu state-changing command%s sent, %s verified. "
+	       "%lu read%s (self-verifying, nothing assumed).\n",
+	       changes, changes == 1 ? "" : "s",
+	       changes ? "NONE" : "none", reads, reads == 1 ? "" : "s");
+	if (changes)
+		printf("chip: every state change above was sent and assumed. "
+		       "See docs/verification-gap.md\n");
+	fflush(stdout);
+}
+
 static int send_mail(struct stubd *s, unsigned int tx_slot,
 		     const struct dect_mail *m)
 {
@@ -841,6 +965,7 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 
 	if (el_len <= 0 || tx_slot >= s->slots)
 		return -1;
+	verify_count(s, (uint16_t)m->prim);
 
 	/*
 	 * Once the ring is running every write goes through it, so the mail is
@@ -3141,10 +3266,23 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		break;
 	case 0x0242:
 		/*
-		 * Channel assignment confirmed: {handle, chan_flags, mask}. The
-		 * low nibble is the channel the chip actually gave us; 0 or 0xF
-		 * means none. Only the long form answers 0x0230 [CR COMMAND_SET
-		 * §8.4]; the short one reports later state changes.
+		 * {handle, chan_flags, mask}. The low nibble is the channel
+		 * the chip names; 0 or 0xF means none. Only the long form
+		 * follows 0x0230 [CR COMMAND_SET §8.4]; the short one reports
+		 * later state changes.
+		 *
+		 * NOT a confirmation, though it was called one here until
+		 * 2026-10-23. `[CR A-0075]`: 0x0242 is emitted on EVERY path
+		 * through the chip's handler, including the early-out that
+		 * does nothing -- it means "mail processed", not "matrix
+		 * changed". vF418 holds six byte-identical 0x0242 replies to
+		 * sends that changed nothing, beside one that worked.
+		 *
+		 * We still use the channel it names, because that is still
+		 * the channel. What we must not do is read arrival as success:
+		 * the act/no-act gate is the connection record's +0x116 bit 5,
+		 * which we do not yet read. Until we do, binding audio here is
+		 * an assumption, and the run summary says so.
 		 */
 		if (s->reg.call_bound && !s->reg.audio_connected &&
 		    m->param_len >= 4 && m->param[0] == s->reg.handle) {
@@ -3552,6 +3690,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			       (unsigned long long)ps.errors,
 			       ps.overruns, ps.tx_blocks, ps.tx_frames);
 	}
+	verify_report(s);
 	free(buf);
 	free(txbuf);
 	return 0;
