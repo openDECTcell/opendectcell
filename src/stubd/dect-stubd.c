@@ -2708,6 +2708,18 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	 */
 	dect_link_set_tx_log(&s->reg.link, log_nwk_out, s);
 	/*
+	 * dect_link_init() also zeroed mm.stats.located. Without resetting
+	 * our own watermark the comparison below reads 0 != N and fires a
+	 * date-and-time send on every connection setup, with no location
+	 * registration behind it -- which is exactly what vF439 did: 14 sends
+	 * for 7 LOCATE-ACCEPTs, the extras landing right after
+	 * "connection up".
+	 *
+	 * Found by running it. A counter compared across a re-init is a trap
+	 * no unit test of either side would have caught.
+	 */
+	s->reg.time_sent_for = 0;
+	/*
 	 * Hand the MM state machine the identity we are subscribed to, so a
 	 * location registration from a handset we do not hold is rejected.
 	 * Must come AFTER dect_mm_init(), which clears it.
