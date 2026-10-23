@@ -259,6 +259,26 @@ struct stubd {
 		int      nbcodec;
 		int      nowait;	/* send 0x022D immediately (old behaviour) */
 		/*
+		 * remode=MS: MS ms after 0x022D, send a SECOND 0x0230 for the
+		 * same handle and channel with flag bit 6 CLEAR.
+		 *
+		 * [CR A-0039]: the chip's channel configurator picks its mode
+		 * from the assign's flags and the path state. A first 0x0230,
+		 * and the 0x022D connect, both run mode 1 -- which routes PCM
+		 * out(k) from the silence constant, parks PCM in(k) in a sink,
+		 * and writes a skip over the channel's transmit chain, i.e.
+		 * disables it. Our whole sequence runs mode 1 twice, so nothing
+		 * we write to the lane can reach the air and nothing from the
+		 * air reaches us through the matrix. That is the decoupling
+		 * measured on 2026-10-23 (3.8 dB of envelope range against the
+		 * source's 52.9 dB, no correlation at any offset).
+		 *
+		 * A second 0x0230 with bit 6 clear while the path is already on
+		 * selects mode 2: PCM out(k) <- channel k, channel k <- PCM
+		 * in(k), and a NOP over the chain, i.e. enabled.
+		 */
+		unsigned remode_ms;
+		/*
 		 * noconnect: never send 0x022D. The stock connect sequence is
 		 * exactly 0x0251 then 0x0230 [CR A-0034]; 0x022D is the stock
 		 * mute control (0x80 = mute), never sent at connect. Whether
@@ -565,6 +585,8 @@ struct stubd {
 		int persisted;		/* chip subscription written this connection */
 		int call_bound;		/* audio channel bound for the active call */
 		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
+		uint64_t remode_at;	/* when to send the mode-2 re-assign, 0 = off */
+		uint8_t  remode_handle;
 		uint64_t bind_ms;	/* when 0x0230 went out, for the fallback */
 		uint64_t status_ms;	/* when the last 0xF624 poll went out */
 		uint16_t counter[10];	/* previous 0xF625 counters, for deltas */
@@ -1543,6 +1565,10 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 	m.prim = 0x022Du;		/* AUDIO_PATH_ON_OFF */
 	m.param[0] = handle;
 	m.param[1] = 0x00u;		/* bit 7 = 0: connect */
+	if (a->remode_ms) {
+		s->reg.remode_at = mono_ms() + a->remode_ms;
+		s->reg.remode_handle = handle;
+	}
 	m.param_len = 2;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
@@ -1653,6 +1679,39 @@ static void play_sweep(struct stubd *s, uint64_t now)
  * The reply (0xFFF1 sub 0x08) carries the address and the bytes and is
  * printed by the ordinary mail log, so no extra decoding lives here.
  */
+/*
+ * Second 0x0230 with flag bit 6 clear, once the path is on: asks the chip's
+ * channel configurator for mode 2 instead of the mode 1 our bind leaves it
+ * in. [CR A-0039]
+ */
+static void remode_tick(struct stubd *s, uint64_t now)
+{
+	const struct audio_cfg *a = &s->audio;
+	struct dect_mail m;
+
+	if (!s->reg.remode_at || now < s->reg.remode_at)
+		return;
+	s->reg.remode_at = 0;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0230u;
+	m.param[0] = s->reg.remode_handle;
+	m.param[1] = (uint8_t)(a->flags & ~0x40u);	/* bit 6 CLEAR */
+	m.param[2] = (uint8_t)(a->mask & 0xFFu);
+	m.param[3] = (uint8_t)(a->mask >> 8);
+	m.param[4] = a->mode;
+	m.param[5] = a->codec;
+	m.param_len = 6;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	printf("call: re-assign for mode 2: 0x0230 {%02x %04x %02x %02x}\n",
+	       m.param[1], a->mask, a->mode, a->codec);
+	fflush(stdout);
+}
+
 static void mem_dump_tick(struct stubd *s, uint64_t now)
 {
 	struct dect_mail m;
@@ -2333,6 +2392,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	    (s->reg.cc.state == DECT_CC_ST_CONNECT_PENDING ||
 	     s->reg.cc.state == DECT_CC_ST_ACTIVE)) {
 		s->reg.audio_connected = 0;
+		s->reg.remode_at = 0;
 		s->reg.bind_ms = now;
 		s->reg.status_ms = 0;
 		s->reg.have_counters = 0;
@@ -2790,6 +2850,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		}
 		if (s->sess.state == DECT_SESS_UP)
 			mem_dump_tick(s, now);
+		remode_tick(s, now);
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
 			struct dect_mail cm;
 
@@ -3061,6 +3122,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->tone_word = (uint8_t)v;
 		else if (klen == 8 && !memcmp(key, "playslot", 8))
 			a->play_slot_ms = (unsigned)v;
+		else if (klen == 6 && !memcmp(key, "remode", 6))
+			a->remode_ms = (unsigned)v;
 		else if (klen == 3 && !memcmp(key, "dsp", 3)) {
 			/* dsp=DST:SRC -- the generic check above let the ':' through */
 			unsigned long src;
@@ -3240,6 +3303,11 @@ static void usage(void)
 		"           playsync advances the coded stream on the received\n"
 		"           lane's word boundary instead of a cadence of our own;\n"
 		"           required for anything but a steady tone\n"
+		"           remode=MS sends a second 0x0230 with flag bit 6 clear\n"
+		"           MS ms after 0x022D, which asks the chip's channel\n"
+		"           configurator for mode 2 (PCM out <- channel, chain\n"
+		"           enabled) instead of the mode 1 our bind leaves it in,\n"
+		"           where PCM out is the silence constant [CR A-0039]\n"
 		"           playslot=MS walks the lane across every transmit slot,\n"
 		"           MS ms each, logging 'play: lane slot N'. Which slot the\n"
 		"           chip reads as the downlink bearer is not established.\n"
