@@ -1682,6 +1682,36 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
  * confirmed in 0x0242 -- A-0032 Q9: trust the returned channel, not the one
  * we asked for.
  */
+/*
+ * 0x0233 AUDIO_DISCONNECT -- the clean inverse of 0x0230 [CR A-0070].
+ *
+ * We have never sent this. `call_bound` was set when a call connected and
+ * cleared only when the LINK restarted, so the audio channel stayed armed
+ * after every call ended and the next call inherited whatever state the last
+ * one left. The chip's handler runs the configurator in mode 0 (release) and
+ * clears the path-on bit (record +0x116 b6), which is exactly the teardown we
+ * have been missing.
+ *
+ * [CR A-0070] §4 gives the release order: 0x0233 first, then 0x0202 once the
+ * DLC is quiescent. This is the audio half.
+ */
+static void send_audio_disconnect(struct stubd *s, uint8_t handle)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0233u;
+	m.param[0] = handle;
+	m.param[1] = 0x01u;	/* [3] must be non-zero */
+	m.param_len = 2;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	printf("call: audio disconnected (0x0233 on handle %u)\n", handle);
+}
+
 static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 {
 	const struct audio_cfg *a = &s->audio;
@@ -3229,6 +3259,16 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		if (s->do_register && s->reg.active) {
 			dect_lapc_tick(&s->reg.lapc, now);
 			dect_cc_tick(&s->reg.cc, now);
+			/*
+			 * The call has gone away: release the audio channel.
+			 * Without this it stays armed for the life of the link
+			 * and the next call starts on top of the last one's
+			 * state.
+			 */
+			if (s->reg.call_bound && !dect_cc_busy(&s->reg.cc)) {
+				s->reg.call_bound = 0;
+				send_audio_disconnect(s, s->reg.handle);
+			}
 			pump_lapc(s);
 		}
 		if (run_seconds && now - start >= (uint64_t)run_seconds * 1000u)
