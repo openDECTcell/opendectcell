@@ -49,7 +49,6 @@
 
 /* Longest -a loopdelay ring, in frames (1 s at 8 kHz). */
 /* How long to wait for a lingering link to clear before ringing anyway. */
-#define RING_LINK_WAIT_MS	20000u
 
 #define LOOP_DELAY_MAX 8000u
 
@@ -164,7 +163,6 @@ struct stubd {
 	       RING_DONE } ring_state;
 	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
 	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
-	uint64_t ring_link_wait_until;	/* lingering link: wait, see ring_tick */
 	unsigned    ring_pages;		/* pages sent for this attempt */
 	uint64_t    ring_last;		/* when the last one went out */
 	int sub_restored;	/* stored subscription already pushed to the chip */
@@ -2060,54 +2058,73 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			return;
 		}
 		/*
-		 * A link may already be up, in which case the handset does not
-		 * need paging and the SETUP can go straight out. **Avoid that
-		 * shortcut when we can.**
+		 * **Page for every call, even when the handset is attached.**
+		 *
+		 * This used to take a shortcut: a link is already up, so the
+		 * handset does not need paging and the SETUP can go straight
+		 * out. That shortcut was the whole of defect 2's intermittency.
 		 *
 		 * Measured 2026-10-23 over seven runs, a clean 7/7 split:
 		 *
-		 *   "page response received" -> 0xF625 slot type 0x02 -> the
-		 *       mode-2 re-assign takes -> audio works
-		 *   "a link was already up"  -> 0xF625 slot type 0x01 -> the
-		 *       enable word never reaches 1, however often mode 2 is
-		 *       asked for (eight times in vF415) -> no audio at all
+		 *   "page response received" -> the mode-2 re-assign takes ->
+		 *       audio works
+		 *   "a link was already up"  -> the enable word never reaches 1,
+		 *       however often mode 2 is asked for (eight times in vF415)
+		 *       -> no audio at all
 		 *
-		 * A SETUP sent on a lingering link brings the bearer up in a
-		 * state whose audio path we cannot configure, and re-asserting
-		 * afterwards does not recover it. This is the "same settings,
-		 * tone one minute and silence the next" intermittency that cost
-		 * days: it was never random, it tracked whether the handset's
-		 * previous link had cleared.
+		 * [CR A-0052] names the mechanism. The link that is already up
+		 * is the ATTACHMENT/signalling link, not a traffic bearer. Stock
+		 * sets up a call's traffic bearer by PAGING (0x0300, page type
+		 * 0x11), and the causal chain is: page -> the handset answers
+		 * over the air -> the chip allocates the traffic bearer -> MAC
+		 * bearer event 0x20 -> event 0x70 -> the configurator binds the
+		 * audio channel. Skip the page and nothing ever asks the chip for
+		 * a traffic bearer, so 0x20/0x70 never fire, the configurator
+		 * never runs, and the channel keeps its unconfigured default
+		 * (enable = 0, dest 6 = the silence source) no matter what we
+		 * assign afterwards.
 		 *
-		 * So wait for the link to clear and page properly, and fall
-		 * back to the old behaviour only after the deadline -- saying
-		 * so, because a call with broken audio still beats no call.
+		 * Paging an idle-locked attached handset is the ordinary DECT
+		 * mechanism and does not un-attach it, so this is light, not
+		 * heavy: no release, no re-attach. An earlier fix here waited up
+		 * to 20 s for the link to "clear" -- vF420/vF420b showed the C4
+		 * attaches a second after the base comes up and holds the link
+		 * indefinitely, so the wait never fired and could not have.
 		 */
-		if (s->reg.active) {
-			if (!s->ring_link_wait_until) {
-				s->ring_link_wait_until =
-					now + RING_LINK_WAIT_MS;
-				printf("ring: a link is still up -- waiting up "
-				       "to %u ms for it to clear; a SETUP sent "
-				       "on a lingering link comes up with an "
-				       "audio path we cannot configure\n",
-				       RING_LINK_WAIT_MS);
-			}
-			if (now < s->ring_link_wait_until)
-				return;
-			s->ring_state = RING_PAGING;
-			printf("ring: link did not clear in %u ms -- sending "
-			       "the SETUP on it anyway; EXPECT NO AUDIO\n",
-			       RING_LINK_WAIT_MS);
-			ring_queue_setup(s, now, "a link was already up");
-			return;
-		}
+		if (s->reg.active)
+			printf("ring: a link is already up (the attachment) -- "
+			       "paging anyway; the page is what makes the chip "
+			       "allocate a traffic bearer\n");
 		s->ring_state = RING_PAGING;
 	}
 
 	if (s->ring_pages && now - s->ring_last < RING_PAGE_INTERVAL)
 		return;
 	if (s->ring_pages >= RING_PAGE_RETRIES) {
+		/*
+		 * An attached handset does not answer our page. Measured
+		 * 2026-10-23 (vF423): with the attachment link up, 16 pages
+		 * went unanswered, where vF411 -- same build, same mails, no
+		 * link up -- got a page response on attempt 1. So [CR A-0052]'s
+		 * "paging an idle-locked attached handset is routine" does not
+		 * hold for this handset in this state: the C4 ignores the page
+		 * while it holds a link.
+		 *
+		 * Fall back to the SETUP on the existing link so the handset
+		 * still rings. That call will have no audio -- the chip never
+		 * allocates a traffic bearer without a page response, so the
+		 * configurator never runs -- but a call that rings and is
+		 * silent beats a handset that does not ring at all, which is
+		 * what paging alone gives us here.
+		 */
+		if (s->reg.active) {
+			printf("ring: %u pages unanswered -- the handset is "
+			       "attached and ignores them; falling back to the "
+			       "SETUP on the existing link; EXPECT NO AUDIO\n",
+			       s->ring_pages);
+			ring_queue_setup(s, now, "a link was already up");
+			return;
+		}
 		printf("ring: the handset did not answer %u pages, giving up\n",
 		       s->ring_pages);
 		s->ring_state = RING_DONE;
