@@ -118,11 +118,21 @@ struct dect_cc {
 	size_t   out_len[DECT_CC_TXQ];
 	unsigned out_head, out_count;
 
+	/*
+	 * <<CODEC-LIST>> to advertise in an FP-originated {CC-SETUP}; empty
+	 * means send none. Set with dect_cc_set_codec_list().
+	 */
+	uint8_t  codec_list[8];
+	size_t   codec_list_len;
+
 	struct dect_cc_stats stats;
 	struct dect_iwu iwu;	/* <<IWU-TO-IWU>> session responder */
 };
 
 void dect_cc_init(struct dect_cc *cc);
+
+/* Advertise this <<CODEC-LIST>> in FP-originated setups; NULL clears it. */
+void dect_cc_set_codec_list(struct dect_cc *cc, const uint8_t *list, size_t len);
 
 /* Feed a decoded NWK message (the LAPC I-frame payload). Non-CC messages are
  * ignored. Any responses are queued; pull them with dect_cc_poll(). */

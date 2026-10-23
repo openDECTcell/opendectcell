@@ -293,13 +293,62 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	mm->stats.located++;
 }
 
+/*
+ * FP -> PP LOCATE-REJECT (EN 300 175-5 §6.3.6.18, Table 55): protocol
+ * discriminator, transaction identifier, message type and a mandatory
+ * <<REJECT-REASON>> (§7.7.34). Reason 0x02 is "IPUI unknown", which is
+ * exactly our case -- the handset is not the one we hold a record for.
+ */
+static void send_locate_reject(struct dect_mm *mm, uint8_t reason)
+{
+	unsigned idx;
+	uint8_t *b = txq_slot(mm, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = hdr(mm, b, DECT_TI_RESPONDER, DECT_MM_LOCATE_REJECT);
+	if (!off)
+		return;
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+			      DECT_IE_REJECT_REASON, &reason, 1);
+	if (!off)
+		return;
+	txq_commit(mm, idx, off);
+	mm->stats.locate_rej++;
+}
+
+/*
+ * Accept a location registration only from the handset we actually hold.
+ *
+ * We used to accept every {LOCATE-REQUEST} unconditionally. Measured
+ * 2026-10-23 (vF418, vF426): with one handset's subscription loaded, a
+ * DIFFERENT handset -- one the chip had no record of at all -- attached and
+ * had its location registration accepted, thirty times in ninety seconds.
+ * The chip admits anything locked to our RFPI, so this check is the only
+ * gate there is, and without it the store said one thing while the air said
+ * another, which made every identity question of the week ambiguous.
+ *
+ * A GAP FP serves subscribed handsets. If the <<PORTABLE-IDENTITY>> does not
+ * match the one we hold, reject it.
+ */
 static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 			      size_t ies_len)
 {
-	const uint8_t *la;
-	size_t la_len;
+	const uint8_t *la, *pid;
+	size_t la_len, pid_len;
 
 	mm->stats.locate_req++;
+
+	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+			       &pid_len);
+	if (mm->port_id_len && pid &&
+	    (pid_len != mm->port_id_len ||
+	     memcmp(pid, mm->port_id, pid_len) != 0)) {
+		send_locate_reject(mm, DECT_MM_REJECT_IPUI_UNKNOWN);
+		return;
+	}
+
 	la = dect_nwk_find_ie(ies, ies_len, DECT_IE_LOCATION_AREA, &la_len);
 	send_locate_accept(mm, la, la_len);
 }

@@ -234,6 +234,30 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 			return -1;
 	}
 
+	/*
+	 * <<CODEC-LIST>> (EN 300 175-5 §7.7.54), optional in {CC-SETUP} and
+	 * listed there alongside <<BASIC-SERVICE>>.
+	 *
+	 * We used to send none, and the Gigaset A540 answers our page, takes
+	 * the SETUP and then returns {CC-RELEASE-COM} with release reason
+	 * 0x32. The standard puts 0x32 in the TEMPORARY OVERLOAD block --
+	 * "insufficient resources", next to "insufficient bearers available"
+	 * -- which reads as a handset that cannot allocate what the call
+	 * needs, not one refusing us. A handset that is told nothing about
+	 * the codec has to guess what to reserve. The FRITZ!Fon C4 rings
+	 * without it, but it is lenient in other ways too.
+	 *
+	 * One codec, G.726 32 kbit/s, full slot: the same list stock
+	 * advertises, byte for byte [CR A-0059].
+	 */
+	if (cc->codec_list_len) {
+		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+				      DECT_IE_CODEC_LIST,
+				      cc->codec_list, cc->codec_list_len);
+		if (!off)
+			return -1;
+	}
+
 	if (id && !id->emit_before_basic_service)
 		off = put_identity(b, off, id);
 
@@ -435,6 +459,16 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 					    DECT_CC_REASON_UNKNOWN_TRANSACTION);
 		break;
 	}
+}
+
+void dect_cc_set_codec_list(struct dect_cc *cc, const uint8_t *list, size_t len)
+{
+	if (!list || !len || len > sizeof(cc->codec_list)) {
+		cc->codec_list_len = 0;
+		return;
+	}
+	memcpy(cc->codec_list, list, len);
+	cc->codec_list_len = len;
 }
 
 int dect_cc_release(struct dect_cc *cc)

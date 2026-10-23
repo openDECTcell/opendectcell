@@ -247,8 +247,72 @@ static void test_cipher(void)
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_CIPHER_REQUEST);
 }
 
+
+/*
+ * A GAP FP serves subscribed handsets. Measured 2026-10-23: with one
+ * handset's subscription loaded, a different handset had its location
+ * registration accepted thirty times in ninety seconds, because the chip
+ * admits anything locked to our RFPI and this was the only gate.
+ */
+static void test_locate_request_from_a_stranger_is_rejected(void)
+{
+	static const uint8_t ours[]    = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t stranger[] = { 0x80, 0xa8, 0x02, 0x44, 0x55, 0x66 };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	size_t n, m;
+
+	struct dect_mm_cfg cfg;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, ours, sizeof(ours));
+	mm.port_id_len = sizeof(ours);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    stranger, sizeof(stranger));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+
+	m = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_MM_LOCATE_REJECT);
+	CHECK_EQ(out[2], DECT_IE_REJECT_REASON);
+	CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_UNKNOWN);
+	CHECK_EQ(mm.stats.locate_rej, 1u);
+	(void)m;
+}
+
+/* ... and the handset we DO hold is still accepted. */
+static void test_locate_request_from_our_handset_is_accepted(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	struct dect_mm_cfg cfg;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, ours, sizeof(ours));
+	mm.port_id_len = sizeof(ours);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    ours, sizeof(ours));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+
+	dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_MM_LOCATE_ACCEPT);
+	CHECK_EQ(mm.stats.locate_rej, 0u);
+}
+
 int main(void)
 {
+	test_locate_request_from_a_stranger_is_rejected();
+	test_locate_request_from_our_handset_is_accepted();
 	test_register_ok();
 	test_register_bad_pin();
 	test_locate();

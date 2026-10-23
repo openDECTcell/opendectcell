@@ -150,6 +150,14 @@ struct stubd {
 	int uak_valid;
 	const char *sub_path;	/* host-side subscription store (holds the UAK) */
 	/* Identities for an FP-originated SETUP, learned and persisted. */
+	/*
+	 * The subscribed handset's MM <<PORTABLE-IDENTITY>>, restored from the
+	 * store. reg_start() pushes it into the MM state machine so a location
+	 * registration from a handset we do not hold can be rejected -- the
+	 * chip admits anything locked to our RFPI, so this is the only gate.
+	 */
+	uint8_t     sub_port_id[DECT_MM_PORTID_MAX];
+	size_t      sub_port_id_len;
 	uint8_t     cc_port_id[DECT_CC_ID_MAX];
 	size_t      cc_port_id_len;
 	uint8_t     cc_fixed_id[DECT_CC_ID_MAX];
@@ -280,6 +288,7 @@ struct stubd {
 		 * selects mode 2: PCM out(k) <- channel k, channel k <- PCM
 		 * in(k), and a NOP over the chain, i.e. enabled.
 		 */
+		int nocodeclist;	/* omit <<CODEC-LIST>> from CC-SETUP */
 		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
 		/*
@@ -1440,13 +1449,41 @@ static int sub_load(struct stubd *s)
 		return 0;
 	memcpy(s->uak, r.uak, DECT_MM_UAK_LEN);
 	s->uak_valid = 1;
+	/*
+	 * The record has always carried the MM portable identity and we have
+	 * never restored it, so the identity gate in on_locate_request() could
+	 * not fire: measured 2026-10-23, a handset we hold no record for had
+	 * its location registration accepted anyway.
+	 */
+	if (r.port_id_len && r.port_id_len <= DECT_MM_PORTID_MAX) {
+		memcpy(s->sub_port_id, r.port_id, r.port_id_len);
+		s->sub_port_id_len = r.port_id_len;
+	}
 	if (r.magic == SUB_MAGIC2 && r.cc_port_id_len <= DECT_CC_ID_MAX &&
 	    r.cc_fixed_id_len <= DECT_CC_ID_MAX) {
 		memcpy(s->cc_port_id, r.cc_port_id, sizeof(s->cc_port_id));
 		s->cc_port_id_len = r.cc_port_id_len;
 		memcpy(s->cc_fixed_id, r.cc_fixed_id, sizeof(s->cc_fixed_id));
 		s->cc_fixed_id_len = r.cc_fixed_id_len;
+		/*
+		 * Older records carry no MM identity -- sub_save() stores
+		 * reg.mm.port_id, which is empty unless the handset registered
+		 * in this session, so every stored file has port_id_len = 0.
+		 * The CC portable identity is the same handset and the same
+		 * bytes: the A540's record holds 80 a8 02 de ad 00 01 and that
+		 * is exactly what its {LOCATE-REQUEST} puts in
+		 * <<PORTABLE-IDENTITY>>. Use it so the gate has something to
+		 * compare against.
+		 */
+		if (!s->sub_port_id_len && r.cc_port_id_len &&
+		    r.cc_port_id_len <= DECT_MM_PORTID_MAX) {
+			memcpy(s->sub_port_id, r.cc_port_id, r.cc_port_id_len);
+			s->sub_port_id_len = r.cc_port_id_len;
+		}
 	}
+	printf("sub: identity gate %s (%zu bytes)\n",
+	       s->sub_port_id_len ? "armed" : "DISABLED -- no stored identity",
+	       s->sub_port_id_len);
 	printf("sub: restored subscription for slot %u from %s%s\n",
 	       r.slot, s->sub_path,
 	       s->cc_fixed_id_len ? " (with call identities)" : "");
@@ -2472,7 +2509,29 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	dect_lc_rx_init(&s->reg.lc, 0);
 	dect_lapc_init(&s->reg.lapc, 0);
 	dect_mm_init(&s->reg.mm, &mcfg);
+	/*
+	 * Hand the MM state machine the identity we are subscribed to, so a
+	 * location registration from a handset we do not hold is rejected.
+	 * Must come AFTER dect_mm_init(), which clears it.
+	 */
+	if (s->sub_port_id_len) {
+		memcpy(s->reg.mm.port_id, s->sub_port_id, s->sub_port_id_len);
+		s->reg.mm.port_id_len = s->sub_port_id_len;
+	}
 	dect_cc_init(&s->reg.cc);
+	/*
+	 * Advertise a codec in FP-originated setups. The A540 answers our page,
+	 * takes a codec-less {CC-SETUP} and returns release reason 0x32, which
+	 * EN 300 175-5 classes as a TEMPORARY OVERLOAD ("insufficient
+	 * resources"), so give it something to reserve against. One codec,
+	 * G.726 32 kbit/s, full slot -- stock's own list, byte for byte.
+	 */
+	{
+		static const uint8_t cl[] = { 0x90u, 0x02u, 0x00u, 0x84u };
+
+		if (!s->audio.nocodeclist)
+			dect_cc_set_codec_list(&s->reg.cc, cl, sizeof(cl));
+	}
 	dect_cc_set_signal(&s->reg.cc, s->audio.signal_on,
 			   s->audio.signal_value);
 	dect_cc_set_callinfo(&s->reg.cc, &s->audio.callinfo);
@@ -3240,6 +3299,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->nbcodec = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nogain", 6))
 			a->no_gain = 1;
+		else if (!eq && klen == 11 && !memcmp(key, "nocodeclist", 11))
+			a->nocodeclist = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "noconnect", 9))
 			a->no_connect = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nowait", 6))

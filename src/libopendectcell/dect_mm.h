@@ -28,6 +28,9 @@
 
 #include "dect_lapc.h"	/* DECT_LAPC_MSG_MAX */
 
+/* <<REJECT-REASON>> codes, EN 300 175-5 §7.7.34 */
+#define DECT_MM_REJECT_IPUI_UNKNOWN	0x02u
+
 #define DECT_MM_PIN_MAX		16u
 #define DECT_MM_RFPI_LEN	5u
 #define DECT_MM_PORTID_MAX	20u	/* saved PORTABLE-IDENTITY contents */
@@ -112,7 +115,8 @@ struct dect_mm_stats {
 	uint32_t auth_fail;
 	uint32_t accepted;
 	uint32_t rejected;
-	uint32_t locate_req;	/* PP LOCATE-REQUEST seen */
+	uint32_t locate_req;
+	uint32_t locate_rej;	/* rejected: not the handset we hold */	/* PP LOCATE-REQUEST seen */
 	uint32_t located;	/* LOCATE-ACCEPT sent */
 };
 
