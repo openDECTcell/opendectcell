@@ -67,6 +67,21 @@ struct dect_link {
 	 */
 	uint8_t  ciss[DECT_LAPC_MSG_MAX];
 	size_t   ciss_len;
+
+	/*
+	 * Optional sink for every NWK message the link hands to the DLC.
+	 * Logging only -- the library still does no I/O of its own, it just
+	 * lets the caller see what went out.
+	 *
+	 * This exists because #67 moved the drain into the library and
+	 * silently took `reg: nwk out` out of the daemon's log with it. That
+	 * line is how every outbound message in this project has ever been
+	 * read, and losing it cost an hour chasing a protocol ghost: a run
+	 * that looked like "we never answered a LOCATE-REQUEST" was really
+	 * "we answered and no longer say so".
+	 */
+	void   (*tx_log)(void *ctx, const uint8_t *msg, size_t len);
+	void    *tx_log_ctx;
 };
 
 /*
@@ -134,6 +149,11 @@ void dect_link_tick(struct dect_link *l, uint64_t now);
  * clock still makes calls.
  */
 int dect_link_send_time(struct dect_link *l, const struct dect_time *t);
+
+/* Watch every NWK message the link sends. Pass NULL to stop watching. */
+void dect_link_set_tx_log(struct dect_link *l,
+			  void (*fn)(void *ctx, const uint8_t *msg, size_t len),
+			  void *ctx);
 
 /*
  * Take the next frame to transmit, already wrapped in an Lc frame and a

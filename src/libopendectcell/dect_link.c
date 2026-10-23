@@ -40,6 +40,8 @@ static void drain_nwk(struct dect_link *l, uint64_t now)
 		}
 		if (mlen == 0)
 			break;
+		if (l->tx_log)
+			l->tx_log(l->tx_log_ctx, msg, mlen);
 		if (dect_lapc_send(&l->lapc, msg, mlen, now) != 0)
 			break;
 	}
@@ -48,6 +50,14 @@ static void drain_nwk(struct dect_link *l, uint64_t now)
 void dect_link_drain(struct dect_link *l, uint64_t now)
 {
 	drain_nwk(l, now);
+}
+
+void dect_link_set_tx_log(struct dect_link *l,
+			  void (*fn)(void *ctx, const uint8_t *msg, size_t len),
+			  void *ctx)
+{
+	l->tx_log = fn;
+	l->tx_log_ctx = ctx;
 }
 
 int dect_link_send_time(struct dect_link *l, const struct dect_time *t)

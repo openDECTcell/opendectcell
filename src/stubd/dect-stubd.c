@@ -2193,6 +2193,30 @@ static void pump_lapc(struct stubd *s);
 #define RING_SETUP_RETRY_MS	2000u	/* re-try a refused CC-SETUP this often */
 #define RING_SETUP_TRIES	8u	/* ... this many times before giving up */
 
+/*
+ * Print every NWK message we send, as `reg: nwk out --> ...`.
+ *
+ * This line predates the #67 refactor, which moved the drain into the
+ * library and removed it without anyone noticing -- including me, who wrote
+ * the refactor. The first run that needed it read as "we never answered a
+ * LOCATE-REQUEST", which would have been a serious protocol defect; what had
+ * actually happened was that we answered and stopped saying so. Reading a log
+ * for an absence only works if the thing would have been printed.
+ */
+static void log_nwk_out(void *ctx, const uint8_t *msg, size_t len)
+{
+	const struct stubd *s = ctx;
+	size_t i;
+
+	if (!s->verbose)
+		return;
+	printf("reg: nwk out --> ");
+	for (i = 0; i < len; i++)
+		printf("%02x ", msg[i]);
+	printf("\n");
+	fflush(stdout);
+}
+
 static void send_page(struct stubd *s)
 {
 	struct dect_mail m;
@@ -2678,6 +2702,11 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.cipher_done = 0;
 	s->reg.handle = handle;
 	dect_link_init(&s->reg.link, handle, &mcfg);
+	/*
+	 * Re-arm after every init: dect_link_init() zeroes the whole struct,
+	 * so the hook has to be set per connection, not once at startup.
+	 */
+	dect_link_set_tx_log(&s->reg.link, log_nwk_out, s);
 	/*
 	 * Hand the MM state machine the identity we are subscribed to, so a
 	 * location registration from a handset we do not hold is rejected.
