@@ -232,3 +232,33 @@ ordinary incoming call. And the remaining difference must lie where the
 measurement already points: `[CR A-StockTrace-5 §15/§16]` a connection bearer
 exists ~360 ms before stock's CC-SETUP and its onset is **MAC-initiated**,
 while on our base **no traffic bearer ever appears at all**.
+
+## 2026-10-24: the comparison that mattered was never run
+
+Everything in this file about the A540 refusing FP-originated calls was
+measured while our `{CC-SETUP}` reached the air **3 860 ms after it was
+queued** (see `spec-conformance.md`). In that window the A540 opened a
+service call of its own, so the refusal was EN 300 175-5 §9.5.2.3 collision
+resolution, not a verdict on anything we sent.
+
+That changes how the C4 row should be read. The C4 "accepts our 3-IE
+CC-SETUP and rings" and the A540 "rejects" — but the C4 **does not open a
+periodic CAT-iq service call** (the row two above says so), so it had nothing
+to collide with. The two handsets were never being asked the same question.
+The C4's tolerance and the A540's strictness may both be artefacts of that.
+
+With the latency fixed the A540 still refuses, now cleanly: 0 ms queue-to-wire,
+no collision, no call in progress, and nineteen variables swept with one
+identical answer — message content including the exact EN 300 444 table 21
+message, narrowband and wideband connections, and an audio channel assigned
+before the setup.
+
+**So the open question is no longer "why does the A540 differ from the C4".
+It is "does our base ring anything at all, now that it can actually deliver a
+setup on time".** The C4 result predates the fix and the C4 is local
+equipment. The test that settles it is the **C430A** — a spare, never
+registered to our base, never offered an incoming call, and the handset the
+clean room's stock captures were taken with. `work/7520/lab/c430a.sh`.
+
+Until that runs, no row in this file about FP-originated calls should be
+treated as a property of a handset.
