@@ -69,6 +69,32 @@ alternatives are in `call-g7.md`. **This is not a CC-layer defect** -- the CC
 layer is doing the right thing with the wrong lower layer underneath it, which
 is why auditing CC alone would never have found it.
 
+**2026-10-23: this converges with `[CR A-0076]`, and they are the same
+mechanism seen from two layers.** The chip side found that `0x0300` builds a
+fixed **short** page whose LCE header is compiled in, and that EN 300 444
+table 80b maps LCE header `000` ("no U-plane") to **"MAC service = no MAC
+service"** -- a PT that establishes its link that way has no U-plane resource
+at all. §14.2.3 says the same thing from the other end: without service detail
+in the page, "the responding PT shall only establish the minimum MAC layer
+service needed for a single C-plane link".
+
+So: our page may be telling the handset to bring up a C-plane-only link, and
+our `{CC-SETUP}` then declares a basic connection that §9.3.2.3 requires to be
+already established. Two readings, one failure, and the same observable --
+`{CC-RELEASE-COM}` with "insufficient resources".
+
+It also explains the handset split without needing either handset to be at
+fault: the C4 tolerates being asked to find a U-plane late, the A540 does not.
+"Lenient versus strict" is a description, not a cause; this is the cause it
+describes.
+
+**`F4.36` tests it with one dump.** Read the compiled LCE header at
+`0x96ad+4` while paging: if it decodes to `000`, both readings are confirmed
+at once and the fix is to make the page ask for a U-plane rather than to keep
+adjusting the SETUP. Four of our attempted fixes so far -- codec list, basic
+service in three forms -- were all inside the SETUP, which is the layer that
+was never wrong.
+
 ## DLC / LAPC, Part 4
 
 ### ~~Gap 3 -- the retransmission timer is half the specified value~~ **FIXED**

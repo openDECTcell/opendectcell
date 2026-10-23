@@ -119,12 +119,24 @@ static uint64_t fs_free_bytes(const char *path)
  * no reason to doubt it -- and TS 102 527-3 7.4.20.2 makes our duty to send
  * conditional on our own time being valid, which is exactly this question.
  */
-static int clock_is_trustworthy(time_t now_s)
+#define TIMESYNC_AUTO	0u
+#define TIMESYNC_FORCE	1u
+#define TIMESYNC_OFF	2u
+
+static int clock_is_trustworthy(time_t now_s, uint8_t mode)
 {
 	struct timex tx;
 
+	if (mode == TIMESYNC_OFF)
+		return 0;
+	/*
+	 * The epoch floor holds even when forced: it catches the case this
+	 * whole gate exists for, a box that has never had a clock at all.
+	 */
 	if (now_s <= CLOCK_SANE_AFTER)
 		return 0;
+	if (mode == TIMESYNC_FORCE)
+		return 1;
 	memset(&tx, 0, sizeof(tx));
 	if (adjtimex(&tx) < 0)
 		return 0;		/* cannot tell: assume not */
@@ -597,6 +609,16 @@ struct stubd {
 		 * parsed, so the call class is the first thing to sweep.
 		 */
 		uint8_t  basic_svc;
+		/*
+		 * timesync: 0 = auto (send only when the kernel says the
+		 * clock is disciplined), 1 = force (send anyway), 2 = off.
+		 *
+		 * "force" is not only a test lever. A deployment can have a
+		 * trustworthy clock the kernel knows nothing about -- the
+		 * controller pushing time over the cell link, for one -- and
+		 * STA_UNSYNC would refuse it. The operator gets to say.
+		 */
+		uint8_t  timesync;
 		/*
 		 * signal=N: send <<SIGNAL>> N in the SETUP. v33 showed a
 		 * call-class-3 SETUP displays the caller but never alerts,
@@ -2847,7 +2869,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		struct tm tm;
 
 		s->reg.time_sent_for = s->reg.link.mm.stats.located;
-		if (clock_is_trustworthy(now_s) && localtime_r(&now_s, &tm)) {
+		if (clock_is_trustworthy(now_s, s->audio.timesync)
+		    && localtime_r(&now_s, &tm)) {
 			long off_s = tz_offset_seconds(now_s);
 
 			memset(&dt, 0, sizeof(dt));
@@ -3512,7 +3535,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		klen = eq ? (size_t)(eq - key) : (size_t)(spec - key);
 		if (eq) {
 			v = strtoul(eq + 1, &end, 0);
-			/* These carry a ':' or a path in their value. */
+			/* These carry a ':', a path or a word, not a number. */
 			if (end != spec &&
 			    !(klen == 3 && !memcmp(key, "dsp", 3)) &&
 			    !(klen == 8 && !memcmp(key, "dspsweep", 8)) &&
@@ -3523,6 +3546,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
 			    !(klen == 7 && !memcmp(key, "memdump", 7)) &&
+			    !(klen == 8 && !memcmp(key, "timesync", 8)) &&
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
@@ -3572,6 +3596,18 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		}
 		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
 			a->basic_svc = (uint8_t)v;
+		else if (klen == 8 && !memcmp(key, "timesync", 8)) {
+			if (!eq)
+				return -1;
+			if (!strncmp(eq + 1, "auto", 4))
+				a->timesync = TIMESYNC_AUTO;
+			else if (!strncmp(eq + 1, "force", 5))
+				a->timesync = TIMESYNC_FORCE;
+			else if (!strncmp(eq + 1, "off", 3))
+				a->timesync = TIMESYNC_OFF;
+			else
+				return -1;
+		}
 		else if (klen == 2 && !memcmp(key, "ti", 2))
 			a->ti_fixed = (int)v;
 		else if (klen == 6 && !memcmp(key, "signal", 6)) {
@@ -3850,6 +3886,10 @@ static void usage(void)
 		"           0x41 works, 0x40 alone binds nothing), mode is master and\n"
 		"           codec is extra. nogain = skip 0x0251, f626 = send 0xF626,\n"
 		"           nowait = send 0x022D at once instead of after 0x0242\n"
+		"           timesync=auto|force|off  send <<TIME-DATE>> after a\n"
+		"                    location registration. auto (default) only when\n"
+		"                    the kernel says the clock is disciplined;\n"
+		"                    force trusts it anyway; off never sends\n"
 		"           noconnect = never send 0x022D (the stock connect is\n"
 		"           0x0251 then 0x0230 and nothing else)\n"
 		"           tone=HZ (multiple of 125) transmits an A-law test tone to\n"
