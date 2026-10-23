@@ -107,6 +107,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [~] CLIP/CNIP: `src/libopendectcell/dect_clip.c` builds CALLING-PARTY-NUMBER (`0x6C`) and CALLING-PARTY-NAME (`0x6D`) from the public ETSI text, wired into the FP-originated CC-SETUP and into `dect-stubd -a clip=/cnip=`. **[hw]** No handset has been shown either IE. Privacy semantics (what to send for a withheld caller) stay deliberately unimplemented: we omit, because the one stock value we have for the restricted case is ambiguous. Since 2026-10-20 the SETUP can also carry `<<CALL-INFORMATION>>` (`src/libopendectcell/dect_callinfo.c`, `-a lineid=`): CAT-iq 2.0 marks an incoming external call by its line identifier, the leading explanation for the C4's "Intern" display (test card #73).
 - [ ] Wideband (G.722) codec negotiation
 - [ ] Multiple handsets and parallel calls (STUB limit: about 3 PCM channels)
+- [ ] **Diagnostics in the library** (`docs/diagnostics.md`): a `struct dect_diag` per link plus a base-wide one, carrying identity, subscription slot and whether the chip really holds it, connected state, manufacturer/model from `<<MODEL-IDENTIFIER>>`, codecs offered and in use, slot type, time slot, carrier, field strength, signal quality and encryption state. The library fills the protocol half and the caller fills the radio half — **no I/O in the library**, which has no transport and must keep none. One struct so the LuCI app and the controller cannot drift apart on what "quality" means. *The protocol half needs no new facts and can be built now; the radio half waits on `Q-0054`.*
 - [ ] Golden-trace regression tests in CI
 
 ## M9: OpenWrt integration
@@ -115,6 +116,8 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [ ] procd init script: board detection, profile plus UCI overrides, clear message on unsupported boxes; console/getty handling
 - [ ] Firmware storage in `/etc/opendectcell/firmware/`: SHA-256 check against the profile, kept across upgrades (`keep.d`)
 - [ ] LuCI app for non-technical users: status page, firmware upload, basic settings
+- [ ] **LuCI DECT Monitor page** (`docs/diagnostics.md`): one row per registered handset — identity, in range / connected, model, field strength, signal quality, slot type (long/full), time slot, carrier, codec in use, encryption — plus a base section (RFPI, radio state, dummy-bearer slot, carrier, power). The point is that a non-technical user can answer "is this handset in range and what is it doing" without reading a log. AVM ships exactly this as its DECT Monitor; every hard question of 2026-10-23 was a field on that screen. Deliberately **not** a debugging console: raw mails stay in `dect-stubd -v`.
+- [ ] **Export diagnostics from `dect-stubd`**: periodic chip reads into the `dect_diag` struct and a way out of the process — a JSON line on a UNIX socket, since both consumers (LuCI, controller) are out-of-process. The slot audit and UAK read-back already exist and should feed this rather than only printing.
 - [ ] Cell mode: tunnel mails (TCP, optional TLS) and audio (UDP, optional SRTP/DTLS) to the controller
 
 ## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
