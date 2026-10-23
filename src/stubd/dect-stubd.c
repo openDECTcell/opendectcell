@@ -74,7 +74,13 @@ static uint64_t fs_free_bytes(const char *path)
 }
 
 
-#define RING_BASIC_SVC	0x88u		/* normal call class, wideband speech */
+#define RING_BASIC_SVC	0x40u		/* call class 4 (normal call), basic speech.
+					 * 0x88 was call class 8 (EXTERNAL HANDOVER)
+					 * plus service 8 (wideband speech) -- wrong
+					 * on both nibbles for an ordinary call, and
+					 * almost certainly copied from a handset-
+					 * originated capture [CR A-0069]. Does NOT
+					 * fix the A540 refusal, but it is correct. */
 #include "dect_g722.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
