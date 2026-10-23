@@ -674,3 +674,57 @@ speech `{CC-SETUP}` over it, and **nothing has ever asked the chip for a
 traffic bearer** — so "insufficient resources" is exactly right, and no air-
 side field could have fixed it. `Q-0055` asks the room for `0x015E`'s layout.
 **Do not invent the payload.**
+
+### `0x015E` is the missing bearer allocation `[CR A-0095]` `[2026-10-23]`
+
+`Q-0055` answered, and question 3 came back **yes**.
+
+**Mechanism, verified from the chip:** `0x015E`'s arm bit sets `0x8000` in the
+bearer table at **`0x965d + index × 2`**. That table is read by the MAC bearer
+handler, indexed by connection, and **nothing else in the task-2 set arms
+`0x965d`** — only `0x015E` does.
+
+So the §9.3.2.3 chain is:
+
+> `0x015E` arms the bearer → the MAC allocates it → a speech `{CC-SETUP}` has
+> a U-plane to bind to.
+
+Skip it, and `0x965d` is never armed, the MAC never allocates, and a handset
+offered speech with no bearer underneath refuses — **insensitive to everything
+in the air messages, because the problem is below them.** That is exactly the
+shape of the theory sweep: ten air-side variables, one identical `0x32`.
+
+**`dect-stubd`'s comment that "the page is what makes the chip allocate a
+traffic bearer" is false**, and it is the `"compiled in"` of this thread — a
+sentence both rooms accepted without asking whether anything we send actually
+does it.
+
+#### Field map
+
+`mail[0..1]` is the primitive, so `param[N]` = `mail[N+2]`:
+
+| field | bytes | meaning |
+|---|---|---|
+| handle | `mail[2]` | |
+| TPUI | `mail[3:4]` | only read when flags bit 3 is set |
+| **flags** | `mail[5]` | **`0x10` ARM**, `0x20` DISARM, `0x08` also build a page |
+| opaque | `mail[6:7]` | 16-bit, **not pinned by the room** |
+| bearer id | `mail[8:9]` | index = value − `0x196`, armed iff index ≤ `0x27` |
+
+#### What we hold, and what we do not
+
+**We have no stock capture of `0x015E`.** A-0095 suggested reading the values
+from "your A-StockTrace capture"; that series is the room's evidence, not
+ours, and our own stock-firmware mail capture is still scheduled for the
+weekend. So stock's actual bytes remain unknown.
+
+But the field map leaves **exactly two unknowns** for an ARM-only mail:
+
+1. the endianness of `mail[8:9]`;
+2. the value of `mail[6:7]`.
+
+That is a **structured sweep, not a guess**, and it is a different position
+from the one `f4.sh 41` still refuses — every other byte comes from A-0095's
+map. `work/7520/lab/sweep15e.sh` runs eight phases including a **DISARM
+control** (`flags 0x20`) which must *not* ring; if it does, the flag map is
+wrong and nothing else in the sweep counts.
