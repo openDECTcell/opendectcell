@@ -597,3 +597,80 @@ to 0 when `mail[5] & 0xC0 != 0`, and capping the option at `0x0F` means we can
 never trip that path by accident. It also closes "never 4" from the firmware
 side — reaching `4` needs `mail[5]` bit 2 set with bits 6–7 clear, which
 nothing in our traffic produces, including the rare `3/5/7` tail.
+
+## Theory sweep: ten causes eliminated in one sitting `[2026-10-23 night]`
+
+The maintainer's rule, applied for the first time: **gather every plausible
+theory and test them all in one attended run**, with the script announcing
+which is live. `work/7520/lab/sweep.sh`, eleven phases, ~11 minutes.
+
+**The handset showed "Synchronisiere" throughout and never rang — but the
+sweep was sound**, which the logs establish and the display does not:
+
+| phase | theory | page resp | our SETUP | reply |
+|---|---|---|---|---|
+| 1 | baseline (`pagehdr=4`) | — | yes | `0x32` |
+| 2 | page header **1** (PP negotiates attributes) | yes | yes | `0x32` |
+| 3 | page header **3** (general purpose) | yes | yes | `0x32` |
+| 4 | page header **0** (known-bad) | yes | yes | `0x32` |
+| 5 | `<<BASIC-SERVICE>>` `0x88` wideband | yes | yes | `0x32` |
+| 6 | `<<BASIC-SERVICE>>` `0x28` (the A540's own value) | yes | yes | `0x32` |
+| 7 | `<<SIGNAL>>` alerting pattern 0 | yes | yes | `0x32` |
+| 8 | `<<CALL-INFORMATION>>` external line | no | **no setup** | — |
+| 9 | CLIP number present | yes | yes | `0x32` |
+| 10 | **ciphering ON** (`-C` dropped) | yes | yes | `0x32` |
+| 11 | baseline again | yes | yes | `0x32` |
+
+Phases 1 and 11 agree, so the sweep is internally consistent. Phase 8 sent no
+SETUP and tested nothing. **Ten theories, one identical refusal.**
+
+`e2 32` appears three times per log because one event is logged at three
+layers (raw mail, Cs decode, NWK) — one refusal per phase, not three.
+
+### What that eliminates
+
+**The LCE header is not the cause.** Headers `0`, `1`, `3` and `4` produce
+byte-identical outcomes. Whatever `[CR A-0091]`'s `mail[5]` mechanism does,
+varying it changes nothing the handset reacts to — and combined with the whole
+40-slot table at `0x96ad` reading zero through 12 496 reads while pages
+demonstrably work, the page-header line of inquiry is **closed, not merely
+unproven**. Gap 2/Gap 5 as stated was wrong.
+
+Also eliminated: basic service (three values), `<<SIGNAL>>`, CLIP presence,
+and **ciphering** — a CAT-iq handset refusing an unencrypted call was the best
+remaining alternative and it refuses either way.
+
+### What is left, and it was in our own notes
+
+The refusal is **insensitive to everything we can put in the air messages.**
+That points at the chip, not the protocol — and the inventory of primitives we
+send has a hole in exactly the right shape:
+
+> `0xFFF1` memory read · `0xF624` status · `0x020A` subscription · `0x0247`
+> slot op · `0x0230` assign audio channel · `0x016A` channel config · `0x0251`
+> channel params · `0x022D` audio path on · `0x0233` audio disconnect ·
+> `0x0208` cipher · `0x0300` page · `0xF626` DSP route · `0x015B` radio ·
+> `0x022B` enable token · `0x022C` close registration · `0x0244` transmit
+> C-plane
+
+**There is no connection- or bearer-setup primitive anywhere in that list.**
+Everything is audio routing (after a call binds) or C-plane. `dect-stubd`
+asserts in a comment that "the page is what makes the chip allocate a traffic
+bearer"; the sweep is evidence that assumption is false.
+
+And `docs/mac-bringup.md` §80 has had the stock sequence written down since
+the MAC bring-up work:
+
+> `0x022C` param 1 → `0x015C` (cell parameters) → **`0x0300`** → **`0x015E` ×2**
+> → **`0x0300`**
+
+**Stock sends `0x015E` twice around every page. We have never sent it once.**
+`[CR A-0076]` notes in passing that `0x015E` has a **bearer-type field read by
+the MAC config** — it was mentioned only to rule it out as a *page* builder,
+and nobody asked what it does as a *bearer* request.
+
+That is the live hypothesis now: we page, a C-plane link comes up, we send a
+speech `{CC-SETUP}` over it, and **nothing has ever asked the chip for a
+traffic bearer** — so "insufficient resources" is exactly right, and no air-
+side field could have fixed it. `Q-0055` asks the room for `0x015E`'s layout.
+**Do not invent the payload.**
