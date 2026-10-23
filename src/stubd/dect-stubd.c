@@ -293,6 +293,17 @@ struct stubd {
 		 */
 		int      remode_bit6;
 		/*
+		 * remodecodec=N overrides the codec byte in the re-assign only.
+		 * [CR A-0040] §5: with bit 6 set and the path on, the codec byte
+		 * picks the mode -- 1 gives mode 8, 2-3 give mode 9. Mode 8 is
+		 * the only mode that configures the 80-byte B-field our long-slot
+		 * bearer actually carries: transparent downlink on, uplink
+		 * deliberately off, enable word 0. A-0033 rejected codec 1
+		 * because the UPLINK lane stayed 0x0000, which is what mode 8
+		 * does by design, and never checked the downlink acoustically.
+		 */
+		int      remode_codec;	/* -1 = keep a->codec */
+		/*
 		 * noconnect: never send 0x022D. The stock connect sequence is
 		 * exactly 0x0251 then 0x0230 [CR A-0034]; 0x022D is the stock
 		 * mute control (0x80 = mute), never sent at connect. Whether
@@ -1717,14 +1728,15 @@ static void remode_tick(struct stubd *s, uint64_t now)
 	m.param[2] = (uint8_t)(a->mask & 0xFFu);
 	m.param[3] = (uint8_t)(a->mask >> 8);
 	m.param[4] = a->mode;
-	m.param[5] = a->codec;
+	m.param[5] = a->remode_codec >= 0 ? (uint8_t)a->remode_codec
+					  : a->codec;
 	m.param_len = 6;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 	printf("call: re-assign for mode %d: 0x0230 {%02x %04x %02x %02x}\n",
-	       a->remode_bit6 ? 9 : 2,
-	       m.param[1], a->mask, a->mode, a->codec);
+	       a->remode_bit6 ? (m.param[5] == 1 ? 8 : 9) : 2,
+	       m.param[1], a->mask, a->mode, m.param[5]);
 	fflush(stdout);
 }
 
@@ -3142,6 +3154,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->remode_ms = (unsigned)v;
 		else if (!eq && klen == 10 && !memcmp(key, "remodebit6", 10))
 			a->remode_bit6 = 1;
+		else if (klen == 11 && !memcmp(key, "remodecodec", 11))
+			a->remode_codec = (int)v;
 		else if (klen == 3 && !memcmp(key, "dsp", 3)) {
 			/* dsp=DST:SRC -- the generic check above let the ':' through */
 			unsigned long src;
@@ -3324,6 +3338,10 @@ static void usage(void)
 		"           remode=MS sends a second 0x0230 with flag bit 6 clear\n"
 		"           MS ms after 0x022D, which asks the chip's channel\n"
 		"           configurator for mode 2 (PCM out <- channel, chain\n"
+		"           remodecodec=N overrides the codec byte in the re-assign;\n"
+		"           with bit 6 set, N=1 selects mode 8 (the only mode with\n"
+		"           the 80-byte B-field a long slot carries: transparent\n"
+		"           downlink on, uplink off by design) [CR A-0040]\n"
 		"           remodebit6 keeps bit 6 set instead: mode 9, which uses\n"
 		"           the channel's input variant B (the transparent path a\n"
 		"           wideband call needs, since the chip has no G.722\n"
@@ -3410,6 +3428,7 @@ int main(int argc, char **argv)
 	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
 	s.audio.ti_fixed = -1;
+	s.audio.remode_codec = -1;	/* keep the bind's codec byte unless asked */
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN0;
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
