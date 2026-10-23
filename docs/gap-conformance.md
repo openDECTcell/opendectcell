@@ -105,3 +105,38 @@ M8 lists "outgoing calls" as an item. It is more pointed than that: **one
 mandatory GAP feature is absent**, and it is small, well-specified and
 hardware-free. It should come before the optional work in M8 — ciphering in
 particular, which this audit shows is not required of us.
+
+## Two things that look like GAP basics but are not
+
+Asked 2026-10-23 alongside the dialled-digits work, and worth recording so
+nobody implements them twice.
+
+### Call duration is the handset's own timer
+
+**There is nothing for us to implement.** GAP's feature list (N.1–N.36) does
+not contain call duration, and `<<DURATION>>` in EN 300 175-5 is not about
+call timing at all — it carries **identity and access-rights lifetime**, used
+in `{TEMPORARY-IDENTITY-ASSIGN}` and in `{LOCATE-ACCEPT}`/`{LOCATE-REJECT}`
+to say how long an assignment stays valid. (`DECT_IE_DURATION` is `0x72` and
+was already in `dect_nwk.h`.)
+
+The elapsed-time display during a call is **handset-local**: the PT starts its
+own timer when the call connects. The only way we break it is by failing to
+establish the call properly — if `{CC-CONNECT}` goes out and the call reaches
+ACTIVE, the handset counts. That path is verified (G7).
+
+Where duration *does* become ours is the **CAT-iq call list**: missed- and
+received-call entries carry a duration and a timestamp. That is list access
+(TS 102 527-3), which `dect_iwu.c` partly implements, and it is a later
+feature rather than a GAP basic.
+
+### We never send `<<TIME-DATE>>`, so we never set the handset's clock
+
+Not a GAP requirement either, but **visible to a user**: the handset's clock
+is not set by us, so any timestamp it shows — call lists in particular — is
+whatever the handset itself believes. CAT-iq defines a date/time
+synchronisation feature for this, and the controller's roadmap already carries
+it as a feature module (C10, "date/time module").
+
+Flagged here because "the clock is wrong" reads as a basic defect to anyone
+using the thing, even though no profile mandates it.
