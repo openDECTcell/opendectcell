@@ -490,3 +490,76 @@ in place — it is free and it states the intent — but recorded so nobody
 "simplifies" it believing a test guards it. The test pins the behaviour (a
 handset-originated call is never torn down by our timer), which is what we
 actually care about.
+
+## The LCE header is ring noise, and our own logs predict its value `[CR A-0091, A-0092]` `[2026-10-23]`
+
+`[CR A-0091]` corrects `[CR A-0076]` §2: the page header byte at `0x96ad+4` is
+**not compiled in**. The builder makes it from
+
+```
+bit0 | ((mail[5] & 0x0F) << 1) | (bits 5-7 preserved)
+```
+
+and `mail[5]` is the `0x0300` body byte after the TPUI. **Neither we nor stock
+has ever written it** — stock's sender emits three payload bytes exactly as
+ours does. `[CR A-0092]` then explains what the builder reads instead: the
+chip's incoming mails sit in a **queue ring, dispatched in place**, with no
+copy to a scratch buffer and nothing zeroing the region. So `mail[5]` is the
+byte left at that ring offset by whatever mail last occupied it.
+
+### Our own mail log predicts the header, before the bench run
+
+If the leftover is a previous host→chip mail, its value is **ours**, and we
+have 198 960 of them in the corpus. `mail[5]` is `param[3]`, so:
+
+| what we send | count | `param[3]` |
+|---|---|---|
+| `fff1` memory read | **197 190 (99.1 %)** | the address high byte |
+| `f624` status poll | 554 | — |
+| everything else (`0230`, `0251`, `022d`, `015b`, `0247`, `0300`) | ~1 200 | assorted |
+
+And `param[3]` of an `fff1` read is exactly the address high byte, verified
+across all 197 190: **`0x00` for any address below `0x010000`, `0x01` for the
+`0x01xxxx` range.** Nothing else occurs.
+
+So the ring is, to three nines, full of `0x00` and `0x01`. Taking
+`header = mail[5] & 0x07`:
+
+| header | share of host→chip mails | table 80b behaviour |
+|---|---|---|
+| **`000`** | 68.7 % | basic connection, full slot, **MAC service = no MAC service** |
+| **`001`** | 31.3 % | basic connection, full slot, **PP does negotiate attributes**, MAC service as negotiated |
+| 3, 5, 7 | 0.04 % combined | — |
+| **`100` (the GAP voice code)** | **never** | — |
+
+**Pre-committed prediction: `F4.36` reads header `0` or `1`, and never `4`.**
+
+### This is a mechanism for the intermittency, not just a value
+
+`000` gives the handset no MAC service; `001` makes it negotiate attributes
+and would **work** for a voice call. A page whose header is a leftover ring
+byte would land on one or the other depending on preceding traffic — which is
+intermittent by construction and correlates with nothing we control. That is
+the signature we have been unable to explain all week, and it is the first
+account of it with a mechanism behind it.
+
+### The instrument changes the measurement, and `F4.36` is not exempt
+
+`F4.36` polls `0x96a0` plus `$RECORD` (eleven low addresses, `param[3]=0x00`)
+and `$LANES` (two `0x01xxxx` addresses, `param[3]=0x01`) every 50 ms. **It is
+injecting `0x00` into the ring far faster than anything else happens**, and
+`0x96a0` — the read we need in order to see the header at all — is itself a
+low address. So a header of `0` in `F4.36` is partly our own doing and does
+**not** establish that an ordinary ring test sees `0`.
+
+There is no way to read `0x96a0` without an `fff1` at a low address, so this
+cannot be designed away. It can be worked around two ways, and both are worth
+having:
+
+1. **`36b` (`pagehdr=4`) is immune**, because it writes `mail[5]` explicitly.
+   If the header follows our byte, the ring no longer matters.
+2. **`36c` changes the ring composition instead of the page**: `$LANES` only,
+   polled slowly, so `0x01xxxx` reads dominate. If the header moves toward `1`
+   with no change to the page at all, that is a **second, independent lever on
+   the same byte** — confirming A-0091/A-0092 by a different mechanism, the
+   way `dir1+6` and the corpus confirmed each other over the RSSI.
