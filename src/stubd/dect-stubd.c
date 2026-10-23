@@ -633,6 +633,33 @@ struct stubd {
 		int	 page_hdr;
 		unsigned setup_tries;	/* 0 = RING_SETUP_TRIES */
 		/*
+		 * pagemail=SPEC: raw mails to send IMMEDIATELY after each
+		 * 0x0300 page, in the order given. -M cannot do this -- its
+		 * mails fire once, when the session comes up, not per page.
+		 *
+		 * This exists for 0x015E. docs/mac-bringup.md has recorded the
+		 * stock sequence since the MAC bring-up work:
+		 *
+		 *   0x022C -> 0x015C -> 0x0300 -> 0x015E x2 -> 0x0300
+		 *
+		 * Stock sends 0x015E twice around every page; we have never
+		 * sent it once. [CR A-0076] notes it carries a bearer-type
+		 * field read by the MAC config -- mentioned only to rule it
+		 * out as a page builder, so nobody asked what it does as a
+		 * BEARER REQUEST. Our whole primitive inventory has no
+		 * connection- or bearer-setup mail in it, which is the shape
+		 * of a hole that "insufficient resources" would fit.
+		 *
+		 * The payload is deliberately NOT built in: we have no
+		 * observed bytes for 0x015E, only that it exists and has a
+		 * bearer-type field. Q-0055 asks the room for the layout. A
+		 * wrong bearer request is likelier to wedge the MAC than a
+		 * missing one, and the chip has no error indication to catch
+		 * it [A-0086], so the bytes come from the answer, not from us.
+		 */
+		const char *page_mail[4];
+		unsigned n_page_mail;
+		/*
 		 * timesync: 0 = auto (send only when the kernel says the
 		 * clock is disciplined), 1 = force (send anyway), 2 = off.
 		 *
@@ -2630,6 +2657,7 @@ static void send_page(struct stubd *s)
 {
 	struct dect_mail m;
 	uint8_t tpui[3];
+	unsigned i;
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
@@ -2672,6 +2700,18 @@ static void send_page(struct stubd *s)
 		       (unsigned)s->audio.page_hdr,
 		       (unsigned)(s->audio.page_hdr & 0x07),
 		       (unsigned)(((s->audio.page_hdr & 0x0F) << 1) | 1));
+	/*
+	 * Whatever the caller wants sent straight after the page -- see the
+	 * comment on page_mail. Sent here rather than from the poll loop so
+	 * the ordering against 0x0300 is exact, which is the whole point.
+	 */
+	for (i = 0; i < s->audio.n_page_mail; i++) {
+		printf("ring: page mail %u/%u: %s\n", i + 1u,
+		       s->audio.n_page_mail, s->audio.page_mail[i]);
+		if (send_mail_spec(s, s->audio.page_mail[i]))
+			printf("ring: page mail %u FAILED to parse/send: %s\n",
+			       i + 1u, s->audio.page_mail[i]);
+	}
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
 	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
@@ -4142,6 +4182,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
 			    !(klen == 7 && !memcmp(key, "memdump", 7)) &&
 			    !(klen == 8 && !memcmp(key, "timesync", 8)) &&
+			    !(klen == 8 && !memcmp(key, "pagemail", 8)) &&
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
@@ -4191,6 +4232,21 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		}
 		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
 			a->basic_svc = (uint8_t)v;
+		else if (klen == 8 && !memcmp(key, "pagemail", 8)) {
+			/* text, not a number: a mail spec, taken verbatim */
+			size_t n = (size_t)(spec - (eq + 1));
+			char *text;
+
+			if (a->n_page_mail >= sizeof(a->page_mail) /
+					      sizeof(a->page_mail[0]))
+				return -1;
+			text = malloc(n + 1);
+			if (!text)
+				return -1;
+			memcpy(text, eq + 1, n);
+			text[n] = '\0';
+			a->page_mail[a->n_page_mail++] = text;
+		}
 		else if (klen == 10 && !memcmp(key, "setuptries", 10)) {
 			/*
 			 * How long to keep re-offering a CC-SETUP the local CC
@@ -4536,6 +4592,13 @@ static void usage(void)
 		"           little-endian PCM, encoding it to G.722 at start-up\n"
 		"           signal=N adds <<SIGNAL>> N to the SETUP (0x40..0x47 =\n"
 		"           alerting pattern 0..7); omitted, the handset picks\n"
+		"           pagemail=SPEC sends a raw mail (same syntax as -M)\n"
+		"           IMMEDIATELY after each page; repeatable, up to 4, in\n"
+		"           order. For 0x015E, which stock sends twice around\n"
+		"           every page and we never send at all.\n"
+		"           setuptries=N re-offers a refused CC-SETUP N times\n"
+		"           (default 8; the default 16 s budget is SHORTER than\n"
+		"           our own F<CC.03> timer, so it gives up first)\n"
 		"           pagehdr=N appends a FOURTH byte to the 0x0300 page\n"
 		"           (mail[5], 0..15). [CR A-0091]: the chip builds the\n"
 		"           page header byte at 0x96ad+4 from it, so the low 3\n"
