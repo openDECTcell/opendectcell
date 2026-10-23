@@ -958,3 +958,54 @@ slot mask 2. **The connection had an assigned audio channel before the
 
 So "the handset is being offered speech on a connection with no U-plane" is
 not the explanation, or at least not one the host can fix with `0x0230`.
+
+### The timing sweep: not that either, and the knob was verified `[2026-10-24]`
+
+`[CR A-StockTrace-5 §15]` measured a connection bearer on stock ~360 ms before
+its `{CC-SETUP}`. We send ours 120 ms after connection-up. Five phases, with
+the gap from connection-up to the setup on the wire measured in each log
+rather than assumed:
+
+| phase | `setupdelay` | measured gap | result |
+| --- | --- | --- | --- |
+| 5 (control) | 0 | **120 ms** | `0x32` |
+| 1 | 360 | **480 ms** | `0x32` |
+| 2 | 800 | **912 ms** | `0x32` |
+| 4 | 1600 | **1 720 ms** | `0x32` |
+| 3 | 360 + wideband connection | 480 ms | `0x32` |
+
+Stock's 360 ms is bracketed in both directions and nothing moves. The delay
+was confirmed to have taken effect in every phase — the daemon logged the hold
+and the measured gap matches the requested value plus the ~120 ms
+connection-up-to-page-response interval. **Timing is not the axis.**
+
+## Where this leaves it
+
+Nineteen variables, one handset, one answer. With the transport defect fixed
+and two agreeing baselines, the following are measured and refused: message
+content including the exact EN 300 444 table 21 message; page headers 0, 1, 3,
+4; narrowband and wideband page-response connections; the handset's own
+preferred codec list; an audio channel configured before the setup and
+confirmed by the chip; `0x015E` arming at any index on either handle; and the
+setup-to-bearer gap from 120 ms to 1 720 ms.
+
+**The uniformity is the finding.** Nineteen phases agreeing is not nineteen
+eliminations of a shared cause — it is evidence that the varied thing is not
+in the causal path. Every theory this week has asked "which of the mails we
+send is wrong", and the answer keeps coming back "none of them". The question
+that fits the data is **"which mail are we not sending at all"**, and no
+amount of reasoning from the chip's receive side answers it.
+
+Two things settle it, in order, and both are cheap:
+
+1. **Ring a second handset** (`docs/test-card-2026-10-25.md`). Nineteen
+   variables have been varied against one A540; the handset itself never has.
+   Ten minutes, and it decides whether we are debugging our base or a device
+   quirk.
+2. **The stock capture.** What is wanted is the complete ordered host→chip
+   mail list between the page and the `{CC-SETUP}`, with timings, including
+   mails we have never sent. The clean room holds the chip's full host→chip
+   dispatcher and has offered to diff stock's sequence against our inventory
+   and name anything missing.
+
+Until one of those runs, further sweeps are not worth their bench time.
