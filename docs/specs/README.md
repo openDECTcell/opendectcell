@@ -11,6 +11,7 @@ goes stale.
 | `en_30017505v020901p.pdf` | EN 300 175-5 V2.9.1 — Network (NWK) layer |
 | `ts_10252701v010501p.pdf` | TS 102 527-1 V1.5.1 — CAT-iq, New Generation DECT part 1 |
 | `en_300444v020501p.pdf` | **EN 300 444 V2.5.1 — Generic Access Profile (GAP)** |
+| `ts_10252703v010701p.pdf` | **TS 102 527-3 V1.7.1 — CAT-iq part 3, Extended wideband speech services** |
 
 Fetch them with:
 
@@ -24,6 +25,8 @@ curl -sL -A "$UA" -o docs/specs/ts_10252701v010501p.pdf \
   "https://www.etsi.org/deliver/etsi_ts/102500_102599/10252701/01.05.01_60/ts_10252701v010501p.pdf"
 curl -sL -A "$UA" -o docs/specs/en_300444v020501p.pdf \
   "https://www.etsi.org/deliver/etsi_en/300400_300499/300444/02.05.01_60/en_300444v020501p.pdf"
+curl -sL -A "$UA" -o docs/specs/ts_10252703v010701p.pdf \
+  "https://www.etsi.org/deliver/etsi_ts/102500_102599/10252703/01.07.01_60/ts_10252703v010701p.pdf"
 ```
 
 `etsi.org` returns 403 without a browser `User-Agent`; that is what `-A` is for.
@@ -49,6 +52,10 @@ already verified on the wire (`0x05` portable identity, `0x7C` codec list,
 `0x77` IWU-to-IWU) before trusting a new one. That check is what caught all
 three errors.
 
+**Part 3 was missing until 2026-10-23 too**, and it is the one that defines
+list access (which we implement) and the date-and-time procedures (which we
+did not, because we had not read them). Part 1 alone is not enough.
+
 **GAP was missing until 2026-10-23**, which is worth recording: the project's
 standing rule is "GAP and CAT-iq are the product", and we had been inferring
 GAP's requirements from EN 300 175-5 without the profile document that
@@ -56,7 +63,7 @@ actually states which procedures are mandatory. The first audit against it
 found a mandatory feature we had not implemented. **Hold the profile, not
 just the base standard.**
 
-**Why these five.** Parts 3/4/5 are the DECT stack we implement the host side
+**Why these six.** Parts 3/4/5 are the DECT stack we implement the host side
 of; TS 102 527-1 is CAT-iq part 1, which defines the wideband codec negotiation
 (`<<CODEC-LIST>>`) that a wideband call depends on. Clause references in
 `call-g7.md`, `registration-g6.md` and `spec-conformance.md` point into these

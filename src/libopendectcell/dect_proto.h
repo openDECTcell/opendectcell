@@ -80,8 +80,22 @@
  *    dect_mm_tpui_confirmed() before treating a handset as reachable: an
  *    unacknowledged assignment means pages may go to an identity it is not
  *    listening for, which fails silently.
+ *
+ * 8: date and time towards the handset. New `dect_time.h`
+ *    (<<TIME-DATE>> 0x23, the CISS {FACILITY} 0x62 that carries it,
+ *    struct dect_time, dect_time_valid/put/build_facility), `struct
+ *    dect_link` grows a one-deep CISS slot, and dect_link_send_time()
+ *    arrives.
+ *
+ *    CONSUMERS: TS 102 527-3 §7.4.20.2 makes it the FT's duty to send the
+ *    date and time after every successful location registration --
+ *    unconditionally, "even if the PT does not indicate support" and
+ *    "independently of the 'Clock master' setting". A base is where a
+ *    handset gets its clock; without this every timestamp it shows, call
+ *    lists above all, is invented. The library has no clock, so the caller
+ *    supplies the time and decides whether its own is trustworthy.
  */
-#define OPENDECTCELL_API_VERSION 7
+#define OPENDECTCELL_API_VERSION 8
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

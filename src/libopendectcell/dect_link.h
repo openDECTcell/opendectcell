@@ -47,6 +47,7 @@
 #include "dect_lc.h"
 #include "dect_mail.h"
 #include "dect_mm.h"
+#include "dect_time.h"
 #include "dect_nwk.h"
 #include "dect_proto.h"
 
@@ -57,6 +58,15 @@ struct dect_link {
 	struct dect_lapc   lapc;
 	struct dect_mm     mm;
 	struct dect_cc     cc;
+	/*
+	 * One pending CISS message. Today that is only the {FACILITY}
+	 * carrying <<TIME-DATE>> after a location registration
+	 * (TS 102 527-3 §7.4.2), which is a single message with no state
+	 * machine behind it, so a one-deep slot is the honest size. If CISS
+	 * ever grows a real entity this becomes its queue.
+	 */
+	uint8_t  ciss[DECT_LAPC_MSG_MAX];
+	size_t   ciss_len;
 };
 
 /*
@@ -110,6 +120,20 @@ void dect_link_drain(struct dect_link *l, uint64_t now);
 
 /* Drive LAPC retransmission and CC timers. Call once per poll loop. */
 void dect_link_tick(struct dect_link *l, uint64_t now);
+
+/*
+ * Queue the CISS {FACILITY} that tells the handset the date and time.
+ *
+ * TS 102 527-3 §7.4.20.2 makes this the FT's duty after a successful
+ * location registration, unconditionally -- "even if the PT does not
+ * indicate support" and "independently of the 'Clock master' setting".
+ * The caller supplies the time, because the library has no clock.
+ *
+ * Returns 0 if queued, -1 if the time is out of range or a message is
+ * already pending. Sending it is never essential: a handset with the wrong
+ * clock still makes calls.
+ */
+int dect_link_send_time(struct dect_link *l, const struct dect_time *t);
 
 /*
  * Take the next frame to transmit, already wrapped in an Lc frame and a

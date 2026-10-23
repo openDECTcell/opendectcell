@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/timex.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -95,6 +96,67 @@ static uint64_t fs_free_bytes(const char *path)
  * drew {CC-RELEASE-COM} 0x32), so this is a conformance fix, not a defect fix.
  */
 #define RING_BASIC_SVC	0x80u		/* normal call setup, basic speech */
+
+/*
+ * Below this the box clock is certainly unset: the 7520 has no RTC, so a
+ * freshly booted OpenWrt sits near the epoch until NTP lands. 2020-01-01.
+ */
+#define CLOCK_SANE_AFTER	1577836800L
+
+/*
+ * Is the system clock actually trustworthy?
+ *
+ * The epoch check above is not enough, and the bench box proves it: on
+ * 2026-10-23 it read "Jun 30 2026" -- four months out, with ntpd running but
+ * no route to a server, 34 hours into an uptime. That date passes any
+ * plausible threshold while being completely wrong, and we would have pushed
+ * it to every handset that registered.
+ *
+ * The kernel already tracks this. adjtimex(2) with modes = 0 is a read-only
+ * query needing no privilege, and STA_UNSYNC means "no reference has
+ * disciplined this clock". A handset with no time shows a blank or a default;
+ * a handset we confidently told the wrong date is worse, because the user has
+ * no reason to doubt it -- and TS 102 527-3 7.4.20.2 makes our duty to send
+ * conditional on our own time being valid, which is exactly this question.
+ */
+static int clock_is_trustworthy(time_t now_s)
+{
+	struct timex tx;
+
+	if (now_s <= CLOCK_SANE_AFTER)
+		return 0;
+	memset(&tx, 0, sizeof(tx));
+	if (adjtimex(&tx) < 0)
+		return 0;		/* cannot tell: assume not */
+	return (tx.status & STA_UNSYNC) == 0;
+}
+
+/*
+ * Seconds east of GMT at `t`. `tm_gmtoff` would say this in one line but it
+ * is a BSD extension that musl hides without a feature macro, and this file
+ * cross-compiles against musl. The difference of the two broken-down times is
+ * portable C: take the seconds-of-day difference, then correct by a day when
+ * the two land on different dates (including across a year boundary, where
+ * tm_yday jumps by ~364 rather than 1).
+ */
+static long tz_offset_seconds(time_t t)
+{
+	struct tm lt, gt;
+	long d;
+	int dday;
+
+	if (!localtime_r(&t, &lt) || !gmtime_r(&t, &gt))
+		return 0;
+	d = (lt.tm_hour - gt.tm_hour) * 3600L
+	  + (lt.tm_min  - gt.tm_min)  * 60L
+	  + (lt.tm_sec  - gt.tm_sec);
+	dday = lt.tm_yday - gt.tm_yday;
+	if (dday == 1 || dday < -1)
+		d += 86400L;
+	else if (dday == -1 || dday > 1)
+		d -= 86400L;
+	return d;
+}
 #include "dect_g722.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
@@ -673,6 +735,7 @@ struct stubd {
 		int persisted;		/* chip subscription written this connection */
 		int call_bound;		/* audio channel bound for the active call */
 		int nonspeech_noted;	/* logged "not a speech call" once */
+		uint32_t time_sent_for;	/* mm.stats.located we last answered */
 		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
 		uint64_t remode_at;	/* when to send the mode-2 re-assign, 0 = off */
 		int      remode_done;	/* the mode-2 re-assign has been sent */
@@ -2759,6 +2822,60 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.persisted = 1;
 		printf("reg: subscription persisted + registration closed (slot %u)\n",
 		       (unsigned)dect_mm_sub_slot(&s->reg.link.mm));
+	}
+
+	/*
+	 * A base is where a handset gets its clock, and we never sent one --
+	 * so every timestamp a handset showed, call lists above all, was
+	 * whatever it had invented.
+	 *
+	 * TS 102 527-3 §7.4.20.2: "If the system Date and Time on FT side is
+	 * valid, the FT shall systematically use the 'FT initiated Date and
+	 * Time synchronization procedure' after successful PT location
+	 * registration". It adds that we send it "even if the PT does not
+	 * indicate support" and "independently of the 'Clock master' setting
+	 * value" -- so there is nothing to negotiate and nothing to check.
+	 *
+	 * Our clock is the box's. If the box has no valid time (no RTC on
+	 * this hardware, so this means NTP has not landed yet) we send
+	 * nothing: the same clause makes the duty conditional on the FT's own
+	 * time being valid, and a confidently wrong clock is worse than none.
+	 */
+	if (s->reg.link.mm.stats.located != s->reg.time_sent_for) {
+		struct dect_time dt;
+		time_t now_s = time(NULL);
+		struct tm tm;
+
+		s->reg.time_sent_for = s->reg.link.mm.stats.located;
+		if (clock_is_trustworthy(now_s) && localtime_r(&now_s, &tm)) {
+			long off_s = tz_offset_seconds(now_s);
+
+			memset(&dt, 0, sizeof(dt));
+			dt.year   = (uint8_t)(tm.tm_year % 100);
+			dt.month  = (uint8_t)(tm.tm_mon + 1);
+			dt.day    = (uint8_t)tm.tm_mday;
+			dt.hour   = (uint8_t)tm.tm_hour;
+			dt.minute = (uint8_t)tm.tm_min;
+			dt.second = (uint8_t)tm.tm_sec;
+			dt.tz_quarters = (int16_t)(off_s / 900);
+			dt.tz_valid = 1;
+			if (dect_link_send_time(&s->reg.link, &dt) == 0)
+				printf("reg: sent the date and time "
+				       "(20%02u-%02u-%02u %02u:%02u:%02u, "
+				       "GMT%+ld:%02ld)\n",
+				       dt.year, dt.month, dt.day, dt.hour,
+				       dt.minute, dt.second,
+				       off_s / 3600, labs(off_s % 3600) / 60);
+			else
+				printf("reg: could not queue the date and "
+				       "time\n");
+		} else {
+			printf("reg: clock not disciplined (STA_UNSYNC or "
+			       "pre-2020) -- sending no date and time. "
+			       "TS 102 527-3 7.4.20.2 makes the duty "
+			       "conditional on ours being valid, and a "
+			       "confidently wrong clock is worse than none\n");
+		}
 	}
 
 	if (s->reg.link.mm.state == DECT_MM_REGISTERED)

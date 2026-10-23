@@ -33,6 +33,11 @@ static void drain_nwk(struct dect_link *l, uint64_t now)
 		mlen = dect_mm_poll(&l->mm, msg, sizeof(msg));
 		if (mlen == 0)
 			mlen = dect_cc_poll(&l->cc, msg, sizeof(msg));
+		if (mlen == 0 && l->ciss_len) {
+			mlen = l->ciss_len;
+			memcpy(msg, l->ciss, mlen);
+			l->ciss_len = 0;
+		}
 		if (mlen == 0)
 			break;
 		if (dect_lapc_send(&l->lapc, msg, mlen, now) != 0)
@@ -43,6 +48,19 @@ static void drain_nwk(struct dect_link *l, uint64_t now)
 void dect_link_drain(struct dect_link *l, uint64_t now)
 {
 	drain_nwk(l, now);
+}
+
+int dect_link_send_time(struct dect_link *l, const struct dect_time *t)
+{
+	size_t n;
+
+	if (l->ciss_len)
+		return -1;		/* one at a time is enough */
+	n = dect_time_build_facility(l->ciss, sizeof(l->ciss), t);
+	if (!n)
+		return -1;
+	l->ciss_len = n;
+	return 0;
 }
 
 void dect_link_tick(struct dect_link *l, uint64_t now)
