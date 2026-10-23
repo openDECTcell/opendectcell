@@ -1109,6 +1109,26 @@ static int find_control_slot(struct stubd *s, unsigned int fpb)
 		for (rx = 0; rx < s->slots; rx++) {
 			if (!slot_has_mail(data, frames, s->slots, rx, &ans))
 				continue;
+			/*
+			 * Only a contact ACK proves the chip read our mail on
+			 * THIS tx slot. The chip also emits unsolicited
+			 * reports on its own schedule -- 0xFFF1 statistics
+			 * and 0xF618 every 5 s, 0xF623 scan reports -- so
+			 * accepting any mail at all lets one of those land
+			 * inside the 500 ms probe window and lock the search
+			 * onto a slot the chip never read. The daemon then
+			 * runs with a transmit slot nothing listens to: mails
+			 * go nowhere, the radio is never brought up, and the
+			 * handset cannot see the base, while the log still
+			 * says "control slot found" and the chip's periodic
+			 * reports keep arriving. That is 2026-10-23 vF46 --
+			 * "tx 0, rx 1 (answer prim fff1)", session contacts 3
+			 * answers 0 -- against the working "tx 1, rx 1
+			 * (answer prim f601)" of the day before.
+			 */
+			if (ans.prim != DECT_PRIM_CONTACT_ACK1 &&
+			    ans.prim != DECT_PRIM_CONTACT_ACK2)
+				continue;
 			s->tx_slot = (int)tx;
 			s->rx_slot = (int)rx;
 			printf("control slot found: tx %u, rx %u (answer prim %04x)\n",
