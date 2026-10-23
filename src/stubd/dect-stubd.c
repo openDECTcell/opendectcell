@@ -48,6 +48,9 @@
 #include "dect_clip.h"
 
 /* Longest -a loopdelay ring, in frames (1 s at 8 kHz). */
+/* How long to wait for a lingering link to clear before ringing anyway. */
+#define RING_LINK_WAIT_MS	20000u
+
 #define LOOP_DELAY_MAX 8000u
 
 /* Headroom left for the log and anything else sharing the filesystem. */
@@ -161,6 +164,7 @@ struct stubd {
 	       RING_DONE } ring_state;
 	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
 	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
+	uint64_t ring_link_wait_until;	/* lingering link: wait, see ring_tick */
 	unsigned    ring_pages;		/* pages sent for this attempt */
 	uint64_t    ring_last;		/* when the last one went out */
 	int sub_restored;	/* stored subscription already pushed to the chip */
@@ -2055,15 +2059,50 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			s->ring_state = RING_DONE;
 			return;
 		}
-		s->ring_state = RING_PAGING;
 		/*
 		 * A link may already be up, in which case the handset does not
-		 * need paging at all and the SETUP can go straight out.
+		 * need paging and the SETUP can go straight out. **Avoid that
+		 * shortcut when we can.**
+		 *
+		 * Measured 2026-10-23 over seven runs, a clean 7/7 split:
+		 *
+		 *   "page response received" -> 0xF625 slot type 0x02 -> the
+		 *       mode-2 re-assign takes -> audio works
+		 *   "a link was already up"  -> 0xF625 slot type 0x01 -> the
+		 *       enable word never reaches 1, however often mode 2 is
+		 *       asked for (eight times in vF415) -> no audio at all
+		 *
+		 * A SETUP sent on a lingering link brings the bearer up in a
+		 * state whose audio path we cannot configure, and re-asserting
+		 * afterwards does not recover it. This is the "same settings,
+		 * tone one minute and silence the next" intermittency that cost
+		 * days: it was never random, it tracked whether the handset's
+		 * previous link had cleared.
+		 *
+		 * So wait for the link to clear and page properly, and fall
+		 * back to the old behaviour only after the deadline -- saying
+		 * so, because a call with broken audio still beats no call.
 		 */
 		if (s->reg.active) {
+			if (!s->ring_link_wait_until) {
+				s->ring_link_wait_until =
+					now + RING_LINK_WAIT_MS;
+				printf("ring: a link is still up -- waiting up "
+				       "to %u ms for it to clear; a SETUP sent "
+				       "on a lingering link comes up with an "
+				       "audio path we cannot configure\n",
+				       RING_LINK_WAIT_MS);
+			}
+			if (now < s->ring_link_wait_until)
+				return;
+			s->ring_state = RING_PAGING;
+			printf("ring: link did not clear in %u ms -- sending "
+			       "the SETUP on it anyway; EXPECT NO AUDIO\n",
+			       RING_LINK_WAIT_MS);
 			ring_queue_setup(s, now, "a link was already up");
 			return;
 		}
+		s->ring_state = RING_PAGING;
 	}
 
 	if (s->ring_pages && now - s->ring_last < RING_PAGE_INTERVAL)
