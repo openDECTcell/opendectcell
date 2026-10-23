@@ -468,7 +468,14 @@ struct stubd {
 		 * per-slot DSP descriptor table and the media region.
 		 * READ ONLY -- A-RouteMedia-FINAL rules out writes to chip RAM.
 		 */
-		struct { uint32_t addr; uint32_t len; } memdump[8];
+		/*
+		 * 24, not 8. Eight was enough while a run watched one region;
+		 * a run now carries the matrix, the connection record for both
+		 * handles and the five slot descriptors, which is 13 before
+		 * anything specific to the question being asked. Exceeding the
+		 * cap used to fail the whole option string -- see the parser.
+		 */
+		struct { uint32_t addr; uint32_t len; } memdump[24];
 		unsigned n_memdump;
 		unsigned memdump_ms;
 		/*
@@ -3418,7 +3425,15 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if (klen == 7 && !memcmp(key, "memdump", 7)) {
 			unsigned long len = 32;
 
-			if (a->n_memdump >= 8u || !eq)
+			if (a->n_memdump >= sizeof(a->memdump) /
+					    sizeof(a->memdump[0])) {
+				fprintf(stderr, "too many memdump= regions "
+					"(max %zu)\n",
+					sizeof(a->memdump) /
+					sizeof(a->memdump[0]));
+				return -1;
+			}
+			if (!eq)
 				return -1;
 			if (*end == ':')
 				len = strtoul(end + 1, &end, 0);
@@ -3868,7 +3883,15 @@ int main(int argc, char **argv)
 		case 's': s.sub_path = optarg[0] ? optarg : NULL; break;
 		case 'C': s.no_cipher = 1; break;
 		case 'a':
+			/*
+			 * Say which option string was rejected before printing
+			 * 60 lines of usage. A bad -a used to look exactly
+			 * like a missing argument, and finding that out cost a
+			 * run -- it would have cost an attended one.
+			 */
 			if (parse_audio(&s.audio, optarg)) {
+				fprintf(stderr, "bad -a option string: %s\n",
+					optarg);
 				usage();
 				return 2;
 			}
