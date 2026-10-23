@@ -563,3 +563,37 @@ having:
    with no change to the page at all, that is a **second, independent lever on
    the same byte** — confirming A-0091/A-0092 by a different mechanism, the
    way `dir1+6` and the corpus confirmed each other over the RSSI.
+
+### How to decode `0x96b1`, and why a raw read would mislead `[CR A-0093]`
+
+The byte at `0x96ad+4` is **composed, not copied**:
+
+| bits | contents |
+|---|---|
+| 0 | **always 1**, set unconditionally. Not part of the header |
+| 1–4 | `mail[5]` bits 0–3 — **the only part that moves** |
+| 5–7 | a fixed init constant; the page path never writes them |
+
+So the header to compare against table 80b is **`(byte >> 1) & 0x07`**, and
+the low five bits we expect are `((mail[5] & 0x0F) << 1) | 1`:
+
+| `mail[5]` | low 5 bits | header |
+|---|---|---|
+| `0x00` | `0 0001` | `000` no MAC service |
+| `0x01` | `0 0011` | `001` PP negotiates attributes |
+| `0x04` | `0 1001` | `100` GAP voice code |
+
+Two consequences worth stating:
+
+- **A non-zero high nibble is expected and means nothing.** Reading the byte
+  as a header directly would have made every run look like a null result,
+  which is why this is recorded before the run rather than after it.
+- **Bits 5–7 being constant rules them out as an intermittency source.** Only
+  bits 1–4 track the ring, so the variable header lives exactly where our
+  `0x00`/`0x01` prediction puts it.
+
+A-0093 also confirms the ceiling on `pagehdr`: the builder forces the header
+to 0 when `mail[5] & 0xC0 != 0`, and capping the option at `0x0F` means we can
+never trip that path by accident. It also closes "never 4" from the firmware
+side — reaching `4` needs `mail[5]` bit 2 set with bits 6–7 clear, which
+nothing in our traffic produces, including the rare `3/5/7` tail.

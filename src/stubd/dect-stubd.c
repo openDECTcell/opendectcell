@@ -2659,10 +2659,18 @@ static void send_page(struct stubd *s)
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 	if (s->audio.page_hdr >= 0)
+		/*
+		 * [CR A-0093]: the byte at 0x96ad+4 is composed, not copied --
+		 * bit 0 is always set, bits 1-4 carry mail[5] bits 0-3, and
+		 * bits 5-7 are a fixed init constant. So the header to compare
+		 * against a reading is (byte >> 1) & 7, and the low five bits
+		 * we expect are ((hdr & 0x0F) << 1) | 1.
+		 */
 		printf("ring: page carries mail[5] = 0x%02x -> expect LCE "
-		       "header %u at 0x96ad+4 (A-0091)\n",
+		       "header %u, 0x96ad+4 low bits 0x%02x (A-0091/93)\n",
 		       (unsigned)s->audio.page_hdr,
-		       (unsigned)(s->audio.page_hdr & 0x07));
+		       (unsigned)(s->audio.page_hdr & 0x07),
+		       (unsigned)(((s->audio.page_hdr & 0x0F) << 1) | 1));
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
 	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
@@ -4182,9 +4190,14 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->basic_svc = (uint8_t)v;
 		else if (klen == 7 && !memcmp(key, "pagehdr", 7)) {
 			/*
-			 * Only the low nibble reaches the page, and bits 6-7
-			 * are rejected rather than masked so a typo is not
-			 * silently accepted as something else.
+			 * Only the low nibble reaches the page, and anything
+			 * above 0x0F is rejected rather than masked so a typo
+			 * is not silently accepted as something else.
+			 *
+			 * [CR A-0093]: the builder also has a second path that
+			 * forces the header to 0 when mail[5] & 0xC0 != 0.
+			 * Capping at 0x0F means we can never trip it by
+			 * accident.
 			 */
 			if (v > 0x0Fu)
 				return -1;
