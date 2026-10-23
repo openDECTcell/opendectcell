@@ -809,6 +809,147 @@ static void test_setup_ie_order_is_ascending(void)
 	}
 }
 
+
+/*
+ * F<CC.03>, the CC setup timer (EN 300 175-5 A.1 and 9.3.2.2). 20 s, started
+ * when we send a {CC-SETUP}; on expiry the FT shall reject the call with
+ * {CC-RELEASE-COM} / "timer expiry" and enter NULL.
+ *
+ * These tests were missing until 2026-10-23: the timer had been implemented
+ * on 2026-10-22 and nothing exercised it. A 20-second fuse whose whole job is
+ * to fire when nothing else happens is exactly the kind of code that stops
+ * working in silence, and the conformance table still said "missing" for a
+ * day after it was written.
+ */
+static size_t fp_setup(struct dect_cc *cc, uint8_t *out, size_t cap)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+
+	dect_cc_init(cc);
+	CHECK_EQ(dect_cc_setup(cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	CHECK_EQ(cc->state, DECT_CC_ST_CALL_PRESENT);
+	return dect_cc_poll(cc, out, cap);	/* drain the SETUP */
+}
+
+static void test_setup_timer_releases_an_unanswered_call(void)
+{
+	struct dect_cc cc;
+	uint8_t out[64];
+	size_t n;
+
+	CHECK(fp_setup(&cc, out, sizeof(out)) > 0);
+
+	/*
+	 * The deadline is armed by the first tick in CALL PRESENT, not by
+	 * dect_cc_setup(), so it is 20 s from that tick. A caller that never
+	 * ticks never arms it -- which is worth stating in a test, because it
+	 * is the one way this timer can silently not exist.
+	 */
+	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+	dect_cc_tick(&cc, 1000u);
+	CHECK_EQ(dect_cc_next_deadline(&cc), 21000u);
+
+	/* One millisecond early: nothing. */
+	dect_cc_tick(&cc, 20999u);
+	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	CHECK_EQ(cc.stats.setup_timeouts, 0u);
+
+	/* On the deadline: release, with a reason, and back to NULL. */
+	dect_cc_tick(&cc, 21000u);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(cc.stats.setup_timeouts, 1u);
+	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK(n >= 4u);
+	if (n >= 4u) {
+		CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+		CHECK_EQ(ti_flag_of(out, n), DECT_TI_ORIGINATOR);
+		/*
+		 * <<RELEASE-REASON>> 0x0D, "timer expiry" -- a bare
+		 * RELEASE-COM is legal but tells the handset nothing.
+		 */
+		CHECK_EQ(out[n - 2], DECT_IE_RELEASE_REASON);
+		CHECK_EQ(out[n - 1], 0x0Du);
+	}
+
+	/* It fires once, not once per tick. */
+	dect_cc_tick(&cc, 60000u);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	CHECK_EQ(cc.stats.setup_timeouts, 1u);
+}
+
+static void test_setup_timer_stops_when_the_handset_answers(void)
+{
+	struct dect_cc cc;
+	uint8_t out[64], msg[8];
+	size_t n;
+
+	CHECK(fp_setup(&cc, out, sizeof(out)) > 0);
+	dect_cc_tick(&cc, 1000u);
+	CHECK_EQ(dect_cc_next_deadline(&cc), 21000u);
+
+	/*
+	 * A.1 stops the timer when "a response message has been received",
+	 * and every response moves the entity out of CALL PRESENT. So the
+	 * state is the stop condition; there is no separate stop call, and
+	 * this test is what keeps that equivalence honest.
+	 */
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
+			       0, DECT_CC_ALERTING);
+	dect_cc_rx(&cc, msg, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_RINGING);
+
+	dect_cc_tick(&cc, 21000u);
+	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+	CHECK_EQ(cc.state, DECT_CC_ST_RINGING);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	CHECK_EQ(cc.stats.setup_timeouts, 0u);
+
+	/* And long past it, the call is still up. */
+	dect_cc_tick(&cc, 120000u);
+	CHECK_EQ(cc.state, DECT_CC_ST_RINGING);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+}
+
+static void test_setup_timer_does_not_run_for_a_pp_originated_call(void)
+{
+	struct dect_cc cc;
+	uint8_t out[64], msg[64];
+	size_t n;
+
+	/*
+	 * F<CC.03> starts when *we* send a SETUP. A call the handset
+	 * originates must never be torn down by it, however long the far end
+	 * takes to answer.
+	 *
+	 * This test pins the BEHAVIOUR, not the `!cc->incoming` branch in
+	 * dect_cc_tick(). Mutation-testing it on 2026-10-23 showed that
+	 * deleting that term changes nothing: a PP-originated SETUP goes to
+	 * CONNECT PENDING (on_setup() queues CALL-PROC and CONNECT at once)
+	 * and never sits in CALL PRESENT, so the state guard alone already
+	 * excludes it, and `incoming == 0 && state == CALL_PRESENT` is
+	 * unreachable through the public API. The term is defensive and
+	 * currently redundant -- worth knowing before someone "simplifies"
+	 * either it or this test.
+	 */
+	dect_cc_init(&cc);
+	n = pp_setup_svc(msg, sizeof(msg), 0, 0x80);
+	dect_cc_rx(&cc, msg, n);
+	CHECK_EQ(cc.incoming, 0u);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+
+	dect_cc_tick(&cc, 1000u);
+	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+	dect_cc_tick(&cc, 300000u);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	CHECK_EQ(cc.stats.setup_timeouts, 0u);
+}
+
 int main(void)
 {
 	test_setup_carries_line_identifier();
@@ -835,5 +976,8 @@ int main(void)
 	test_keypad_in_the_setup_is_collected();
 	test_keypad_outside_a_call_is_ignored();
 	test_setup_ie_order_is_ascending();
+	test_setup_timer_releases_an_unanswered_call();
+	test_setup_timer_stops_when_the_handset_answers();
+	test_setup_timer_does_not_run_for_a_pp_originated_call();
 	return CHECK_DONE();
 }

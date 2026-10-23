@@ -47,13 +47,15 @@ reason-from-one-sample error the project has hit before.
 
 | timer | side | role | ours |
 |---|---|---|---|
-| `F<CC.03>` | FT | started on {CC-SETUP}; on expiry the FT **shall** reject the call with {CC-RELEASE-COM}, reason "TIMER-EXPIRY", and enter NULL (§9.3.2.2) | **missing** |
+| `F<CC.03>` | FT | started on {CC-SETUP}; on expiry the FT **shall** reject the call with {CC-RELEASE-COM}, reason "TIMER-EXPIRY", and enter NULL (§9.3.2.2) | **implemented** (`dect_cc_tick()`, 20 s) |
 | `F<CC.04>` | FT | started on {CC-ALERTING}; **optional** for both sides (§9.3.2.10 NOTE) | missing, allowed |
 | `P<CC.05>` | PT | PT-side only | n/a |
 
-Consequence today: an FP-originated call that is never answered leaves our CC
-entity in `CALL_PRESENT` indefinitely rather than releasing. That is a real
-defect and it is cheap to fix, but it is **not** why the A540 refuses calls.
+Consequence **before the fix**: an FP-originated call that is never answered
+left our CC entity in `CALL_PRESENT` indefinitely rather than releasing. Real,
+cheap to fix, and never the reason the A540 refuses calls. Closed on
+2026-10-22 -- see "Gaps 1 and 3 closed" below for the three details worth
+knowing about how it arms and stops.
 
 ### Gap 2 -- the one that matters: no lower-layer connection
 
@@ -120,16 +122,18 @@ sentences while they are at it. All of this is from
 So `F4.36` is no longer "read it and see". **The expected value for a voice
 call is `100`; `000` is the value reserved for C-plane-only procedures.**
 
+**Table 80b itself was already on this page** -- Gap 5 decoded it on
+2026-10-23 night, including the `100` voice row. This section re-derived it
+from the PDFs instead of reading Gap 5 first, which is the mistake
+`read-our-own-notes-first` exists to prevent. What is genuinely new here is
+Table 66 above, its follow-on-call sentence, and GAP §8.35; the rest points at
+Gap 5.
+
 **Correction to this page.** Gap 2 above says we "omit both and establish
-nothing". That is wrong, and Table 80b says so plainly -- both relevant rows
-describe a basic connection being set up:
-
-| LCE | short paging, full slot | default behaviour |
-|---|---|---|
-| `000` | MT **basic connection setup on full slot**, PP does not initiate attributes negotiation. **MAC service = no MAC service** |
-| `100` | MT **basic connection setup on full slot**, PP does not initiate attributes negotiation. **Initial MAC service = IN_min_delay** |
-
-A basic connection is established either way. What `000` withholds is the
+nothing". That contradicts Gap 5's own table 80b in this same document, where
+both relevant rows read *"MT basic connection setup on full slot"* and differ
+only in MAC service (`none` vs `IN_min_delay`). A basic connection is
+established either way. What `000` withholds is the
 **MAC service** -- there is no U-plane on the connection, not no connection.
 That matters because it is the only reading consistent with what we actually
 observe: we exchange LAPC frames with the handset perfectly well, which a
@@ -184,33 +188,39 @@ Part 4 timers (`<DL.00>`, `<DL.01>`, `<DL.02>`, `<DL.03>`, `<DL.07>` all 2 s;
 `<DL.05>` 10 s; `<DL.06>` 4 s) are not implemented at all; most are for
 procedures we do not perform (suspend, resume, connection handover).
 
-### Gap 4 -- CC `IWU-INFO` is never sent and never answered
+### ~~Gap 4 -- CC `IWU-INFO` is never sent and never answered~~ **CLOSED as a responder; the hypothesis attached to it is WITHDRAWN**
 
-`[observed]` `dect_cc_rx()` has no `case DECT_CC_IWU_INFO`; the constant is
-defined and the message falls into `default: break;`, silently dropped --
-together with `CALL_PROC`, `SETUP_ACK`, `NOTIFY` and `INFO`. Nothing in the
-codebase sends `0x60`, and nothing builds a `<<CODEC-LIST>>`.
+**What was written here** `[2026-10-22]`: `dect_cc_rx()` had no
+`case DECT_CC_IWU_INFO`, the message fell into `default: break;` alongside
+`CALL_PROC`, `SETUP_ACK`, `NOTIFY` and `INFO`, and this was called "the
+**best-supported** explanation for the A540 refusing FP-originated calls" on
+four independent lines. Implementation was `[blocked]` on the record layout.
 
-This is currently the **best-supported** explanation for the A540 refusing
-FP-originated calls, on four independent lines (see `call-g7.md`): the air
-trace shows stock negotiating IWU-INFO between SETUP and ALERTING; stock's own
-release guard is named "MAC layer and/or IWU-Info not in time -> release
-connection"; `<<BASIC-SERVICE>> 0x88` selects wideband, for which §7.6.4
-NOTE 3 requires TS 102 527-1 codec negotiation that we never perform; and the
-A540 sent us 20 `IWU-INFO` frames in one run, all unanswered.
+**Both halves of that are now out of date, and the second one matters more.**
 
-**Implementation points, both in `dect_cc.c`:**
+*Implemented.* `src/libopendectcell/dect_iwu.{c,h}` is the `<<IWU-TO-IWU>>` session
+responder, dispatched from `case DECT_CC_IWU_INFO` in `dect_cc_rx()` and
+covered by `tests/test_iwu.c` (45 checks). The record framing came from
+`[CR A-StockTrace-5 §23]`, 40 records across 6+ complete dialogs, so nothing
+was invented. `case DECT_CC_INFO` also exists now (GAP N.4, dialled digits),
+so the list of silently-dropped messages in the old text is wrong twice over.
 
-1. a `case DECT_CC_IWU_INFO` in `dect_cc_rx()` to **answer** the handset;
-2. a sender invoked **after** our CC-SETUP on an FP-originated call to
-   **initiate** the exchange -- stock sends its first IWU-INFO seven frames
-   after the SETUP and alerts only once the exchange completes.
+*Only a responder, and deliberately.* The old implementation point 2 -- a
+sender to **initiate** the exchange after our `{CC-SETUP}` -- **is retired, not
+outstanding.** `[CR A-StockTrace-5 §24]` corrects §11a: in stock captures
+**every** open is handset→base, the base only ever responds, and
+base-originated calls to Gigaset handsets ring with **no** `{CC-IWU-INFO}`
+exchange at all.
 
-`[blocked]` on the record layout: the content leads `c3`, carries an advancing
-sequence byte and a `91`, inside `<<IWU-TO-IWU>>` (`0x77`). The the hardware-analysis step is
-decoding it. **Do not invent the payload** -- a wrong reply is likely worse
-than no reply, and the handset's own frames give us the shape but not the
-semantics.
+*Hypothesis withdrawn.* That same correction removes the ground this gap's
+headline claim stood on. The dialog's absence during our failed calls is a
+**consequence of the early release, not its cause**. `dect_iwu.h` says so in
+its own header comment; this page had not caught up. The live explanation for
+the A540 is Gap 2 / Gap 5, not this.
+
+**Why it was still worth doing:** the peer opens sessions we were dropping,
+which is a defect whatever else it causes, and TS 102 527-3 list access is
+built on this dialog.
 
 ## Gap 5 -- the page never says what the call needs `[2026-10-23 night]`
 
@@ -275,12 +285,35 @@ Two things follow if the answer is the unfavourable one, and both are open:
 
 ### Status
 
-**Not a finding yet.** We have not verified that our page is short format or
-that its header is `000`; that is `Q-0051` to the clean room, which asks what
-the chip builds from `0x0300`, how the page-info byte maps to the LCE header,
-what bit `0x20` changes on the air, and whether any path exists to a
-full-format TPUI page with info field 1 = long slot. A plain "there is none"
-is a complete answer and retires the wideband thread on this STUB.
+**`Q-0051` is answered; the measurement is not taken.** `[CR A-0076]` replied
+on every part of it: `0x0300` builds a fixed **short** page into chip RAM at
+`0x96ad` and writes exactly one header byte at `0x96ad+4`; the page-info byte
+(`mail[2]`, our `0x0C`/`0x2C`) is **never referenced in the page path**, so bit
+`0x20` is inert on the air and the LCE header is **compiled in**; and there is
+**no full-format page builder** on this STUB -- not `0x0300`, not `0x015E`, not
+`0x015C`. That last answer retires the wideband-by-paging thread, exactly as
+the question anticipated.
+
+So the only thing still unmeasured is **the value of the compiled header**,
+which `F4.36` reads in one dump while a page is in flight. `F4.35` has already
+shown `0x96a0..0x96bf` is all zero with the radio down, so it must be read
+during paging.
+
+**What the profile adds, and it was not in the question** `[2026-10-23]`:
+**EN 300 444 Table 66** permits a GAP FP exactly two header values, `0` and
+`4`, with `0` "used when only C-plane is required (e.g. MM procedures)" -- so
+the table above is not just a menu, it is a two-way choice and `100` is the
+voice half of it. Table 66 also says **"The PT shall support a follow on call
+on the same link even if value '0' was used during initial paging"**, which
+is the first thing we have found that explains the handset split without
+either handset being at fault: acquiring a U-plane later by service
+modification is required of the PT, the C4 does it, the A540 appears not to.
+
+And GAP §8.35 -- *"FT and PT shall only support short format for the
+{LCE-REQUEST-PAGE} message"* -- means the missing full-format builder
+`A-0076` found is **profile conformance, not a chip limitation**. A GAP FP
+cannot page for a long slot at all. The wideband conclusion is unchanged; its
+reason is better.
 
 ## Still to audit
 
@@ -353,9 +386,10 @@ left a transaction stuck in `CALL_PRESENT`, and only a daemon restart cleared
 it. That is also why `ring_queue_setup()` could be refused by a busy CC entity
 -- the entity was busy with a call that had already failed.
 
-Still open: **Gap 2** (no lower-layer connection, the live defect) and **Gap 4**
-(`IWU-INFO` never sent or answered, deferred since the registration-time codec
-list turned out not to be the cause).
+Still open: **Gap 2 / Gap 5** -- the lower-layer connection and the LCE header
+that selects its MAC service, which are one defect seen from two clauses and
+are the live one. **Gap 4 is closed** (responder implemented, initiator
+retired, hypothesis withdrawn).
 
 ## CLIP / CNIP audit `[2026-10-23]`
 
@@ -413,3 +447,46 @@ displayed "Intern".
   an entry in the FP contact list, the name from that list should be sent with
   screening "user-provided, verified and passed". That belongs with the
   controller's contact list, not here.
+
+## Audit of this page against the code `[2026-10-23]`
+
+The conformance tables are read by people and by the controller agent as the
+interface to this stack, so they were checked line by line against the source.
+**Three entries had drifted, and the document contradicted itself once.**
+
+| entry | said | actually |
+|---|---|---|
+| `F<CC.03>` row | **missing** | implemented 2026-10-22 as `dect_cc_tick()`. The *heading* above the table said "FIXED" and the closure section below it said "implemented" — only the row, the thing a reader scans, was stale |
+| Gap 4 | "never sent and never answered", `[blocked]` on the record layout, and "the **best-supported** explanation for the A540 refusing FP-originated calls" | implemented as a responder (`dect_iwu.{c,h}`, 45 checks) and the hypothesis **withdrawn** by `[CR A-StockTrace-5 §24]` — `dect_iwu.h` says so in its own header; this page had not caught up |
+| Gap 5 status | "Not a finding yet … that is `Q-0051` to the clean room" | `Q-0051` was answered in full by `[CR A-0076]`; only the header's *value* is unmeasured |
+| Gap 2 vs Gap 5 | Gap 2: "we omit both and **establish nothing**" | Gap 5's own table 80b, on this page, says *"MT basic connection setup on full slot"* for both rows. A basic connection is established either way; `000` withholds the **MAC service** |
+
+A stale "missing" is the expensive kind of wrong: it sends the next session —
+or the controller agent — to build something that already exists.
+
+### `F<CC.03>` had no test, and now has three
+
+The timer was written on 2026-10-22 and nothing exercised it. A 20-second fuse
+whose only job is to fire when nothing else happens is exactly what stops
+working in silence. `tests/test_cc.c` now covers expiry, the stop-on-answer
+path and a PP-originated call, 33 checks.
+
+**They were mutation-tested rather than trusted**, and that caught two faults
+in the tests themselves:
+
+- changing the timer to 10 s, changing the release reason, and removing the
+  deadline-clear on answer are each caught now — but the first revision read
+  `out[n-2]` without checking `n`, so the "wrong timer" mutation turned a
+  clean failure into an ASan stack-buffer-overflow. Guarded.
+- the PP-originated test **did not discriminate**: deleting `!cc->incoming`
+  from `dect_cc_tick()` changed nothing. A PP SETUP goes to `CONNECT PENDING`
+  (`on_setup()` queues CALL-PROC and CONNECT at once) and never sits in
+  `CALL PRESENT`, so the state guard alone already excludes it.
+
+**That last one is a small finding about the code, not just the test:**
+`incoming == 0 && state == CALL_PRESENT` is **unreachable through the public
+API**, so the `!cc->incoming` term is defensive and currently redundant. Left
+in place — it is free and it states the intent — but recorded so nobody
+"simplifies" it believing a test guards it. The test pins the behaviour (a
+handset-originated call is never torn down by our timer), which is what we
+actually care about.
