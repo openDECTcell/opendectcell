@@ -103,25 +103,26 @@ PLAN_DUPLEX = [
 # frame is the rate-matched packing -- and it is also the rate we measured on
 # the uplink. So `g722_one` leads here and `g722_full` is tested second, not
 # first. `g722_held` (word held two frames) is NOT retried: vF413 falsified it.
-# Mode 3 leads. It is the ONLY mode in [CR A-0043]'s table with the coded
-# block ARMED and the enable word at 1 -- mode 8 arms it with enable 0, mode 9
-# with enable 3, and mode 2 has enable 1 with the block off. Since enable = 1
-# is the value that carries our working narrowband audio, mode 3 is the only
-# candidate that looks like "the working state plus the coded block", and we
-# have never reached it. It needs bit 6 set with a codec byte that is neither
-# 1 nor 2-4, so 0x05 and 0x00 both select it; both are included, which also
-# confirms the branch itself.
+# [CR A-0049] corrected A-0043's mode-3 row before we ran it: mode 3 is NOT
+# enable = 1. The enable word is written as 1 only by the narrowband patcher
+# in the mode-2 branch; every armed mode (3/8/9) takes it from the direction-0
+# writer, so it reads 2, 3 or 0. **No mode combines an armed coded block with
+# enable = 1**, so the shape we hoped for does not exist. Mode 3 is mode 9's
+# twin (same route, standard B-field, dir0 = 2, enable = 3) and the room
+# predicts the same null; it keeps ONE window, as a check on that prediction.
+# Mode 8 leads: it is the only mode that sets the 80-byte long slot our bearer
+# carries. Packing order is ours ([CR A-0047] §1 conceded it): one octet per
+# frame = 8000 octets/s is rate-matched to the 80-byte-per-10-ms B-field.
 PLAN_WIDEBAND = [
     ("bind default           ", None,    "g722_one"),
-    ("mode 3 (41:05), one/fr ", "41:05", "g722_one"),
-    ("mode 3 (41:05), two/fr ", "41:05", "g722_full"),
-    ("mode 3 (41:00), one/fr ", "41:00", "g722_one"),
     ("mode 8, one octet/frame", "41:01", "g722_one"),
     ("mode 8, octet in high  ", "41:01", "g722_one_hi"),
-    ("mode 8, two octets/frame", "41:01", "g722_full"),
     ("mode 8, one octet, swap", "41:01", "g722_one_swap"),
+    ("mode 8, word held 2 fr ", "41:01", "g722_held"),
+    ("mode 8, two octets/fr  ", "41:01", "g722_full"),
     ("mode 9, one octet/frame", "41:03", "g722_one"),
-    ("mode 9, two octets/frame", "41:03", "g722_full"),
+    ("mode 9, word held 2 fr ", "41:03", "g722_held"),
+    ("mode 3 (41:05) check   ", "41:05", "g722_one"),
 ]
 
 PLANS = {"format": (PLAN_FORMAT, 8.0), "duplex": (PLAN_DUPLEX, 25.0),
