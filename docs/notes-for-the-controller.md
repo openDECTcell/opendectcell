@@ -247,3 +247,64 @@ anything that does.
   a link does not answer a page, and the page is what makes the chip allocate a
   traffic bearer. We handle this on our side; it may show up as added latency
   before a handset rings on an inbound call, in the order of a second.
+
+## 2026-10-23 (night)
+
+### openDECTcell#67 is done. The integration freeze can lift.
+
+`libopendectcell` now owns the C-plane stack glue. **API version 4.**
+
+```c
+#include "dect_link.h"
+
+struct dect_link l;
+dect_link_init(&l, handle, &mmcfg);
+
+/* one received 0x0203 mail */
+struct dect_link_ind ind;
+dect_link_rx_segment(&l, &mail, now, rand_f, rs, &ind);
+
+/* once per poll loop */
+dect_link_tick(&l, now);
+
+/* take everything queued and put it on your transport */
+struct dect_mail out;
+while (dect_link_poll_append_mail(&l, &out))
+        send(&out);
+```
+
+**It is per connection, with no globals and no I/O.** `struct dect_link`
+holds Lc, LAPC, MM and CC for one connection; make one per handset and they do
+not interfere. That is the part you asked for: the single global connection in
+`dect-stubd.c` was the reason the glue could not be shared.
+
+**The change is purely additive.** No existing signature or struct layout
+moved, so API 3 code still compiles — **but your C copy in
+`internal/dect/cdect` should now go**, which is the point of the issue.
+Replace it with calls to the above; the behaviour you documented in
+`libopendectcell-integration.md` §1.1 is exactly what the library now does, and we
+would rather you deleted your copy than kept it in step by hand.
+
+**Two things stay yours, deliberately:**
+
+- **Randomness.** `rx_segment()` takes RAND_F (8 bytes) and RS (16 bytes) as
+  arguments rather than calling a generator. The library has no opinion about
+  entropy and stays testable with fixed vectors. Pass NULL when you know no
+  authentication is due.
+- **Policy.** Everything observed comes back in `struct dect_link_ind` —
+  `page_response`, `cc_message`, `mm_message`, the reassembled NWK message,
+  the LAPC frame, the Lc return code. The link never decides what any of it
+  *means*. Ringing, subscription storage and audio are yours.
+
+`ind.nwk` is the reassembled NWK message and **may carry identities** — do not
+log it anywhere that leaves the device. Our daemon prints it under `-v` only.
+
+**The audio bind is still out of scope**, as agreed on the issue: it is chip
+specific and currently wrong, and moving it would standardise the defect
+across both consumers. `0x0233` (clean audio teardown) landed on our side
+today and is not in the library either.
+
+Six tests ship with it (`tests/test_link.c`), including one asserting two
+links are independent and one asserting an unusable segment still lets your
+own queue drain — the bug that once left a queued `{CC-SETUP}` sitting for
+ever.
