@@ -1679,6 +1679,15 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
  * AVM's bind), then 0x022D with bit 7 clear. `chan` is the channel the chip
  * confirmed in 0x0242 -- A-0032 Q9: trust the returned channel, not the one
  * we asked for.
+ *
+ * CAVEAT, 2026-10-23 [CR A-0075 §0]: "confirmed" is too strong. 0x0242 is
+ * emitted on EVERY path through the handler, including the early-out that
+ * does nothing -- it means "mail processed", not "matrix changed". vF418 has
+ * six byte-identical 0x0242 replies to sends that changed nothing, next to
+ * one that configured the matrix. The real act/no-act gate is the
+ * connection's byte 0/byte 1 plus record +0x116 bit 5. We keep using the
+ * returned channel because it is still the channel, but nothing here should
+ * be read as evidence that a 0x0230 landed.
  */
 /*
  * 0x0233 AUDIO_DISCONNECT -- the clean inverse of 0x0230 [CR A-0070].
@@ -2052,6 +2061,19 @@ static void send_gendsp(struct stubd *s, uint8_t sub, uint8_t a, uint8_t b,
  * for any other basic service -- `-a basicsvc=0x80` paged "wideband to
  * follow" and then sent a narrowband SETUP, so that test was measuring a
  * self-contradiction rather than narrowband.
+ */
+/*
+ * INERT ON THE AIR, 2026-10-23 [CR A-0076]. The chip never reads mail[2] of
+ * 0x0300: it takes the TPUI from bytes 3 and 4 and passes a hardcoded format
+ * constant to the page builder, so 0x0C and 0x2C produce byte-identical
+ * pages. Bit 0x20 changes nothing that is transmitted.
+ *
+ * We keep the derivation because it is what stock does and it costs nothing,
+ * but it must never be treated as an experimental variable again. It already
+ * cost us: today's four A540 runs varied <<BASIC-SERVICE>> across 0x88, 0x80
+ * and 0x40, and because this function keys on the service nibble, three of
+ * them silently changed the page byte as well. We read four experiments over
+ * two variables. They were four runs of the same page.
  */
 #define RING_PAGE_CC	0x0Cu		/* CC page */
 #define RING_PAGE_WIDEBAND 0x20u	/* ... wideband SETUP to follow */
