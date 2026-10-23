@@ -631,6 +631,7 @@ struct stubd {
 		 * default changes nothing. 0..15 appends the byte.
 		 */
 		int	 page_hdr;
+		unsigned setup_tries;	/* 0 = RING_SETUP_TRIES */
 		/*
 		 * timesync: 0 = auto (send only when the kernel says the
 		 * clock is disciplined), 1 = force (send anyway), 2 = off.
@@ -2723,7 +2724,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 		       why);
 		return;
 	}
-	if (++s->ring_setup_tries >= RING_SETUP_TRIES) {
+	if (++s->ring_setup_tries >= (s->audio.setup_tries ?
+				      s->audio.setup_tries : RING_SETUP_TRIES)) {
 		s->ring_state = RING_DONE;
 		printf("ring: CC-SETUP refused %u times, the handset's own call "
 		       "never cleared; giving up\n", s->ring_setup_tries);
@@ -2731,7 +2733,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	}
 	s->ring_resp_deadline = now + RING_SETUP_RETRY_MS;
 	printf("ring: CC-SETUP refused (a call is in progress), retry %u of %u "
-	       "in %u ms\n", s->ring_setup_tries, RING_SETUP_TRIES,
+	       "in %u ms\n", s->ring_setup_tries,
+	       s->audio.setup_tries ? s->audio.setup_tries : RING_SETUP_TRIES,
 	       RING_SETUP_RETRY_MS);
 }
 
@@ -4188,6 +4191,23 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		}
 		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
 			a->basic_svc = (uint8_t)v;
+		else if (klen == 10 && !memcmp(key, "setuptries", 10)) {
+			/*
+			 * How long to keep re-offering a CC-SETUP the local CC
+			 * entity refuses because the handset's own call is up.
+			 *
+			 * The default 8 x 2 s = 16 s is SHORTER than our own
+			 * F<CC.03> setup timer (20 s), so the ring always gave
+			 * up before the timer that would clear a stuck
+			 * transaction could fire -- which is exactly how F4.36b
+			 * came back void. The A540 also opens a CAT-iq list
+			 * access call roughly every 17 s and holds it ~13 s,
+			 * so a budget under ~20 s can miss every window.
+			 */
+			if (v < 1u || v > 200u)
+				return -1;
+			a->setup_tries = (unsigned)v;
+		}
 		else if (klen == 7 && !memcmp(key, "pagehdr", 7)) {
 			/*
 			 * Only the low nibble reaches the page, and anything
