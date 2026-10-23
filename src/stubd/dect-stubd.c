@@ -304,6 +304,29 @@ struct stubd {
 		 */
 		int      remode_codec;	/* -1 = keep a->codec */
 		/*
+		 * seq=MS with repeated seqstep=FLAGS:CODEC walks a list of
+		 * 0x0230 configurations during one call, MS ms per window,
+		 * starting when the call binds -- the same instant playraw
+		 * restarts the lane file at offset 0. Build the lane file with
+		 * windows of the same length and the formats stay aligned with
+		 * the modes by construction.
+		 *
+		 * Window 0 is left alone, so it records whatever the bind itself
+		 * produced. That matters: the bind is not reliable. On
+		 * 2026-10-23 vF49 reached dest 6 = 085d with the enable word 3,
+		 * while vF412 read dest 6 = 0410 and enable 0 at the same point
+		 * with identical mails, which made that run's result
+		 * uninterpretable rather than negative.
+		 *
+		 * Pair this with memdump of the route words: every window then
+		 * carries its own proof of which state the chip was actually in,
+		 * so one attended call tests many hypotheses and none of them
+		 * rests on the bind having worked.
+		 */
+		unsigned seq_ms;
+		const char *seq_step[16];
+		unsigned n_seq;
+		/*
 		 * noconnect: never send 0x022D. The stock connect sequence is
 		 * exactly 0x0251 then 0x0230 [CR A-0034]; 0x022D is the stock
 		 * mute control (0x80 = mute), never sent at connect. Whether
@@ -611,6 +634,8 @@ struct stubd {
 		int call_bound;		/* audio channel bound for the active call */
 		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
 		uint64_t remode_at;	/* when to send the mode-2 re-assign, 0 = off */
+		uint64_t seq_t0;	/* when the call bound, 0 = no call */
+		unsigned seq_idx;
 		uint8_t  remode_handle;
 		uint64_t bind_ms;	/* when 0x0230 went out, for the fallback */
 		uint64_t status_ms;	/* when the last 0xF624 poll went out */
@@ -1740,6 +1765,47 @@ static void remode_tick(struct stubd *s, uint64_t now)
 	fflush(stdout);
 }
 
+/* Walk the seqstep list, one 0x0230 per window. See audio_cfg.seq_ms. */
+static void seq_tick(struct stubd *s, uint64_t now)
+{
+	const struct audio_cfg *a = &s->audio;
+	struct dect_mail m;
+	unsigned int flags, codec;
+
+	if (!a->seq_ms || !s->reg.seq_t0 || s->reg.seq_idx >= a->n_seq)
+		return;
+	if (now < s->reg.seq_t0 +
+		  (uint64_t)(s->reg.seq_idx + 1u) * a->seq_ms)
+		return;
+
+	if (sscanf(a->seq_step[s->reg.seq_idx], "%x:%x", &flags, &codec) != 2) {
+		printf("seq: step %u (%s) malformed, skipped\n",
+		       s->reg.seq_idx, a->seq_step[s->reg.seq_idx]);
+		s->reg.seq_idx++;
+		return;
+	}
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0230u;
+	m.param[0] = s->reg.remode_handle ? s->reg.remode_handle : 1u;
+	m.param[1] = (uint8_t)flags;
+	m.param[2] = (uint8_t)(a->mask & 0xFFu);
+	m.param[3] = (uint8_t)(a->mask >> 8);
+	m.param[4] = a->mode;
+	m.param[5] = (uint8_t)codec;
+	m.param_len = 6;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	printf("call: seq window %u begins (t+%u ms): 0x0230 {%02x %04x %02x %02x}\n",
+	       s->reg.seq_idx + 1u, (unsigned)((s->reg.seq_idx + 1u) * a->seq_ms),
+	       m.param[1], a->mask, a->mode, m.param[5]);
+	fflush(stdout);
+	s->reg.seq_idx++;
+}
+
 static void mem_dump_tick(struct stubd *s, uint64_t now)
 {
 	struct dect_mail m;
@@ -2421,6 +2487,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	     s->reg.cc.state == DECT_CC_ST_ACTIVE)) {
 		s->reg.audio_connected = 0;
 		s->reg.remode_at = 0;
+		s->reg.seq_t0 = 0;
+		s->reg.seq_idx = 0;
 		s->reg.bind_ms = now;
 		s->reg.status_ms = 0;
 		s->reg.have_counters = 0;
@@ -2431,6 +2499,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 */
 		s->reg.handover_sent = 0;
 		s->cmail_idx = 0;	/* re-arm the -N sweep for this call */
+		s->reg.seq_t0 = mono_ms();	/* window 0 starts now */
+		s->reg.seq_idx = 0;
 		s->reg.sweep_idx = 1;
 		s->reg.sweep_ms = now;	/* let the call settle for one step */
 		s->reg.sweep_done = 0;
@@ -2879,6 +2949,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		if (s->sess.state == DECT_SESS_UP)
 			mem_dump_tick(s, now);
 		remode_tick(s, now);
+		seq_tick(s, now);
 		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
 			struct dect_mail cm;
 
@@ -2978,10 +3049,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		klen = eq ? (size_t)(eq - key) : (size_t)(spec - key);
 		if (eq) {
 			v = strtoul(eq + 1, &end, 0);
-			/* "dsp" and "dspsweep" carry a ':' in their value. */
+			/* These carry a ':' or a path in their value. */
 			if (end != spec &&
 			    !(klen == 3 && !memcmp(key, "dsp", 3)) &&
 			    !(klen == 8 && !memcmp(key, "dspsweep", 8)) &&
+			    !(klen == 7 && !memcmp(key, "seqstep", 7)) &&
 			    !(klen == 4 && !memcmp(key, "play", 4)) &&
 			    !(klen == 7 && !memcmp(key, "playpcm", 7)) &&
 			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
@@ -3156,6 +3228,14 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->remode_bit6 = 1;
 		else if (klen == 11 && !memcmp(key, "remodecodec", 11))
 			a->remode_codec = (int)v;
+		else if (klen == 3 && !memcmp(key, "seq", 3))
+			a->seq_ms = (unsigned)v;
+		else if (klen == 7 && !memcmp(key, "seqstep", 7)) {
+			if (a->n_seq >= sizeof(a->seq_step) /
+					sizeof(a->seq_step[0]))
+				return -1;
+			a->seq_step[a->n_seq++] = eq + 1;
+		}
 		else if (klen == 3 && !memcmp(key, "dsp", 3)) {
 			/* dsp=DST:SRC -- the generic check above let the ':' through */
 			unsigned long src;
@@ -3338,6 +3418,13 @@ static void usage(void)
 		"           remode=MS sends a second 0x0230 with flag bit 6 clear\n"
 		"           MS ms after 0x022D, which asks the chip's channel\n"
 		"           configurator for mode 2 (PCM out <- channel, chain\n"
+		"           seq=MS with repeated seqstep=FLAGS:CODEC walks a list of\n"
+		"           0x0230 configurations, MS ms per window, starting when\n"
+		"           the call binds -- the same instant playraw restarts the\n"
+		"           lane file, so a file built with matching windows keeps\n"
+		"           format and mode aligned. Window 0 is left as the bind\n"
+		"           left it. Pair with memdump of the route words so every\n"
+		"           window carries proof of the state it was really in.\n"
 		"           remodecodec=N overrides the codec byte in the re-assign;\n"
 		"           with bit 6 set, N=1 selects mode 8 (the only mode with\n"
 		"           the 80-byte B-field a long slot carries: transparent\n"
