@@ -3236,6 +3236,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->play_slot_ms = (unsigned)v;
 		else if (klen == 6 && !memcmp(key, "remode", 6))
 			a->remode_ms = (unsigned)v;
+		else if (!eq && klen == 8 && !memcmp(key, "noremode", 8))
+			a->remode_ms = 0;
 		else if (!eq && klen == 10 && !memcmp(key, "remodebit6", 10))
 			a->remode_bit6 = 1;
 		else if (klen == 11 && !memcmp(key, "remodecodec", 11))
@@ -3427,9 +3429,14 @@ static void usage(void)
 		"           playsync advances the coded stream on the received\n"
 		"           lane's word boundary instead of a cadence of our own;\n"
 		"           required for anything but a steady tone\n"
-		"           remode=MS sends a second 0x0230 with flag bit 6 clear\n"
-		"           MS ms after 0x022D, which asks the chip's channel\n"
-		"           configurator for mode 2 (PCM out <- channel, chain\n"
+		"           remode=MS changes when the second 0x0230 with flag bit 6\n"
+		"           clear goes out after 0x022D (default 150), asking the\n"
+		"           chip's channel configurator for mode 2 (the narrowband\n"
+		"           G.726 path, which takes signed 16-bit linear PCM at one\n"
+		"           sample per frame on the lane; chain\n"
+		"           noremode suppresses the mode-2 re-assign, which is ON by\n"
+		"           default: without it the chip stays in mode 9 after the\n"
+		"           bind and no downlink audio reaches the handset at all\n"
 		"           seq=MS with repeated seqstep=FLAGS:CODEC walks a list of\n"
 		"           0x0230 configurations, MS ms per window, starting when\n"
 		"           the call binds -- the same instant playraw restarts the\n"
@@ -3528,6 +3535,15 @@ int main(int argc, char **argv)
 	s.audio.basic_svc = RING_BASIC_SVC;
 	s.audio.ti_fixed = -1;
 	s.audio.remode_codec = -1;	/* keep the bind's codec byte unless asked */
+	/*
+	 * The mode-2 re-assign is ON by default since 2026-10-23: without it
+	 * the chip stays in mode 9 after the bind and no downlink audio of any
+	 * format reaches the handset. With it, and linear PCM on the lane, a
+	 * whole call is audible (vF411). 150 ms is comfortably after the
+	 * 0x0242 that triggers 0x022D and short enough that the silent gap at
+	 * the start of a call is not noticeable.
+	 */
+	s.audio.remode_ms = 150;
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN0;
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
