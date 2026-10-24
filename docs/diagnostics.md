@@ -536,5 +536,11 @@ firm.** Confirmed protocol/MAC targets:
 
 Below `0x1800`, **the six-connection test is the only authority.**
 
-> `0x9518 + (slot−1) × 0x11` holds the UAK. It is key material: never add it
-> to a dump list, and exclude it from any analysis that prints bytes.
+> `0x9518 + (slot−1) × 0x11` holds the UAK. It is key material: **never add
+> it to a dump list**, and exclude it from any analysis that prints bytes.
+>
+> A-0100 originally listed it among the firm protocol/MAC targets. It is not
+> wrong that it is protocol-driven — that is precisely what makes it
+> sensitive, since the path that populates it is the authentication exchange.
+> Raised, and `[CR A-0101]` withdrew it. The target list above is final and
+> carries no key material.
