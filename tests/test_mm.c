@@ -673,10 +673,136 @@ static void test_sub_slot_drives_the_tpui(void)
 	CHECK_EQ(id[2], 0x07u);
 }
 
+/*
+ * A base serves every handset subscribed to it. One held besides port_id is
+ * accepted at location registration, and the link takes on that handset:
+ * its identity, its slot and so its TPUI, and the owner's tag. On 2026-10-25
+ * the A540 was turned away twenty times a minute by a daemon that knew only
+ * the AS690H.
+ */
+static size_t locate_from(uint8_t *buf, size_t cap, const uint8_t *id,
+			  size_t id_len)
+{
+	uint8_t la[1] = { 0x64 };
+	size_t n = dect_nwk_build_hdr(buf, cap, DECT_PD_MM, DECT_TI_ORIGINATOR,
+				      0, DECT_MM_LOCATE_REQUEST);
+
+	n = dect_nwk_put_ie(buf, cap, n, DECT_IE_PORTABLE_IDENTITY, id, id_len);
+	return dect_nwk_put_ie(buf, cap, n, DECT_IE_LOCATION_AREA, la,
+			       sizeof(la));
+}
+
+static void test_a_held_handset_is_accepted_and_adopted(void)
+{
+	static const uint8_t ours[]  = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t other[] = { 0x80, 0xa8, 0x03, 0x44, 0x55, 0x66 };
+	static const uint8_t tpui3[] = { 0x05, 0x05, 0xa0, 0x94, 0x00, 0x11,
+					 0x03 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .rfpi = { 1, 2, 3, 4, 5 },
+				   .sub_slot = 2 };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(mm.adopted, -1);
+	memcpy(mm.port_id, ours, sizeof(ours));
+	mm.port_id_len = sizeof(ours);
+	CHECK_EQ(dect_mm_hold(&mm, other, sizeof(other), 3, NULL, 7), 0);
+
+	n = locate_from(buf, sizeof(buf), other, sizeof(other));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+	CHECK_EQ(mm.adopted, 7);
+	CHECK_EQ(mm.port_id_len, sizeof(other));
+	CHECK(memcmp(mm.port_id, other, sizeof(other)) == 0);
+	CHECK_EQ(dect_mm_sub_slot(&mm), 3u);
+	/* the TPUI handed out is the held handset's, from its slot */
+	CHECK(n >= 2 + sizeof(tpui3) &&
+	      memcmp(&out[2], tpui3, sizeof(tpui3)) == 0);
+}
+
+/* Holding handsets does not open the door to strangers. */
+static void test_a_stranger_is_still_rejected_with_handsets_held(void)
+{
+	static const uint8_t ours[]     = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t other[]    = { 0x80, 0xa8, 0x03, 0x44, 0x55, 0x66 };
+	static const uint8_t stranger[] = { 0x80, 0xa8, 0x03, 0x44, 0x55, 0x67 };
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, ours, sizeof(ours));
+	mm.port_id_len = sizeof(ours);
+	CHECK_EQ(dect_mm_hold(&mm, other, sizeof(other), 3, NULL, 1), 0);
+
+	n = locate_from(buf, sizeof(buf), stranger, sizeof(stranger));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_MM_LOCATE_REJECT);
+	CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_UNKNOWN);
+	CHECK_EQ(mm.adopted, -1);
+	CHECK(memcmp(mm.port_id, ours, sizeof(ours)) == 0);
+}
+
+/* A base may hold everyone and arm port_id with nobody. */
+static void test_held_handsets_need_no_port_id(void)
+{
+	static const uint8_t other[] = { 0x80, 0xa8, 0x03, 0x44, 0x55, 0x66 };
+	static const uint8_t pool[3] = { 0x00, 0x22, 0x09 };
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+	uint8_t buf[64], out[64], id[3];
+	size_t n;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(dect_mm_hold(&mm, other, sizeof(other), 5, pool, 4), 0);
+
+	n = locate_from(buf, sizeof(buf), other, sizeof(other));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+	CHECK_EQ(mm.adopted, 4);
+	/* an explicit TPUI in the held entry wins over its slot */
+	dect_mm_tpui(&mm, id);
+	CHECK(memcmp(id, pool, sizeof(pool)) == 0);
+}
+
+static void test_hold_rejects_what_it_cannot_serve(void)
+{
+	static const uint8_t id[] = { 0x80, 0xa8, 0x03, 0x44, 0x55, 0x66 };
+	uint8_t big[DECT_MM_PORTID_MAX + 1];
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+	unsigned i;
+
+	memset(&cfg, 0, sizeof(cfg));
+	memset(big, 0x80, sizeof(big));
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(dect_mm_hold(&mm, id, sizeof(id), 0, NULL, 0), -1);
+	CHECK_EQ(dect_mm_hold(&mm, id, sizeof(id), DECT_MM_MAX_SLOT + 1u, NULL,
+			      0), -1);
+	CHECK_EQ(dect_mm_hold(&mm, id, 0, 1, NULL, 0), -1);
+	CHECK_EQ(dect_mm_hold(&mm, big, sizeof(big), 1, NULL, 0), -1);
+	CHECK_EQ(mm.n_held, 0u);
+	for (i = 0; i < DECT_MM_HELD_MAX; i++)
+		CHECK_EQ(dect_mm_hold(&mm, id, sizeof(id), 1, NULL, (int)i), 0);
+	CHECK_EQ(dect_mm_hold(&mm, id, sizeof(id), 1, NULL, 99), -1);
+}
+
 int main(void)
 {
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
+	test_a_held_handset_is_accepted_and_adopted();
+	test_a_stranger_is_still_rejected_with_handsets_held();
+	test_held_handsets_need_no_port_id();
+	test_hold_rejects_what_it_cannot_serve();
 	test_locate_request_without_identity_is_rejected();
 	test_locate_request_with_no_subscription_is_rejected();
 	test_failed_registration_keeps_the_held_identity();

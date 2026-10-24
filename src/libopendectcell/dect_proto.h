@@ -146,8 +146,19 @@
  *    port_id for location registration; a consumer that does not arm it now
  *    loses handset-placed calls and list access too. Treat a rise in
  *    rejected_identity as a handset you do not hold, not as a fault.
+ *
+ * 12: a base holds more than one handset (2026-10-25). Layout changes:
+ *    struct dect_mm gains held[]/n_held/adopted (struct dect_mm_held, new).
+ *    New: dect_mm_hold(), dect_mm_adopt(), DECT_MM_HELD_MAX.
+ *
+ *    Behaviour: {LOCATE-REQUEST} and a PT {CC-SETUP} are accepted from any
+ *    held handset, and the link adopts it -- mm.port_id, the slot and the
+ *    TPUI become that handset's, and mm.adopted is the tag you gave it. A
+ *    consumer that holds nothing behaves exactly as under API 11. To serve
+ *    several handsets, dect_mm_hold() each after every dect_link_init(),
+ *    and read mm.adopted to know which one a link is serving.
  */
-#define OPENDECTCELL_API_VERSION 11
+#define OPENDECTCELL_API_VERSION 12
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

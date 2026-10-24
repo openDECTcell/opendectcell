@@ -109,21 +109,29 @@ static void test_cc_admits_only_the_handset_mm_holds(void)
 	uint8_t msg[32];
 	size_t n, k;
 	struct {
-		const uint8_t *held;	/* mm.port_id, NULL = none */
+		const uint8_t *armed;	/* mm.port_id, NULL = none */
+		const uint8_t *held;	/* dect_mm_hold(), NULL = none */
 		const uint8_t *caller;
 		uint32_t setup, rejected;
+		int adopted;
 	} c[] = {
-		{ ours, ours,  1, 0 },
-		{ ours, other, 0, 1 },
-		{ NULL, ours,  0, 1 },
+		{ ours, NULL,  ours,  1, 0, -1 },
+		{ ours, NULL,  other, 0, 1, -1 },
+		{ NULL, NULL,  ours,  0, 1, -1 },
+		/* a held handset calls on a fresh link: adopted, admitted */
+		{ ours, other, other, 1, 0,  5 },
+		{ NULL, other, other, 1, 0,  5 },
 	};
 
 	for (k = 0; k < sizeof(c) / sizeof(c[0]); k++) {
 		init(&l);
-		if (c[k].held) {
-			memcpy(l.mm.port_id, c[k].held, sizeof(ours));
+		if (c[k].armed) {
+			memcpy(l.mm.port_id, c[k].armed, sizeof(ours));
 			l.mm.port_id_len = sizeof(ours);
 		}
+		if (c[k].held)
+			CHECK_EQ(dect_mm_hold(&l.mm, c[k].held, sizeof(ours),
+					      3, NULL, 5), 0);
 		n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
 				       DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
 		n = dect_nwk_put_ie(msg, sizeof(msg), n,
@@ -133,6 +141,7 @@ static void test_cc_admits_only_the_handset_mm_holds(void)
 		CHECK_EQ(ind.cc_message, 1u);
 		CHECK_EQ(l.cc.stats.setup, c[k].setup);
 		CHECK_EQ(l.cc.stats.rejected_identity, c[k].rejected);
+		CHECK_EQ(l.mm.adopted, c[k].adopted);
 	}
 }
 

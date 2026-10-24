@@ -195,7 +195,19 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			uint32_t kp_before = l->cc.stats.keypad;
 
 			ind->cc_message = 1;
-			/* the handset MM would accept, and no other */
+			/*
+			 * The handset MM would accept, and no other. A held
+			 * handset placing a call on a fresh link has not
+			 * located on it, so adopt it here as LOCATE would.
+			 */
+			if (h.msg_type == DECT_CC_SETUP) {
+				size_t pid_len;
+				const uint8_t *pid = dect_nwk_find_ie(
+					ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+					&pid_len);
+
+				(void)dect_mm_adopt(&l->mm, pid, pid_len);
+			}
 			dect_cc_set_gate(&l->cc, l->mm.port_id,
 					 l->mm.port_id_len);
 			dect_cc_rx(&l->cc, ind->nwk, ind->nwk_len);

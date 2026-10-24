@@ -55,6 +55,48 @@ void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg)
 	mm->cfg = *cfg;
 	mm->cfg.authenticate = cfg->authenticate ? 1u : 0u;
 	mm->state = DECT_MM_IDLE;
+	mm->adopted = -1;
+}
+
+int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
+		 uint8_t slot, const uint8_t tpui[3], int tag)
+{
+	struct dect_mm_held *h;
+
+	if (mm->n_held >= DECT_MM_HELD_MAX || !id || !id_len ||
+	    id_len > DECT_MM_PORTID_MAX || slot < 1u || slot > DECT_MM_MAX_SLOT)
+		return -1;
+	h = &mm->held[mm->n_held++];
+	memset(h, 0, sizeof(*h));
+	memcpy(h->id, id, id_len);
+	h->id_len = id_len;
+	h->slot = slot;
+	if (tpui)
+		memcpy(h->tpui, tpui, sizeof(h->tpui));
+	h->tag = tag;
+	return 0;
+}
+
+int dect_mm_adopt(struct dect_mm *mm, const uint8_t *id, size_t id_len)
+{
+	unsigned i;
+
+	if (!id || !id_len)
+		return 0;
+	for (i = 0; i < mm->n_held; i++) {
+		const struct dect_mm_held *h = &mm->held[i];
+
+		if (h->id_len != id_len || memcmp(h->id, id, id_len))
+			continue;
+		memcpy(mm->port_id, h->id, h->id_len);
+		mm->port_id_len = h->id_len;
+		mm->cfg.sub_slot = h->slot;
+		memcpy(mm->cfg.tpui, h->tpui, sizeof(mm->cfg.tpui));
+		mm->adopted = h->tag;
+		return 1;
+	}
+	return mm->port_id_len && id_len == mm->port_id_len &&
+	       !memcmp(id, mm->port_id, id_len);
 }
 
 /* Reserve the next free TX slot and return a pointer to build into, or NULL. */
@@ -387,9 +429,8 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 		send_locate_reject(mm, DECT_MM_REJECT_IE_ERROR);
 		return;
 	}
-	/* Only the handset we hold a subscription for; none held, none known. */
-	if (!mm->port_id_len || pid_len != mm->port_id_len ||
-	    memcmp(pid, mm->port_id, pid_len) != 0) {
+	/* Only handsets we hold a subscription for; none held, none known. */
+	if (!dect_mm_adopt(mm, pid, pid_len)) {
 		send_locate_reject(mm, DECT_MM_REJECT_IPUI_UNKNOWN);
 		return;
 	}

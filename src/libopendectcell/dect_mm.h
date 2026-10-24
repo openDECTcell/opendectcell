@@ -117,12 +117,26 @@ struct dect_mm_stats {
 	uint32_t accepted;
 	uint32_t rejected;
 	uint32_t locate_req;
-	uint32_t locate_rej;	/* rejected: not the handset we hold */	/* PP LOCATE-REQUEST seen */
+	uint32_t locate_rej;	/* rejected: not a handset we hold */
 	uint32_t located;	/* LOCATE-ACCEPT sent */
 	uint32_t tpui_acked;	/* {TEMPORARY-IDENTITY-ASSIGN-ACK} received */
 	uint32_t tpui_timeouts;	/* <MM_ident.1> expiries */
 	uint32_t tpui_unsolicited; /* ACKs with no assignment made: ignored */
 };
+
+/*
+ * A handset this base holds a subscription for, besides (or instead of) the
+ * one in port_id. See dect_mm_hold() and dect_mm_adopt().
+ */
+struct dect_mm_held {
+	uint8_t id[DECT_MM_PORTID_MAX];	/* its <<PORTABLE-IDENTITY>> contents */
+	size_t  id_len;
+	uint8_t slot;			/* its chip subscription slot */
+	uint8_t tpui[3];		/* its TPUI; all-zero derives from slot */
+	int     tag;			/* the owner's handle for it */
+};
+
+#define DECT_MM_HELD_MAX	DECT_MM_MAX_SLOT
 
 struct dect_mm {
 	struct dect_mm_cfg cfg;
@@ -167,6 +181,14 @@ struct dect_mm {
 	size_t  pend_id_len;
 
 	/*
+	 * Every handset the base holds, and the tag of the one this link has
+	 * adopted (-1: none, port_id is whatever the owner put there).
+	 */
+	struct dect_mm_held held[DECT_MM_HELD_MAX];
+	unsigned n_held;
+	int      adopted;
+
+	/*
 	 * Allocated long-term key (UAK). Key allocation derives it from the AC
 	 * (PIN); it is the 16-byte credential the chip stores for the handset via
 	 * 0x020A [CR A-0026]. Valid once `subscribed` is set (authentication OK).
@@ -193,6 +215,30 @@ struct dect_mm {
 };
 
 void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg);
+
+/*
+ * Hold a subscription for another handset on this link: its identity, its
+ * chip slot, its TPUI (NULL or all-zero derives one from the slot) and a tag
+ * the owner chooses. Returns 0, or -1 if the table is full or the entry
+ * invalid. dect_mm_init() empties the table, so hold them after each init.
+ *
+ * A base serves every handset subscribed to it. With port_id alone it knew
+ * one: on 2026-10-25 a daemon serving the AS690H turned away the A540, which
+ * IS subscribed here, twenty times a minute (`{LOCATE-REJECT}`, then every
+ * list-access call), and the A540 lost its name and kept resynchronising.
+ */
+int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
+		 uint8_t slot, const uint8_t tpui[3], int tag);
+
+/*
+ * Make this link serve the handset with this identity, if the base holds
+ * it: port_id, the slot and the TPUI become that handset's, and
+ * mm->adopted its tag. Returns 1 if the identity is held (or is already
+ * port_id), 0 if the base does not know it. The {LOCATE-REQUEST} gate uses
+ * it, and dect_link calls it for a {CC-SETUP}'s identity before arming the
+ * CC gate, so the two gates admit the same handsets.
+ */
+int dect_mm_adopt(struct dect_mm *mm, const uint8_t *id, size_t id_len);
 
 /* The configured subscription slot, with the default already applied. */
 uint8_t dect_mm_sub_slot(const struct dect_mm *mm);
