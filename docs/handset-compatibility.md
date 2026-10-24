@@ -314,3 +314,50 @@ six-connection filter and the record diff at once.
   the only thing left worth doing;
 - **one rings** → the FP-originated path works and the A540's refusal is a
   device trait, which is a different project entirely.
+
+### The first three-handset run was void, and the script said "refused" `[2026-10-24]`
+
+All three handsets were rung in turn with all of them powered on. None rang,
+and the summary reported "refused" for each. **That verdict was wrong and the
+run proves nothing.**
+
+| handset | `0x32` received | replies on our TI | C-plane re-arms |
+| --- | --- | --- | --- |
+| A540 | **0** | **0** | 28 |
+| C430A | **0** | **0** | 26 |
+| AS690H | **0** | **0** | 30 |
+
+Not one "insufficient resources" — which is what every previous refusal
+looked like — and not one message of any kind on our transaction. The
+handsets did not refuse. **They never answered at all.**
+
+The A540's window shows why:
+
+```
+106435  hold start (setupdelay 1600 ms)
+107999  connection up (handle 0), C-plane armed   <- link re-armed
+108035  {CC-SETUP} queued and sent
+110035  tx cplane 37 bytes                        <- LAPC retransmit: no ack
+111815  connection up (handle 0)                  <- re-armed, retransmit abandoned
+```
+
+**Our base has one C-plane link.** Every connection from any handset calls
+`reg_start()`, which re-initialises LAPC, MM and CC. With three handsets and a
+FRITZ!Fon C4 in range there were 26–30 re-arms in 170 s — one every six
+seconds — so a `{CC-SETUP}` was sent onto a link that was torn down underneath
+it before it could be acknowledged. The right handset answered the page and
+the setup carried the right identity; it simply never survived to be read.
+
+`setupdelay=1600` made it worse by holding the setup for 1.6 s in exactly that
+window. It is removed: the delay sweep had already shown it changes nothing
+from 120 ms to 1 720 ms.
+
+**So the handset question is still open.** The fix is procedural, not code:
+**run one handset at a time with the others powered off.** The script now
+counts re-arms and reports `VOID -- CONFOUNDED` rather than inventing a
+refusal, and distinguishes a real `0x32` from silence.
+
+This is the third time this week a confounded null has been presented as a
+clean negative — see also the eighteen void theories and the `0x3D4`/`0xEF4`
+regions. The pattern is the same every time: the instrument could not have
+shown a positive, and nothing in the output said so.
