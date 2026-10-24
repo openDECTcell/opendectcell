@@ -3955,6 +3955,23 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		/* Keep the UAK for the later call's ciphering, and across restarts. */
 		memcpy(s->uak, s->reg.link.mm.uak, DECT_MM_UAK_LEN);
 		s->uak_valid = 1;
+		/*
+		 * Arm the identity gate for every later link of this run, the
+		 * way sub_load() arms it for a stored handset. Since 7e7e5f4 a
+		 * {LOCATE-REQUEST} is rejected when nothing is armed, and a
+		 * freshly registered handset coming back on a new link would
+		 * have been told "IPUI unknown" -- which a handset may take as
+		 * losing its registration.
+		 */
+		if (s->reg.link.mm.port_id_len &&
+		    s->reg.link.mm.port_id_len <= sizeof(s->sub_port_id)) {
+			memcpy(s->sub_port_id, s->reg.link.mm.port_id,
+			       s->reg.link.mm.port_id_len);
+			s->sub_port_id_len = s->reg.link.mm.port_id_len;
+			printf("sub: identity gate armed for the newly "
+			       "registered handset (%zu bytes)\n",
+			       s->sub_port_id_len);
+		}
 		send_subscription(s);
 		sub_save(s);
 		/*
