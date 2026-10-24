@@ -164,8 +164,18 @@
  *    you call it: on a page response whose page_id is not the handset you
  *    paged, queue the reject and release the link (TS 102 527-1
  *    §7.3.8.3.1), as dect-stubd does.
+ *
+ * 14: codec choice for handset-placed calls (2026-10-25). Layout changes:
+ *    struct dect_cc gains peer_negotiates/peer_g726/peer_has_g726/
+ *    chosen_codec, dect_cc_stats gains codec_unmatched.
+ *
+ *    Behaviour: when a handset's {CC-SETUP} negotiates (a <<CODEC-LIST>>,
+ *    or the wideband basic service), our {CC-CONNECT} now carries
+ *    <<CODEC-LIST>> with G.726 alone (TS 102 527-1 §7.3.3) -- the codec the
+ *    narrowband audio path carries. A basic-speech SETUP without a list is
+ *    answered exactly as before. Read chosen_codec before binding audio.
  */
-#define OPENDECTCELL_API_VERSION 13
+#define OPENDECTCELL_API_VERSION 14
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

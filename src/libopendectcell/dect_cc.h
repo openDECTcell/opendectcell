@@ -106,6 +106,8 @@ struct dect_cc_stats {
 	uint32_t represented;
 	/* {CC-SETUP}s turned away by the identity gate, dect_cc_set_gate() */
 	uint32_t rejected_identity;
+	/* handset-placed calls that negotiated, but offered no G.726 */
+	uint32_t codec_unmatched;
 };
 
 /* No <<BASIC-SERVICE>> was present in the peer's {CC-SETUP}. */
@@ -132,6 +134,19 @@ struct dect_cc {
 	size_t  peer_port_id_len;
 	uint8_t peer_fixed_id[DECT_CC_ID_MAX];
 	size_t  peer_fixed_id_len;
+
+	/*
+	 * Codec negotiation for a call the handset places (TS 102 527-1
+	 * §7.3.3): its SETUP negotiates when it carries <<CODEC-LIST>> or the
+	 * wideband basic service, and we then choose one codec in our
+	 * {CC-CONNECT}. We choose G.726, the only one our audio path carries
+	 * (chip mode 2), as the handset's own 3-octet entry. chosen_codec is
+	 * 0 when no codec was chosen.
+	 */
+	uint8_t peer_negotiates;
+	uint8_t peer_g726[3];
+	uint8_t peer_has_g726;
+	uint8_t chosen_codec;
 
 	/* The identity gate, see dect_cc_set_gate(). */
 	uint8_t gate_armed;

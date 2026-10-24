@@ -1472,6 +1472,113 @@ static void test_gate_setup_without_an_identity(void)
 	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
 }
 
+/*
+ * TS 102 527-1 §7.3.3: a handset's SETUP that negotiates (a <<CODEC-LIST>>,
+ * or the wideband basic service) gets the chosen codec, alone, at the latest
+ * in our {CC-CONNECT}. We choose G.726, the codec our audio path carries,
+ * from the handset's own entry. The A540's real list: G.722 long slot, then
+ * G.726 full slot.
+ */
+static size_t pp_setup_codecs(uint8_t *out, size_t cap, uint8_t svc,
+			      const uint8_t *cl, size_t cl_len)
+{
+	size_t n = pp_setup_svc(out, cap, 0, svc);
+
+	return cl ? dect_nwk_put_ie(out, cap, n, DECT_IE_CODEC_LIST, cl, cl_len)
+		  : n;
+}
+
+static size_t connect_of(struct dect_cc *cc, uint8_t *out, size_t cap)
+{
+	size_t n;
+
+	while ((n = dect_cc_poll(cc, out, cap)) > 0)
+		if (msg_type_of(out, n) == DECT_CC_CONNECT)
+			return n;
+	return 0;
+}
+
+static void test_connect_names_the_chosen_codec(void)
+{
+	static const uint8_t a540[] = { 0x90, 0x03, 0x00, 0x01,
+					0x02, 0x00, 0x84 };
+	static const uint8_t want[] = { 0x7C, 0x04, 0x90, 0x02, 0x00, 0x84 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, a540, sizeof(a540));
+	dect_cc_rx(&cc, buf, n);
+	n = connect_of(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u + sizeof(want));
+	CHECK(memcmp(&out[2], want, sizeof(want)) == 0);
+	CHECK_EQ(cc.chosen_codec, 0x02u);
+
+	/* G.726 first in the offer, not last: still one codec, flagged last */
+	{
+		static const uint8_t g726_first[] = { 0x90, 0x02, 0x00, 0x04,
+						      0x03, 0x00, 0x81 };
+
+		dect_cc_init(&cc);
+		n = pp_setup_codecs(buf, sizeof(buf), 0x88, g726_first,
+				    sizeof(g726_first));
+		dect_cc_rx(&cc, buf, n);
+		n = connect_of(&cc, out, sizeof(out));
+		CHECK_EQ(n, 2u + sizeof(want));
+		CHECK(memcmp(&out[2], want, sizeof(want)) == 0);
+	}
+}
+
+/* Wideband service without a list: G.726 from the registration list. */
+static void test_wideband_setup_without_a_list_gets_g726(void)
+{
+	static const uint8_t want[] = { 0x7C, 0x04, 0x90, 0x02, 0x00, 0x84 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, NULL, 0);
+	dect_cc_rx(&cc, buf, n);
+	n = connect_of(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u + sizeof(want));
+	CHECK(memcmp(&out[2], want, sizeof(want)) == 0);
+}
+
+/* Basic speech, no list: nothing to negotiate, the CONNECT stays bare. */
+static void test_basic_speech_connect_names_no_codec(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x80, NULL, 0);
+	dect_cc_rx(&cc, buf, n);
+	n = connect_of(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u);
+	CHECK_EQ(cc.chosen_codec, 0u);
+}
+
+/* An offer without G.726: we name nothing it did not offer, and count it. */
+static void test_offer_without_g726_names_nothing(void)
+{
+	static const uint8_t g722_only[] = { 0x90, 0x03, 0x00, 0x81 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, g722_only,
+			    sizeof(g722_only));
+	dect_cc_rx(&cc, buf, n);
+	n = connect_of(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u);
+	CHECK_EQ(cc.stats.codec_unmatched, 1u);
+	CHECK_EQ(cc.chosen_codec, 0u);
+}
+
 int main(void)
 {
 	test_setup_collision_releases_the_handsets_call();
@@ -1503,6 +1610,10 @@ int main(void)
 	test_gate_admits_the_subscribed_handset();
 	test_gate_without_an_identity_turns_away_every_setup();
 	test_gate_setup_without_an_identity();
+	test_connect_names_the_chosen_codec();
+	test_wideband_setup_without_a_list_gets_g726();
+	test_basic_speech_connect_names_no_codec();
+	test_offer_without_g726_names_nothing();
 	test_peer_basic_service_decides_speech();
 	test_setup_without_basic_service_is_not_speech();
 	test_basic_service_is_not_found_inside_a_payload();

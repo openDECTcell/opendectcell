@@ -1188,6 +1188,7 @@ All verified on the A540 in runs 19 and 20 unless marked "unit-tested".
 | segment marker/handle (an external review #7) | `398d1f7`, `981f546` | **fixed**; zero violations in 42 252 corpus segments |
 | odd hex in `-M` (an external review #8) | `ea52963` | **fixed**, checked at startup |
 | Class B DISC on a Class A link (an external review #4) | — | **open**: Class A release is the MAC connection release; which chip mail does it is a question for the room |
-| default codec list G.726 only; CONNECT names no chosen codec (an external review #8) | — | **open**, tied to the audio work |
+| CONNECT names no chosen codec (an external review #8) | API 14 | **fixed** for handset-placed calls: G.726 alone in {CC-CONNECT} when the SETUP negotiates (TS 102 527-1 §7.3.3); unit-tested, not yet on hardware |
+| our {CC-SETUP} lists G.726 alone (an external review #8) | — | **open**: §7.3.3 wants at least G.722 and G.726 in any list; the conformant narrowband form is no list with basic speech (`-a nocodeclist`). Not changed blind: these bytes rang all three Gigasets; a bench run decides |
 | no CAT-iq line/call identifier by default (an external review #6) | — | **open**, controller-owned data; the A540 rings without it |
 | no pseudo call waiting into an open LiA session (an external review #7) | — | **open** |

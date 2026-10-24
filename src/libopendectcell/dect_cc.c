@@ -337,6 +337,49 @@ static void learn_id(const uint8_t *ies, size_t ies_len, uint8_t id,
 	*dst_len = n;
 }
 
+/*
+ * The handset's offer, for the choice on_setup() makes. <<CODEC-LIST>>
+ * (EN 300 175-5 §7.7.54): a negotiation octet, then 3 octets per codec --
+ * identifier, MAC/DLC service, last-flag + C-plane routing + slot size.
+ */
+#define CODEC_ID_G726		0x02u
+#define CODEC_LAST		0x80u	/* octet c, bit 8: last in the list */
+#define CODEC_NEGOTIATION	0x90u	/* "codec negotiation possible" */
+
+static void learn_codec_offer(struct dect_cc *cc, const uint8_t *ies,
+			      size_t ies_len)
+{
+	size_t n, i;
+	const uint8_t *p = dect_nwk_find_ie(ies, ies_len, DECT_IE_CODEC_LIST,
+					    &n);
+
+	cc->peer_has_g726 = 0;
+	cc->chosen_codec = 0;
+	cc->peer_negotiates = p != NULL ||
+		(cc->peer_basic_service != DECT_CC_SVC_NONE &&
+		 (cc->peer_basic_service & 0x0Fu) == 0x8u);
+	if (!p) {
+		/*
+		 * Wideband service, no list here: the negotiation runs on the
+		 * list from location registration, where G.726 is mandatory
+		 * (§7.3.1). Its entry, as every handset we hold sends it:
+		 * full slot, MAC/DLC service 0.
+		 */
+		static const uint8_t g726[3] = { CODEC_ID_G726, 0x00u, 0x04u };
+
+		memcpy(cc->peer_g726, g726, sizeof(g726));
+		cc->peer_has_g726 = cc->peer_negotiates;
+		return;
+	}
+	for (i = 1; i + 3u <= n; i += 3u) {
+		if (p[i] != CODEC_ID_G726)
+			continue;
+		memcpy(cc->peer_g726, &p[i], 3);
+		cc->peer_has_g726 = 1;
+		return;
+	}
+}
+
 static void learn_basic_service(struct dect_cc *cc, const uint8_t *ies,
 				size_t ies_len)
 {
@@ -431,6 +474,47 @@ void dect_cc_clear_keypad(struct dect_cc *cc)
 	cc->keypad_overflow = 0;
 }
 
+/*
+ * {CC-CONNECT} for a call the handset placed. If its SETUP negotiated, it
+ * names the codec we chose, alone (TS 102 527-1 §7.3.3: "at latest" in
+ * CC-CONNECT, "only one codec shall be in the list", negotiation octet
+ * "codec negotiation possible"). G.726 from the handset's own entry; if it
+ * offered none we name nothing rather than a codec it did not offer.
+ */
+static void queue_connect(struct dect_cc *cc)
+{
+	unsigned idx;
+	uint8_t *b;
+	size_t off;
+	uint8_t cl[4];
+
+	if (!cc->peer_negotiates) {
+		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
+		return;
+	}
+	if (!cc->peer_has_g726) {
+		cc->stats.codec_unmatched++;
+		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
+		return;
+	}
+	b = txq_slot(cc, &idx);
+	if (!b)
+		return;
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 DECT_TI_RESPONDER, cc->ti_value,
+				 DECT_CC_CONNECT);
+	cl[0] = CODEC_NEGOTIATION;
+	memcpy(&cl[1], cc->peer_g726, 3);
+	cl[3] |= CODEC_LAST;
+	if (off)
+		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+				      DECT_IE_CODEC_LIST, cl, sizeof(cl));
+	if (!off)
+		return;
+	txq_commit(cc, idx, off);
+	cc->chosen_codec = CODEC_ID_G726;
+}
+
 static void on_setup(struct dect_cc *cc)
 {
 	cc->stats.setup++;
@@ -455,7 +539,7 @@ static void on_setup(struct dect_cc *cc)
 	 * responder-side in the PP-originated transaction.
 	 */
 	queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
-	queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
+	queue_connect(cc);
 	cc->state = DECT_CC_ST_CONNECT_PENDING;
 }
 
@@ -595,6 +679,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_id(ies, ies_len, DECT_IE_FIXED_IDENTITY,
 				 cc->peer_fixed_id, &cc->peer_fixed_id_len);
 			learn_basic_service(cc, ies, ies_len);
+			learn_codec_offer(cc, ies, ies_len);
 			learn_keypad(cc, ies, ies_len);
 			on_setup(cc);
 		} else if (!our_transaction(cc, &h)) {
