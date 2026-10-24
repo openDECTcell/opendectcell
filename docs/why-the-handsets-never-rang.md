@@ -282,3 +282,39 @@ The page info byte. Stock pages `2c`, we page `0c`, and that is only the
 documented derivation `0x0C | (basic service == 8 ? 0x20 : 0)` -- stock's setup
 was wideband, ours is narrowband. `[CR A-0076]` already established the chip
 never reads that byte and both values produce byte-identical pages.
+
+### Correction to the section above: the build switch retired two divergences
+
+`[observed]` The 07.56 run's *outcome* is identical (`0x32`), but the chip-mail
+counts are not. Same A540 ring, same script, both builds:
+
+| | 08.25 | 07.56 |
+|---|---|---|
+| `0x0242` / `0x0200` | 8 / 5 | 6 / 6 |
+| `0x0243` | 254, middle byte **29** | 263, middle byte **2b** |
+| `0x0205` | **0** | **258** |
+| `0x0209` / `0x0208` | 0 / 0 | 0 / 0 |
+
+Two items that had been carried as unexplained divergences from stock were
+artefacts of the build mismatch and are now retired:
+
+- **`0x0205` was absent on 08.25 and fires 258 times on 07.56**, the first at
+  +1 ms after the page-response `0x0242`, then at frame cadence. `[CR A-0111]`
+  identifies the `0x0243`/`0x0205` loop as the alerting emission itself, so on
+  the matched build we HAVE it. "The CC machine never runs for our connection"
+  was true of 08.25 and is false of 07.56.
+- **`0x0243`'s middle byte is `2b` on 07.56**, matching stock, where 08.25 gave
+  `29`. `[CR A-0111]` reports it as a hardcoded constant in the 07.56 image, so
+  the two builds simply emit different constants. This was never a defect.
+
+So the remaining chip-level gap is `0x0209` **alone**, not the trio. And the
+handset still answers `0x32` while the alerting loop is running, which makes
+the refusal an NWK-level decision rather than a missing bearer.
+
+**Open, and not answerable with our current instrument:** whether the ring
+connection gets a MAC bearer / U-plane slot. `memdump` revisits each 32-byte
+chunk about every 176 ms while the frame pump runs every 10 ms, so a rotating
+per-frame structure is sampled roughly 1 frame in 17. The 2026-10-24 sweep of
+`0x160` and `0x10000`-`0x100ff` found no structural allocation after the page,
+but at that resolution the null is aliasing, not evidence. A real answer needs
+either a chip-side trigger or a far tighter dump window.
