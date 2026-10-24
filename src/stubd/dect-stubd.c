@@ -3836,6 +3836,37 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			       h);
 			break;
 		}
+		/*
+		 * And do not let ANOTHER handset's connection destroy a
+		 * registration that is half done.
+		 *
+		 * reg_start() calls dect_mm_init(), which memsets MM back to
+		 * DECT_MM_IDLE. The key-allocation exchange spans two round
+		 * trips -- we send {KEY-ALLOCATE} and the handset answers with
+		 * {AUTHENTICATION-REQUEST} a few hundred ms later -- and the
+		 * dispatcher only accepts that answer while MM is in
+		 * DECT_MM_WAIT_AUTH. Re-initialise in between and the answer
+		 * is dropped silently; the handset shows "registration
+		 * failed" after having asked for the PIN, which is exactly
+		 * what it looks like from the outside.
+		 *
+		 * Measured 2026-10-24 with three handsets powered on, trying
+		 * to register a C430A:
+		 *   t=10160  {KEY-ALLOCATE} out, MM -> WAIT_AUTH
+		 *   t=10400  connection up (handle 2) -- a DIFFERENT handset
+		 *   t=10500  {AUTHENTICATION-REQUEST} in -- dropped, MM idle
+		 * That run saw 34 connection-up events, so 34 chances to lose
+		 * it. With one handset on the bench this never showed.
+		 */
+		if (s->reg.active && h != s->reg.handle &&
+		    s->reg.link.mm.state == DECT_MM_WAIT_AUTH) {
+			printf("reg: connection up (handle %u) IGNORED -- a "
+			       "key allocation is in flight on handle %u and "
+			       "re-arming would drop it. Another handset is "
+			       "competing for the link; power the others off "
+			       "while registering.\n", h, s->reg.handle);
+			break;
+		}
 		reg_start(s, h);
 		/*
 		 * -a bindearly: assign the audio channel now, on the bare link,
