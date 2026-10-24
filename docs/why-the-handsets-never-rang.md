@@ -344,3 +344,75 @@ first C-plane uplink, noting stock follows the PP by ~80 ms and warning that
 blasting it on bearer-up can itself draw a reject. Measured on our side: PP's
 first `0x0203` at t=70371, our setup queued and sent at t=70451 -- **+80 ms**,
 the same ordering and the same delay. Not a divergence.
+
+## 2026-10-24, night: spec read + library audit — the NWK code is clean, the lever is chip-side
+
+Done at the maintainer's request: read EN 300 444 (GAP) and EN 300 175-5 on
+what makes a handset ring, and audit our library for anything C4-specific
+(we started on the FRITZ!Fon C4, an AVM handset).
+
+### What the standard requires for an incoming call to ring
+
+1. **Beacon**: the FP broadcasts FP-capabilities (GAP §10.2.3, table 113) with
+   **a23 "Basic A-field setup" = 1** and **a27 "In minimum delay" = 1** (speech),
+   both mandatory. Our beacon templates match stock byte-for-byte
+   (`[CR A-0109/withdrawn-decode]`, verified on 07.56), so this is in place.
+2. **Page** (GAP §10.3 / M.3): we page.
+3. **Basic connection setup** (GAP §10.4 / M.4): the handset, in response to
+   the page, sets up a **basic connection** — GAP's own definition (clause 3.1,
+   [M.4]): *"a connection ... consisting of one full slot duplex bearer
+   supporting the In_minimum_delay data service (i.e. speech)."* That is a
+   **traffic bearer**, and it is **PT-initiated** ("first PT transmission",
+   EN 300 175-3 §7.2.5.2). The FT (our chip) only answers `bearer_confirm`.
+4. **CC-SETUP** (GAP §8.12, table 21): basic service call class 8 / service 0
+   = `0x80`. Ours matches.
+5. **EN 300 175-5 §9.3.2.3**: for a basic connection (CC-SETUP omits
+   `<<CONNECTION-IDENTITY>>`/`<<CONNECTION-ATTRIBUTES>>`, as ours does and must)
+   *"if this basic connection is not already established when the {CC-SETUP}
+   message is received, the call shall be rejected."*
+
+The A540's refusal is step 5 firing because step 3 never produced a traffic
+bearer (`0x0242 = 01 00 00 00`). The handset is **conformant** — it is owed a
+basic/traffic bearer before the SETUP and does not have one. The C4 gets one
+(`0x0242 = 01 40 00 00`) and rings; it is lenient about the same path.
+
+### The library audit: nothing C4-specific in the NWK code
+
+Checked `dect_cc.c`, `dect_mm.c` and the subscription mails the daemon sends:
+
+- **The NWK messages are handset-agnostic.** The same `{CC-SETUP}`,
+  `{ACCESS-RIGHTS-ACCEPT}` and `{LOCATE-ACCEPT}` go to both handsets, byte for
+  byte but for the identities. `{CC-SETUP}` is exactly GAP table 21; the
+  accepts carry PORTABLE/FIXED identity, the whole PARK, the CAT-iq
+  `<<CODEC-LIST>>`. We verified long ago we send **no** AVM `<<MODEL-IDENTIFIER>>`
+  (`0x78`) and no proprietary IE. So the C4-specific behaviour is **not** in
+  our protocol — good news, nothing proprietary leaked into the library.
+- **We do not process `<<TERMINAL-CAPABILITY>>`** (GAP §8.17). The FT's only
+  obligation there is to *receive* it, and its fields (tone/display/profile/
+  DSAA2/DSC2/control-codes) do not gate the traffic bearer, so this is a minor
+  conformance gap, not the ringer cause. Worth closing later.
+- **The one C4-validated unknown we control is chip-config, not NWK.** The
+  subscription write sends `0x0247 {slot, op, status=0x00}` and
+  `0x020A {slot, UAK[16], extra=0x00}`. `[CR A-0026]` calls the `status`/`extra`
+  bytes a security-mode field with "no known enumeration"; we send `0x00` and
+  the comment says "validate on hardware" — that validation was the **C4**.
+  These bytes write the chip's per-handset subscription record at
+  `0x9518 + (slot-1)*0x11`. If a field in that record tells the chip's MAC what
+  service/bearer a handset is entitled to, `0x00` ("none/unknown") is a plausible
+  reason the chip sets up only a C-plane link when the **A540** is paged, while
+  tolerated by the C4. This is the best match to "we do something C4-specific
+  before the call".
+
+### Why this is chip-side and not another NWK change
+
+The traffic bearer is set up at the **MAC layer** (GAP §10.4), which runs in
+the chip — we own NWK, the chip owns MAC/DLC (`AGENTS.md` §1a). The page the
+chip transmits is identical for both handsets, and `[CR A-0076]` established
+the chip ignores our `0x0300` page-info byte and offers no long-slot-page
+path, so we cannot set the page's bearer request from the host. Whether a paged
+connection becomes a traffic bearer is therefore the chip's decision, and the
+only host inputs that reach the chip's per-handset state are the subscription
+mails above. That is why the lever, if host-reachable at all, is the
+`0x0247`/`0x020A` capability byte — a chip-decode question, folded into
+`Q-0055`, and **not** something to dial blind (0x00-vs-what is a large space
+and the project forbids blind chip-register sweeps).
