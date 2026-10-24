@@ -1,0 +1,13 @@
+{
+	"admin/status/opendectcell": {
+		"title": "DECT",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "opendectcell/monitor"
+		},
+		"depends": {
+			"acl": [ "luci-app-opendectcell" ]
+		}
+	}
+}

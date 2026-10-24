@@ -1,0 +1,10 @@
+{
+	"luci-app-opendectcell": {
+		"description": "Read the DECT base's state file",
+		"read": {
+			"file": {
+				"/tmp/opendectcell-state.json": [ "read" ]
+			}
+		}
+	}
+}
