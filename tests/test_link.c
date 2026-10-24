@@ -131,6 +131,56 @@ static void test_a_queued_message_needs_a_tick(void)
 	CHECK_EQ(m.prim, 0x0244u);
 }
 
+/*
+ * A segment belonging to ANOTHER connection must not touch this link.
+ *
+ * A link serves one connection, and the 0x0203 segment carries the handle it
+ * belongs to. That handle was decoded and never compared, so every handset on
+ * air fed the same Lc reassembly, the same LAPC sequence numbers and the same
+ * NWK state machines.
+ *
+ * With one handset on the bench this is invisible. On 2026-10-24, with three
+ * handsets and a FRITZ!Fon C4 in range, there were 26-30 connections in 170 s
+ * and an FP-originated {CC-SETUP} was never acknowledged by anyone -- the
+ * verdict logic reported "refused" for a call nobody had answered.
+ */
+static void test_a_segment_for_another_handle_is_rejected(void)
+{
+	struct dect_link l;
+	struct dect_mail m;
+	struct dect_link_ind ind;
+	uint8_t vs_before, vr_before;
+
+	init(&l);				/* this link is handle 1 */
+	vs_before = l.lapc.vs;
+	vr_before = l.lapc.vr;
+
+	memset(&m, 0, sizeof(m));
+	m.prim = 0x0203u;
+	m.param_len = 15;
+	m.param[0] = 4;				/* a different connection */
+	m.param[1] = 0x01;
+	m.param[2] = 0x11;			/* plausible Cs octets */
+	m.param[3] = 0x02;
+	m.param[4] = 0x59;
+
+	CHECK_EQ(dect_link_rx_segment(&l, &m, 0, NULL, NULL, &ind), -1);
+	CHECK_EQ(ind.foreign, 1u);
+	CHECK_EQ(ind.seg_handle, 4u);
+	CHECK_EQ(ind.nwk_len, 0u);
+
+	/* Nothing in the link moved. */
+	CHECK_EQ(l.lapc.vs, vs_before);
+	CHECK_EQ(l.lapc.vr, vr_before);
+	CHECK_EQ(l.lapc.outstanding, 0u);
+
+	/* And our own handle is still accepted afterwards. */
+	m.param[0] = 1;
+	CHECK_EQ(dect_link_rx_segment(&l, &m, 0, NULL, NULL, &ind), 0);
+	CHECK_EQ(ind.foreign, 0u);
+	CHECK_EQ(ind.seg_handle, 1u);
+}
+
 /* A segment that is not C-plane is rejected without disturbing the link. */
 static void test_non_cplane_mail_is_rejected(void)
 {
@@ -180,6 +230,7 @@ int main(void)
 	test_two_links_are_independent();
 	test_outbound_message_becomes_an_append_mail();
 	test_a_queued_message_needs_a_tick();
+	test_a_segment_for_another_handle_is_rejected();
 	test_only_one_message_is_outstanding();
 	test_non_cplane_mail_is_rejected();
 	test_unusable_segment_still_drains_the_queue();

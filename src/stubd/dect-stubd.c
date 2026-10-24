@@ -871,6 +871,15 @@ struct stubd {
 	uint8_t  sub_audit_pending;
 	uint8_t  sub_audit_occupied;
 	uint8_t  sub_audit_mine;	/* the slot we believe is ours */
+	/*
+	 * Traffic from handsets that are not the one this run serves.
+	 * Counted rather than silently dropped: a busy neighbour is the
+	 * difference between a result and a confounded one, and the run
+	 * should say so instead of leaving it to be worked out from a log.
+	 */
+	uint32_t foreign_seg;		/* 0x0203 segments for another handle */
+	uint32_t foreign_conn;		/* connection-ups we refused to re-arm on */
+	uint8_t  foreign_seg_handle;	/* the last such handle seen */
 
 	/* Per-run tally of commands sent, by verification class. */
 	uint32_t verify_n[17];
@@ -1096,6 +1105,21 @@ static void verify_report(const struct stubd *s)
 	 * when every state change is unchecked, which is the opposite of the
 	 * truth. A summary that flatters is worse than no summary.
 	 */
+	/*
+	 * Say whether anyone else was on the air. A run with another handset
+	 * competing for this link cannot be read as a result about the handset
+	 * we were serving, and the run should declare that itself rather than
+	 * leave it to be reconstructed from the log afterwards.
+	 */
+	if (s->foreign_seg || s->foreign_conn)
+		printf("reg: *** OTHER HANDSETS WERE ON AIR *** %lu C-plane "
+		       "segment(s) for another handle (last: %u) and %lu "
+		       "connection-up(s) refused. This link serves one "
+		       "handset; a run with competing traffic is NOT a clean "
+		       "measurement. Power the others off.\n",
+		       (unsigned long)s->foreign_seg,
+		       (unsigned)s->foreign_seg_handle,
+		       (unsigned long)s->foreign_conn);
 	printf("chip: %lu state-changing command%s sent, %lu verified by "
 	       "read-back. %lu query/read%s.\n",
 	       changes, changes == 1 ? "" : "s", verified,
@@ -3464,8 +3488,24 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	gen_rand(s, rand_f, sizeof(rand_f));
 	gen_rand(s, rs, sizeof(rs));
 
-	if (dect_link_rx_segment(&s->reg.link, m, now, rand_f, rs, &ind) < 0)
+	if (dect_link_rx_segment(&s->reg.link, m, now, rand_f, rs, &ind) < 0) {
+		if (ind.foreign) {
+			/*
+			 * Another handset's connection. The library refused to
+			 * let it touch this link's Lc/LAPC/NWK state; we only
+			 * count it, and say so the first time so a confounded
+			 * run is visible while it is running.
+			 */
+			if (!s->foreign_seg)
+				printf("reg: ignoring C-plane traffic for "
+				       "handle %u -- this link serves handle "
+				       "%u. Another handset is on air.\n",
+				       ind.seg_handle, s->reg.handle);
+			s->foreign_seg++;
+			s->foreign_seg_handle = ind.seg_handle;
+		}
 		return;
+	}
 	pump_lapc(s);			/* at least the LAPC ack */
 
 	if (s->verbose) {
@@ -3851,43 +3891,53 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * a different handle, or a genuinely idle one, still starts a
 		 * fresh link.
 		 */
-		if (s->reg.active && h == s->reg.handle
-		    && (s->reg.call_bound || dect_cc_busy(&s->reg.link.cc))) {
-			printf("reg: connection up (handle %u) repeated while "
-			       "a call is in progress -- keeping call state\n",
-			       h);
-			break;
-		}
 		/*
-		 * And do not let ANOTHER handset's connection destroy a
-		 * registration that is half done.
+		 * A connection-up re-arms the link: reg_start() re-initialises
+		 * LAPC, MM and CC. That is right for a genuinely new link and
+		 * destructive for one that is in the middle of something, and
+		 * until 2026-10-24 the only thing protected was a live call on
+		 * the SAME handle.
 		 *
-		 * reg_start() calls dect_mm_init(), which memsets MM back to
-		 * DECT_MM_IDLE. The key-allocation exchange spans two round
-		 * trips -- we send {KEY-ALLOCATE} and the handset answers with
-		 * {AUTHENTICATION-REQUEST} a few hundred ms later -- and the
-		 * dispatcher only accepts that answer while MM is in
-		 * DECT_MM_WAIT_AUTH. Re-initialise in between and the answer
-		 * is dropped silently; the handset shows "registration
-		 * failed" after having asked for the PIN, which is exactly
-		 * what it looks like from the outside.
+		 * With several handsets in range that is not enough. Every
+		 * handset that connects -- including one we hold no record for
+		 * -- re-armed our link. Measured with three handsets and a
+		 * FRITZ!Fon C4 on air: 26-30 connection-ups in 170 s, and an
+		 * FP-originated {CC-SETUP} sent onto a link that was re-armed
+		 * underneath it, retransmitted unacknowledged, then abandoned.
+		 * Nothing answered, and the run read as a refusal.
 		 *
-		 * Measured 2026-10-24 with three handsets powered on, trying
-		 * to register a C430A:
-		 *   t=10160  {KEY-ALLOCATE} out, MM -> WAIT_AUTH
-		 *   t=10400  connection up (handle 2) -- a DIFFERENT handset
-		 *   t=10500  {AUTHENTICATION-REQUEST} in -- dropped, MM idle
-		 * That run saw 34 connection-up events, so 34 chances to lose
-		 * it. With one handset on the bench this never showed.
+		 * So: while this link has work in progress, no connection-up
+		 * re-arms it -- least of all one for a different handle.
+		 *
+		 * Paging is deliberately NOT in the busy set. RING_PAGING is
+		 * exactly when we want the handset's connection to come up and
+		 * arm the link; it is only from the page response onwards that
+		 * a re-arm would lose the call we are placing.
 		 */
-		if (s->reg.active && h != s->reg.handle &&
-		    s->reg.link.mm.state == DECT_MM_WAIT_AUTH) {
-			printf("reg: connection up (handle %u) IGNORED -- a "
-			       "key allocation is in flight on handle %u and "
-			       "re-arming would drop it. Another handset is "
-			       "competing for the link; power the others off "
-			       "while registering.\n", h, s->reg.handle);
-			break;
+		{
+			int ring_busy = s->ring_state == RING_WAIT_PAGE_RESP ||
+					s->ring_state == RING_SETUP_DELAY;
+			int busy = s->reg.active &&
+				   (s->reg.call_bound ||
+				    dect_cc_busy(&s->reg.link.cc) ||
+				    s->reg.link.mm.state == DECT_MM_WAIT_AUTH ||
+				    ring_busy);
+
+			if (busy && h == s->reg.handle) {
+				printf("reg: connection up (handle %u) repeated "
+				       "while this link is busy -- keeping "
+				       "state\n", h);
+				break;
+			}
+			if (busy) {
+				s->foreign_conn++;
+				printf("reg: connection up (handle %u) IGNORED "
+				       "-- handle %u is busy. Another handset "
+				       "is competing for the link; re-arming "
+				       "now would drop what it is doing.\n",
+				       h, s->reg.handle);
+				break;
+			}
 		}
 		reg_start(s, h);
 		/*

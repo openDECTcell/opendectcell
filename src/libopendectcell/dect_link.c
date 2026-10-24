@@ -118,6 +118,25 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 	if (dect_cs_decode_segment(m, &seg) < 0)
 		return -1;
 
+	/*
+	 * A link serves ONE connection. A segment carrying a different handle
+	 * is another handset's traffic and must not reach this link's Lc
+	 * reassembly, LAPC sequence numbers or NWK state machines.
+	 *
+	 * The handle was always decoded here and never checked. With one
+	 * handset on the bench that is invisible; with several it is not. On
+	 * 2026-10-24, three handsets and a FRITZ!Fon C4 in range produced
+	 * 26-30 connections in 170 s, all feeding one link, and an
+	 * FP-originated {CC-SETUP} was never acknowledged by anyone. Reject
+	 * the segment and say whose it was, so the caller can route it or
+	 * ignore it deliberately rather than by accident.
+	 */
+	ind->seg_handle = seg.handle;
+	if (seg.handle != l->handle) {
+		ind->foreign = 1;
+		return -1;
+	}
+
 	memcpy(ind->seg_head, seg.data, sizeof(ind->seg_head));
 	lapc_len = dect_lc_rx_fragment(&l->lc, seg.data, lapcbuf,
 				       sizeof(lapcbuf));
