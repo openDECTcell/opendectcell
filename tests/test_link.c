@@ -19,6 +19,82 @@ static void init(struct dect_link *l)
 	dect_link_init(l, 1, &cfg);
 }
 
+/*
+ * Feed one inbound NWK message through the link the way the chip delivers
+ * it: a LAPC I-frame (NLF set, N(S) 0) in Lc framing with LSIG 0, cut into
+ * 15-byte 0x0203 segments for handle 1. *ind is the indication of the
+ * segment that completed the message.
+ */
+static void feed_nwk(struct dect_link *l, const uint8_t *nwk, size_t n,
+		     struct dect_link_ind *ind)
+{
+	uint8_t frame[DECT_LC_LAPC_MAX], cs[DECT_LC_FRAME_MAX];
+	struct dect_link_ind cur;
+	struct dect_mail m;
+	size_t fl, cl, off;
+
+	fl = dect_lapc_build_i(frame, sizeof(frame), 0, 1, DECT_LAPC_LLN_A, 0, 0,
+			       0, 0, nwk, n);
+	cl = dect_lc_build(frame, fl, 0, cs, sizeof(cs));
+	CHECK(fl > 0 && cl > 0);
+	memset(ind, 0, sizeof(*ind));
+	for (off = 0; off + 5u <= cl; off += 5u) {
+		memset(&m, 0, sizeof(m));
+		m.prim = 0x0203u;
+		m.param_len = 15;
+		m.param[0] = 1;
+		m.param[1] = 0x01;
+		memcpy(&m.param[2], cs + off, 5);
+		m.param[12] = 1;
+		dect_link_rx_segment(l, &m, 0, NULL, NULL, &cur);
+		if (cur.nwk_len)
+			*ind = cur;
+	}
+}
+
+/*
+ * Only {LCE-PAGE-RESPONSE} (0x71) with its mandatory <<PORTABLE-IDENTITY>>
+ * is a page response, and the identity is handed up so the caller can check
+ * who answered (TS 102 527-1 §7.3.8.2.1). Any LCE message used to count.
+ */
+static void test_page_response_carries_the_identity(void)
+{
+	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[32];
+	size_t n;
+
+	init(&l);
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_LCE, DECT_TI_ORIGINATOR,
+			       0, DECT_LCE_PAGE_RESPONSE);
+	n = dect_nwk_put_ie(msg, sizeof(msg), n, DECT_IE_PORTABLE_IDENTITY,
+			    ipui, sizeof(ipui));
+	feed_nwk(&l, msg, n, &ind);
+	CHECK(ind.nwk_len > 0);
+	CHECK_EQ(ind.page_response, 1u);
+	CHECK_EQ(ind.page_id_len, sizeof(ipui));
+	CHECK(memcmp(ind.page_id, ipui, sizeof(ipui)) == 0);
+
+	/* Another LCE message type is not a page response. */
+	init(&l);
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_LCE, DECT_TI_ORIGINATOR,
+			       0, 0x72u);
+	n = dect_nwk_put_ie(msg, sizeof(msg), n, DECT_IE_PORTABLE_IDENTITY,
+			    ipui, sizeof(ipui));
+	feed_nwk(&l, msg, n, &ind);
+	CHECK(ind.nwk_len > 0);
+	CHECK_EQ(ind.page_response, 0u);
+
+	/* Nor is a page response without its mandatory identity. */
+	init(&l);
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_LCE, DECT_TI_ORIGINATOR,
+			       0, DECT_LCE_PAGE_RESPONSE);
+	feed_nwk(&l, msg, n, &ind);
+	CHECK(ind.nwk_len > 0);
+	CHECK_EQ(ind.page_response, 0u);
+}
+
 /* A fresh link owns its own state and has nothing to send. */
 static void test_init_is_quiet(void)
 {
@@ -230,6 +306,7 @@ static void test_unusable_segment_still_drains_the_queue(void)
 int main(void)
 {
 	test_init_is_quiet();
+	test_page_response_carries_the_identity();
 	test_two_links_are_independent();
 	test_outbound_message_becomes_an_append_mail();
 	test_a_queued_message_needs_a_tick();

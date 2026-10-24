@@ -170,8 +170,26 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			 * The peer's answer to our page. Reported, never acted
 			 * on: when an FP-originated {CC-SETUP} may go out is
 			 * the caller's decision.
+			 *
+			 * Only {LCE-PAGE-RESPONSE} counts, and only with its
+			 * mandatory <<PORTABLE-IDENTITY>> (EN 300 175-5 table
+			 * 64; a missing one means ignore, §17.6.5), which is
+			 * handed up so the caller can check who answered. Any
+			 * LCE message used to count, from any handset (external
+			 * review, the clean-room record/an external review-24102026.md,
+			 * finding 10).
 			 */
-			ind->page_response = 1;
+			const uint8_t *pid;
+			size_t pid_len;
+
+			pid = dect_nwk_find_ie(ies, ies_len,
+					       DECT_IE_PORTABLE_IDENTITY, &pid_len);
+			if (h.msg_type == DECT_LCE_PAGE_RESPONSE && pid &&
+			    pid_len <= sizeof(ind->page_id)) {
+				memcpy(ind->page_id, pid, pid_len);
+				ind->page_id_len = pid_len;
+				ind->page_response = 1;
+			}
 		} else if (dect_nwk_parse(ind->nwk, ind->nwk_len, &h, &ies,
 					  &ies_len) == 0 && h.pd == DECT_PD_CC) {
 			uint32_t kp_before = l->cc.stats.keypad;

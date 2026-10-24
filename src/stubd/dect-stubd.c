@@ -3785,6 +3785,20 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * FP-originated {CC-SETUP} can be sent: see ring_queue_setup() for the
 	 * run that showed sending it on link-up loses the frame.
 	 */
+	/*
+	 * TS 102 527-1 §7.3.8.2.1: only a page response with the IPUI we
+	 * paged stops the paging. Another handset's answer is not ours to
+	 * ring. The standard's answer to it is {LCE-PAGE-REJECT} (§7.3.8.3.1),
+	 * which we do not send yet; we ignore it and keep waiting.
+	 */
+	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP &&
+	    s->cc_port_id_len &&
+	    (ind.page_id_len != s->cc_port_id_len ||
+	     memcmp(ind.page_id, s->cc_port_id, s->cc_port_id_len) != 0)) {
+		printf("ring: page response from a handset we did not page "
+		       "(identity differs) -- ignored, still waiting\n");
+		ind.page_response = 0;
+	}
 	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP) {
 		/*
 		 * Give the connection a U-plane before offering speech over

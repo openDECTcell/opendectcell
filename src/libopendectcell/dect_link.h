@@ -91,7 +91,7 @@ struct dect_link {
  * anywhere that leaves the device.
  */
 struct dect_link_ind {
-	unsigned page_response : 1;	/* LCE: the peer answered our page */
+	unsigned page_response : 1;	/* {LCE-PAGE-RESPONSE}, identity in page_id */
 	unsigned cc_message    : 1;
 	unsigned mm_message    : 1;
 	unsigned lapc_parse_failed : 1;	/* a segment we could not use */
@@ -107,6 +107,13 @@ struct dect_link_ind {
 	struct dect_lapc_frame frame;	/* valid when lc_rc > 0 */
 	uint8_t  nwk[DECT_LAPC_MSG_MAX];
 	size_t   nwk_len;
+	/*
+	 * With page_response: the <<PORTABLE-IDENTITY>> contents the handset
+	 * answered with. The caller must check it is the handset it paged
+	 * (TS 102 527-1 §7.3.8.2.1); another handset may answer.
+	 */
+	uint8_t  page_id[DECT_CC_ID_MAX];
+	size_t   page_id_len;
 };
 
 /*
