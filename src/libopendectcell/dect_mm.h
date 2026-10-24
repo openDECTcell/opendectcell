@@ -189,6 +189,15 @@ void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg);
 uint8_t dect_mm_sub_slot(const struct dect_mm *mm);
 
 /*
+ * Build this FP's <<FIXED-IDENTITY>> contents (type 32 PARK, whole PARK) into
+ * `out`. Returns the length written, or 0 if `cap` is too small. CC needs the
+ * same bytes MM sends in {ACCESS-RIGHTS-ACCEPT}, so there is one encoding and
+ * one place that knows it.
+ */
+size_t dect_mm_fixed_identity(const struct dect_mm *mm, uint8_t *out,
+			      size_t cap);
+
+/*
  * The three content octets of the TPUI we assign, with the default already
  * applied. Anything that pages this handset must use its low 16 bits, so take
  * them from here rather than rebuilding them from the slot.

@@ -135,6 +135,63 @@ static void test_register_ok(void)
 	CHECK_EQ(h.ti_flag, DECT_TI_RESPONDER);
 	CHECK_EQ(mm.state, DECT_MM_REGISTERED);
 	CHECK_EQ(mm.stats.accepted, 1);
+
+	/*
+	 * The identities an FP-originated {CC-SETUP} needs are both already
+	 * here, in this message, at registration time -- the handset's IPUI
+	 * and our own PARK. dect_mm_fixed_identity() must hand CC byte-for-byte
+	 * what MM just put on the wire, because the whole point of exposing it
+	 * is that there is ONE encoding of the PARK and not two.
+	 *
+	 * This is what lets us ring a handset that has never placed a call.
+	 * dect-stubd used to copy the pair out of the first call the handset
+	 * made, so "ring the handset" silently depended on the handset having
+	 * dialled us first; on a handset that never does, it could not ring at
+	 * all. Measured against the A540: our accept and the {CC-SETUP} it
+	 * later places carry identical <<PORTABLE-IDENTITY>> and
+	 * <<FIXED-IDENTITY>> elements.
+	 */
+	{
+		/*
+		 * Ground truth, not self-consistency. Comparing the builder
+		 * against {ACCESS-RIGHTS-ACCEPT} alone proves nothing once the
+		 * accept is built BY the builder -- mutating the encoding
+		 * moves both sides together and such a test passes happily.
+		 * (Checked: it does.) So pin the bytes.
+		 *
+		 * 0xA0 = ext + type 32 PARK; 0xA5 = ext + 37 = PLI+1 for a
+		 * 36-bit class-A ARI. Measured on hardware against the A540,
+		 * where our accept carries a0 a5 de ad 00 00 b8 for RFPI
+		 * de ad 00 00 b8, and the {CC-SETUP} the handset itself places
+		 * carries the same seven octets.
+		 */
+		static const uint8_t want[] = { 0xA0u, 0xA5u, 1, 2, 3, 4, 5 };
+		uint8_t fid[2 + DECT_MM_RFPI_LEN];
+		const uint8_t *wire;
+		size_t wire_len, got;
+
+		got = dect_mm_fixed_identity(&mm, fid, sizeof(fid));
+		CHECK_EQ(got, sizeof(fid));
+		CHECK_EQ(sizeof(want), sizeof(fid));
+		CHECK_EQ(memcmp(fid, want, sizeof(want)), 0);
+
+		/* And MM really does put those bytes on the wire. */
+		wire = dect_nwk_find_ie(ies, ies_len, DECT_IE_FIXED_IDENTITY,
+					&wire_len);
+		CHECK(wire != NULL);
+		CHECK_EQ(wire_len, got);
+		CHECK_EQ(memcmp(wire, want, got), 0);
+
+		/* And the portable identity CC needs is the one MM holds. */
+		wire = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+					&wire_len);
+		CHECK(wire != NULL);
+		CHECK_EQ(wire_len, mm.port_id_len);
+		CHECK_EQ(memcmp(wire, mm.port_id, wire_len), 0);
+
+		/* Too small a buffer writes nothing rather than truncating. */
+		CHECK_EQ(dect_mm_fixed_identity(&mm, fid, sizeof(fid) - 1u), 0);
+	}
 }
 
 /* A wrong PIN (RES1 mismatch) is rejected. */

@@ -189,6 +189,30 @@ static size_t put_codec_list(const struct dect_mm *mm, uint8_t *b, size_t off)
 	return n ? n : off;
 }
 
+/*
+ * The <<FIXED-IDENTITY>> contents for this FP: type 32 PARK, length PLI+1,
+ * then the whole PARK including its non-significant bits -- EN 300 444
+ * table 10 and table 21 both require exactly that, for the PT's outgoing
+ * {CC-SETUP} and for the FT's incoming one.
+ *
+ * Exposed because CC needs the identical bytes. They used to be built only
+ * here, so an FP-originated call had no way to name the FP and dect-stubd
+ * waited to copy the pair out of the first call the handset placed instead.
+ * That made "ring the handset" depend on the handset having dialled us first,
+ * which is not a DECT requirement -- it was just this encoding living in one
+ * function.
+ */
+size_t dect_mm_fixed_identity(const struct dect_mm *mm, uint8_t *out,
+			      size_t cap)
+{
+	if (!mm || !out || cap < 2u + DECT_MM_RFPI_LEN)
+		return 0;
+	out[0] = OCTET_GROUP_END | FIXED_ID_TYPE_PARK;
+	out[1] = (uint8_t)(OCTET_GROUP_END | (ARC_A_LEN + 1));
+	memcpy(&out[2], mm->cfg.rfpi, DECT_MM_RFPI_LEN);
+	return 2u + DECT_MM_RFPI_LEN;
+}
+
 static void send_access_accept(struct dect_mm *mm)
 {
 	uint8_t fixed_id[2 + DECT_MM_RFPI_LEN];
@@ -203,9 +227,8 @@ static void send_access_accept(struct dect_mm *mm)
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_PORTABLE_IDENTITY,
 				      mm->port_id, mm->port_id_len);
-	fixed_id[0] = OCTET_GROUP_END | FIXED_ID_TYPE_PARK;
-	fixed_id[1] = (uint8_t)(OCTET_GROUP_END | (ARC_A_LEN + 1));
-	memcpy(&fixed_id[2], mm->cfg.rfpi, DECT_MM_RFPI_LEN);
+	if (!dect_mm_fixed_identity(mm, fixed_id, sizeof(fixed_id)))
+		return;
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_FIXED_IDENTITY,
 			      fixed_id, sizeof(fixed_id));
 	off = put_codec_list(mm, b, off);	/* TS 102 527-1 7.3.1 */

@@ -257,6 +257,12 @@ struct stubd {
 	uint8_t     cc_fixed_id[DECT_CC_ID_MAX];
 	size_t      cc_fixed_id_len;
 	/*
+	 * 1 once the pair came from a call the handset actually placed.
+	 * A derived pair is good enough to ring with; a measured one is
+	 * still better, so it is allowed to overwrite a derived one.
+	 */
+	int         cc_id_learned;
+	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
 	 * again until the handset brings up a link or we give up.
@@ -2854,9 +2860,9 @@ static void ring_tick(struct stubd *s, uint64_t now)
 		if (now - g_start < s->audio.ring_ms)
 			return;
 		if (!s->cc_fixed_id_len) {
-			printf("ring: no stored call identities -- let the "
-			       "handset place one call first (with -s), then "
-			       "retry\n");
+			printf("ring: no call identities -- the handset is not "
+			       "registered here, or -s is off so nothing was "
+			       "stored\n");
 			s->ring_state = RING_DONE;
 			return;
 		}
@@ -3510,7 +3516,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * first pair we see and persist it, so calling the handset later needs
 	 * no guesswork about identity types, bit lengths or padding.
 	 */
-	if (ind.cc_message && !s->cc_fixed_id_len &&
+	if (ind.cc_message && !s->cc_id_learned &&
 	    s->reg.link.cc.peer_fixed_id_len) {
 		memcpy(s->cc_port_id, s->reg.link.cc.peer_port_id,
 		       sizeof(s->cc_port_id));
@@ -3518,10 +3524,47 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		memcpy(s->cc_fixed_id, s->reg.link.cc.peer_fixed_id,
 		       sizeof(s->cc_fixed_id));
 		s->cc_fixed_id_len = s->reg.link.cc.peer_fixed_id_len;
+		s->cc_id_learned = 1;
 		printf("call: learned the identities for calling the handset "
 		       "(%zu + %zu bytes), saving\n",
 		       s->cc_port_id_len, s->cc_fixed_id_len);
 		sub_save(s);
+	}
+
+	/*
+	 * Derive them instead, if the handset has not placed a call.
+	 *
+	 * Both identities are ours to build the moment the handset is known:
+	 * the portable one is the IPUI it gave us during registration, and the
+	 * fixed one is our own PARK, which we already send it in
+	 * {ACCESS-RIGHTS-ACCEPT}. Measured on the A540, our accept and the
+	 * {CC-SETUP} the handset later places carry byte-identical IEs.
+	 *
+	 * Waiting for the handset to dial first was never a DECT requirement
+	 * -- EN 300 444 table 21 specifies both elements exactly -- it was an
+	 * artefact of the PARK encoding living only inside dect_mm.c. Stock
+	 * does not need it either. A handset that never places a call, or a
+	 * freshly registered one, could not be rung at all.
+	 */
+	if (!s->cc_fixed_id_len && s->have_rfpi &&
+	    s->reg.link.mm.port_id_len &&
+	    s->reg.link.mm.port_id_len <= sizeof(s->cc_port_id)) {
+		uint8_t fid[DECT_CC_ID_MAX];
+		size_t n = dect_mm_fixed_identity(&s->reg.link.mm, fid,
+						  sizeof(fid));
+
+		if (n) {
+			memcpy(s->cc_port_id, s->reg.link.mm.port_id,
+			       s->reg.link.mm.port_id_len);
+			s->cc_port_id_len = s->reg.link.mm.port_id_len;
+			memcpy(s->cc_fixed_id, fid, n);
+			s->cc_fixed_id_len = n;
+			printf("call: derived the identities for calling the "
+			       "handset (%zu + %zu bytes) from the "
+			       "subscription, saving\n",
+			       s->cc_port_id_len, s->cc_fixed_id_len);
+			sub_save(s);
+		}
 	}
 
 	/*
