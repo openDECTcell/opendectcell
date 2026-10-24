@@ -795,6 +795,63 @@ static void test_hold_rejects_what_it_cannot_serve(void)
 	CHECK_EQ(dect_mm_hold(&mm, id, sizeof(id), 1, NULL, 99), -1);
 }
 
+/*
+ * Registration policy. A closed link refuses every {ACCESS-RIGHTS-REQUEST};
+ * a "same" link lets only the handset it holds re-enrol. Found by review on
+ * 2026-10-25: side links ran the whole enrolment and the daemon never
+ * stored the key, so the handset showed "registered" with a key the base
+ * did not have.
+ */
+static void test_registration_policy(void)
+{
+	static const uint8_t held[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22,
+					 0x33, 0x44 };	/* pp_access_request() */
+	static const uint8_t other[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22,
+					  0x33, 0x45 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1 };
+	uint8_t rand_f[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rs[16] = { 8, 7, 6, 5, 4, 3, 2, 1 };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	cfg.registration = DECT_MM_REG_CLOSED;
+	dect_mm_init(&mm, &cfg);
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
+	CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_NOT_ACCEPTED);
+	CHECK_EQ(mm.stats.key_alloc_sent, 0u);
+
+	/* "same": a different handset is refused ... */
+	cfg.registration = DECT_MM_REG_SAME;
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, other, sizeof(other));
+	mm.port_id_len = sizeof(other);
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
+
+	/* ... and the one it holds goes on to key allocation */
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, held, sizeof(held));
+	mm.port_id_len = sizeof(held);
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK(msg_type_of(out, n) != DECT_MM_ACCESS_RIGHTS_REJECT);
+	CHECK_EQ(mm.stats.key_alloc_sent, 1u);
+
+	/* "same" with nothing held: nobody */
+	dect_mm_init(&mm, &cfg);
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
+}
+
 int main(void)
 {
 	test_locate_request_from_a_stranger_is_rejected();
@@ -803,6 +860,7 @@ int main(void)
 	test_a_stranger_is_still_rejected_with_handsets_held();
 	test_held_handsets_need_no_port_id();
 	test_hold_rejects_what_it_cannot_serve();
+	test_registration_policy();
 	test_locate_request_without_identity_is_rejected();
 	test_locate_request_with_no_subscription_is_rejected();
 	test_failed_registration_keeps_the_held_identity();

@@ -2201,6 +2201,8 @@ static void sub_save(struct stubd *s)
 			}
 		}
 		printf("sub: subscription saved to %s\n", s->sub_path);
+		if (s->cur < s->n_hs)
+			s->hs[s->cur].loaded = 1;	/* it exists now */
 	}
 }
 
@@ -2302,6 +2304,22 @@ static int sub_load(struct stubd *s)
 }
 
 static void uak_verify_send(struct stubd *s, uint8_t slot);
+
+static unsigned hs_slot(const struct stubd *s, unsigned i);
+
+/* Does any handset we hold have a key to put in the chip? */
+static int any_uak(const struct stubd *s)
+{
+	unsigned i;
+
+	if (s->uak_valid)
+		return 1;
+	for (i = 0; i < s->n_hs; i++)
+		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid)
+			return 1;
+	return 0;
+}
+
 static void sub_audit_reply(struct stubd *s, uint32_t addr,
 			    const uint8_t *rec, size_t len);
 static void sub_audit_send(struct stubd *s, uint8_t mine);
@@ -2380,24 +2398,30 @@ static void send_subscription_tail(struct stubd *s);
 static void send_subscription(struct stubd *s)
 {
 	uint8_t slot = stubd_sub_slot(s);
-	unsigned keep = 1u << slot, i;
+	unsigned keep = s->uak_valid ? 1u << slot : 0u, i;
 
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->n_hs; i++) {
+		unsigned hsl = hs_slot(s, i);
+
 		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid &&
-		    s->hs[i].slot >= 1u && s->hs[i].slot <= DECT_MM_MAX_SLOT)
-			keep |= 1u << s->hs[i].slot;
+		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT)
+			keep |= 1u << hsl;
+	}
 	clear_foreign_slots(s, slot, keep);
-	for (i = 0; i < s->n_hs; i++)
-		if (i != s->cur && (keep & (1u << s->hs[i].slot)) &&
-		    s->hs[i].loaded && s->hs[i].uak_valid &&
-		    s->hs[i].slot != slot) {
-			install_subscription(s, (uint8_t)s->hs[i].slot,
-					     s->hs[i].uak);
+	for (i = 0; i < s->n_hs; i++) {
+		unsigned hsl = hs_slot(s, i);
+
+		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid &&
+		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT && hsl != slot) {
+			install_subscription(s, (uint8_t)hsl, s->hs[i].uak);
 			printf("sub: %s installed in chip slot %u\n",
-			       s->hs[i].path, s->hs[i].slot);
+			       s->hs[i].path, hsl);
 		}
-	install_subscription(s, slot, s->uak);
-	uak_verify_send(s, slot);	/* [CR A-0085] the only check that exists */
+	}
+	if (s->uak_valid) {
+		install_subscription(s, slot, s->uak);
+		uak_verify_send(s, slot);	/* [CR A-0085] the only check */
+	}
 	send_subscription_tail(s);
 }
 
@@ -3947,10 +3971,25 @@ static void led_tick(struct stubd *s, uint64_t now, int radio_on)
  * once a second, on /tmp, which is RAM. IPUIs only with -p: the file is
  * meant to be read by a web page.
  */
-static unsigned hs_slot(const struct stubd *s, unsigned i);
-
 #define STATE_DEFAULT_PATH	"/tmp/opendectcell-state.json"
 #define STATE_EVERY_MS		1000u
+
+/* A JSON string: quotes, backslashes and control characters escaped. */
+static void json_str(FILE *f, const char *v)
+{
+	fputc('"', f);
+	for (; v && *v; v++) {
+		unsigned char c = (unsigned char)*v;
+
+		if (c == '"' || c == '\\')
+			fprintf(f, "\\%c", c);
+		else if (c < 0x20)
+			fprintf(f, "\\u%04x", c);
+		else
+			fputc(c, f);
+	}
+	fputc('"', f);
+}
 
 static void state_link(struct stubd *s, FILE *f, const struct dect_link *l,
 		       const struct dect_diag_status *st, uint64_t frames,
@@ -3989,11 +4028,11 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 	f = fopen(tmp, "w");
 	if (!f)
 		return;
-	fprintf(f, "{\"uptime_ms\":%llu,\"radio\":\"%s\",\"stub\":\"%s\","
-		"\"registration\":\"%s\",\"handsets\":[",
+	fprintf(f, "{\"uptime_ms\":%llu,\"radio\":\"%s\",\"stub\":",
 		(unsigned long long)(now - g_start),
-		radio_on ? "up" : "parked",
-		s->stub_build == STUB_UNKNOWN ? "unknown" : s->stub_name,
+		radio_on ? "up" : "parked");
+	json_str(f, s->stub_build == STUB_UNKNOWN ? "unknown" : s->stub_name);
+	fprintf(f, ",\"registration\":\"%s\",\"handsets\":[",
 		s->audio.no_reg_open ? "closed" : "open");
 	first = 1;
 	for (i = 0; i < s->n_hs; i++) {
@@ -4007,11 +4046,10 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		for (k = 0; k < SIDE_MAX; k++)
 			if (s->side[k].active && s->side[k].adopted == (int)i)
 				linked = 1;
-		fprintf(f, "%s{\"slot\":%u,\"name\":\"DECT %u\","
-			"\"store\":\"%s\",\"link\":%s",
-			first ? "" : ",", hs_slot(s, i), hs_slot(s, i),
-			s->hs[i].path ? s->hs[i].path : "",
-			linked ? "true" : "false");
+		fprintf(f, "%s{\"slot\":%u,\"name\":\"DECT %u\",\"store\":",
+			first ? "" : ",", hs_slot(s, i), hs_slot(s, i));
+		json_str(f, s->hs[i].path);
+		fprintf(f, ",\"link\":%s", linked ? "true" : "false");
 		if (seen)
 			fprintf(f, ",\"seen_ms_ago\":%llu",
 				(unsigned long long)(now - seen));
@@ -4084,6 +4122,16 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	mcfg.narrowband_only = (uint8_t)s->audio.nbcodec;
 	if (s->have_rfpi)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
+	/*
+	 * Who may enrol. Closed with noregopen. With the first store already
+	 * holding a handset, only that handset may re-enrol into it (or a held
+	 * one, once adopted, into its own): a new handset used to land in the
+	 * first store and overwrite the ring target (review, 2026-10-25). A
+	 * new handset needs a store of its own as the first -s.
+	 */
+	mcfg.registration = s->audio.no_reg_open ? DECT_MM_REG_CLOSED :
+			    s->sub_port_id_len ? DECT_MM_REG_SAME :
+						 DECT_MM_REG_OPEN;
 
 	s->reg.active = 1;
 	s->reg.persisted = 0;
@@ -4192,7 +4240,11 @@ static void reg_start(struct stubd *s, uint8_t handle)
 /* Slot and identity of handset table entry i, current or stashed. */
 static unsigned hs_slot(const struct stubd *s, unsigned i)
 {
-	return i == s->cur ? stubd_sub_slot(s) : s->hs[i].slot;
+	if (i == s->cur)
+		return stubd_sub_slot(s);
+	if (i == 0 && s->audio.sub_slot)	/* subslot= is the target's */
+		return s->audio.sub_slot;
+	return s->hs[i].slot;
 }
 
 static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
@@ -4250,6 +4302,13 @@ static int side_start(struct stubd *s, uint8_t handle)
 
 	memset(&mcfg, 0, sizeof(mcfg));
 	mcfg.sub_slot = DECT_MM_REG_SLOT;	/* adoption sets the real one */
+	/*
+	 * A side link cannot keep a subscription -- the persist path lives
+	 * on the main link -- so it accepts no registration at all. It used
+	 * to run the whole enrolment and the key was never stored (review,
+	 * 2026-10-25).
+	 */
+	mcfg.registration = DECT_MM_REG_CLOSED;
 	if (s->pin)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
@@ -4331,6 +4390,13 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 		       "subscribed to (handle %u, release reason 0x0a)\n",
 		       sl->handle);
 	}
+	/*
+	 * Known limit (review, 2026-10-25): if ringing has started and a
+	 * locating handset took the main link first, the target's answer
+	 * lands here, the main link never sees a page response, and the ring
+	 * times out -- the outcome from before side links existed. Promoting
+	 * this link to the main one would fix it; not done yet.
+	 */
 	if (ind.page_response)
 		printf("side: page response on handle %u while the main link "
 		       "is busy -- not ours to ring here, ignored\n",
@@ -5461,7 +5527,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		 * BACK so the handset is already known and locked when they go
 		 * out, so the reload must not wait for them.
 		 */
-		if (s->sess.state == DECT_SESS_UP && s->uak_valid &&
+		if (s->sess.state == DECT_SESS_UP && any_uak(s) &&
 		    !s->sub_restored &&
 		    (s->xmail_idx >= s->n_xmail || s->audio.xmail_ms)) {
 			send_subscription(s);
@@ -6469,6 +6535,37 @@ int main(int argc, char **argv)
 				       s.hs[i].slot, s.hs[j].path);
 				s.hs[i].loaded = 0;
 			}
+		}
+		/*
+		 * A first store that does not exist yet (an enrolment) has no
+		 * slot; it used to default to 1 and silently share it with
+		 * whichever store held 1 (review, 2026-10-25). Give it the
+		 * lowest free one, unless subslot= chose.
+		 */
+		if (!s.hs[0].loaded && !s.audio.sub_slot) {
+			unsigned used = 0, slot;
+
+			for (i = 1; i < s.n_hs; i++)
+				if (s.hs[i].loaded)
+					used |= 1u << s.hs[i].slot;
+			for (slot = 1; slot <= DECT_MM_MAX_SLOT &&
+			     (used & (1u << slot)); slot++)
+				;
+			if (slot > DECT_MM_MAX_SLOT) {
+				fprintf(stderr, "sub: every chip slot is taken "
+					"by the other stores\n");
+				return 2;
+			}
+			s.hs[0].slot = slot;
+			printf("sub: %s is new; it gets chip slot %u\n",
+			       s.hs[0].path, slot);
+		} else if (!s.hs[0].loaded) {
+			for (i = 1; i < s.n_hs; i++)
+				if (s.hs[i].loaded &&
+				    s.hs[i].slot == s.audio.sub_slot)
+					printf("sub: *** subslot=%u is %s's slot "
+					       "-- enrolling here overwrites it ***\n",
+					       s.audio.sub_slot, s.hs[i].path);
 		}
 		s.cur = 0;
 		hs_load(&s, 0);

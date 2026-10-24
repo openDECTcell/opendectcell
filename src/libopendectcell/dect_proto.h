@@ -189,8 +189,15 @@
  *    the 16-bit wrap, and dect_diag_json(). Layout change: struct dect_mm
  *    gains peer_model/peer_codecs, what the handset declares about itself
  *    in {LOCATE-REQUEST} or {ACCESS-RIGHTS-REQUEST}. Nothing else changes.
+ *
+ * 17: registration policy (2026-10-25). Layout change: struct dect_mm_cfg
+ *    gains registration (enum dect_mm_registration: OPEN, the default and
+ *    the old behaviour; CLOSED; SAME, only the held port_id re-enrolling).
+ *    Refusals answer {ACCESS-RIGHTS-REJECT} "IPUI not accepted" 0x06. Set
+ *    CLOSED on any link that cannot keep a subscription, or the handset
+ *    shows "registered" with a key you never stored.
  */
-#define OPENDECTCELL_API_VERSION 16
+#define OPENDECTCELL_API_VERSION 17
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

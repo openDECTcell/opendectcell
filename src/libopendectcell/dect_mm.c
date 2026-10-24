@@ -279,9 +279,9 @@ static void send_access_accept(struct dect_mm *mm)
 	mm->stats.accepted++;
 }
 
-static void send_access_reject(struct dect_mm *mm)
+static void send_access_reject_reason(struct dect_mm *mm, uint8_t why)
 {
-	uint8_t reason[1] = { 0x01u };
+	uint8_t reason[1] = { why };
 	unsigned idx;
 	uint8_t *b = txq_slot(mm, &idx);
 	size_t off;
@@ -294,6 +294,12 @@ static void send_access_reject(struct dect_mm *mm)
 	txq_commit(mm, idx, off);
 	mm->state = DECT_MM_FAILED;
 	mm->stats.rejected++;
+}
+
+/* The historical reject for a failed PIN; 0x10 would name it better. */
+static void send_access_reject(struct dect_mm *mm)
+{
+	send_access_reject_reason(mm, 0x01u);
 }
 
 /*
@@ -559,6 +565,13 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 	mm->stats.access_req++;
 	learn_self_description(mm, ies, ies_len);
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
+	if (mm->cfg.registration == DECT_MM_REG_CLOSED ||
+	    (mm->cfg.registration == DECT_MM_REG_SAME &&
+	     (!pid || !mm->port_id_len || pid_len != mm->port_id_len ||
+	      memcmp(pid, mm->port_id, pid_len)))) {
+		send_access_reject_reason(mm, DECT_MM_REJECT_IPUI_NOT_ACCEPTED);
+		return;
+	}
 	/*
 	 * Held aside until the PIN is proven (on_auth_request()). This used to
 	 * overwrite port_id at once, so a stranger with the wrong PIN replaced

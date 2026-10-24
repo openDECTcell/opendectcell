@@ -31,6 +31,19 @@
 /* <<REJECT-REASON>> codes, EN 300 175-5 §7.7.34 */
 #define DECT_MM_REJECT_IPUI_UNKNOWN	0x02u
 #define DECT_MM_REJECT_IE_ERROR		0x60u	/* "information element error" */
+#define DECT_MM_REJECT_IPUI_NOT_ACCEPTED 0x06u
+
+/*
+ * Who may obtain access rights ({ACCESS-RIGHTS-REQUEST}) on a link. A base
+ * accepts registrations only while the user has opened it to them, and a
+ * link that cannot keep a new subscription must not accept one: the
+ * handset would show "registered" with a key the base never stored.
+ */
+enum dect_mm_registration {
+	DECT_MM_REG_OPEN = 0,	/* anyone with the PIN (the default) */
+	DECT_MM_REG_CLOSED,	/* nobody: "IPUI not accepted" */
+	DECT_MM_REG_SAME,	/* only port_id re-enrolling, with the PIN */
+};
 
 #define DECT_MM_PIN_MAX		16u
 #define DECT_MM_RFPI_LEN	5u
@@ -106,6 +119,8 @@ struct dect_mm_cfg {
 	 * docs/tasks-2026-10-22.md T3.
 	 */
 	uint8_t narrowband_only;
+	/* enum dect_mm_registration */
+	uint8_t registration;
 };
 
 struct dect_mm_stats {
