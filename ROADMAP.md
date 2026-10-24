@@ -91,7 +91,8 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [~] **[hw]** Gate G6: a GAP handset registers — **DLC proven on hardware** (FRITZ!Fon C4): the link establishes, the C4 sends its full ACCESS-RIGHTS-REQUEST and acks our replies. **Open:** the MM exchange doesn't complete (no PIN prompt) — see `docs/registration-g6.md` "Hardware progress". Key hardware fix: never send `0x0202` after a C-plane reply (it is AVM's abnormal-release primitive).
 
 ## M7: Minimal call → **Gate G7**
-- [ ] `libopendectcell`: CC setup/alert/connect/release, connection-to-voice-slot binding
+- [x] `libopendectcell`: CC setup/alert/connect/release, connection-to-voice-slot binding
+  - `dect_cc` + `dect_link`; FP- and PP-originated calls, transaction matching, setup collisions (§9.5.2.3), F<CC.03>. 2026-10-25: all three Gigasets ring and are answered on transaction value 0 with `<<SIGNAL>>` 0x41 and a conformant SETUP (no codec list); narrowband audio both ways (mode 2, 16-bit linear PCM), runs 21-34 in `docs/call-g7.md`
 - [ ] `dect-probe`: ring a handset, play a tone, echo mode
 - [x] **[hw]** **Gate G7 PASSED (2026-10-19)**: the handset rings, it is answered, and audio passes
   - [x] **Audio passes, both directions** (v22): the chip delivers the call's coded G.722 bearer on the TDM slot and accepts it back; echoing it is audible in the handset. See `docs/call-g7.md`
@@ -104,10 +105,13 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
   - **Still open — the 2026-10-19 scan undercounted.** It found nine names in two files; a repo-wide sweep finds symbol-shaped names in six. The remainder are **not** AVM-authored and so fall outside the rule above, but still need one deliberate call: (a) RTX/Dialog mail-OS and FP-stack internals (`docs/models/7520-DECT-analysis.md` §mail OS, `docs/mac-bringup.md`, `docs/capacity.md`, `docs/models/7362SL-DECT-analysis.md`) — third-party SDK, not AVM's, but equally only readable from a binary; (b) AVM GPIO/clock line names in `docs/7412-spi-tdm-and-loader.md` and `docs/models/7412-DECT-analysis.md`, which plausibly come from the device tree in AVM's GPL kernel source and would then be explicitly allowed. Stripping (a) would cost real traceability in the MAC and capacity notes, so decide before publishing rather than now.
 
 ## M8: Full GAP / CAT-iq basics in libopendectcell
-- [ ] Locate, temporary identities, ciphering (DSC), outgoing calls
+- [~] Locate, temporary identities, ciphering (DSC), outgoing calls
+  - locate with identity gate, TPUI assignment with `<MM_ident.1>`, PP-originated calls with keypad collection: done. Ciphering: DCK derivation unit-tested, chip hand-over (`0x0208`) experimental, calls run with `-C`. Routing an outgoing call anywhere is the controller's job
 - [~] CLIP/CNIP: `src/libopendectcell/dect_clip.c` builds CALLING-PARTY-NUMBER (`0x6C`) and CALLING-PARTY-NAME (`0x6D`) from the public ETSI text, wired into the FP-originated CC-SETUP and into `dect-stubd -a clip=/cnip=`. **[hw]** No handset has been shown either IE. Privacy semantics (what to send for a withheld caller) stay deliberately unimplemented: we omit, because the one stock value we have for the restricted case is ambiguous. Since 2026-10-20 the SETUP can also carry `<<CALL-INFORMATION>>` (`src/libopendectcell/dect_callinfo.c`, `-a lineid=`): CAT-iq 2.0 marks an incoming external call by its line identifier, the leading explanation for the C4's "Intern" display (test card #73).
-- [ ] Wideband (G.722) codec negotiation
-- [ ] Multiple handsets and parallel calls (STUB limit: about 3 PCM channels)
+- [~] Codec negotiation (TS 102 527-1 §7.3.3)
+  - 2026-10-25: we choose G.726 in `{CC-CONNECT}` for a handset-placed call that negotiates (API 14), and our SETUP carries no list (basic speech = G.726). **Wideband open:** the chip's G.722 paths are modes 8/9 (`[CR A-0043]`), never yet audible with our lane
+- [~] Multiple handsets and parallel calls (STUB limit: about 3 PCM channels)
+  - 2026-10-25: **multiple handsets done** — MM holds every subscribed handset and the link adopts the one it serves (API 12); `dect-stubd -s` repeats, installs every UAK in its chip slot, names everyone in the Internal Names List, and rings the first store's handset (runs 29-34). CC rejects strangers with "unknown identity" (API 11); a foreign page response gets `{LCE-PAGE-REJECT}` (API 13). **Open: parallel calls** — the daemon serves one link at a time and ignores a second connection while the first is busy; one `dect_link` per handle is the next structural step
 - [ ] **Diagnostics in the library** (`docs/diagnostics.md`): a `struct dect_diag` per link plus a base-wide one, carrying identity, subscription slot and whether the chip really holds it, connected state, manufacturer/model from `<<MODEL-IDENTIFIER>>`, codecs offered and in use, slot type, time slot, carrier, field strength, signal quality and encryption state. The library fills the protocol half and the caller fills the radio half — **no I/O in the library**, which has no transport and must keep none. One struct so the LuCI app and the controller cannot drift apart on what "quality" means. *The protocol half needs no new facts and can be built now; the radio half waits on `Q-0054`.*
 - [ ] Golden-trace regression tests in CI
 
@@ -118,6 +122,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [ ] Firmware storage in `/etc/opendectcell/firmware/`: SHA-256 check against the profile, kept across upgrades (`keep.d`)
 - [ ] LuCI app for non-technical users: status page, firmware upload, basic settings
 - [ ] **LuCI DECT Monitor page** (`docs/diagnostics.md`): one row per registered handset — identity, in range / connected, model, field strength, signal quality, slot type (long/full), time slot, carrier, codec in use, encryption — plus a base section (RFPI, radio state, dummy-bearer slot, carrier, power). The point is that a non-technical user can answer "is this handset in range and what is it doing" without reading a log. AVM ships exactly this as its DECT Monitor; every hard question of 2026-10-23 was a field on that screen. Deliberately **not** a debugging console: raw mails stay in `dect-stubd -v`.
+- [x] Fon/DECT LED (`green:fon`): on while the radio is up, ~5 Hz blink on C-plane traffic or a call, off when parked (`dce3ad7`, verified run 30)
 - [ ] **Export diagnostics from `dect-stubd`**: periodic chip reads into the `dect_diag` struct and a way out of the process — a JSON line on a UNIX socket, since both consumers (LuCI, controller) are out-of-process. The slot audit and UAK read-back already exist and should feed this rather than only printing.
 - [ ] Cell mode: tunnel mails (TCP, optional TLS) and audio (UDP, optional SRTP/DTLS) to the controller
 
