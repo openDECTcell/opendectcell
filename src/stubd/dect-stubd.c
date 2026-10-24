@@ -347,7 +347,8 @@ struct stubd {
 	int         tx_ring;		/* ring active: queue mails, do not write */
 	uint8_t     txq[4096];		/* pending control-slot bytes */
 	size_t      txq_head, txq_len;
-	uint32_t    txq_drops;
+	uint32_t    txq_drops;		/* mails refused: control queue full */
+	uint32_t    tx_write_short;	/* block writes the driver did not take whole */
 	int         parked;		/* run_loop() drained the park mails */
 	uint8_t     tx_idle;		/* filler for unmapped slots (-a txidle) */
 	uint8_t     tx_voice_idle;	/* filler for the voice lanes */
@@ -1313,6 +1314,17 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 {
 	size_t fb = s->slots * 2u;
 	unsigned int f, n;
+	/*
+	 * Control-slot bytes are taken from a copy of the queue position and
+	 * committed only for the frames the driver accepted. They used to be
+	 * dequeued as the frames were built, so a failed or short write lost
+	 * part of a mail for good (second external review,
+	 * the clean-room record/an external review-1-24102026.md, finding 2). Frames take
+	 * the queue in pairs from the first frame on, so the bytes owed for
+	 * the first k accepted frames are min(2k, bytes taken).
+	 */
+	size_t qh = s->txq_head, ql = s->txq_len, taken, owed;
+	ssize_t wr;
 
 	if (s->tx_slot < 0)
 		return;
@@ -1571,17 +1583,26 @@ lane_done:
 			}
 		}
 		tx_tone(s, fr);
-		if (s->txq_len >= 2u) {
-			fr[(unsigned int)s->tx_slot * 2u] =
-				s->txq[s->txq_head];
+		if (ql >= 2u) {
+			fr[(unsigned int)s->tx_slot * 2u] = s->txq[qh];
 			fr[(unsigned int)s->tx_slot * 2u + 1u] =
-				s->txq[(s->txq_head + 1u) % sizeof(s->txq)];
-			s->txq_head = (s->txq_head + 2u) % sizeof(s->txq);
-			s->txq_len -= 2u;
+				s->txq[(qh + 1u) % sizeof(s->txq)];
+			qh = (qh + 2u) % sizeof(s->txq);
+			ql -= 2u;
 		}
 	}
-	if (write(s->fd, frames, fpb * fb) != (ssize_t)(fpb * fb))
-		s->txq_drops++;
+	taken = s->txq_len - ql;
+	wr = write(s->fd, frames, fpb * fb);
+	if (wr == (ssize_t)(fpb * fb)) {
+		owed = taken;
+	} else {
+		owed = wr > 0 ? 2u * ((size_t)wr / fb) : 0u;
+		if (owed > taken)
+			owed = taken;
+		s->tx_write_short++;
+	}
+	s->txq_head = (s->txq_head + owed) % sizeof(s->txq);
+	s->txq_len -= owed;
 	s->tx_blocks++;
 }
 
@@ -3557,12 +3578,21 @@ static void pump_lapc(struct stubd *s)
 {
 	struct dect_mail m;
 
-	while (dect_link_poll_append_mail(&s->reg.link, &m)) {
+	/*
+	 * Take a frame out of LAPC only when the control queue can hold a
+	 * whole mail: once dequeued it is gone, and LAPC retransmits a lost
+	 * I-frame by timer but never a lost RR or UA. send_mail() used to be
+	 * called with its result ignored (second external review, finding 2).
+	 */
+	while (sizeof(s->txq) - s->txq_len >= DECT_TX_ELEM_MAX &&
+	       dect_link_poll_append_mail(&s->reg.link, &m)) {
 		if (s->verbose)
 			printf("[%5llu] reg: tx cplane %u bytes\n",
 			       (unsigned long long)(mono_ms() - g_start),
 			       (unsigned)m.param_len);
-		send_mail(s, (unsigned int)s->tx_slot, &m);
+		if (send_mail(s, (unsigned int)s->tx_slot, &m))
+			printf("reg: C-plane mail LOST (%u bytes) -- send "
+			       "failed\n", (unsigned)m.param_len);
 	}
 }
 
@@ -4702,8 +4732,10 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	printf("session: state %d contacts %u answers %u status %u deaths %u\n",
 	       s->sess.state, s->sess.stats.contacts_sent, s->sess.stats.answers,
 	       s->sess.stats.status_mails, s->sess.stats.deaths);
-	printf("tx: blocks %u queue_drops %u idle %02x voice_idle %02x\n",
-	       s->tx_blocks, s->txq_drops, s->tx_idle, s->tx_voice_idle);
+	printf("tx: blocks %u queue_drops %u write_short %u idle %02x "
+	       "voice_idle %02x\n",
+	       s->tx_blocks, s->txq_drops, s->tx_write_short, s->tx_idle,
+	       s->tx_voice_idle);
 	printf("cc: setups_in %u alerting %u connected %u released %u "
 	       "collisions %u represented %u setup_timeouts %u closed_unknown %u\n",
 	       s->reg.link.cc.stats.setup, s->reg.link.cc.stats.alerting,
