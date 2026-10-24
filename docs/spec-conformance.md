@@ -1165,3 +1165,29 @@ transaction value.** All open.
 | 6 | `sub_save()` truncates and rewrites the store in place | **confirmed**. A crash or full overlay mid-write loses the UAK, and re-registration needs the user | write a temporary file, `fsync()`, `rename()` over the store; `fchmod(0600)` an existing file |
 | 7 | `dect_cs_decode_segment()` does not check the `0x01` marker or the trailing copy of the handle | **confirmed**, defensive only | reject a segment whose marker is not `0x01` or whose two handles differ |
 | 8 | an odd number of hex digits in `-M` steps `par` past the NUL | **confirmed**, local command line only | reject odd-length parameter strings before the loop |
+
+## Status of both reviews after the fix batch `[2026-10-24 night]`
+
+All verified on the A540 in runs 19 and 20 unless marked "unit-tested".
+
+| finding (review, #) | commit | status |
+|---|---|---|
+| transaction value rotated (an external review #9) | `dd5a630` | **fixed; was the Gigaset refusal** (runs 15-17) |
+| no alerting by default (an external review #5) | `9c4414c` | **fixed**, `<<SIGNAL>>` 0x41 default; silent ring without it (run 18) |
+| CC transaction matching (an external review #3) | `0ac7e38` | **fixed**; CONNECT/CONNECT-ACK verified (runs 19, 20) |
+| mail parser underlength (an external review #1) | `aa41389` | **fixed**, unit-tested (ASan) |
+| end-of-run park never sent (an external review #2) | `8ded31a` | **fixed**, park line in every run since 14 |
+| any LCE message counted as the page response (an external review #10) | `02b9039` | **fixed**; A540 accepted (run 20). `{LCE-PAGE-REJECT}` on a mismatch still **open** |
+| CONN_DOWN not checked against its handle (an external review #10) | `12cb980` | **fixed**; 102 misattributed releases in the corpus |
+| LOCATE-REQUEST identity (an external review #1) | `7e7e5f4` | **fixed**, plus the pre-authentication overwrite; A540 accepted (run 20) |
+| transmit loss on failed write (an external review #2) | `35a7c20` | **fixed**; `write_short 0` (run 20) |
+| over-long reassembly (an external review #3) | `e5bc10b` | **fixed**, unit-tested |
+| unsolicited TPUI ACK (an external review #4) | `edaaeb3` | **fixed**, unit-tested |
+| LAPC SAPI (an external review #5) | `2fd24ae` | **fixed** (SAPI only, LLN deliberately not), unit-tested |
+| non-atomic store (an external review #6) | `c615aa9` | **fixed**; save path host-checked, not yet exercised by a registration |
+| segment marker/handle (an external review #7) | `398d1f7`, `981f546` | **fixed**; zero violations in 42 252 corpus segments |
+| odd hex in `-M` (an external review #8) | `ea52963` | **fixed**, checked at startup |
+| Class B DISC on a Class A link (an external review #4) | — | **open**: Class A release is the MAC connection release; which chip mail does it is a question for the room |
+| default codec list G.726 only; CONNECT names no chosen codec (an external review #8) | — | **open**, tied to the audio work |
+| no CAT-iq line/call identifier by default (an external review #6) | — | **open**, controller-owned data; the A540 rings without it |
+| no pseudo call waiting into an open LiA session (an external review #7) | — | **open** |
