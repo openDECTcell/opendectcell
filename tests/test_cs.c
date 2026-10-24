@@ -68,6 +68,31 @@ static void test_decode_rejects(void)
 	CHECK_EQ(dect_cs_decode_segment(&m, &seg), -1);
 }
 
+/*
+ * The 0x01 marker at offset 1 and the copy of the handle at offset 12 are
+ * fixed in every one of the 42 252 segments in the corpus, 13- and 15-byte
+ * forms alike; a segment that breaks either is malformed, not data.
+ */
+static void test_decode_rejects_bad_marker_or_handle(void)
+{
+	struct dect_mail m;
+	struct dect_cs_seg seg;
+	uint8_t p[] = { 0x01, 0x01, 0x12, 0x34, 0x56, 0x78, 0x9a,
+			0x00, 0x00, 0x11, 0x22, 0x33, 0x01 };
+
+	memset(&m, 0, sizeof(m));
+	m.prim = DECT_PRIM_SIGNALLING;
+	m.param_len = sizeof(p);
+	memcpy(m.param, p, sizeof(p));
+	CHECK_EQ(dect_cs_decode_segment(&m, &seg), 0);	/* well formed */
+
+	m.param[1] = 0x02;				/* marker */
+	CHECK_EQ(dect_cs_decode_segment(&m, &seg), -1);
+	m.param[1] = 0x01;
+	m.param[12] = 0x02;				/* handle copy */
+	CHECK_EQ(dect_cs_decode_segment(&m, &seg), -1);
+}
+
 /* APPEND_CONNECTION_DATA packs {handle, n, data} and sets src/dst/prim. */
 static void test_append_mail(void)
 {
@@ -116,6 +141,7 @@ int main(void)
 	test_decode_segment_13();
 	test_decode_segment_15();
 	test_decode_rejects();
+	test_decode_rejects_bad_marker_or_handle();
 	test_append_mail();
 	test_append_bounds();
 	test_trigger_mail();

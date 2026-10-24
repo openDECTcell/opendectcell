@@ -12,12 +12,22 @@
 #define SEG_OFF_MARKER	1u	/* always 0x01 */
 #define SEG_OFF_DATA	2u	/* 5 bytes */
 #define SEG_OFF_TAG	9u	/* 3 bytes */
+#define SEG_OFF_HANDLE2	12u	/* the handle again, in both 13- and 15-byte forms */
 
 int dect_cs_decode_segment(const struct dect_mail *m, struct dect_cs_seg *seg)
 {
 	if (m->prim != DECT_PRIM_SIGNALLING)
 		return -1;
 	if (m->param_len < DECT_CS_MIN_PARAM)
+		return -1;
+	/*
+	 * The marker and the handle copy are fixed in all 42 252 segments of
+	 * the 2026-10-24 corpus; a segment that breaks either is malformed and
+	 * must not reach DLC reassembly. Found by the second external review,
+	 * the clean-room record/an external review-1-24102026.md, finding 7.
+	 */
+	if (m->param[SEG_OFF_MARKER] != 0x01u ||
+	    m->param[SEG_OFF_HANDLE2] != m->param[SEG_OFF_HANDLE])
 		return -1;
 
 	seg->handle = m->param[SEG_OFF_HANDLE];
