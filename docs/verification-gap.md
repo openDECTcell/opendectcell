@@ -262,3 +262,33 @@ that it had no consumer and the room had four open items that did. That was
 right at the time and is wrong now: the Monitor is the consumer, and it shows
 the slot, the carrier and the level together. Recorded because the reasoning
 was sound and the conclusion still expired within hours.
+
+## Operational notes from the first multi-handset session `[2026-10-24]`
+
+**A UAK read-back MISMATCH immediately after another handset's registration is
+transient.** Registering the C430A into slot 2 clears the other slots, and an
+A540 verify run started right afterwards reported
+`*** UAK READ-BACK MISMATCH *** slot 1` — while the audit simultaneously said
+slot 1 was occupied. Re-running the same verify with nothing else in flight
+gave `MATCHES`. So the write and the read-back can race the preceding clear.
+
+Operationally: **do not treat a single MISMATCH straight after a registration
+as a failure.** Re-run it on a settled chip before believing it. Treat a
+MISMATCH that survives a second, quiet run as real — that is the case the
+check exists for.
+
+**The clear does not reliably take.** Both runs printed
+`cleared chip subscription slots other than N` and both audits still showed
+the other slot `held`, with `*** FOREIGN SLOT(S) STILL HELD ***`. This is the
+pre-existing `vF426` behaviour and `0x0247` remains unverified. Consequence
+for multi-handset work: a slot keeps its key material until something
+overwrites it, so a handset that has been factory-reset and whose store has
+been deleted **still occupies its chip slot**. Harmless for our tests — the
+host-side identity gate rejects a handset we hold no record for — but the
+warning is accurate and should not be dismissed. A box power cycle clears
+chip RAM if it ever matters.
+
+**Only one handset is chip-live at a time, by design.** Each run clears the
+other slots, so after registering several handsets only the last is live in
+the chip. The stores on disk are untouched and each run re-asserts its own
+handset's UAK, which is exactly how `ringall.sh` works: one handset per phase.
