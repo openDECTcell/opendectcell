@@ -4242,11 +4242,30 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		}
 		break;
 	}
-	case DECT_PRIM_CONN_DOWN:
+	case DECT_PRIM_CONN_DOWN: {
+		/*
+		 * {handle}. Only the release of OUR connection ends our link.
+		 * The chip also reports the release of an older connection
+		 * just after the new one is up -- vF418: up on handle 0, then
+		 * down for handle 1 eight ms later -- and that used to clear
+		 * reg.active, so the live connection's next C-plane segment
+		 * was dropped. 102 such releases in the 2026-10-24 corpus.
+		 * Found by the external review (the clean-room record/
+		 * an external review-24102026.md, finding 10).
+		 */
+		uint8_t h = m->param_len ? m->param[0] : 0;
+
+		if (s->reg.active && m->param_len && h != s->reg.handle) {
+			printf("reg: release of handle %u ignored -- our "
+			       "connection is handle %u\n", (unsigned)h,
+			       (unsigned)s->reg.handle);
+			break;
+		}
 		if (s->reg.active)
 			printf("reg: connection released\n");
 		s->reg.active = 0;
 		break;
+	}
 	case DECT_PRIM_SIGNALLING:
 		if (s->reg.active)
 			reg_segment(s, m, now);
