@@ -277,6 +277,21 @@ struct stubd {
 	uint64_t    ring_last;		/* when the last one went out */
 	int sub_restored;	/* stored subscription already pushed to the chip */
 	/*
+	 * Chip subscription slot, 1..DECT_MM_MAX_SLOT, 0 = not chosen yet.
+	 *
+	 * This decides two things at once, which is why it matters for
+	 * multi-handset work: the chip UAK slot at 0x9518 + (slot-1)*0x11,
+	 * and the assigned TPUI, which dect_mm_tpui() derives as
+	 * {0x00, 0x11, slot}. Left at the default every handset is slot 1,
+	 * so a second handset overwrites the first's UAK in the chip AND is
+	 * given the same TPUI 0x1101 -- after which a page for 0x1101 can be
+	 * answered by either of them and a per-handset test is meaningless.
+	 *
+	 * The store has always carried the slot; sub_load() printed it and
+	 * threw it away, and reg_start() never set mcfg.sub_slot at all.
+	 */
+	unsigned sub_slot;
+	/*
 	 * Experimental chip cipher-enable (0x0208). Its field layout is only
 	 * statically derived and the key offsets are unproven [CR A-0027 Q1], so
 	 * it is never sent unless -k asks for a specific selector and layout.
@@ -407,6 +422,8 @@ struct stubd {
 		 * {handle, 0x40}.
 		 */
 		int earlybind;
+		/* subslot=N: chip subscription slot, 1..6. 0 = use the store's. */
+		unsigned sub_slot;
 		/*
 		 * setupdelay=N: wait N ms after the page response before the
 		 * {CC-SETUP}. [CR A-StockTrace-5 §15] measured a connection
@@ -1840,6 +1857,14 @@ static int sub_load(struct stubd *s)
 	printf("sub: identity gate %s (%zu bytes)\n",
 	       s->sub_port_id_len ? "armed" : "DISABLED -- no stored identity",
 	       s->sub_port_id_len);
+	/*
+	 * Honour the slot the record was saved with, unless -a subslot=N said
+	 * otherwise. Without this a handset enrolled in slot 3 came back as
+	 * slot 1 on the next run, taking another handset's UAK slot and TPUI
+	 * with it.
+	 */
+	if (!s->audio.sub_slot && r.slot >= 1u && r.slot <= DECT_MM_MAX_SLOT)
+		s->sub_slot = r.slot;
 	printf("sub: restored subscription for slot %u from %s%s\n",
 	       r.slot, s->sub_path,
 	       s->cc_fixed_id_len ? " (with call identities)" : "");
@@ -3320,6 +3345,10 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	struct dect_mm_cfg mcfg;
 
 	memset(&mcfg, 0, sizeof(mcfg));
+	/* subslot=N wins, else the slot the store was saved with, else 0 --
+	 * and dect_mm_sub_slot() maps 0 to DECT_MM_REG_SLOT. */
+	mcfg.sub_slot = (uint8_t)(s->audio.sub_slot ? s->audio.sub_slot
+						    : s->sub_slot);
 	if (s->pin)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
@@ -4349,6 +4378,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->nocodeclist = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "earlybind", 9))
 			a->earlybind = 1;
+		else if (eq && klen == 7 && !memcmp(key, "subslot", 7)) {
+			if (v < 1u || v > DECT_MM_MAX_SLOT)
+				return -1;
+			a->sub_slot = (unsigned)v;
+		}
 		else if (eq && klen == 10 && !memcmp(key, "setupdelay", 10)) {
 			if (v > 5000u)
 				return -1;
@@ -4782,6 +4816,7 @@ static void usage(void)
 		"           setuptries=N re-offers a refused CC-SETUP N times\n"
 		"           codeclist=HEX <<CODEC-LIST>> value octets\n"
 		"           earlybind    assign audio on the page response\n"
+		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
 		"           setupdelay=N hold the CC-SETUP N ms after the page\n"
 		"           (default 8; the default 16 s budget is SHORTER than\n"
 		"           our own F<CC.03> timer, so it gives up first)\n"

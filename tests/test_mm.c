@@ -478,10 +478,60 @@ static void test_no_assignment_means_no_timer(void)
 	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
 }
 
+/*
+ * The subscription slot drives BOTH the chip UAK slot and the assigned TPUI.
+ *
+ * This is what makes more than one handset possible at all. dect_mm_tpui()
+ * derives {0x00, 0x11, slot}, and dect-stubd left mcfg.sub_slot at 0 for every
+ * handset, so a second one took the first's UAK slot at
+ * 0x9518 + (slot-1)*0x11 AND was handed the same TPUI 0x1101 -- after which a
+ * page for 0x1101 could be answered by either handset and a per-handset result
+ * meant nothing.
+ */
+static void test_sub_slot_drives_the_tpui(void)
+{
+	struct dect_mm_cfg cfg = { .pin = "1234", .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	uint8_t id[3];
+	unsigned slot;
+
+	/* 0 means "the single-cell default", not "no slot". */
+	cfg.sub_slot = 0;
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(dect_mm_sub_slot(&mm), DECT_MM_REG_SLOT);
+	dect_mm_tpui(&mm, id);
+	CHECK_EQ(id[0], 0x00u);
+	CHECK_EQ(id[1], 0x11u);
+	CHECK_EQ(id[2], DECT_MM_REG_SLOT);
+
+	/* Every valid slot gives a distinct TPUI -- the whole point. */
+	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
+		cfg.sub_slot = (uint8_t)slot;
+		dect_mm_init(&mm, &cfg);
+		CHECK_EQ(dect_mm_sub_slot(&mm), slot);
+		dect_mm_tpui(&mm, id);
+		CHECK_EQ(id[2], slot);
+	}
+
+	/* Out of range falls back rather than indexing off the end. */
+	cfg.sub_slot = DECT_MM_MAX_SLOT + 1u;
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(dect_mm_sub_slot(&mm), DECT_MM_REG_SLOT);
+
+	/* An explicitly configured TPUI still wins over the slot. */
+	cfg.sub_slot = 3u;
+	cfg.tpui[0] = 0x00u; cfg.tpui[1] = 0x22u; cfg.tpui[2] = 0x07u;
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tpui(&mm, id);
+	CHECK_EQ(id[1], 0x22u);
+	CHECK_EQ(id[2], 0x07u);
+}
+
 int main(void)
 {
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
+	test_sub_slot_drives_the_tpui();
 	test_register_ok();
 	test_register_bad_pin();
 	test_locate();

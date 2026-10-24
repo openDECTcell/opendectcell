@@ -262,3 +262,55 @@ clean room's stock captures were taken with. `work/7520/lab/c430a.sh`.
 
 Until that runs, no row in this file about FP-originated calls should be
 treated as a property of a handset.
+
+## Multi-handset: one slot each, and why that was broken `[2026-10-24]`
+
+A third spare arrived (Gigaset **AS690H**), so the base now has to hold more
+than one handset at a time. It could not.
+
+**`dect-stubd` never set `mcfg.sub_slot`.** Every handset therefore took chip
+subscription slot 1, and the slot decides two things at once:
+
+| what | where | consequence of everyone being slot 1 |
+| --- | --- | --- |
+| chip UAK slot | `0x9518 + (slot−1) × 0x11` | a second handset **overwrites the first's key** |
+| assigned TPUI | `dect_mm_tpui()` → `{0x00, 0x11, slot}` | every handset is given **TPUI `0x1101`** |
+
+The second is the one that would have quietly ruined the whole multi-handset
+comparison: with two handsets both believing they are `0x1101`, a page for
+`0x1101` can be answered by either, and a per-handset result means nothing.
+It would have looked like data.
+
+The subscription store has **always** carried the slot — `sub_save()` writes
+`r.slot` — and `sub_load()` printed it and threw it away. Both ends are now
+connected, so a slot round-trips, and `-a subslot=N` overrides it.
+
+| handset | slot | store |
+| --- | --- | --- |
+| Gigaset A540 CAT | 1 | `/etc/opendectcell-sub.a540` |
+| Gigaset C430A | 2 | `/etc/opendectcell-sub.c430a` |
+| Gigaset AS690H | 3 | `/etc/opendectcell-sub.as690h` |
+
+The A540 needs nothing redone: its existing record was saved with slot 1 and
+now restores into it.
+
+**Registration is still sequential, and that is a real limit, not a
+convenience.** `dect-stubd` holds one C-plane link, one MM state machine, one
+UAK and one `-s` store, so two handsets cannot register inside a single run —
+the second would overwrite the first in the store. `work/7520/lab/regall.sh`
+gives each handset its own run and its own store; `both` only saves you
+invoking it twice. Making registration genuinely concurrent means giving the
+daemon a link per handset, which is `opendectcell#67` territory and is not needed
+to answer the question in front of us.
+
+**The question in front of us** is narrow: nineteen variables have been swept
+against the A540 and the handset itself has never been varied.
+`work/7520/lab/ringall.sh` rings each registered handset in turn and collects,
+in the same capture, the connection record at `0x1AB9 + handle × 0x148`,
+`0x965d` and `0x96ad` — so one run answers the handset question and feeds the
+six-connection filter and the record diff at once.
+
+- **all three refuse identically** → it is our base, and the stock capture is
+  the only thing left worth doing;
+- **one rings** → the FP-originated path works and the A540's refusal is a
+  device trait, which is a different project entirely.
