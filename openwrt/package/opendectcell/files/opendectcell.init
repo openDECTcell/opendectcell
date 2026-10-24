@@ -17,6 +17,23 @@ PARK="-M 0x22:0x02:0x022c:01 -M 0x22:0x02:0x015b:00 -t 6"
 
 log() { logger -t opendectcell "$*"; echo "opendectcell: $*" >&2; }
 
+# The chip builds openDECTcell was tested with (docs/firmware-sourcing.md;
+# tools/dect-fw-extract.py has the same table). Our protocol knowledge
+# belongs to these, so anything else is refused unless allowed.
+KNOWN_FW="
+0d855b5929f8b2ad0b8d8fb38065b32e27f9357cd44a2b4e60573b1b5b6da895
+9bdb332678f981d83ac31cf1b68c489ab9c979e2ac601d18b81bb802f16d0d20
+7cac33c72b2222468f34033a15c35487aa35062265ab0013bb480068ebab7b31
+"
+
+fw_known() {
+	local sum
+	sum=$(sha256sum "$1" 2>/dev/null) || return 1
+	sum=${sum%% *}
+	case "$KNOWN_FW" in *"$sum"*) return 0 ;; esac
+	return 1
+}
+
 # The DECT UART is also the serial console on this box; a getty on it
 # corrupts the firmware upload. Refuse rather than fight it.
 console_free() {
@@ -29,7 +46,7 @@ console_free() {
 }
 
 load_chip() {
-	local dir first second uart mtd off mode
+	local dir first second uart mtd off mode unverified f
 	config_get dir main firmware_dir /etc/opendectcell/firmware
 	config_get first main first
 	config_get second main second
@@ -42,6 +59,16 @@ load_chip() {
 		log "chip firmware missing in $dir ($first, $second); not starting"
 		return 1
 	}
+	config_get_bool unverified main fw_allow_unverified 0
+	for f in "$dir/$first" "$dir/$second"; do
+		fw_known "$f" && continue
+		if [ "$unverified" = 1 ]; then
+			log "WARNING: $f is not a firmware build opendectcell knows; running it anyway (fw_allow_unverified)"
+		else
+			log "$f is not a firmware build opendectcell knows; not starting. Extract it with tools/dect-fw-extract.py from the FRITZ!OS version in docs/firmware-sourcing.md"
+			return 1
+		fi
+	done
 	grep -q '^opendectcell ' /proc/modules || insmod opendectcell || {
 		log "insmod opendectcell failed"
 		return 1
