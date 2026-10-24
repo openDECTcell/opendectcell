@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <sys/timex.h>
 #include <time.h>
 #include <unistd.h>
@@ -1898,16 +1899,55 @@ static void sub_save(struct stubd *s)
 	r.cc_fixed_id_len = (uint8_t)s->cc_fixed_id_len;
 	memcpy(r.cc_fixed_id, s->cc_fixed_id, sizeof(r.cc_fixed_id));
 
-	fd = open(s->sub_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-	if (fd < 0) {
-		printf("sub: cannot write %s: %s\n", s->sub_path, strerror(errno));
-		return;
-	}
-	if (write(fd, &r, sizeof(r)) != (ssize_t)sizeof(r))
-		printf("sub: short write to %s\n", s->sub_path);
-	else
+	/*
+	 * Replace the store atomically: write a temporary file beside it,
+	 * fsync it, rename it over the store, then fsync the directory. The
+	 * record holds the UAK, and losing it means re-registering the handset
+	 * by hand. It used to be truncated and rewritten in place, so a crash,
+	 * a full overlay or a power cut mid-write destroyed the old record
+	 * before the new one existed. fchmod() because O_CREAT's mode does not
+	 * touch a temporary file left over from an earlier attempt. Found by
+	 * the second external review, the clean-room record/an external review-1-24102026.md,
+	 * finding 6.
+	 */
+	{
+		char tmp[512], dir[512];
+		char *slash;
+		int ok;
+
+		if ((size_t)snprintf(tmp, sizeof(tmp), "%s.tmp", s->sub_path) >=
+		    sizeof(tmp)) {
+			printf("sub: path too long: %s\n", s->sub_path);
+			return;
+		}
+		fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		if (fd < 0) {
+			printf("sub: cannot write %s: %s\n", tmp, strerror(errno));
+			return;
+		}
+		ok = fchmod(fd, 0600) == 0 &&
+		     write(fd, &r, sizeof(r)) == (ssize_t)sizeof(r) &&
+		     fsync(fd) == 0;
+		if (close(fd) != 0)
+			ok = 0;
+		if (!ok || rename(tmp, s->sub_path) != 0) {
+			printf("sub: could not save %s (%s); the old record "
+			       "is untouched\n", s->sub_path, strerror(errno));
+			unlink(tmp);
+			return;
+		}
+		snprintf(dir, sizeof(dir), "%s", s->sub_path);
+		slash = strrchr(dir, '/');
+		if (slash) {
+			*(slash == dir ? slash + 1 : slash) = '\0';
+			fd = open(dir, O_RDONLY);
+			if (fd >= 0) {
+				(void)fsync(fd);
+				close(fd);
+			}
+		}
 		printf("sub: subscription saved to %s\n", s->sub_path);
-	close(fd);
+	}
 }
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
