@@ -478,3 +478,40 @@ why it never showed. No ABI change.
   the line and call ids are yours to own, like the list data.
 - Expect the handset's chosen codec in `{CC-ALERTING}`: the A540 sent a
   one-entry `<<CODEC-LIST>>` with G.722 there.
+
+## API 10: the review fixes, and three things you have to act on `[2026-10-24 night]`
+
+`OPENDECTCELL_API_VERSION` is 10 (`dect_proto.h` has the full entry). Struct
+layouts changed: `struct dect_mm`, `struct dect_lapc`, `struct
+dect_link_ind`, `dect_mm_stats`, `dect_lapc_stats`. Recompile; nothing
+else changes for code that does not touch the items below.
+
+**Act on these if you drive the stack yourself:**
+
+1. **Check who answered the page.** `ind.page_response` is now set only for
+   an `{LCE-PAGE-RESPONSE}` that carries its identity, and the identity is
+   in `ind.page_id`. Compare it with the IPUI you paged before sending the
+   `{CC-SETUP}` (TS 102 527-1 §7.3.8.2.1); `dect-stubd` ignores a mismatch.
+   The standard's reply to a mismatch, `{LCE-PAGE-REJECT}`, is not built yet.
+2. **Arm `mm.port_id` on every link** from your subscription store, as
+   `dect-stubd` does after `dect_link_init()`. A `{LOCATE-REQUEST}` is now
+   rejected when its identity is missing ("information element error") or
+   does not match ("IPUI unknown"), and with nothing armed every handset is
+   unknown. During registration the identity is adopted only after the PIN
+   is proven.
+3. **`<<SIGNAL>>` is on by default** (0x41, external call). Call
+   `dect_cc_set_signal(cc, 1, DECT_SIGNAL_ALERT_PATTERN0)` for an internal
+   call. Without the element the A540 rings silently (run 18).
+
+**Behaviour you get for free:** CC messages are matched to their
+transaction (a release of the handset's list-access call no longer kills
+your ringing call; unhandled messages on your call are ignored, not
+closed); LAPC drops frames for SAPIs other than 0 and cuts an over-long
+inbound message once; a TPUI acknowledgement with no assignment is ignored;
+malformed 0x0203 segments are rejected. Counters: `mm.stats.tpui_unsolicited`,
+`lapc.stats.rx_bad_sapi`, `lapc.stats.rx_truncated`.
+
+**One daemon-side fix you need to copy** if you replace `dect-stubd`: a
+chip release (0x0201) names a handle, and only the release of *your*
+connection ends your link. The chip reports old connections' releases just
+after a new connection comes up (102 times in the corpus).
