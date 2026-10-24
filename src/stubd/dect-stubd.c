@@ -992,9 +992,42 @@ struct stubd {
 };
 
 /*
+ * The chip's UAK table [CR A-0085]: six 17-byte records, 16 key bytes and a
+ * config byte each. The address is the 08.25 STUB build's, which is the one
+ * A-0085 was read from. On 07.56 this range holds something else and the
+ * table's address is not known yet (Q-0059).
+ */
+#define SUB_UAK_BASE	0x9518u
+#define SUB_UAK_STRIDE	0x11u
+#define SUB_UAK_END	(SUB_UAK_BASE + DECT_MM_MAX_SLOT * SUB_UAK_STRIDE)
+
+/*
+ * Whether parameter byte i of m is key material: the 16 UAK octets of a
+ * 0x020A subscription record, or a byte of a 0xFFF1 memory-read reply
+ * (sub 0x08: address in [1..4], data from [7]) that falls in the UAK table.
+ */
+static int mail_byte_is_key(const struct dect_mail *m, unsigned int i)
+{
+	uint32_t addr;
+
+	if (m->prim == 0x020Au)
+		return i >= 1u && i <= DECT_MM_UAK_LEN;
+	if (m->prim != 0xFFF1u || m->param_len < 7u || m->param[0] != 0x08u
+	    || i < 7u)
+		return 0;
+	addr = (uint32_t)m->param[1] | ((uint32_t)m->param[2] << 8)
+	     | ((uint32_t)m->param[3] << 16) | ((uint32_t)m->param[4] << 24);
+	addr += i - 7u;
+	return addr >= SUB_UAK_BASE && addr < SUB_UAK_END;
+}
+
+/*
  * Log a mail. Parameter bytes are hidden by default: the 0xF601/0xF602
  * answers carry box identity (RFPI-like) data that must not leak into
  * shared logs or issues. Pass -p to show them for local debugging only.
+ * Key bytes print as ** even under -p: the UAK in a 0x020A record or in a
+ * read-back of the table. Until 2026-10-24 -p printed both, in the clear,
+ * in every run that loaded or registered a handset.
  */
 static void log_mail(const struct dect_mail *m, const char *dir, int show_params)
 {
@@ -1013,8 +1046,12 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
 	 * at offsets 16..43 [CR COMMAND_SET 8.1], so every run up to
 	 * 2026-10-20 logged 8 of them and threw the other 20 away.
 	 */
-	for (i = 0; i < m->param_len && i < sizeof(m->param); i++)
-		printf(" %02x", m->param[i]);
+	for (i = 0; i < m->param_len && i < sizeof(m->param); i++) {
+		if (mail_byte_is_key(m, i))
+			printf(" **");
+		else
+			printf(" %02x", m->param[i]);
+	}
 	/*
 	 * The build stamp is ASCII ("RAM: <date>"). It arrives once, as the
 	 * first mail after the first contact following a chip boot, so a run
@@ -2186,7 +2223,7 @@ static void send_subscription(struct stubd *s)
 	m.param[1 + DECT_MM_UAK_LEN] = s->audio.att_cfg;	/* [CR A-0113] */
 	m.param_len = (uint16_t)(2 + DECT_MM_UAK_LEN);
 	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)			/* params carry the UAK: -p is local only */
+	if (s->verbose)			/* log_mail() masks the UAK */
 		log_mail(&m, "tx M", s->show_params);
 	uak_verify_send(s, slot);	/* [CR A-0085] the only check that exists */
 
@@ -2243,9 +2280,6 @@ static void send_subscription(struct stubd *s)
  * The UAK is key material. We compare it and report the verdict; the bytes
  * are never printed, not even under -p.
  */
-#define SUB_UAK_BASE	0x9518u
-#define SUB_UAK_STRIDE	0x11u
-
 static void uak_verify_send(struct stubd *s, uint8_t slot)
 {
 	struct dect_mail m;
