@@ -113,8 +113,28 @@
  *    class 0010) is now CALL-PROC'd only, never connected, so anything
  *    keyed on "a call reached ACTIVE" is unaffected but anything counting
  *    CONNECTs will see fewer.
+ *
+ * 10: the fixes from two external reviews (2026-10-24). Layout changes:
+ *    struct dect_mm gains pend_id/pend_id_len and dect_mm_stats gains
+ *    tpui_unsolicited; struct dect_lapc gains rx_discard and
+ *    dect_lapc_stats gains rx_bad_sapi and rx_truncated; struct
+ *    dect_link_ind gains page_id/page_id_len. New macros:
+ *    DECT_MM_REJECT_IE_ERROR, DECT_LCE_PAGE_RESPONSE,
+ *    DECT_SIGNAL_ALERT_PATTERN1.
+ *
+ *    CONSUMERS MUST ACT on three behaviour changes. (a) page_response is now
+ *    set only for {LCE-PAGE-RESPONSE} with its identity, and the caller must
+ *    compare page_id with the handset it paged before offering the call.
+ *    (b) A {LOCATE-REQUEST} is rejected unless its identity matches
+ *    mm.port_id, so arm port_id from your subscription store on every link,
+ *    as dect-stubd does. (c) Every FP-originated {CC-SETUP} now carries
+ *    <<SIGNAL>> 0x41 unless dect_cc_set_signal() says otherwise.
+ *    Also: the transaction value of an FP-originated call is 0 (the lowest
+ *    free), CC messages are matched to their transaction, and the API 9 note
+ *    above is wrong that a Gigaset refuses incoming calls until its list
+ *    sync completes -- the refusal was the transaction value.
  */
-#define OPENDECTCELL_API_VERSION 9
+#define OPENDECTCELL_API_VERSION 10
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
