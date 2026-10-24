@@ -560,3 +560,23 @@ read `cc.chosen_codec` before binding audio. Not yet seen on hardware.
 hold G.722 and G.726 if present); the first `0x0230` with flag bit 6 clear,
 and no 500 ms re-assign, which removes the half second of noise at the start
 of every call; every UAK in its own chip slot, clear only unused slots.
+
+## API 16-17: diagnostics as data, and who may enrol `[2026-10-25 night]`
+
+**API 16, `dect_diag.[ch]`.** One `struct dect_diag_link` per link:
+`dect_diag_from_link()` fills the protocol half, `dect_diag_decode_status()`
+decodes the chip's `0xF625` row (carrier, time slot, ten RSSI values, eight
+integrity counters, frames since establishment), `dect_diag_frames_update()`
+unwraps the 16-bit frame count, `dect_diag_json()` emits one object (IPUI
+only on request). MM keeps the handset's <<MODEL-IDENTIFIER>> and
+<<CODEC-LIST>> from its LOCATE or ACCESS-RIGHTS request. Use it for C5/C7
+rather than decoding `0xF625` again; `dect-stubd` writes the same objects to
+`/tmp/opendectcell-state.json` for LuCI.
+
+**API 17, `dect_mm_cfg.registration`.** `DECT_MM_REG_OPEN` (default, as
+before), `CLOSED`, or `SAME` (only the held `port_id` may re-enrol).
+Refusals answer "IPUI not accepted". **Act on it:** set `CLOSED` on every
+link that cannot persist a subscription, and outside an enrolment window.
+Without it a handset enrolling on such a link shows "registered" with a key
+the base never stored -- an independent review found exactly that in
+`dect-stubd`'s side links.
