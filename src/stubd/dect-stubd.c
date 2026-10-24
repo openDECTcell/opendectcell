@@ -503,6 +503,7 @@ struct stubd {
 		size_t   codeclist_len;
 		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
+		int      remode_set;	/* remode= or noremode given */
 		/*
 		 * remodebit6 keeps flag bit 6 SET in the re-assign, which asks
 		 * for mode 9 rather than mode 2: the channel's codec-side input
@@ -5278,10 +5279,13 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->play_slot_ms = (unsigned)v;
 		else if (klen == 7 && !memcmp(key, "xmailms", 7))
 			a->xmail_ms = (unsigned)v;
-		else if (klen == 6 && !memcmp(key, "remode", 6))
+		else if (klen == 6 && !memcmp(key, "remode", 6)) {
 			a->remode_ms = (unsigned)v;
-		else if (!eq && klen == 8 && !memcmp(key, "noremode", 8))
+			a->remode_set = 1;
+		} else if (!eq && klen == 8 && !memcmp(key, "noremode", 8)) {
 			a->remode_ms = 0;
+			a->remode_set = 1;
+		}
 		else if (!eq && klen == 10 && !memcmp(key, "remodebit6", 10))
 			a->remode_bit6 = 1;
 		else if (klen == 11 && !memcmp(key, "remodecodec", 11))
@@ -5507,15 +5511,15 @@ static void usage(void)
 		"           playsync advances the coded stream on the received\n"
 		"           lane's word boundary instead of a cadence of our own;\n"
 		"           required for anything but a steady tone\n"
-		"           remode=MS changes when the second 0x0230 with flag bit 6\n"
-		"           clear goes out after 0x022D (default 500; less than\n"
-		"           that races the chip's own pass and is overwritten),\n"
-		"           asking for mode 2 (the narrowband\n"
+		"           remode=MS sends a second 0x0230 with flag bit 6 clear\n"
+		"           MS ms after 0x022D, asking for mode 2 (the narrowband\n"
 		"           G.726 path, which takes signed 16-bit linear PCM at one\n"
-		"           sample per frame on the lane; chain\n"
-		"           noremode suppresses the mode-2 re-assign, which is ON by\n"
-		"           default: without it the chip stays in mode 9 after the\n"
-		"           bind and no downlink audio reaches the handset at all\n"
+		"           sample per frame on the lane). Default: 500 if flags has\n"
+		"           bit 6 set, else none -- with bit 6 clear the chip\n"
+		"           reaches mode 2 from the first assign, and a re-assign\n"
+		"           only adds a burst of noise. Less than 500 races the\n"
+		"           chip's own pass and is overwritten\n"
+		"           noremode never sends the re-assign\n"
 		"           seq=MS with repeated seqstep=FLAGS:CODEC walks a list of\n"
 		"           0x0230 configurations, MS ms per window, starting when\n"
 		"           the call binds -- the same instant playraw restarts the\n"
@@ -5531,8 +5535,6 @@ static void usage(void)
 		"           the channel's input variant B (the transparent path a\n"
 		"           wideband call needs, since the chip has no G.722\n"
 		"           encoder) rather than variant A (the G.726 encoder)\n"
-		"           enabled) instead of the mode 1 our bind leaves it in,\n"
-		"           where PCM out is the silence constant [CR A-0039]\n"
 		"           playslot=MS walks the lane across every transmit slot,\n"
 		"           MS ms each, logging 'play: lane slot N'. Which slot the\n"
 		"           chip reads as the downlink bearer is not established.\n"
@@ -5624,10 +5626,19 @@ int main(int argc, char **argv)
 	s.audio.ti_fixed = -1;
 	s.audio.remode_codec = -1;	/* keep the bind's codec byte unless asked */
 	/*
-	 * The mode-2 re-assign is ON by default since 2026-10-23: without it
-	 * the chip stays in mode 9 after the bind and no downlink audio of any
-	 * format reaches the handset. With it, and linear PCM on the lane, a
-	 * whole call is audible (vF411).
+	 * The mode-2 re-assign. Since 2026-10-25 it is sent only when the
+	 * first 0x0230 had flag bit 6 set (the 0x41 wideband bind every lab
+	 * script used); see the resolution after option parsing. With bit 6
+	 * clear in the first assign -- our default flags=1 -- the chip reaches
+	 * mode 2 by itself once 0x022D turns the path on, as A-0046/A-0047
+	 * said, and the re-assign only adds a 500 ms mode-9 window: a burst of
+	 * noise in both directions at the start of every call (runs 25-27,
+	 * A540 and AS690H).
+	 *
+	 * When it is sent: the 2026-10-23 history.
+	 * Without it the 0x41 bind stays in mode 9 and no downlink audio of
+	 * any format reaches the handset. With it, and linear PCM on the lane,
+	 * a whole call is audible (vF411).
 	 *
 	 * 500 ms, and not less. This was briefly defaulted to 150 ms on the
 	 * reasoning that it is comfortably after the 0x0242 which triggers
@@ -5767,6 +5778,8 @@ int main(int argc, char **argv)
 		usage();
 		return 2;
 	}
+	if (!s.audio.remode_set && !(s.audio.flags & 0x40u))
+		s.audio.remode_ms = 0;	/* mode 2 from the first assign */
 
 	s.stub_build = stub_build_read(s.stub_name, sizeof(s.stub_name));
 	printf("chip: STUB second stage %s\n",
