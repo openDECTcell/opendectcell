@@ -218,6 +218,7 @@ struct handset {
 	uint8_t  cc_fixed_id[DECT_CC_ID_MAX];
 	size_t   cc_fixed_id_len;
 	int      cc_id_learned;
+	uint64_t last_seen_ms;	/* runtime only: last segment from it */
 };
 
 /*
@@ -324,6 +325,7 @@ struct stubd {
 	uint64_t    led_next;
 	uint32_t    led_traffic, led_traffic_seen;
 	unsigned    led_changes, led_blink_ticks;
+	uint64_t    state_next;		/* next state-file write */
 	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
@@ -557,6 +559,8 @@ struct stubd {
 		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
 		const char *led_path;	/* led=PATH, NULL = the default */
+		const char *state_path;	/* statefile=PATH, NULL = the default */
+		int      no_state;	/* nostatefile */
 		int      no_reg_open;	/* noregopen */
 		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
@@ -1036,6 +1040,7 @@ struct stubd {
 		uint16_t frames_last;	/* previous [36..37], for wrap detection */
 		uint64_t frames_total;	/* unwrapped frame count for this call */
 		int have_counters;
+		struct dect_diag_status last_status;	/* for the state file */
 		int handover_sent;	/* -a handover fired for this call */
 		unsigned sweep_idx;	/* next GenDSP source for -a dspsweep */
 		uint64_t sweep_ms;	/* when the current source was routed */
@@ -3776,6 +3781,7 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 	s->reg.have_counters = 1;
 
 	/* The same row as one object, the shape the Monitor export will use. */
+	s->reg.last_status = st;
 	memset(&d, 0, sizeof(d));
 	d.radio = st;
 	d.call_frames = s->reg.frames_total;
@@ -3932,6 +3938,101 @@ static void led_tick(struct stubd *s, uint64_t now, int radio_on)
 	} else {
 		led_write(s, 1);
 	}
+}
+
+/*
+ * The state file: what the base is doing, for LuCI or anything else that
+ * wants it without speaking a protocol (ROADMAP M9, docs/diagnostics.md).
+ * One JSON object, rewritten atomically (temporary file, rename) at most
+ * once a second, on /tmp, which is RAM. IPUIs only with -p: the file is
+ * meant to be read by a web page.
+ */
+static unsigned hs_slot(const struct stubd *s, unsigned i);
+
+#define STATE_DEFAULT_PATH	"/tmp/opendectcell-state.json"
+#define STATE_EVERY_MS		1000u
+
+static void state_link(struct stubd *s, FILE *f, const struct dect_link *l,
+		       const struct dect_diag_status *st, uint64_t frames,
+		       int *first)
+{
+	struct dect_diag_link d;
+	char js[768];
+
+	memset(&d, 0, sizeof(d));
+	if (st)
+		d.radio = *st;
+	d.call_frames = frames;
+	dect_diag_from_link(l, &d);
+	if (dect_diag_json(&d, s->show_params, js, sizeof(js))) {
+		fprintf(f, "%s%s", *first ? "" : ",", js);
+		*first = 0;
+	}
+}
+
+static void state_write(struct stubd *s, uint64_t now, int radio_on,
+			int force)
+{
+	const char *path = s->audio.state_path ? s->audio.state_path
+					       : STATE_DEFAULT_PATH;
+	char tmp[512];
+	FILE *f;
+	unsigned i;
+	int first;
+
+	if (s->audio.no_state || !s->do_register ||
+	    (!force && now < s->state_next))
+		return;
+	s->state_next = now + STATE_EVERY_MS;
+	if ((size_t)snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= sizeof(tmp))
+		return;
+	f = fopen(tmp, "w");
+	if (!f)
+		return;
+	fprintf(f, "{\"uptime_ms\":%llu,\"radio\":\"%s\",\"stub\":\"%s\","
+		"\"registration\":\"%s\",\"handsets\":[",
+		(unsigned long long)(now - g_start),
+		radio_on ? "up" : "parked",
+		s->stub_build == STUB_UNKNOWN ? "unknown" : s->stub_name,
+		s->audio.no_reg_open ? "closed" : "open");
+	first = 1;
+	for (i = 0; i < s->n_hs; i++) {
+		unsigned k, linked = 0;
+		uint64_t seen = s->hs[i].last_seen_ms;
+
+		if (i != s->cur && !s->hs[i].loaded)
+			continue;
+		if (s->reg.active && s->reg.link.mm.adopted == (int)i)
+			linked = 1;
+		for (k = 0; k < SIDE_MAX; k++)
+			if (s->side[k].active && s->side[k].adopted == (int)i)
+				linked = 1;
+		fprintf(f, "%s{\"slot\":%u,\"name\":\"DECT %u\","
+			"\"store\":\"%s\",\"link\":%s",
+			first ? "" : ",", hs_slot(s, i), hs_slot(s, i),
+			s->hs[i].path ? s->hs[i].path : "",
+			linked ? "true" : "false");
+		if (seen)
+			fprintf(f, ",\"seen_ms_ago\":%llu",
+				(unsigned long long)(now - seen));
+		fprintf(f, "}");
+		first = 0;
+	}
+	fprintf(f, "],\"links\":[");
+	first = 1;
+	if (s->reg.active)
+		state_link(s, f, &s->reg.link,
+			   s->reg.last_status.valid ? &s->reg.last_status
+						    : NULL,
+			   s->reg.frames_total, &first);
+	for (i = 0; i < SIDE_MAX; i++)
+		if (s->side[i].active)
+			state_link(s, f, &s->side[i].link, NULL, 0, &first);
+	fprintf(f, "]}\n");
+	if (fclose(f) == 0)
+		(void)rename(tmp, path);
+	else
+		unlink(tmp);
 }
 
 static void pump_lapc(struct stubd *s)
@@ -4215,6 +4316,8 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 		return;
 	}
 	a = sl->link.mm.adopted;
+	if (a >= 0 && (unsigned)a < s->n_hs)
+		s->hs[a].last_seen_ms = now;
 	if (a >= 0 && a != sl->adopted && (unsigned)a < s->n_hs) {
 		sl->adopted = a;
 		dect_iwu_set_own(&sl->link.cc.iwu,
@@ -4280,6 +4383,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		return;
 	}
 	pump_lapc(s);			/* at least the LAPC ack */
+	if (s->reg.link.mm.adopted >= 0 &&
+	    (unsigned)s->reg.link.mm.adopted < s->n_hs)
+		s->hs[s->reg.link.mm.adopted].last_seen_ms = now;
 
 	/*
 	 * MM took on one of the other handsets we hold (its LOCATE-REQUEST,
@@ -4688,6 +4794,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.bind_ms = now;
 		s->reg.status_ms = 0;
 		s->reg.have_counters = 0;
+		memset(&s->reg.last_status, 0, sizeof(s->reg.last_status));
 		s->reg.frames_total = 0;
 		s->reg.frames_last = 0;
 		/*
@@ -5290,6 +5397,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 
 		now = mono_ms();
 		led_tick(s, now, s->do_register && s->sess.state == DECT_SESS_UP);
+		state_write(s, now, s->do_register &&
+			    s->sess.state == DECT_SESS_UP, 0);
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
@@ -5482,6 +5591,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 7 && !memcmp(key, "playpcm", 7)) &&
 			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
 			    !(klen == 3 && !memcmp(key, "led", 3)) &&
+			    !(klen == 9 && !memcmp(key, "statefile", 9)) &&
 			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
 			    !(klen == 7 && !memcmp(key, "memdump", 7)) &&
@@ -5775,6 +5885,17 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if (klen == 6 && !memcmp(key, "remode", 6)) {
 			a->remode_ms = (unsigned)v;
 			a->remode_set = 1;
+		} else if (eq && klen == 9 && !memcmp(key, "statefile", 9)) {
+			size_t n = (size_t)(spec - (eq + 1));
+			char *path = malloc(n + 1);
+
+			if (!path)
+				return -1;
+			memcpy(path, eq + 1, n);
+			path[n] = '\0';
+			a->state_path = path;
+		} else if (!eq && klen == 11 && !memcmp(key, "nostatefile", 11)) {
+			a->no_state = 1;
 		} else if (eq && klen == 3 && !memcmp(key, "led", 3)) {
 			size_t n = (size_t)(spec - (eq + 1));
 			char *path = malloc(n + 1);
@@ -6020,6 +6141,9 @@ static void usage(void)
 		"           playsync advances the coded stream on the received\n"
 		"           lane's word boundary instead of a cadence of our own;\n"
 		"           required for anything but a steady tone\n"
+		"           statefile=PATH writes the base's state as JSON, at most\n"
+		"           once a second (default " STATE_DEFAULT_PATH ");\n"
+		"           nostatefile turns it off\n"
 		"           led=PATH drives this LED brightness file (default\n"
 		"           " LED_DEFAULT_PATH ", the 7520's\n"
 		"           Fon/DECT LED): on while the radio is up, ~5 Hz blink on\n"
@@ -6528,6 +6652,7 @@ int main(int argc, char **argv)
 	led_open(&s);
 	led_write(&s, 0);	/* a park or probe run leaves it dark */
 	ret = run_loop(&s, fpb, run_seconds);
+	state_write(&s, mono_ms(), 0, 1);	/* says "parked" */
 	led_write(&s, 0);
 	if (s.led_fd >= 0) {
 		close(s.led_fd);
