@@ -318,3 +318,29 @@ per-frame structure is sampled roughly 1 frame in 17. The 2026-10-24 sweep of
 `0x160` and `0x10000`-`0x100ff` found no structural allocation after the page,
 but at that resolution the null is aliasing, not evidence. A real answer needs
 either a chip-side trigger or a far tighter dump window.
+
+### Calling-party content eliminated (2026-10-24 evening)
+
+`[CR A-0112]` reports stock's FP-originated `{CC-SETUP}` as "rich": calling-party
+number (IE `0x6C`) and name (IE `0x6D`) alongside the codec and basic-service
+elements. Ours carried neither, so this was a genuine content difference from
+stock. Swept on the A540, 07.56, three phases:
+
+| phase | setup content | `6c`/`6d` on the wire | result |
+|---|---|---|---|
+| 1 | + `clip=` and `cnip=` | 1 / 1 | `0x32` |
+| 2 | + `<<CALL-INFORMATION>>` as well | 1 / 1 | `0x32` |
+| 3 | control: today's exact setup | 0 / 0 | `0x32` |
+
+The IE counts are read out of the actual setup bytes, so the variable is proven
+to have reached the peer, and the control reproduced the refusal, so the sweep
+is sound. **EN 300 444 table 21 lists the calling-party number as optional and
+the handset agrees: its absence is not the cause.**
+
+### Also eliminated: the `{CC-SETUP}` ordering
+
+`[CR A-0112]` asks whether we send the `{CC-SETUP}` before or after the PP's
+first C-plane uplink, noting stock follows the PP by ~80 ms and warning that
+blasting it on bearer-up can itself draw a reject. Measured on our side: PP's
+first `0x0203` at t=70371, our setup queued and sent at t=70451 -- **+80 ms**,
+the same ordering and the same delay. Not a divergence.
