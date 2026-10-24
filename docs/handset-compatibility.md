@@ -18,8 +18,13 @@ two demonstrably *conformant* handsets need genuinely different FP behaviour.**
 |---|---|---|---|
 | vendor | AVM | Gigaset | Gigaset |
 | role here | the handset G1-G7 were developed against | current bench handset | arrived with the A540; used by the the hardware-analysis step for stock captures |
-| registered to our base | yes (2026-10-18) | **yes, 2026-10-22** | no -- *re-attaches* on a FRITZ!OS-era subscription |
+| registered to our base | yes (2026-10-18) | **yes, 2026-10-22**; again after factory reset, slot 1 | **yes, 2026-10-24**, after factory reset, slot 2 |
 | local status | a handset, on the a second unit, **off-limits for experiments** | spare | spare |
+
+The **Gigaset AS690H** joined on 2026-10-24: registered in slot 3 after a
+factory reset, and it rings aloud and is answered on the default build (runs
+22b, 23). Unlike the A540 it placed no list-access call of its own in any run
+we hold.
 
 ## Observed behaviour
 
@@ -28,10 +33,10 @@ two demonstrably *conformant* handsets need genuinely different FP behaviour.**
 | GAP registration against our MM stack | passes | **passes** | not attempted | our MM is not AVM-specific |
 | post-LOCATE message | not recorded | bare `0x5D`, `nwk_len=2`, no IEs | bare `0x5D` **and** `0x64` + escape `0x59` | `0x5D` is common; `0x64`/`0x59` is C430A-specific |
 | incoming `{CC-SETUP}` on transaction value 1 | **rings** | **rejects**, `0x32` "Insufficient resources" | not attempted | the C4 is *tolerant*; the A540 enforces EN 300 444 §6.9.2, lowest free value = 0 (runs 14, 16) |
-| incoming `{CC-SETUP}` on transaction value 0 | **rings** (v28 and every completed C4 call) | **rings**, G.722 chosen in `{CC-ALERTING}` (run 15, 2026-10-24) | not attempted | the default since `dd5a630`; the earlier reading "no bearer, §9.3.2.3" was wrong |
+| incoming `{CC-SETUP}` on transaction value 0 | **rings** (v28 and every completed C4 call) | **rings**, G.722 chosen in `{CC-ALERTING}` (run 15, 2026-10-24); default build, answered (runs 19, 20, 24) | **rings, answered** (run 21, 2026-10-24) | the default since `dd5a630`; the earlier reading "no bearer, §9.3.2.3" was wrong |
 | PP-originated call binds audio | yes | yes | yes | the handset builds the bearer, so this path always worked |
 | opens a periodic CAT-iq service call unprompted | no | **yes** -- `03 05`, then `03 60 77 04 c3 00 NN 00` with an advancing counter, then `03 4d` normal release, ~13 s cycle | not measured | likely LiA list access; harmless, but it misled the collision investigation |
-| re-sync time after our base leaves the air | not measured | **~30 s** | not measured | paging must outlast this (now 20 pages / 60 s) |
+| re-sync time after our base leaves the air | not measured | **~30 s**; 162 s after 17 min off untouched, ~2 s after a key press (runs 20, 23, 24) | 11 s in hand (run 21) | the handset backs off its search the longer the base is gone; a key press restarts it |
 | display with call class 8 (`0x88`) | "Intern", no number | not reached | n/a | call class, not CLIP encoding, drives the C4 display |
 | display with call class 3 (`0x38`) | shows the number, call dies ~4 s | not reached | n/a | the dying call is our `CALL_PRESENT` hole, not a handset trait |
 
