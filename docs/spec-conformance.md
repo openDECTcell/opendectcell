@@ -1144,3 +1144,24 @@ the thirteen clean `vCOLLIDE` logs (`call-g7.md`, "External review").
 | no line identifier / call identifier in the incoming SETUP by default | TS 102 527-3 §7.4.5.3.2, §7.4.6.3 | controller-owned data, `-a lineid=,callid=` |
 | no pseudo call waiting when a voice call meets an open LiA session | TS 102 527-3 §7.4.10.6.3 | `ring_queue_setup()` |
 | any LCE message counts as the page response; `CONN_DOWN` is not checked against its handle | TS 102 527-1 §7.3.8.2.1, §7.3.8.3.1 | `dect_link_rx_segment()`, daemon |
+
+## Second review (an external review), verified `[2026-10-24 night]`
+
+`the clean-room record/an external review-1-24102026.md` audited the same commit
+(`e899958`) and listed eight findings that do not overlap the first review.
+Each was checked against the current source (`dect_mm.c`, `dect_lapc.c`,
+`dect_cs.c` and `dect_link.c` are unchanged since `e899958`) and, where a
+clause applies, against `docs/specs/`. **All eight hold in the code; two need
+a narrower fix than proposed. None touches the A540 refusal, which was the
+transaction value.** All open.
+
+| # | finding | verdict | the correct fix |
+|---|---|---|---|
+| 1 | `on_locate_request()` accepts a `{LOCATE-REQUEST}` with no `<<PORTABLE-IDENTITY>>`; with no stored subscription it accepts any IPUI | **confirmed**. The element is M in EN 300 175-5 table 56 | §17.6.4: return `{LOCATE-REJECT}` "information element error" when it is missing; "IPUI unknown" when we hold no subscription. `test_locate()` encodes the second case as an accept and must change |
+| 2 | `pump_lapc()` ignores `send_mail()`'s result; `tx_block()` dequeues control bytes before the block write succeeds | **confirmed**, never fired: `queue_drops 0` in all 162 logs. LAPC retransmits a lost I-frame by timer, but not a lost RR or UA | dequeue only after a full `write()`; on a full queue, stop polling LAPC rather than drop the frame |
+| 3 | an oversized reassembly resets `rxmsg_len` and carries on, so the tail of the message is delivered as a new one | **confirmed in part**. Acknowledging is allowed: EN 300 444 §6.9.3 lets the receiver discard further segments | discard until the segment with M = 0, and deliver at most the first part; add a test with a message over 256 octets |
+| 4 | `{TEMPORARY-IDENTITY-ASSIGN-ACK}` sets `tpui_confirmed` with no assignment pending | **confirmed** | accept it only while `ident_pending`, on the MM transaction that sent the assign |
+| 5 | `dect_lapc_rx()` checks neither LLN nor SAPI | **confirmed in part**. Accepting any LLN is deliberate: the PT opens on a Class B LLN and EN 300 175-4 §9.2.4.3 lets us treat it as Class A, so strict LLN checking would break attach | check the SAPI (0, connection-oriented) only |
+| 6 | `sub_save()` truncates and rewrites the store in place | **confirmed**. A crash or full overlay mid-write loses the UAK, and re-registration needs the user | write a temporary file, `fsync()`, `rename()` over the store; `fchmod(0600)` an existing file |
+| 7 | `dect_cs_decode_segment()` does not check the `0x01` marker or the trailing copy of the handle | **confirmed**, defensive only | reject a segment whose marker is not `0x01` or whose two handles differ |
+| 8 | an odd number of hex digits in `-M` steps `par` past the NUL | **confirmed**, local command line only | reject odd-length parameter strings before the loop |
