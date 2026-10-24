@@ -114,7 +114,14 @@ int dect_rx_pull(struct dect_rx *rx, struct dect_mail *out)
 
 		L = rx->buf[2] | (unsigned int)rx->buf[3] << 8;
 		total = 4u + L + 2u + 2u;	/* AA seq len body sum */
-		if (L > DECT_MAIL_L_MAX) {
+		/*
+		 * L counts prim plus parameters, so below 2 there is no room
+		 * for prim and L - 2 would wrap to a 64 KiB parameter copy.
+		 * A stray 0xAA followed by zeros reaches here with L = 0 and
+		 * a checksum that matches (zeros sum to zero), so this is
+		 * not only a theoretical frame.
+		 */
+		if (L < 2u || L > DECT_MAIL_L_MAX) {
 			rx->stats.framing_errors++;
 			rx->stats.resyncs++;
 			rx->resynced = 1;

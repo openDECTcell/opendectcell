@@ -167,6 +167,51 @@ static void test_bad_length(void)
 	CHECK(rx.stats.framing_errors >= 1);
 }
 
+/*
+ * A length field below 2 cannot hold src, dst and prim, so it is a framing
+ * error -- never a mail whose parameter length is L - 2 computed in unsigned
+ * arithmetic (65534 or 65535 bytes copied into a 249-byte buffer). The first
+ * case is the realistic one: a stray 0xAA followed by zero bytes, whose
+ * checksum over zeros is zero and therefore always "matches".
+ */
+static void test_short_length(void)
+{
+	static const uint8_t zeros[] = {
+		0xaa, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	};
+	/* L = 0: L field, src, dst, then sum16 = 0x22 + 0x02. */
+	static const uint8_t l0[] = {
+		0xaa, 0x02, 0x00, 0x00, 0x22, 0x02, 0x24, 0x00,
+	};
+	/* L = 1: L field, src, dst, one byte, then sum16 = 1 + 0x22 + 0x02 + 0x10. */
+	static const uint8_t l1[] = {
+		0xaa, 0x03, 0x01, 0x00, 0x22, 0x02, 0x10, 0x35, 0x00,
+	};
+	const struct { const uint8_t *b; size_t n; } bad[] = {
+		{ zeros, sizeof(zeros) }, { l0, sizeof(l0) }, { l1, sizeof(l1) },
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+		uint8_t buf[64];
+		size_t n;
+		struct dect_rx rx;
+		struct dect_mail got;
+
+		memcpy(buf, bad[i].b, bad[i].n);
+		n = bad[i].n;
+		n += build_rx(buf + n, 9, 0x23, 0x22, 0xf618,
+			      (uint8_t[]){ 0x37, 0x01 }, 2);
+		dect_rx_init(&rx);
+		dect_rx_push(&rx, buf, n);
+		CHECK_EQ(dect_rx_pull(&rx, &got), 1);	/* the valid mail after */
+		CHECK_EQ(got.prim, 0xf618);
+		CHECK_EQ(got.param_len, 2);
+		CHECK_EQ(rx.stats.mails, 1);
+		CHECK(rx.stats.framing_errors >= 1);
+	}
+}
+
 /* A mail split across two pushes is assembled before it parses. */
 static void test_partial(void)
 {
@@ -206,6 +251,7 @@ int main(void)
 	test_seq_gap();
 	test_csum_resync();
 	test_bad_length();
+	test_short_length();
 	test_partial();
 	test_encode_limits();
 	return CHECK_DONE();
