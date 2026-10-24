@@ -4046,24 +4046,21 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		dect_iwu_set_own(&s->reg.link.cc.iwu, tid);
 	}
 	/*
-	 * Advertise a codec in FP-originated setups. The A540 answers our page,
-	 * takes a codec-less {CC-SETUP} and returns release reason 0x32, which
-	 * EN 300 175-5 classes as a TEMPORARY OVERLOAD ("insufficient
-	 * resources"), so give it something to reserve against. One codec,
-	 * G.726 32 kbit/s, full slot -- stock's own list, byte for byte.
+	 * No <<CODEC-LIST>> in FP-originated setups by default: basic speech
+	 * (`e0 80`) already means G.726, the codec our audio path carries.
+	 * TS 102 527-1 §7.3.3 lets a list in {CC-SETUP} only if it holds at
+	 * least G.722 and G.726; the G.726-only list we sent from 2026-10-22
+	 * ("give it something to reserve against", written when the A540's
+	 * refusal was misread as a resource problem -- it was the transaction
+	 * value) was non-conformant. Runs 31-33 (2026-10-25): all three
+	 * Gigasets ring without it. codeclist=HEX still sends one, e.g.
+	 * codeclist=90020084 for the old list.
 	 */
-	{
-		static const uint8_t cl[] = { 0x90u, 0x02u, 0x00u, 0x84u };
-
-		if (s->audio.nocodeclist)
-			dect_cc_set_codec_list(&s->reg.link.cc, NULL, 0);
-		else if (s->audio.codeclist_len)
-			dect_cc_set_codec_list(&s->reg.link.cc,
-					       s->audio.codeclist,
-					       s->audio.codeclist_len);
-		else
-			dect_cc_set_codec_list(&s->reg.link.cc, cl, sizeof(cl));
-	}
+	if (s->audio.codeclist_len && !s->audio.nocodeclist)
+		dect_cc_set_codec_list(&s->reg.link.cc, s->audio.codeclist,
+				       s->audio.codeclist_len);
+	else
+		dect_cc_set_codec_list(&s->reg.link.cc, NULL, 0);
 	dect_cc_set_signal(&s->reg.link.cc, s->audio.signal_on,
 			   s->audio.signal_value);
 	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
@@ -5789,7 +5786,8 @@ static void usage(void)
 		"           order. For 0x015E, which stock sends twice around\n"
 		"           every page and we never send at all.\n"
 		"           setuptries=N re-offers a refused CC-SETUP N times\n"
-		"           codeclist=HEX <<CODEC-LIST>> value octets\n"
+		"           codeclist=HEX <<CODEC-LIST>> value octets for CC-SETUP\n"
+		"           (default none: basic speech means G.726)\n"
 		"           earlybind    assign audio on the page response\n"
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
 		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
