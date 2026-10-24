@@ -344,6 +344,100 @@ static void test_alerting_ignored_when_responder(void)
 }
 
 /*
+ * EN 300 175-5 §17.3.2.1: a {CC-RELEASE} or {CC-RELEASE-COM} on a
+ * transaction we do not hold gets no action, and messages on another
+ * transaction must not move our call. The case that matters: the handset's
+ * own list-access call (PT side, value 0) ends while our incoming call (FT
+ * side, also value 0) is ringing. Its release used to release OUR call.
+ */
+static void test_foreign_transaction_does_not_touch_our_call(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	struct dect_cc cc;
+	uint8_t buf[16], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;					/* our SETUP, F=0, TV 0 */
+
+	/* The handset's transaction 0 (its flag 0) releases: not ours. */
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_RELEASE);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);	/* no reply */
+	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+	CHECK_EQ(cc.stats.released, 0u);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       3, DECT_CC_RELEASE_COM);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_ALERTING);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+	CHECK_EQ(cc.stats.alerting, 0u);
+
+	/* Our own transaction still works: F=1 (the peer's side), TV 0. */
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_RESPONDER,
+			       0, DECT_CC_ALERTING);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_RINGING);
+	CHECK_EQ(cc.stats.alerting, 1u);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+}
+
+/*
+ * EN 300 444 §6.9.4: an unexpected or unrecognised CC message on the call
+ * we hold is ignored. The default branch used to test the flag the wrong way
+ * round and closed our own live call as an "unknown transaction". On a
+ * transaction we do not hold, §17.3.2.1 still clears it.
+ */
+static void test_unhandled_message_on_our_call_is_ignored(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t types[] = {
+		DECT_CC_CALL_PROC, DECT_CC_SETUP_ACK, DECT_CC_NOTIFY,
+		DECT_CC_FACILITY,
+	};
+	struct dect_cc cc;
+	uint8_t buf[16], out[64];
+	size_t n, i;
+
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+
+	for (i = 0; i < sizeof(types); i++) {
+		n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC,
+				       DECT_TI_RESPONDER, 0, types[i]);
+		dect_cc_rx(&cc, buf, n);
+		CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+		CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+	}
+	CHECK_EQ(cc.stats.closed_unknown, 0u);
+
+	/* The same message on a transaction we do not hold is closed. */
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       6, DECT_CC_FACILITY);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 4u);
+	CHECK_EQ(out[0], 0xE3u);		/* F=1, TV=6, PD CC */
+	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_TRANSACTION);
+	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+}
+
+/*
  * A SETUP from the handset carries both identities an FP-originated SETUP
  * needs; we keep them so a call towards the handset needs no guesswork.
  */
@@ -1281,6 +1375,8 @@ int main(void)
 	test_other_release_reasons_are_not_represented();
 	test_second_setup_during_an_active_call_is_rejected();
 	test_setup_carries_line_identifier();
+	test_foreign_transaction_does_not_touch_our_call();
+	test_unhandled_message_on_our_call_is_ignored();
 	test_transaction_value_is_lowest_free();
 	test_transaction_value_rotates();
 	test_busy_spans_the_whole_call();

@@ -509,6 +509,26 @@ uint64_t dect_cc_next_deadline(const struct dect_cc *cc)
 	return cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
 }
 
+/*
+ * Does a received message belong to the call this entity holds? The peer's
+ * messages on our transaction carry our value and the INVERSE of our flag:
+ * we put cc->ti_flag in what we send, the peer puts the other one. With no
+ * call held, nothing is ours.
+ *
+ * Every handler below asks this first. They used not to: a {CC-RELEASE} on
+ * any transaction released our call -- the handset's own list-access call
+ * ending while ours rang would have killed ours -- and the default branch
+ * tested the flag the wrong way round, so an unhandled message on our own
+ * call closed it as an "unknown transaction". Found by the external review
+ * (the clean-room record/an external review-24102026.md, finding 3).
+ */
+static int our_transaction(const struct dect_cc *cc,
+			   const struct dect_nwk_hdr *h)
+{
+	return cc->state != DECT_CC_ST_NULL &&
+	       h->ti_value == cc->ti_value && h->ti_flag != cc->ti_flag;
+}
+
 void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 {
 	struct dect_nwk_hdr h;
@@ -531,8 +551,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_basic_service(cc, ies, ies_len);
 			learn_keypad(cc, ies, ies_len);
 			on_setup(cc);
-		} else if (h.ti_value != cc->ti_value ||
-			   h.ti_flag == cc->ti_flag) {
+		} else if (!our_transaction(cc, &h)) {
 			/*
 			 * A second call while one is in progress. The peer's
 			 * messages on OUR transaction carry the inverse of our
@@ -565,7 +584,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		break;
 	case DECT_CC_ALERTING:
 		/* Incoming call: the handset is ringing. */
-		if (cc->incoming && cc->state == DECT_CC_ST_CALL_PRESENT) {
+		if (our_transaction(cc, &h) && cc->incoming &&
+		    cc->state == DECT_CC_ST_CALL_PRESENT) {
 			cc->state = DECT_CC_ST_RINGING;
 			cc->stats.alerting++;
 		}
@@ -576,18 +596,22 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 * confirms with CONNECT-ACK, and then the call is active and
 		 * the audio bind is the same as for a handset-placed call.
 		 */
-		if (cc->incoming && (cc->state == DECT_CC_ST_CALL_PRESENT ||
-				     cc->state == DECT_CC_ST_RINGING)) {
+		if (our_transaction(cc, &h) && cc->incoming &&
+		    (cc->state == DECT_CC_ST_CALL_PRESENT ||
+		     cc->state == DECT_CC_ST_RINGING)) {
 			queue_msg(cc, cc->ti_flag, DECT_CC_CONNECT_ACK);
 			cc->state = DECT_CC_ST_ACTIVE;
 			cc->stats.connected++;
 		}
 		break;
 	case DECT_CC_CONNECT_ACK:
-		on_connect_ack(cc);
+		if (our_transaction(cc, &h))
+			on_connect_ack(cc);
 		break;
 	case DECT_CC_RELEASE:
-		on_release(cc);
+		/* EN 300 175-5 §17.3.2.1: unknown transaction, no action. */
+		if (our_transaction(cc, &h))
+			on_release(cc);
 		break;
 	case DECT_CC_IWU_INFO: {
 		/*
@@ -623,9 +647,10 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 * closed, because {CC-INFO} is a legitimate message on a live
 		 * transaction and closing it would drop the call.
 		 */
-		if (cc->state == DECT_CC_ST_CALL_PRESENT ||
-		    cc->state == DECT_CC_ST_CONNECT_PENDING ||
-		    cc->state == DECT_CC_ST_ACTIVE) {
+		if (our_transaction(cc, &h) &&
+		    (cc->state == DECT_CC_ST_CALL_PRESENT ||
+		     cc->state == DECT_CC_ST_CONNECT_PENDING ||
+		     cc->state == DECT_CC_ST_ACTIVE)) {
 			size_t before = cc->keypad_len;
 
 			learn_keypad(cc, ies, ies_len);
@@ -645,7 +670,12 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 * same message and transaction value, and restart F<CC.03>.
 		 *
 		 * Bounded by represent_left so two peers cannot ping-pong.
+		 *
+		 * A release on a transaction we do not hold gets no action
+		 * (EN 300 175-5 §17.3.2.1).
 		 */
+		if (!our_transaction(cc, &h))
+			break;
 		if (cc->incoming && cc->state == DECT_CC_ST_CALL_PRESENT &&
 		    h.ti_flag == DECT_TI_RESPONDER &&
 		    h.ti_value == cc->ti_value && cc->setup_len &&
@@ -669,13 +699,15 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		break;
 	default:
 		/*
-		 * A transaction we do not implement. Close it rather than
-		 * ignoring it -- see queue_release_other(). Guarded so we
-		 * never release our own live transaction, and never answer a
-		 * release with a release.
+		 * On the call we hold, an unexpected or unrecognised message
+		 * ({CC-CALL-PROC}, {CC-SETUP-ACK}, {CC-NOTIFY} ...) is ignored
+		 * (EN 300 444 §6.9.4). On a transaction we do not hold, clear
+		 * it with "unknown transaction identifier" (EN 300 175-5
+		 * §17.3.2.1) rather than ignore it -- see queue_release_other().
+		 * Releases never reach here, so a release is never answered
+		 * with a release.
 		 */
-		if (cc->state == DECT_CC_ST_NULL ||
-		    h.ti_value != cc->ti_value || h.ti_flag != cc->ti_flag) {
+		if (!our_transaction(cc, &h)) {
 			queue_release_other(cc, h.ti_flag, h.ti_value,
 					    DECT_CC_REASON_UNKNOWN_TRANSACTION);
 			cc->stats.closed_unknown++;
