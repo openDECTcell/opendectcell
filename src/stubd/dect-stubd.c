@@ -432,6 +432,29 @@ struct stubd {
 		/* subslot=N: chip subscription slot, 1..6. 0 = use the store's. */
 		unsigned sub_slot;
 		/*
+		 * attcfg=N / attflag=N: the two subscription-attach bytes the
+		 * clean room [CR A-0113] found stock sends non-zero and we send
+		 * as 0x00 -- the suspected cause of GAP (Gigaset) handsets
+		 * refusing an incoming call with 0x32 while the AVM C4 rings.
+		 *
+		 *  attcfg  = the 0x020A config byte after the 16-octet UAK.
+		 *            Stock sends 0x01 per Gigaset (0x02 for the C4); the
+		 *            0x020A handler stores it at the UAK slot +0x10 and
+		 *            the CC state machine copies it into the connection
+		 *            record's auth/capability word (conn+0x21). Sending
+		 *            0 seeds a different security class, which a GAP
+		 *            handset gates call acceptance on. PRIMARY.
+		 *  attflag = the 0x0247 install flag byte (third byte). Stock
+		 *            sends bit 0 = 1 (A540 = 0x03); our 0x00 leaves a
+		 *            per-slot mask bit set where stock clears it.
+		 *            SECONDARY.
+		 *
+		 * Both default to the historical 0x00 so nothing changes unless
+		 * asked; set them to match stock for a given handset.
+		 */
+		uint8_t  att_cfg;
+		uint8_t  att_flag;
+		/*
 		 * setupdelay=N: wait N ms after the page response before the
 		 * {CC-SETUP}. [CR A-StockTrace-5 §15] measured a connection
 		 * bearer on stock ~360 ms before its setup; we send ours
@@ -2012,7 +2035,12 @@ static void send_subscription(struct stubd *s)
 	m.prim = 0x0247u;
 	m.param[0] = slot;		/* slot */
 	m.param[1] = 0x01u;		/* op: install/refresh */
-	m.param[2] = 0x00u;		/* status (unknown enumeration) */
+	/*
+	 * Third byte: [CR A-0113] stock sends bit 0 = 1 (A540 = 0x03); the
+	 * op=1 handler tests bit 0 and clears a per-slot mask bit on 1, sets
+	 * it on 0. Historical default 0x00; -a attflag= overrides.
+	 */
+	m.param[2] = s->audio.att_flag;
 	m.param_len = 3;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
@@ -2035,7 +2063,15 @@ static void send_subscription(struct stubd *s)
 	m.prim = 0x020Au;
 	m.param[0] = slot;		/* one-based, 17-byte record stride */
 	memcpy(&m.param[1], s->uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
-	m.param[1 + DECT_MM_UAK_LEN] = 0x00u;			/* extra (unknown) */
+	/*
+	 * Config byte after the UAK: [CR A-0113] stock sends 0x01 per Gigaset
+	 * (0x02 for the C4). The 0x020A handler stores it at UAK-slot +0x10
+	 * and the CC state machine copies it into conn+0x21, the per-connection
+	 * auth/capability word the ring progression uses. Our historical 0x00
+	 * seeds the wrong security class and a GAP handset then refuses the
+	 * call with 0x32. -a attcfg= sets it.
+	 */
+	m.param[1 + DECT_MM_UAK_LEN] = s->audio.att_cfg;	/* [CR A-0113] */
 	m.param_len = (uint16_t)(2 + DECT_MM_UAK_LEN);
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)			/* params carry the UAK: -p is local only */
@@ -4568,7 +4604,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
-		if (!eq && klen == 4 && !memcmp(key, "f626", 4))
+		if (eq && klen == 6 && !memcmp(key, "attcfg", 6))
+			a->att_cfg = (uint8_t)v;
+		else if (eq && klen == 7 && !memcmp(key, "attflag", 7))
+			a->att_flag = (uint8_t)v;
+		else if (!eq && klen == 4 && !memcmp(key, "f626", 4))
 			a->send_f626 = 1;
 		else if (!eq && klen == 7 && !memcmp(key, "nbcodec", 7))
 			a->nbcodec = 1;
@@ -5004,6 +5044,10 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           attcfg=N  0x020A config byte after the UAK (stock 0x01\n"
+		"                     per Gigaset, 0x02 C4; default 0x00) [CR A-0113]\n"
+		"           attflag=N 0x0247 install flag byte (stock bit0=1,\n"
+		"                     A540 0x03; default 0x00) [CR A-0113]\n"
 		"           ringattach=MS same, but MS ms after the handset's FIRST\n"
 		"                     C-plane contact (unattended runs; a lost A540\n"
 		"                     re-locks anywhere from 2 s to minutes later)\n"
