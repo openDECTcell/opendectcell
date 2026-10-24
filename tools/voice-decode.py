@@ -202,7 +202,7 @@ def main():
     for sc, name, rate, samples, d in results[:3]:
         if not d:
             continue
-        safe = name.replace(' ', '.').replace('@', '-')
+        safe = name.replace(' ', '.').replace('@', '-').replace('/', '-')
         path = os.path.join(outdir, '%s.%s.wav' % (base, safe))
         write_wav(path, samples, rate)
         print('wrote %s' % path)
