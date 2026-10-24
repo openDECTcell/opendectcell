@@ -67,6 +67,9 @@ struct dect_link {
 	 */
 	uint8_t  ciss[DECT_LAPC_MSG_MAX];
 	size_t   ciss_len;
+	/* One pending LCE message: the {LCE-PAGE-REJECT}, sent first. */
+	uint8_t  lce[DECT_LAPC_MSG_MAX];
+	size_t   lce_len;
 
 	/*
 	 * Optional sink for every NWK message the link hands to the DLC.
@@ -114,6 +117,7 @@ struct dect_link_ind {
 	 */
 	uint8_t  page_id[DECT_CC_ID_MAX];
 	size_t   page_id_len;
+	uint8_t  page_ti;		/* its transaction value, for the reject */
 };
 
 /*
@@ -162,6 +166,16 @@ void dect_link_tick(struct dect_link *l, uint64_t now);
  * clock still makes calls.
  */
 int dect_link_send_time(struct dect_link *l, const struct dect_time *t);
+
+/*
+ * Queue {LCE-PAGE-REJECT} for a page response from a handset we did not
+ * page: the full IPUI it answered with and the transaction value it used
+ * (TS 102 527-1 §7.3.8.3.1, table 20). The caller then releases the link,
+ * which the clause requires "immediately". Returns 0 if queued, -1 if the
+ * identity does not fit or a reject is already pending.
+ */
+int dect_link_page_reject(struct dect_link *l, const uint8_t *ipui,
+			  size_t ipui_len, uint8_t ti_value);
 
 /* Watch every NWK message the link sends. Pass NULL to stop watching. */
 void dect_link_set_tx_log(struct dect_link *l,

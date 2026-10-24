@@ -296,6 +296,7 @@ struct stubd {
 	int         cc_id_unarmed_warned;
 	/* rejected_identity of this connection's CC, as last reported */
 	uint32_t    cc_rejected_seen;
+	unsigned    page_rejects;	/* {LCE-PAGE-REJECT}s sent */
 	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
@@ -4085,8 +4086,10 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	/*
 	 * TS 102 527-1 §7.3.8.2.1: only a page response with the IPUI we
 	 * paged stops the paging. Another handset's answer is not ours to
-	 * ring. The standard's answer to it is {LCE-PAGE-REJECT} (§7.3.8.3.1),
-	 * which we do not send yet; we ignore it and keep waiting.
+	 * ring: §7.3.8.3.1 answers it with {LCE-PAGE-REJECT} carrying its full
+	 * IPUI, and releases the unwanted link at once. We keep waiting for
+	 * the right one. The release goes out only once the reject is in LAPC
+	 * ahead of it; otherwise the link is left for its own timers.
 	 */
 	size_t tgt_len;
 	const uint8_t *tgt = ring_target_port_id(s, &tgt_len);
@@ -4094,8 +4097,23 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP &&
 	    tgt_len && (ind.page_id_len != tgt_len ||
 			memcmp(ind.page_id, tgt, tgt_len) != 0)) {
+		int rejected = dect_link_page_reject(&s->reg.link, ind.page_id,
+						     ind.page_id_len,
+						     ind.page_ti) == 0;
+
+		if (rejected) {
+			dect_link_drain(&s->reg.link, now);
+			rejected = !s->reg.link.lce_len;
+		}
+		if (rejected) {
+			dect_lapc_disconnect(&s->reg.link.lapc);
+			s->page_rejects++;
+		}
+		pump_lapc(s);
 		printf("ring: page response from a handset we did not page "
-		       "(identity differs) -- ignored, still waiting\n");
+		       "(identity differs) -- %s, still waiting\n",
+		       rejected ? "LCE-PAGE-REJECT sent, link released"
+				: "could not send LCE-PAGE-REJECT, ignored");
 		ind.page_response = 0;
 	}
 	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP) {

@@ -30,7 +30,14 @@ static void drain_nwk(struct dect_link *l, uint64_t now)
 	size_t mlen;
 
 	while (!l->lapc.outstanding) {
-		mlen = dect_mm_poll(&l->mm, msg, sizeof(msg));
+		mlen = 0;
+		if (l->lce_len) {
+			mlen = l->lce_len;
+			memcpy(msg, l->lce, mlen);
+			l->lce_len = 0;
+		}
+		if (mlen == 0)
+			mlen = dect_mm_poll(&l->mm, msg, sizeof(msg));
 		if (mlen == 0)
 			mlen = dect_cc_poll(&l->cc, msg, sizeof(msg));
 		if (mlen == 0 && l->ciss_len) {
@@ -58,6 +65,25 @@ void dect_link_set_tx_log(struct dect_link *l,
 {
 	l->tx_log = fn;
 	l->tx_log_ctx = ctx;
+}
+
+int dect_link_page_reject(struct dect_link *l, const uint8_t *ipui,
+			  size_t ipui_len, uint8_t ti_value)
+{
+	size_t n;
+
+	if (l->lce_len || !ipui || !ipui_len)
+		return -1;
+	n = dect_nwk_build_hdr(l->lce, sizeof(l->lce), DECT_PD_LCE,
+			       DECT_TI_RESPONDER, ti_value,
+			       DECT_LCE_PAGE_REJECT);
+	if (n)
+		n = dect_nwk_put_ie(l->lce, sizeof(l->lce), n,
+				    DECT_IE_PORTABLE_IDENTITY, ipui, ipui_len);
+	if (!n)
+		return -1;
+	l->lce_len = n;
+	return 0;
 }
 
 int dect_link_send_time(struct dect_link *l, const struct dect_time *t)
@@ -188,6 +214,7 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			    pid_len <= sizeof(ind->page_id)) {
 				memcpy(ind->page_id, pid, pid_len);
 				ind->page_id_len = pid_len;
+				ind->page_ti = h.ti_value;
 				ind->page_response = 1;
 			}
 		} else if (dect_nwk_parse(ind->nwk, ind->nwk_len, &h, &ies,

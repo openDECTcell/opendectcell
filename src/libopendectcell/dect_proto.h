@@ -157,8 +157,15 @@
  *    consumer that holds nothing behaves exactly as under API 11. To serve
  *    several handsets, dect_mm_hold() each after every dect_link_init(),
  *    and read mm.adopted to know which one a link is serving.
+ *
+ * 13: {LCE-PAGE-REJECT} (2026-10-25). Layout changes: struct dect_link
+ *    gains lce/lce_len, struct dect_link_ind gains page_ti. New:
+ *    dect_link_page_reject(), DECT_LCE_PAGE_REJECT. Nothing changes until
+ *    you call it: on a page response whose page_id is not the handset you
+ *    paged, queue the reject and release the link (TS 102 527-1
+ *    §7.3.8.3.1), as dect-stubd does.
  */
-#define OPENDECTCELL_API_VERSION 12
+#define OPENDECTCELL_API_VERSION 13
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

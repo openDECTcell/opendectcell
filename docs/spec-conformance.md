@@ -1177,7 +1177,7 @@ All verified on the A540 in runs 19 and 20 unless marked "unit-tested".
 | CC transaction matching (an external review #3) | `0ac7e38` | **fixed**; CONNECT/CONNECT-ACK verified (runs 19, 20) |
 | mail parser underlength (an external review #1) | `aa41389` | **fixed**, unit-tested (ASan) |
 | end-of-run park never sent (an external review #2) | `8ded31a` | **fixed**, park line in every run since 14 |
-| any LCE message counted as the page response (an external review #10) | `02b9039` | **fixed**; A540 accepted (run 20). `{LCE-PAGE-REJECT}` on a mismatch still **open** |
+| any LCE message counted as the page response (an external review #10) | `02b9039`, `{LCE-PAGE-REJECT}` in API 13 | **fixed**; A540 accepted (run 20). `{LCE-PAGE-REJECT}` plus link release on a mismatch (TS 102 527-1 §7.3.8.3.1): unit-tested, not yet seen on hardware |
 | CONN_DOWN not checked against its handle (an external review #10) | `12cb980` | **fixed**; 102 misattributed releases in the corpus |
 | LOCATE-REQUEST identity (an external review #1) | `7e7e5f4` | **fixed**, plus the pre-authentication overwrite; A540 accepted (run 20) |
 | transmit loss on failed write (an external review #2) | `35a7c20` | **fixed**; `write_short 0` (run 20) |

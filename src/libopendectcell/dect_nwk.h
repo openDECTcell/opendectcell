@@ -24,6 +24,7 @@
 /* Protocol discriminators (§7.2). */
 #define DECT_PD_LCE	0x0u
 #define DECT_LCE_PAGE_RESPONSE	0x71u	/* EN 300 175-5 §6.3.7.1 */
+#define DECT_LCE_PAGE_REJECT	0x72u	/* TS 102 527-1 table 20 */
 #define DECT_PD_CC	0x3u
 #define DECT_PD_CISS	0x4u
 #define DECT_PD_MM	0x5u

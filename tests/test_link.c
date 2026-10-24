@@ -145,6 +145,63 @@ static void test_cc_admits_only_the_handset_mm_holds(void)
 	}
 }
 
+static uint8_t tx_seen_buf[64];
+static size_t tx_seen_len;
+
+static void tx_seen(void *ctx, const uint8_t *msg, size_t len)
+{
+	(void)ctx;
+	if (!tx_seen_len && len <= sizeof(tx_seen_buf)) {
+		memcpy(tx_seen_buf, msg, len);
+		tx_seen_len = len;
+	}
+}
+
+/*
+ * A page response from a handset we did not page gets {LCE-PAGE-REJECT}:
+ * LCE, the PT's transaction value with our flag, type 0x72, and its full
+ * IPUI (TS 102 527-1 §7.3.8.3.1, table 20). It goes out before anything
+ * MM or CC has queued.
+ */
+static void test_page_reject_is_built_from_the_response(void)
+{
+	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[32], sent[64];
+	size_t n;
+
+	init(&l);
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_LCE, DECT_TI_ORIGINATOR,
+			       3, DECT_LCE_PAGE_RESPONSE);
+	n = dect_nwk_put_ie(msg, sizeof(msg), n, DECT_IE_PORTABLE_IDENTITY,
+			    ipui, sizeof(ipui));
+	feed_nwk(&l, msg, n, &ind);
+	CHECK_EQ(ind.page_response, 1u);
+	CHECK_EQ(ind.page_ti, 3u);
+
+	CHECK_EQ(dect_link_page_reject(&l, ind.page_id, ind.page_id_len,
+				       ind.page_ti), 0);
+	CHECK_EQ(dect_link_page_reject(&l, ind.page_id, ind.page_id_len,
+				       ind.page_ti), -1);	/* one deep */
+	CHECK_EQ(l.lce_len, 2u + 2u + sizeof(ipui));
+	memcpy(sent, l.lce, l.lce_len);
+	CHECK_EQ(sent[0], 0xB0u);		/* F=1, TV=3, PD LCE */
+	CHECK_EQ(sent[1], DECT_LCE_PAGE_REJECT);
+	CHECK_EQ(sent[2], DECT_IE_PORTABLE_IDENTITY);
+	CHECK_EQ(sent[3], sizeof(ipui));
+	CHECK(memcmp(&sent[4], ipui, sizeof(ipui)) == 0);
+	CHECK_EQ(dect_link_page_reject(&l, NULL, 0, 0), -1);
+
+	/* and it leaves through the link like any NWK message */
+	tx_seen_len = 0;
+	dect_link_set_tx_log(&l, tx_seen, NULL);
+	dect_link_drain(&l, 0);
+	CHECK_EQ(tx_seen_len, 2u + 2u + sizeof(ipui));
+	CHECK_EQ(tx_seen_buf[1], DECT_LCE_PAGE_REJECT);
+	CHECK_EQ(l.lce_len, 0u);
+}
+
 /* A fresh link owns its own state and has nothing to send. */
 static void test_init_is_quiet(void)
 {
@@ -358,6 +415,7 @@ int main(void)
 	test_init_is_quiet();
 	test_page_response_carries_the_identity();
 	test_cc_admits_only_the_handset_mm_holds();
+	test_page_reject_is_built_from_the_response();
 	test_two_links_are_independent();
 	test_outbound_message_becomes_an_append_mail();
 	test_a_queued_message_needs_a_tick();
