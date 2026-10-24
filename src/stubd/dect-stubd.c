@@ -4184,6 +4184,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 	}
 	dect_cc_set_signal(&sl->link.cc, s->audio.signal_on,
 			   s->audio.signal_value);
+	dect_cc_set_busy(&sl->link.cc, 1);	/* no audio path here */
 	sl->active = 1;
 	sl->handle = handle;
 	sl->adopted = -1;

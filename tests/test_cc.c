@@ -1579,6 +1579,38 @@ static void test_offer_without_g726_names_nothing(void)
 	CHECK_EQ(cc.chosen_codec, 0u);
 }
 
+/*
+ * A busy link takes list access and refuses speech: "insufficient
+ * resources", as §17.3.3 does for a SETUP while another call is up.
+ */
+static void test_busy_link_refuses_speech_and_takes_list_access(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_busy(&cc, 1);
+	n = pp_setup(buf, sizeof(buf), 0);		/* basic speech */
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 4u);
+	CHECK_EQ(out[0], 0x83u);			/* F=1, TV=0, CC */
+	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[3], DECT_CC_REASON_INSUFFICIENT_RESOURCES);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(cc.stats.rejected_busy, 1u);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+
+	dect_cc_init(&cc);
+	dect_cc_set_busy(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 1, 0x28);	/* list access */
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	CHECK_EQ(cc.stats.rejected_busy, 0u);
+}
+
 int main(void)
 {
 	test_setup_collision_releases_the_handsets_call();
@@ -1614,6 +1646,7 @@ int main(void)
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();
+	test_busy_link_refuses_speech_and_takes_list_access();
 	test_peer_basic_service_decides_speech();
 	test_setup_without_basic_service_is_not_speech();
 	test_basic_service_is_not_found_inside_a_payload();

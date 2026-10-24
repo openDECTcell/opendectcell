@@ -533,6 +533,12 @@ static void on_setup(struct dect_cc *cc)
 		cc->state = DECT_CC_ST_PROCEEDING;
 		return;
 	}
+	if (cc->busy) {
+		queue_release_com(cc, DECT_CC_REASON_INSUFFICIENT_RESOURCES);
+		cc->state = DECT_CC_ST_NULL;
+		cc->stats.rejected_busy++;
+		return;
+	}
 	/*
 	 * Accept the call: CALL-PROC ("I am handling it") then CONNECT (we are
 	 * the far end for the loopback test, so we answer at once). Both are
@@ -599,6 +605,11 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 uint64_t dect_cc_next_deadline(const struct dect_cc *cc)
 {
 	return cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
+}
+
+void dect_cc_set_busy(struct dect_cc *cc, int busy)
+{
+	cc->busy = busy ? 1u : 0u;
 }
 
 void dect_cc_set_gate(struct dect_cc *cc, const uint8_t *port_id,

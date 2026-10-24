@@ -108,6 +108,8 @@ struct dect_cc_stats {
 	uint32_t rejected_identity;
 	/* handset-placed calls that negotiated, but offered no G.726 */
 	uint32_t codec_unmatched;
+	/* handset-placed calls refused by dect_cc_set_busy() */
+	uint32_t rejected_busy;
 };
 
 /* No <<BASIC-SERVICE>> was present in the peer's {CC-SETUP}. */
@@ -147,6 +149,8 @@ struct dect_cc {
 	uint8_t peer_g726[3];
 	uint8_t peer_has_g726;
 	uint8_t chosen_codec;
+
+	uint8_t busy;		/* dect_cc_set_busy() */
 
 	/* The identity gate, see dect_cc_set_gate(). */
 	uint8_t gate_armed;
@@ -273,6 +277,16 @@ void dect_cc_set_codec_list(struct dect_cc *cc, const uint8_t *list, size_t len)
  */
 void dect_cc_set_gate(struct dect_cc *cc, const uint8_t *port_id,
 		      size_t port_id_len);
+
+/*
+ * Refuse every handset-placed call except list access: a {CC-SETUP} whose
+ * call class is not 0010 gets {CC-RELEASE-COM} "insufficient resources",
+ * the reason EN 300 175-5 §17.3.3 gives a SETUP while another call is in
+ * progress. For a link with no audio path behind it -- dect-stubd's side
+ * links, which serve location registration and list access while the main
+ * link carries the call -- so a handset is not connected into silence.
+ */
+void dect_cc_set_busy(struct dect_cc *cc, int busy);
 
 /* Feed a decoded NWK message (the LAPC I-frame payload). Non-CC messages are
  * ignored. Any responses are queued; pull them with dect_cc_poll(). */

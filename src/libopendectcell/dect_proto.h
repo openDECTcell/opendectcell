@@ -174,8 +174,14 @@
  *    <<CODEC-LIST>> with G.726 alone (TS 102 527-1 §7.3.3) -- the codec the
  *    narrowband audio path carries. A basic-speech SETUP without a list is
  *    answered exactly as before. Read chosen_codec before binding audio.
+ *
+ * 15: dect_cc_set_busy() (2026-10-25). Layout changes: struct dect_cc gains
+ *    busy, dect_cc_stats gains rejected_busy. Nothing changes until you
+ *    call it: a busy CC refuses every handset-placed call but list access
+ *    with "insufficient resources" (EN 300 175-5 §17.3.3). For links with
+ *    no audio path behind them.
  */
-#define OPENDECTCELL_API_VERSION 14
+#define OPENDECTCELL_API_VERSION 15
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
