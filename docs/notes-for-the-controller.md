@@ -451,3 +451,30 @@ presented *inside* that call as a pseudo call waiting (`{CC-CONNECT}` first,
 then the call-waiting indication), not with a fresh `{CC-SETUP}`. We do not
 do that yet; it only matters while a sync is running, which with real data
 is seconds after attach rather than for ever.
+
+## Incoming calls ring on a Gigaset: transaction value 0 `[2026-10-24 night]`
+
+The Gigaset A540 now rings on an FP-originated call (`docs/call-g7.md`,
+runs 14-16). The cause was ours: the daemon rotated the CC transaction value
+per call, and EN 300 444 §6.9.2 requires the lowest free value. The A540
+refuses value 1 with `0x32` and alerts on 0; the C4 accepts both, which is
+why it never showed. No ABI change.
+
+**What to act on when you drive `dect_cc` yourself:**
+
+- Leave the transaction value alone. `dect_cc_init()` sets 0, and
+  `dect_cc_set_next_ti()` is for tests only. One `struct dect_cc` runs one
+  call, so 0 is always the lowest free value for a call we originate. A
+  transaction left open by a lost call is cleared by releasing it, not by
+  choosing another value.
+- Send `<<SIGNAL>>` in every incoming `{CC-SETUP}` (`dect_cc_set_signal()`,
+  `0x41` external, `0x40` internal). EN 300 444 §8.14 requires the FT to
+  start alerting by one of two methods, and the library sends nothing by
+  default yet.
+- For a CAT-iq external incoming call, set `<<CALL-INFORMATION>>` with the
+  line identifier, line type, a system-wide call identifier and call status
+  "CS call setup" (`dect_cc_set_callinfo()`; TS 102 527-3 §7.4.5.3.2,
+  §7.4.6.3, figure 50). The A540 rings without it, but it is mandatory, and
+  the line and call ids are yours to own, like the list data.
+- Expect the handset's chosen codec in `{CC-ALERTING}`: the A540 sent a
+  one-entry `<<CODEC-LIST>>` with G.722 there.
