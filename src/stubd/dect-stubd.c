@@ -2113,8 +2113,14 @@ static void sub_save(struct stubd *s)
 	r.slot = stubd_sub_slot(s);
 	memcpy(r.uak, s->uak, DECT_MM_UAK_LEN);
 	r.magic = SUB_MAGIC2;
-	r.port_id_len = (uint8_t)s->reg.link.mm.port_id_len;
-	memcpy(r.port_id, s->reg.link.mm.port_id, sizeof(r.port_id));
+	/* the current handset's identity; the link MM may serve another */
+	if (s->sub_port_id_len) {
+		r.port_id_len = (uint8_t)s->sub_port_id_len;
+		memcpy(r.port_id, s->sub_port_id, sizeof(r.port_id));
+	} else {
+		r.port_id_len = (uint8_t)s->reg.link.mm.port_id_len;
+		memcpy(r.port_id, s->reg.link.mm.port_id, sizeof(r.port_id));
+	}
 	r.cc_port_id_len = (uint8_t)s->cc_port_id_len;
 	memcpy(r.cc_port_id, s->cc_port_id, sizeof(r.cc_port_id));
 	r.cc_fixed_id_len = (uint8_t)s->cc_fixed_id_len;
@@ -3207,6 +3213,28 @@ static void log_nwk_out(void *ctx, const uint8_t *msg, size_t len)
 	fflush(stdout);
 }
 
+/*
+ * The TPUI of the handset we ring, by MM's own rule for its slot. Not the
+ * link's MM: that is whichever handset the link last served. Measured
+ * 2026-10-25 (run 32): the A540 had placed a call on the link, MM had
+ * adopted it, and the page for the C430A went out as 0x1101 -- the A540's.
+ * The A540 answered, correctly, and got {LCE-PAGE-REJECT}.
+ */
+static void ring_target_tpui(const struct stubd *s, uint8_t tpui[3])
+{
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
+	memset(&cfg, 0, sizeof(cfg));
+	if (s->cur == 0 || !s->n_hs)
+		cfg.sub_slot = stubd_sub_slot(s);
+	else
+		cfg.sub_slot = (uint8_t)(s->audio.sub_slot ? s->audio.sub_slot
+							   : s->hs[0].slot);
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tpui(&mm, tpui);
+}
+
 static void send_page(struct stubd *s)
 {
 	struct dect_mail m;
@@ -3223,7 +3251,7 @@ static void send_page(struct stubd *s)
 	 * pool-assigned TPUI the two are no longer the same number, and a page
 	 * built from the slot would address the wrong handset.
 	 */
-	dect_mm_tpui(&s->reg.link.mm, tpui);
+	ring_target_tpui(s, tpui);
 	m.param[0] = ring_page_info(s);
 	m.param[1] = tpui[1];
 	m.param[2] = tpui[2];
@@ -4337,17 +4365,17 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * does not need it either. A handset that never places a call, or a
 	 * freshly registered one, could not be rung at all.
 	 */
-	if (!s->cc_fixed_id_len && s->have_rfpi &&
-	    s->reg.link.mm.port_id_len &&
-	    s->reg.link.mm.port_id_len <= sizeof(s->cc_port_id)) {
+	if (!s->cc_fixed_id_len && s->have_rfpi && s->sub_port_id_len &&
+	    s->sub_port_id_len <= sizeof(s->cc_port_id)) {
 		uint8_t fid[DECT_CC_ID_MAX];
 		size_t n = dect_mm_fixed_identity(&s->reg.link.mm, fid,
 						  sizeof(fid));
 
 		if (n) {
-			memcpy(s->cc_port_id, s->reg.link.mm.port_id,
-			       s->reg.link.mm.port_id_len);
-			s->cc_port_id_len = s->reg.link.mm.port_id_len;
+			/* this handset's identity, not the link MM's */
+			memcpy(s->cc_port_id, s->sub_port_id,
+			       s->sub_port_id_len);
+			s->cc_port_id_len = s->sub_port_id_len;
 			memcpy(s->cc_fixed_id, fid, n);
 			s->cc_fixed_id_len = n;
 			printf("call: derived the identities for calling the "
