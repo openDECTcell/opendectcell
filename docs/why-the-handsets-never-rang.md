@@ -200,3 +200,85 @@ mechanisms this week fitted the evidence and died to a control: the bearer
 arm, the `{CC-SETUP}` collision, the DSP regions, the page table, and now the
 beacon. The bring-up gap has survived every control so far — which is not the
 same as being proven.
+
+## 2026-10-24, after the OpenWrt reflash: two findings, one of which voids evidence
+
+### The FP-originated {CC-SETUP} addressed the wrong handset
+
+`[observed]` Every FP-originated `{CC-SETUP}` this project has ever sent carried
+the **same** `<<PORTABLE-IDENTITY>>`, whichever handset was being rung:
+
+| run | handset that answered the page | IPUI in our `{CC-SETUP}` | |
+|---|---|---|---|
+| `vRINGC430A-20261024-104558`  | `80 a8 03 de ad 00 03` | `80 a8 02 de ad 00 01` | mismatch |
+| `vRINGAS690H-20261024-105045` | `80 a8 03 de ad ...`   | `80 a8 02 de ad 00 01` | mismatch |
+| `vRINGA540-20261024-103949`   | `80 a8 02 de ad 00 01` | `80 a8 02 de ad 00 01` | correct |
+
+Cause: `cc_id_learned` is set only when learning and is never set by
+`sub_load()`, so **every run starts with the gate open** and the first CC
+message from any handset on air was learned and persisted into whichever `-s`
+store was open. One handset runs a CAT-iq list-access call every ~22 s
+(`{CC-SETUP}` call class 2, an `<<IWU-TO-IWU>>` dialog, `{CC-RELEASE}`), so it
+reliably spoke first and won that race. The C430A and AS690H stores were
+poisoned at registration, on 2026-10-24, while the A540 was powered on.
+
+**What this voids.** "All three handsets refuse identically, therefore it is
+our base" does **not** hold. The C430A and AS690H were paged correctly,
+answered the page correctly, and were then offered a call addressed to a
+different handset; their `0x32` is explained by that and says nothing about our
+CC content. Only the A540 runs tested what they were believed to test.
+
+Fixed: `dect_cc_peer_is()` (`src/libopendectcell/dect_cc.c`, tested in
+`tests/test_cc.c`, both mutations caught) now gates the learn, and the daemon
+prints `ignoring call identities from a handset we are not subscribed to`.
+`cc_id_learned` is deliberately NOT set on the reject, so the subscribed
+handset may still be learned later in the same run.
+
+### The {CC-SETUP} collision is dead for the A540 -- properly this time
+
+`[observed]` In `vRINGA540-20261024-103949` our setup went out in a **gap**
+between the handset's own service calls: the previous released at 12565, the
+next began at 13724, ours went at 13506. Correctly addressed, handset idle,
+still `0x32`. The collision reading of EN 300 175-5 §9.5.2.3 / §17.3.3 is
+eliminated for this handset.
+
+### We were running a different chip firmware than the reference capture
+
+`[observed]` `fwload.sh` defaulted to the **08.25** second-stage STUB; the
+stock capture and every address the the hardware-analysis step derived are **07.56**
+(`[CR A-0109]`: different dispatcher, different config base, "entirely
+different addresses"). So every stock-vs-ours RAM comparison made before this
+was cross-build, including "`0x96ad` is all zeros on our base".
+
+Tested rather than assumed: the box was loaded with the 07.56 STUB and the
+ring re-run. **Identical outcome** -- page -> `0x0242`/`0x0200` -> page
+response -> `{CC-SETUP}` -> `0x32`, no `0x0209`. The STUB build is **not** the
+cause. It did expose one build-specific defect: `uak_readback` reads `MATCHES`
+on 08.25 and `MISSING` on 07.56, so `0x9518 + (slot-1)*0x11` is an 08.25
+address and our UAK write lands nowhere on 07.56.
+
+### What survives: the 0x0209 -> 0x0208 exchange
+
+`[CR A-0107]` gives stock's working ring as
+page -> `RX 0x0242` -> `RX 0x0200` -> `RX 0x0209` -> `TX 0x0208` -> handset alerts.
+Measured on our side, both builds:
+
+| step | stock | us |
+|---|---|---|
+| `0x015e` per call | never | 0 -- already matching |
+| `RX 0x0242` / `RX 0x0200` after the page | yes | **yes, both** |
+| `RX 0x0209` -> `TX 0x0208` | rings right after | **0 and 0** |
+| `0x96ad` | populated | all zeros (but cross-build until now) |
+
+So A-0107's hypothesis #4 is weakened: we *do* get the chip's page-response
+pair, i.e. the chip matches the page response even with `0x96ad` reading zeros.
+The single surviving divergence is that the chip never asks us for the auth,
+so we never answer, and that is exactly where stock's handset starts alerting.
+What makes the chip emit `0x0209` is a chip-mail question and is with the room.
+
+### Not the cause, recorded so it is not re-tested
+
+The page info byte. Stock pages `2c`, we page `0c`, and that is only the
+documented derivation `0x0C | (basic service == 8 ? 0x20 : 0)` -- stock's setup
+was wideband, ours is narrowband. `[CR A-0076]` already established the chip
+never reads that byte and both values produce byte-identical pages.

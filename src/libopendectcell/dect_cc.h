@@ -190,6 +190,23 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms);
 int dect_cc_peer_is_speech(const struct dect_cc *cc);
 
 /*
+ * Does the peer on this transaction carry <<PORTABLE-IDENTITY>> `port_id`?
+ * True on a match, and true when `port_id_len` is 0 -- there is then no
+ * subscribed identity to contradict, so the caller decides.
+ *
+ * Call this before keeping anything a CC transaction tells you about "the"
+ * handset. Measured 2026-10-24: one handset runs a CAT-iq list-access call
+ * every ~22 s, and the daemon learned ITS identities into whichever
+ * subscription store was open -- so the C430A and AS690H were registered with
+ * the A540's portable identity, and every FP-originated {CC-SETUP} afterwards
+ * offered the call to a handset that was not listening. Both handsets paged,
+ * answered, and refused with "insufficient resources", which read as three
+ * handsets agreeing when it was one handset being addressed three times.
+ */
+int dect_cc_peer_is(const struct dect_cc *cc, const uint8_t *port_id,
+		    size_t port_id_len);
+
+/*
  * Keypad information collected on this transaction, oldest first, and its
  * length. The buffer is NOT NUL-terminated -- use the length. Returns NULL
  * when nothing has been received.

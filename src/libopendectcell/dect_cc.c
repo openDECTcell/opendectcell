@@ -348,6 +348,16 @@ static void learn_basic_service(struct dect_cc *cc, const uint8_t *ies,
  * service nibble says. DECT_CC_SVC_NONE is 0xFF, whose class nibble is
  * reserved, so an absent element falls through to 0 on its own.
  */
+int dect_cc_peer_is(const struct dect_cc *cc, const uint8_t *port_id,
+		    size_t port_id_len)
+{
+	if (!port_id_len)
+		return 1;
+	if (cc->peer_port_id_len != port_id_len)
+		return 0;
+	return memcmp(cc->peer_port_id, port_id, port_id_len) == 0;
+}
+
 int dect_cc_peer_is_speech(const struct dect_cc *cc)
 {
 	switch (cc->peer_basic_service >> 4) {

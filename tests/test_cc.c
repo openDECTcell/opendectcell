@@ -490,6 +490,42 @@ static void test_facility_does_not_disturb_a_live_call(void)
  * path to one of those is wrong, and we did it 145 times in one corpus.
  * EN 300 175-5 Â§7.7.5 figure 18: high nibble call class, low nibble service.
  */
+/*
+ * The identity gate. A CC transaction tells us who the peer is, and the
+ * daemon persists that -- so it must be able to tell "the handset I am
+ * subscribed to" from "some other handset that happened to speak first".
+ * Ground-truth bytes are written out literally here rather than taken from
+ * pp_setup(), so that a change to the helper cannot make this agree with
+ * itself.
+ */
+static void test_peer_identity_gate(void)
+{
+	static const uint8_t subscribed[7] =
+		{ 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x44 };
+	static const uint8_t other[7] =
+		{ 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x45 };	/* last byte */
+	struct dect_cc cc;
+	uint8_t buf[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+
+	/* The peer identity actually reached the CC entity. */
+	CHECK_EQ(cc.peer_port_id_len, sizeof(subscribed));
+	CHECK_EQ(memcmp(cc.peer_port_id, subscribed, sizeof(subscribed)), 0);
+
+	/* Same handset. */
+	CHECK_EQ(dect_cc_peer_is(&cc, subscribed, sizeof(subscribed)), 1);
+	/* A different handset, differing in one byte, must not pass. */
+	CHECK_EQ(dect_cc_peer_is(&cc, other, sizeof(other)), 0);
+	/* A prefix is not a match: the length has to agree too. */
+	CHECK_EQ(dect_cc_peer_is(&cc, subscribed, sizeof(subscribed) - 1), 0);
+	/* No subscribed identity -- nothing to contradict, caller decides. */
+	CHECK_EQ(dect_cc_peer_is(&cc, NULL, 0), 1);
+}
+
 static void test_peer_basic_service_decides_speech(void)
 {
 	static const struct { uint8_t svc; int speech; } cases[] = {
@@ -967,6 +1003,7 @@ int main(void)
 	test_ignores_non_cc();
 	test_closes_a_facility_transaction();
 	test_facility_does_not_disturb_a_live_call();
+	test_peer_identity_gate();
 	test_peer_basic_service_decides_speech();
 	test_setup_without_basic_service_is_not_speech();
 	test_basic_service_is_not_found_inside_a_payload();

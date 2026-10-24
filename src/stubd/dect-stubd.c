@@ -262,6 +262,7 @@ struct stubd {
 	 * still better, so it is allowed to overwrite a derived one.
 	 */
 	int         cc_id_learned;
+	int         cc_id_foreign_warned;
 	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
@@ -3613,7 +3614,31 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * no guesswork about identity types, bit lengths or padding.
 	 */
 	if (ind.cc_message && !s->cc_id_learned &&
-	    s->reg.link.cc.peer_fixed_id_len) {
+	    s->reg.link.cc.peer_fixed_id_len &&
+	    !dect_cc_peer_is(&s->reg.link.cc, s->sub_port_id,
+			     s->sub_port_id_len)) {
+		/*
+		 * A CC transaction from a handset we are not subscribed to.
+		 * Learning from it would persist ANOTHER handset's identities
+		 * into this handset's store, and every later FP-originated
+		 * {CC-SETUP} would address the wrong handset -- which is
+		 * exactly what happened on 2026-10-24: a second handset runs a
+		 * CAT-iq list-access call every ~22 s, so it reliably spoke
+		 * first and won the race for `cc_id_learned`.
+		 *
+		 * `cc_id_learned` is deliberately NOT set here: the subscribed
+		 * handset may still speak later in this run and should be
+		 * allowed to.
+		 */
+		if (!s->cc_id_foreign_warned) {
+			s->cc_id_foreign_warned = 1;
+			printf("call: ignoring call identities from a handset "
+			       "we are not subscribed to -- not learning, "
+			       "not saving\n");
+			fflush(stdout);
+		}
+	} else if (ind.cc_message && !s->cc_id_learned &&
+		   s->reg.link.cc.peer_fixed_id_len) {
 		memcpy(s->cc_port_id, s->reg.link.cc.peer_port_id,
 		       sizeof(s->cc_port_id));
 		s->cc_port_id_len = s->reg.link.cc.peer_port_id_len;
