@@ -297,6 +297,11 @@ struct stubd {
 	/* rejected_identity of this connection's CC, as last reported */
 	uint32_t    cc_rejected_seen;
 	unsigned    page_rejects;	/* {LCE-PAGE-REJECT}s sent */
+	/* The Fon/DECT LED, see led_tick(). */
+	int         led_fd;
+	int         led_state;		/* last written, -1 = unknown */
+	uint64_t    led_next;
+	uint32_t    led_traffic, led_traffic_seen;
 	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
@@ -529,6 +534,8 @@ struct stubd {
 		size_t   codeclist_len;
 		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
+		const char *led_path;	/* led=PATH, NULL = the default */
+		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
 		/*
 		 * remodebit6 keeps flag bit 6 SET in the re-assign, which asks
@@ -3829,6 +3836,61 @@ static void send_chip_cipher(struct stubd *s)
  * signature and the 0x0244 mail are the library's (openDECTcell#67); ours is only
  * the transport.
  */
+/*
+ * The Fon/DECT LED. The 7520 has no LED of its own for DECT: its front
+ * panel shares one "Fon/DECT" LED, green:fon under OpenWrt, which nothing
+ * else drives. On while the radio is up, blinking while C-plane traffic
+ * moves or a call is up, off when parked.
+ *
+ * The blink is sampled, not counted: every LED_TICK_MS the loop asks whether
+ * anything moved since the last look and toggles if so. Signalling runs at
+ * about 50 segments/s but a call is 8000 voice frames/s, so a per-packet
+ * divisor would blink at 5 Hz in one case and 800 Hz in the other. Sampled,
+ * it is ~5 Hz either way, at most ten sysfs writes a second, written only
+ * when the state changes.
+ */
+#define LED_DEFAULT_PATH	"/sys/class/leds/green:fon/brightness"
+#define LED_TICK_MS		100u
+
+static void led_write(struct stubd *s, int on)
+{
+	if (s->led_fd < 0 || s->led_state == on)
+		return;
+	if (pwrite(s->led_fd, on ? "1" : "0", 1, 0) == 1)
+		s->led_state = on;
+}
+
+static void led_open(struct stubd *s)
+{
+	const char *path = s->audio.led_path ? s->audio.led_path
+					     : LED_DEFAULT_PATH;
+
+	s->led_fd = -1;
+	s->led_state = -1;
+	if (s->audio.no_led)
+		return;
+	s->led_fd = open(path, O_WRONLY | O_CLOEXEC);
+	if (s->led_fd < 0 && s->audio.led_path)
+		printf("led: cannot open %s: %s\n", path, strerror(errno));
+}
+
+static void led_tick(struct stubd *s, uint64_t now, int radio_on)
+{
+	if (s->led_fd < 0 || now < s->led_next)
+		return;
+	s->led_next = now + LED_TICK_MS;
+	if (!radio_on) {
+		led_write(s, 0);
+		return;
+	}
+	if (s->led_traffic != s->led_traffic_seen || s->reg.call_bound) {
+		s->led_traffic_seen = s->led_traffic;
+		led_write(s, s->led_state != 1);	/* toggle */
+	} else {
+		led_write(s, 1);
+	}
+}
+
 static void pump_lapc(struct stubd *s)
 {
 	struct dect_mail m;
@@ -3848,6 +3910,8 @@ static void pump_lapc(struct stubd *s)
 		if (send_mail(s, (unsigned int)s->tx_slot, &m))
 			printf("reg: C-plane mail LOST (%u bytes) -- send "
 			       "failed\n", (unsigned)m.param_len);
+		else
+			s->led_traffic++;
 	}
 }
 
@@ -4642,6 +4706,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		break;
 	}
 	case DECT_PRIM_SIGNALLING:
+		s->led_traffic++;
 		if (s->reg.active)
 			reg_segment(s, m, now);
 		break;
@@ -5007,10 +5072,13 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		}
 
 		/* While parking, nothing may queue behind the park mails. */
-		if (park_at)
+		if (park_at) {
+			led_write(s, 0);
 			continue;
+		}
 
 		now = mono_ms();
+		led_tick(s, now, s->do_register && s->sess.state == DECT_SESS_UP);
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
@@ -5192,6 +5260,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 4 && !memcmp(key, "play", 4)) &&
 			    !(klen == 7 && !memcmp(key, "playpcm", 7)) &&
 			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
+			    !(klen == 3 && !memcmp(key, "led", 3)) &&
 			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
 			    !(klen == 7 && !memcmp(key, "memdump", 7)) &&
@@ -5483,6 +5552,17 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if (klen == 6 && !memcmp(key, "remode", 6)) {
 			a->remode_ms = (unsigned)v;
 			a->remode_set = 1;
+		} else if (eq && klen == 3 && !memcmp(key, "led", 3)) {
+			size_t n = (size_t)(spec - (eq + 1));
+			char *path = malloc(n + 1);
+
+			if (!path)
+				return -1;
+			memcpy(path, eq + 1, n);
+			path[n] = '\0';
+			a->led_path = path;
+		} else if (!eq && klen == 5 && !memcmp(key, "noled", 5)) {
+			a->no_led = 1;
 		} else if (!eq && klen == 8 && !memcmp(key, "noremode", 8)) {
 			a->remode_ms = 0;
 			a->remode_set = 1;
@@ -5714,6 +5794,11 @@ static void usage(void)
 		"           playsync advances the coded stream on the received\n"
 		"           lane's word boundary instead of a cadence of our own;\n"
 		"           required for anything but a steady tone\n"
+		"           led=PATH drives this LED brightness file (default\n"
+		"           " LED_DEFAULT_PATH ", the 7520's\n"
+		"           Fon/DECT LED): on while the radio is up, ~5 Hz blink on\n"
+		"           C-plane traffic or a call, off when parked; noled leaves\n"
+		"           it alone\n"
 		"           remode=MS sends a second 0x0230 with flag bit 6 clear\n"
 		"           MS ms after 0x022D, asking for mode 2 (the narrowband\n"
 		"           G.726 path, which takes signed 16-bit linear PCM at one\n"
@@ -6206,7 +6291,12 @@ int main(int argc, char **argv)
 			goto out;
 		}
 	}
+	led_open(&s);
+	led_write(&s, 0);	/* a park or probe run leaves it dark */
 	ret = run_loop(&s, fpb, run_seconds);
+	led_write(&s, 0);
+	if (s.led_fd >= 0)
+		close(s.led_fd);
 	if (s.voice_fp) {
 		fclose(s.voice_fp);
 		printf("voice: captured %u bytes from slot %d (%u frames)\n",
