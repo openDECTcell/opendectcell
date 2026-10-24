@@ -45,7 +45,12 @@ enum dect_cc_state {
 	DECT_CC_ST_RINGING,		/* PP sent ALERTING: the handset is ringing */
 };
 
-#define DECT_CC_TXQ	3u		/* pending outbound NWK messages */
+/*
+ * Pending outbound NWK messages. A list-access "read entries" answers with
+ * a confirm plus up to DECT_IWU_OUT_MAX - 1 data packets in one go, each its
+ * own {CC-IWU-INFO}; LAPC sends them one acknowledged frame at a time.
+ */
+#define DECT_CC_TXQ	16u
 #define DECT_CC_ID_MAX	20u		/* PORTABLE-/FIXED-IDENTITY contents */
 
 /*
@@ -57,6 +62,24 @@ enum dect_cc_state {
 #define DECT_CC_REASON_UNEXPECTED_MESSAGE	0x01u
 #define DECT_CC_REASON_UNKNOWN_TRANSACTION	0x02u
 #define DECT_CC_REASON_INCOMPATIBLE_SERVICE	0x05u
+/*
+ * "Insufficient resources": the reason EN 300 175-5 §9.5.2.3 prescribes for
+ * the abnormal release of the OTHER side's call when two {CC-SETUP}s cross,
+ * and the one §17.3.3 prescribes for a {CC-SETUP} received while another
+ * call is already in progress. It is what the Gigaset handsets answered
+ * every FP-originated call with for a week: their own CAT-iq list-access
+ * call was crossing ours.
+ */
+#define DECT_CC_REASON_INSUFFICIENT_RESOURCES	0x32u
+
+/*
+ * How many times an FP-originated {CC-SETUP} is re-presented after the PT
+ * released it for a setup collision (§9.5.2.3: "if the FT does re-present
+ * it, it shall do so immediately"). The PT waits P<CC.06> = 1.5 s for the
+ * re-presentation; two tries cover a second crossing without letting two
+ * stubborn peers ping-pong for ever.
+ */
+#define DECT_CC_REPRESENT_MAX	2u
 
 struct dect_cc_stats {
 	uint32_t setup;		/* CC-SETUP received */
@@ -66,6 +89,14 @@ struct dect_cc_stats {
 	uint32_t closed_unknown;/* transactions we closed with {CC-RELEASE} */
 	uint32_t setup_timeouts;	/* F<CC.03> expiries */
 	uint32_t keypad;	/* {CC-INFO} messages that carried keypad input */
+	/*
+	 * {CC-SETUP} collisions (EN 300 175-5 §9.5.2.3 / §17.3.3): a peer
+	 * SETUP arrived while a call was already in progress and was released
+	 * with "insufficient resources"; and how often our own incoming call,
+	 * released by the PT for a collision, was re-presented.
+	 */
+	uint32_t collisions;
+	uint32_t represented;
 };
 
 /* No <<BASIC-SERVICE>> was present in the peer's {CC-SETUP}. */
@@ -148,6 +179,29 @@ struct dect_cc {
 	 * and only a daemon restart cleared it.
 	 */
 	uint64_t setup_deadline_ms;
+
+	/*
+	 * The last FP-originated {CC-SETUP} as sent, kept for re-presentation.
+	 *
+	 * EN 300 175-5 §9.5.2.3, call setup collision: when the PT's own
+	 * {CC-SETUP} crosses ours, the PT releases OUR call with
+	 * {CC-RELEASE-COM} "insufficient resources", we release ITS call the
+	 * same way, and "the FT may re-present the incoming call ... If the
+	 * FT does re-present it, it shall do so immediately." The PT, for its
+	 * part, "shall wait for the re-presentation of the incoming voice
+	 * call from the FT, and not setup any new outgoing call" for
+	 * P<CC.06> = 1.5 s. Measured on a Gigaset A540 CAT, 2026-10-24: the
+	 * handset opens a CAT-iq list-access call on every link that comes
+	 * up, so EVERY FP-originated call to it was a collision, and without
+	 * the re-presentation every one of them ended in that 0x32.
+	 *
+	 * `represent_left` counts down from `represent_max`
+	 * (DECT_CC_REPRESENT_MAX unless the caller changes it) per call.
+	 */
+	uint8_t  setup_msg[DECT_LAPC_MSG_MAX];
+	size_t   setup_len;
+	uint8_t  represent_left;
+	uint8_t  represent_max;
 
 	/* FIFO of outbound NWK messages (e.g. CALL-PROC then CONNECT). */
 	uint8_t  out[DECT_CC_TXQ][DECT_LAPC_MSG_MAX];

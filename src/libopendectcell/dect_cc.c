@@ -16,6 +16,7 @@ void dect_cc_init(struct dect_cc *cc)
 	cc->state = DECT_CC_ST_NULL;
 	cc->peer_basic_service = DECT_CC_SVC_NONE;
 	cc->ti_flag = DECT_TI_RESPONDER;	/* until a call says otherwise */
+	cc->represent_max = DECT_CC_REPRESENT_MAX;
 	dect_iwu_init(&cc->iwu);
 }
 
@@ -148,7 +149,6 @@ static void queue_release_other(struct dect_cc *cc, uint8_t peer_ti_flag,
 	if (!off)
 		return;
 	txq_commit(cc, idx, off);
-	cc->stats.closed_unknown++;
 }
 
 /* Append both identity IEs; either may be omitted, neither may fail the call. */
@@ -281,6 +281,11 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 
 	/* <<CALL-INFORMATION>> is 0x7E, so it is last and stays last. */
 	off = put_callinfo(b, off, &cc->callinfo);
+
+	/* Keep a copy: §9.5.2.3 may need this exact message sent again. */
+	memcpy(cc->setup_msg, b, off);
+	cc->setup_len = off;
+	cc->represent_left = cc->represent_max;
 
 	txq_commit(cc, idx, off);
 	cc->state = DECT_CC_ST_CALL_PRESENT;
@@ -422,6 +427,21 @@ static void on_setup(struct dect_cc *cc)
 {
 	cc->stats.setup++;
 	/*
+	 * A list-access service call (call class 0010, EN 300 175-5 7.6.4):
+	 * TS 102 527-3 7.4.10.6.1 -- "the FP shall immediately answer with a
+	 * {CC-CALL-PROC}, without call status nor call id", and "the LiA
+	 * service call is not connected ({CC-CALL PROC} is used, but no
+	 * {CC-CONNECT} is used)". We used to answer it like a voice call,
+	 * CALL-PROC then CONNECT, telling the handset a call it never placed
+	 * was through. The list dialog then rides this transaction until the
+	 * handset releases it.
+	 */
+	if ((cc->peer_basic_service >> 4) == 0x2u) {
+		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
+		cc->state = DECT_CC_ST_PROCEEDING;
+		return;
+	}
+	/*
 	 * Accept the call: CALL-PROC ("I am handling it") then CONNECT (we are
 	 * the far end for the loopback test, so we answer at once). Both are
 	 * responder-side in the PP-originated transaction.
@@ -444,6 +464,8 @@ static void on_release(struct dect_cc *cc)
 	queue_msg(cc, cc->ti_flag, DECT_CC_RELEASE_COM);
 	cc->state = DECT_CC_ST_RELEASED;
 	cc->stats.released++;
+	/* "terminated at latest with call release" (TS 102 527-3 7.4.10.4.1.3) */
+	dect_iwu_reset_sessions(&cc->iwu);
 }
 
 
@@ -509,6 +531,36 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_basic_service(cc, ies, ies_len);
 			learn_keypad(cc, ies, ies_len);
 			on_setup(cc);
+		} else if (h.ti_value != cc->ti_value ||
+			   h.ti_flag == cc->ti_flag) {
+			/*
+			 * A second call while one is in progress. The peer's
+			 * messages on OUR transaction carry the inverse of our
+			 * flag, so "same transaction" is same value AND the
+			 * other flag; a retransmitted SETUP of the live call
+			 * is not a collision, and a crossing SETUP with the
+			 * same value but the same (originator) flag is -- the
+			 * standard's NOTE 7: only F tells the two apart then.
+			 *
+			 * EN 300 175-5 §17.3.3: a {CC-SETUP} on a transaction
+			 * that is not the call in progress is rejected with
+			 * {CC-RELEASE-COM} "insufficient resources" and the
+			 * call in progress continues. When OUR call is the
+			 * one in progress and still in CALL PRESENT, this is
+			 * the setup collision of §9.5.2.3 and the same release
+			 * is the FT's prescribed half of resolving it: the PT
+			 * releases our call with that reason, we release its
+			 * call with that reason, and we re-present ours (see
+			 * DECT_CC_RELEASE_COM below).
+			 *
+			 * We used to ignore the crossing SETUP, which left the
+			 * handset's call open until its P<CC.03> expired 20 s
+			 * later -- and left the handset waiting for a release
+			 * that never came before our re-presentation.
+			 */
+			queue_release_other(cc, h.ti_flag, h.ti_value,
+					    DECT_CC_REASON_INSUFFICIENT_RESOURCES);
+			cc->stats.collisions++;
 		}
 		break;
 	case DECT_CC_ALERTING:
@@ -547,14 +599,16 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		size_t n;
 		const uint8_t *p = dect_nwk_find_ie(ies, ies_len,
 						    DECT_IE_IWU_TO_IWU, &n);
-		uint8_t reply[DECT_IWU_REPLY_MAX];
-		size_t reply_len;
+		struct dect_iwu_out replies;
+		unsigned i;
 
 		if (!p)
 			break;
-		reply_len = dect_iwu_reply(&cc->iwu, p, n, reply, sizeof(reply));
-		if (reply_len)
-			queue_iwu(cc, reply, reply_len);
+		replies.count = 0;
+		dect_iwu_handle(&cc->iwu, p, n, &replies);
+		/* A confirm and its data packets, each in its own message. */
+		for (i = 0; i < replies.count; i++)
+			queue_iwu(cc, replies.msg[i], replies.len[i]);
 		break;
 	}
 	case DECT_CC_INFO:
@@ -580,7 +634,38 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		}
 		break;
 	case DECT_CC_RELEASE_COM:
+		/*
+		 * The PT releasing OUR unanswered incoming call with
+		 * "insufficient resources" is EN 300 175-5 §9.5.2.3: its own
+		 * {CC-SETUP} crossed ours (or was about to -- the standard
+		 * applies from CALL INITIATED, before anything is on the air),
+		 * it has released our call as required, and it now waits
+		 * P<CC.06> = 1.5 s for us to re-present the call, placing no
+		 * new call of its own meanwhile. Re-present at once, with the
+		 * same message and transaction value, and restart F<CC.03>.
+		 *
+		 * Bounded by represent_left so two peers cannot ping-pong.
+		 */
+		if (cc->incoming && cc->state == DECT_CC_ST_CALL_PRESENT &&
+		    h.ti_flag == DECT_TI_RESPONDER &&
+		    h.ti_value == cc->ti_value && cc->setup_len &&
+		    cc->represent_left &&
+		    dect_nwk_find_fixed_ie(ies, ies_len, DECT_IE_RELEASE_REASON)
+		    == (int)DECT_CC_REASON_INSUFFICIENT_RESOURCES) {
+			unsigned idx;
+			uint8_t *b = txq_slot(cc, &idx);
+
+			if (b) {
+				memcpy(b, cc->setup_msg, cc->setup_len);
+				txq_commit(cc, idx, cc->setup_len);
+				cc->represent_left--;
+				cc->stats.represented++;
+				cc->setup_deadline_ms = 0;	/* F<CC.03> again */
+				break;
+			}
+		}
 		cc->state = DECT_CC_ST_RELEASED;
+		dect_iwu_reset_sessions(&cc->iwu);
 		break;
 	default:
 		/*
@@ -590,9 +675,11 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 * release with a release.
 		 */
 		if (cc->state == DECT_CC_ST_NULL ||
-		    h.ti_value != cc->ti_value || h.ti_flag != cc->ti_flag)
+		    h.ti_value != cc->ti_value || h.ti_flag != cc->ti_flag) {
 			queue_release_other(cc, h.ti_flag, h.ti_value,
 					    DECT_CC_REASON_UNKNOWN_TRANSACTION);
+			cc->stats.closed_unknown++;
+		}
 		break;
 	}
 }

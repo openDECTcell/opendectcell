@@ -1,53 +1,38 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * <<IWU-TO-IWU>> session dialog carried in {CC-IWU-INFO}.
+ * CAT-iq list access (LiA) responder: TS 102 527-3 V1.7.1 clause 7.4.10.
  *
- * EN 300 175-5 §7.7.23 defines the <<IWU-TO-IWU>> information element as a
- * container whose contents are outside the DECT standard. Both the handsets
- * we have use it for a small request/response protocol whose records begin
- * with the discriminator 0xC3, and they open it during call setup.
+ * A CAT-iq handset reads the base's lists over {CC-IWU-INFO} messages that
+ * carry one <<IWU-TO-IWU>> element each (EN 300 175-5 7.7.23), protocol
+ * discriminator 03H "List Access". The handset opens a session on a list,
+ * reads entries, ends the session. Three lists are what a Gigaset asks for
+ * before it considers itself synchronised with a base: the List of Supported
+ * Lists (00H), the Internal Names List (06H) and the Line Settings List
+ * (08H). They are small, static, and defined to the byte in clauses
+ * 7.4.10.5.2, 7.4.10.5.8 and 7.4.11.4; this file serves them.
  *
- * Our stack has never answered it. A Gigaset A540 opens four of these sessions
- * on every call it places -- session ids 0x00, 0x05, 0x06 and 0x08 -- and we
- * drop all of them. Ignoring a peer's session opens is a defect regardless of
- * what else it causes, and TS 102 527-3 list access needs this dialog, so it
- * has to exist either way.
+ * History, because it explains the defect this replaces. The first version
+ * of this responder copied stock's reply bytes without decoding them. Its
+ * "read entries confirm" announced three entries and never sent the data
+ * packets that TS 102 527-3 7.4.10.4.3.2 says must follow ("Content of list
+ * entry is transmitted in data packets"), so every Gigaset ran its sync,
+ * waited ~3 s for data that never came, ended the session, tried the next
+ * list, released, and started over -- "Synchronisiere" for ever, a
+ * list-access call on every link that came up, and an incoming call refused
+ * with "insufficient resources" while it was at it. Measured 2026-10-24
+ * across 93 logs; see docs/call-g7.md.
  *
- * This is NOT expected to fix FP-originated calls. An earlier reading [CR
- * A-StockTrace-5 §11a] had stock opening {CC-IWU-INFO} between the {CC-SETUP}
- * and the handset's {CC-ALERTING}; §24 corrects it. In stock captures EVERY
- * open is handset->base -- the base only ever responds, and never opens a
- * dialog -- and base-originated calls to Gigaset handsets ring with no
- * {CC-IWU-INFO} exchange at all. So the dialog's absence during our failed
- * calls is a consequence of the early release, not its cause.
+ * Coding conventions used throughout (7.4.10.4.10 table 62, 7.4.10.5.1.0,
+ * and note 1 at table 39): session identifiers, indices, entry identifiers
+ * and lengths are "extensible": values below 128 are one octet with bit 8
+ * set; larger values take two octets, high 7 bits first with bit 8 clear.
+ * Every field is [identifier][length][properties][value...], the length
+ * counting the properties octet.
  *
- * The dialog is implemented because it is owed: the peer opens sessions we
- * drop, and TS 102 527-3 list access is built on it. See
- * docs/tasks-2026-10-22.md.
- *
- * Record framing [CR A-StockTrace-5 §23, from 40 records across 6+ complete
- * dialogs]:
- *
- *   PP  c3 00 NN <data>                     open; NN is a session id
- *   FP  c3 01 NN 91 <X> 00 00 00 ff 01 <Y>  open response, ECHOING NN
- *   PP  c3 06 91 ...     FP  c3 07 91 81 03
- *   PP  c3 10 91 ...     FP  c3 12 91 01
- *   FP  c3 14 91 80 <ASCII> ...             data push (list labels)
- *   PP  c3 02 91         FP  c3 03 91       close / close ack
- *
- * The session id is chosen by the peer and echoed by us; it is NOT a counter
- * we generate, and it is constant within a dialog. It appears only in the open
- * and its response. 0x91 is a fixed tag introducing the payload.
- *
- * The payload field SEMANTICS are deliberately not modelled: what 0x82/0x83/
- * 0x84, `ff 01` and `81 03` mean was not decoded, and guessing at them is how
- * this project has produced its wrong answers. The values we emit are the
- * lowest observed ones, and dect_iwu_set_open_params() exists so the bench can
- * sweep them without a rebuild.
- *
- * No I/O, no allocation, transport-agnostic: feed one <<IWU-TO-IWU>> content
- * in, get the reply content out. Re-implemented from the public ETSI text and
- * clean-room facts as GPL-2.0-or-later.
+ * No I/O, no allocation. Feed one <<IWU-TO-IWU>> content in, get up to
+ * DECT_IWU_OUT_MAX reply contents out, each to be carried in its own
+ * {CC-IWU-INFO} on the same transaction. Re-implemented from the public
+ * ETSI text as GPL-2.0-or-later.
  */
 #ifndef OPENDECTCELL_DECT_IWU_H
 #define OPENDECTCELL_DECT_IWU_H
@@ -55,61 +40,151 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* First octet of every record in this dialog. */
+/* Octet 3 of <<IWU-TO-IWU>>: bit 8 fixed 1, S/R = 1 "transmission", PD 03H. */
 #define DECT_IWU_DISC		0xC3u
+#define DECT_IWU_PD_LIA		0x03u
 
-/* Record types, as observed. Names describe the role, not a decoded meaning. */
-#define DECT_IWU_OPEN		0x00u
-#define DECT_IWU_OPEN_RESP	0x01u
-#define DECT_IWU_CLOSE		0x02u
-#define DECT_IWU_CLOSE_ACK	0x03u
-#define DECT_IWU_REQ_06		0x06u
-#define DECT_IWU_RESP_07	0x07u
-#define DECT_IWU_REQ_10		0x10u
-#define DECT_IWU_RESP_12	0x12u
-#define DECT_IWU_PUSH_14	0x14u
+/* List access commands, TS 102 527-3 7.4.10.4.0. */
+#define DECT_LIA_START_SESSION		0x00u
+#define DECT_LIA_START_SESSION_CFM	0x01u
+#define DECT_LIA_END_SESSION		0x02u
+#define DECT_LIA_END_SESSION_CFM	0x03u
+#define DECT_LIA_QUERY_FIELDS		0x04u
+#define DECT_LIA_QUERY_FIELDS_CFM	0x05u
+#define DECT_LIA_READ_ENTRIES		0x06u
+#define DECT_LIA_READ_ENTRIES_CFM	0x07u
+#define DECT_LIA_EDIT_ENTRY		0x08u
+#define DECT_LIA_EDIT_ENTRY_CFM		0x09u
+#define DECT_LIA_SAVE_ENTRY		0x0Au
+#define DECT_LIA_SAVE_ENTRY_CFM		0x0Bu
+#define DECT_LIA_DELETE_ENTRY		0x0Cu
+#define DECT_LIA_DELETE_ENTRY_CFM	0x0Du
+#define DECT_LIA_DELETE_LIST		0x0Eu
+#define DECT_LIA_DELETE_LIST_CFM	0x0Fu
+#define DECT_LIA_SEARCH_ENTRIES		0x10u
+#define DECT_LIA_SEARCH_ENTRIES_CFM	0x11u
+#define DECT_LIA_NACK			0x12u
+#define DECT_LIA_DATA			0x13u
+#define DECT_LIA_DATA_LAST		0x14u
 
-/* Fixed tag that introduces the payload in every record except the PP's open. */
-#define DECT_IWU_TAG		0x91u
+/* Legacy names kept for the daemon's log vocabulary. */
+#define DECT_IWU_OPEN		DECT_LIA_START_SESSION
+#define DECT_IWU_OPEN_RESP	DECT_LIA_START_SESSION_CFM
+#define DECT_IWU_CLOSE		DECT_LIA_END_SESSION
+#define DECT_IWU_CLOSE_ACK	DECT_LIA_END_SESSION_CFM
 
-/* Longest reply we build (the open response). */
-#define DECT_IWU_REPLY_MAX	16u
+/* List identifiers, 7.4.10.3. */
+#define DECT_LIA_LIST_SUPPORTED		0x00u
+#define DECT_LIA_LIST_MISSED		0x01u
+#define DECT_LIA_LIST_OUTGOING		0x02u
+#define DECT_LIA_LIST_ACCEPTED		0x03u
+#define DECT_LIA_LIST_ALL_CALLS		0x04u
+#define DECT_LIA_LIST_CONTACTS		0x05u
+#define DECT_LIA_LIST_INTERNAL_NAMES	0x06u
+#define DECT_LIA_LIST_SYSTEM_SETTINGS	0x07u
+#define DECT_LIA_LIST_LINE_SETTINGS	0x08u
+#define DECT_LIA_LIST_ALL_INCOMING	0x09u
+
+/* Start session reject reasons, 7.4.10.4.1.2. */
+#define DECT_LIA_REJ_NO_RESOURCES	0x00u
+#define DECT_LIA_REJ_LIST_IN_USE	0x01u
+#define DECT_LIA_REJ_LIST_UNSUPPORTED	0x02u
+#define DECT_LIA_REJ_MAX_SESSIONS	0x03u
+
+/* Negative acknowledgement reasons, 7.4.10.4.9. */
+#define DECT_LIA_NACK_INVALID_RANGE	0x00u
+#define DECT_LIA_NACK_NO_ENTRY		0x01u
+#define DECT_LIA_NACK_INVALID_SESSION	0x02u
+#define DECT_LIA_NACK_TEMP_NOT_POSSIBLE	0x03u
+#define DECT_LIA_NACK_FORMAT		0x04u
+#define DECT_LIA_NACK_INVALID_START	0x05u
+#define DECT_LIA_NACK_NOT_SUPPORTED	0x06u
+#define DECT_LIA_NACK_NOT_ALLOWED	0x07u
+
+/*
+ * One <<IWU-TO-IWU>> content: EN 300 175-4 caps a LAPC UI frame at 63
+ * octets of information, and TS 102 527-3 7.4.10.4.10 derives 56 octets of
+ * data content per data packet from that.
+ */
+#define DECT_IWU_MSG_MAX	63u
+#define DECT_IWU_DATA_PER_PKT	56u
+/* Replies one received record can produce: a confirm plus data packets. */
+#define DECT_IWU_OUT_MAX	12u
+/* Largest data content we assemble before segmenting it into packets. */
+#define DECT_IWU_CONTENT_MAX	(DECT_IWU_DATA_PER_PKT * (DECT_IWU_OUT_MAX - 1u))
+
+#define DECT_IWU_NAME_MAX	16u	/* UTF-8 bytes, NUL-terminated */
+#define DECT_IWU_HANDSETS	8u	/* Internal Names List capacity */
+#define DECT_IWU_SESSIONS	2u	/* "at least two sessions at a time" */
+
+struct dect_iwu_out {
+	uint8_t  msg[DECT_IWU_OUT_MAX][DECT_IWU_MSG_MAX];
+	size_t   len[DECT_IWU_OUT_MAX];
+	unsigned count;
+};
+
+struct dect_iwu_handset {
+	uint8_t terminal_id;			/* 1..127, the Internal Names "Number" */
+	char    name[DECT_IWU_NAME_MAX];
+};
 
 struct dect_iwu_stats {
-	uint32_t opened;	/* opens answered */
-	uint32_t closed;	/* closes acknowledged */
-	uint32_t replied;	/* typed requests answered */
+	uint32_t opened;	/* sessions started */
+	uint32_t closed;	/* sessions ended on request */
+	uint32_t replied;	/* typed commands answered positively */
+	uint32_t rejected;	/* start rejects and negative acknowledgements */
+	uint32_t entries_sent;	/* list entries delivered in data packets */
 	uint32_t ignored;	/* records we have no reply for */
-	uint32_t malformed;	/* too short, or not a 0xC3 record */
+	uint32_t malformed;	/* too short, wrong discriminator, bad coding */
 };
 
 struct dect_iwu {
-	/*
-	 * Open-response parameters, semantics unknown. `[not established]`
-	 * Defaults are the lowest values observed in stock dialogs.
-	 */
-	uint8_t open_x;		/* the octet after the 0x91 tag (82/83/84..) */
-	uint8_t open_y;		/* the trailing octet (01/02/03) */
+	/* The data behind the three lists; the owner fills these in. */
+	struct dect_iwu_handset handsets[DECT_IWU_HANDSETS];
+	unsigned n_handsets;
+	uint8_t  own_terminal_id;	/* the PP talking to us: 'Own' property */
+	uint8_t  line_id;		/* 7.4.11.4.2, "Relating to" subtype */
+	char     line_name[DECT_IWU_NAME_MAX];
+
+	/* Open sessions; session identifier = index + 1. */
+	struct {
+		uint8_t list;
+		uint8_t in_use;
+	} sessions[DECT_IWU_SESSIONS];
+	/* A 'save entry' whose data packets are still arriving (7.4.10.4.9). */
+	uint8_t  save_pending;
+	uint8_t  save_session;
+
 	struct dect_iwu_stats stats;
 };
 
 void dect_iwu_init(struct dect_iwu *iwu);
 
-/*
- * Override the open-response parameters whose meaning we have not decoded.
- * For bench sweeps; the defaults are what dect_iwu_init() sets.
- */
-void dect_iwu_set_open_params(struct dect_iwu *iwu, uint8_t x, uint8_t y);
+/* The one line this base offers, for the Line Settings List. */
+void dect_iwu_set_line(struct dect_iwu *iwu, uint8_t line_id, const char *name);
+
+/* Add a registered handset to the Internal Names List. Keeps the list
+ * sorted by terminal id (7.4.10.3 default sorting); a repeated id replaces
+ * the entry. Returns 0, or -1 when the list is full or the id invalid. */
+int dect_iwu_add_handset(struct dect_iwu *iwu, uint8_t terminal_id,
+			 const char *name);
+
+/* Which handset is on the other end of this transaction (its 'Own' bit). */
+void dect_iwu_set_own(struct dect_iwu *iwu, uint8_t terminal_id);
+
+/* Forget every open session, e.g. when the call carrying them is released:
+ * "The session(s) between a PP and FP shall at latest be terminated with
+ * call release" (7.4.10.4.1.3). */
+void dect_iwu_reset_sessions(struct dect_iwu *iwu);
 
 /*
- * Build the reply to one received <<IWU-TO-IWU>> content.
- *
- * `in` is the IE contents (starting at the 0xC3 discriminator), `out` receives
- * the reply contents to put in an <<IWU-TO-IWU>> of our own. Returns the reply
- * length, or 0 when this record needs no reply -- which includes every record
- * we do not recognise, because answering with a guess is worse than silence.
+ * Handle one received <<IWU-TO-IWU>> content (starting at the discriminator
+ * octet). Replies, if any, are appended to `out` -- call with out->count = 0
+ * for a fresh set. A record we do not recognise, or that needs no reply,
+ * produces nothing: silence beats a guess, which is how this dialog used to
+ * end up desynchronised.
  */
-size_t dect_iwu_reply(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
-		      uint8_t *out, size_t out_max);
+void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
+		     struct dect_iwu_out *out);
 
 #endif /* OPENDECTCELL_DECT_IWU_H */

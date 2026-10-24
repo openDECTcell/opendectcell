@@ -276,6 +276,7 @@ struct stubd {
 	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
 	unsigned    ring_pages;		/* pages sent for this attempt */
 	uint64_t    ring_last;		/* when the last one went out */
+	uint64_t    first_contact_ms;	/* the handset's first C-plane segment, for ringattach= */
 	int sub_restored;	/* stored subscription already pushed to the chip */
 	/*
 	 * Chip subscription slot, 1..DECT_MM_MAX_SLOT, 0 = not chosen yet.
@@ -784,6 +785,17 @@ struct stubd {
 		 * the link it brings up. Milestone B; see docs/call-g7.md.
 		 */
 		unsigned ring_ms;
+		/*
+		 * ringattach=MS: as ring=MS, but counted from the handset's
+		 * FIRST C-plane contact rather than from start-up. An A540
+		 * that has lost the base re-locks anywhere from 2 s to several
+		 * minutes after the radio comes up (2026-10-24: 1.6 s, 4.8 s,
+		 * 57 s, 117 s, and not within 170 s), so a fixed settle
+		 * either wastes the run or rings into thin air. Unattended
+		 * runs want the ring to land while the handset is demonstrably
+		 * there. 0 = off.
+		 */
+		unsigned ring_attach_ms;
 		/*
 		 * clip=NUMBER and cnip=NAME: the caller identity an
 		 * FP-originated CC-SETUP carries. Both are presented as
@@ -2899,8 +2911,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 
 static void ring_tick(struct stubd *s, uint64_t now)
 {
-	if (!s->audio.ring_ms || s->ring_state == RING_DONE ||
-	    s->sess.state != DECT_SESS_UP)
+	if ((!s->audio.ring_ms && !s->audio.ring_attach_ms) ||
+	    s->ring_state == RING_DONE || s->sess.state != DECT_SESS_UP)
 		return;
 
 	/*
@@ -2935,8 +2947,14 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	}
 
 	if (s->ring_state == RING_IDLE) {
-		if (now - g_start < s->audio.ring_ms)
+		if (s->audio.ring_attach_ms) {
+			/* Count from the handset's first contact, not ours. */
+			if (!s->first_contact_ms ||
+			    now - s->first_contact_ms < s->audio.ring_attach_ms)
+				return;
+		} else if (now - g_start < s->audio.ring_ms) {
 			return;
+		}
 		if (!s->cc_fixed_id_len) {
 			printf("ring: no call identities -- the handset is not "
 			       "registered here, or -s is off so nothing was "
@@ -3444,6 +3462,23 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	}
 	dect_cc_init(&s->reg.link.cc);
 	/*
+	 * The lists a CAT-iq handset reads before it calls itself synchronised
+	 * (TS 102 527-3 7.4.10): one line, and the Internal Names List with
+	 * the handset this daemon serves -- terminal identity number = its
+	 * chip subscription slot, which is also the low octet of the TPUI we
+	 * assigned it, and the default name the standard suggests. Installed
+	 * per connection because dect_link_init() zeroes the responder.
+	 */
+	{
+		uint8_t tid = stubd_sub_slot(s) ? stubd_sub_slot(s) : 1u;
+		char hsname[DECT_IWU_NAME_MAX];
+
+		snprintf(hsname, sizeof(hsname), "DECT %u", (unsigned)tid);
+		dect_iwu_set_line(&s->reg.link.cc.iwu, 1, "Line 1");
+		dect_iwu_add_handset(&s->reg.link.cc.iwu, tid, hsname);
+		dect_iwu_set_own(&s->reg.link.cc.iwu, tid);
+	}
+	/*
 	 * Advertise a codec in FP-originated setups. The A540 answers our page,
 	 * takes a codec-less {CC-SETUP} and returns release reason 0x32, which
 	 * EN 300 175-5 classes as a TEMPORARY OVERLOAD ("insufficient
@@ -3490,6 +3525,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 {
 	uint8_t rand_f[8], rs[16];
 	struct dect_link_ind ind;
+	uint32_t collisions = s->reg.link.cc.stats.collisions;
+	uint32_t represented = s->reg.link.cc.stats.represented;
 
 	gen_rand(s, rand_f, sizeof(rand_f));
 	gen_rand(s, rs, sizeof(rs));
@@ -3513,6 +3550,29 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		return;
 	}
 	pump_lapc(s);			/* at least the LAPC ack */
+
+	if (!s->first_contact_ms) {
+		s->first_contact_ms = now;
+		printf("reg: first C-plane contact from the handset at t=%llu ms\n",
+		       (unsigned long long)(now - g_start));
+	}
+
+	/*
+	 * EN 300 175-5 §9.5.2.3, in the log while it happens. Every refusal
+	 * of an FP-originated call in this project's corpus (60 of 60, from
+	 * 93 logs tabulated on 2026-10-24) coincided with the handset's own
+	 * list-access {CC-SETUP} being on the wire, active, or pending; the
+	 * library now resolves the collision, and these two lines are how a
+	 * log shows which half of it ran.
+	 */
+	if (s->reg.link.cc.stats.collisions != collisions)
+		printf("ring: {CC-SETUP} COLLISION -- the handset opened a call "
+		       "of its own while ours was pending; releasing its call "
+		       "with \"insufficient resources\" (EN 300 175-5 9.5.2.3)\n");
+	if (s->reg.link.cc.stats.represented != represented)
+		printf("ring: the handset released our call for the collision; "
+		       "RE-PRESENTING the {CC-SETUP} now (9.5.2.3), %u left\n",
+		       s->reg.link.cc.represent_left);
 
 	if (s->verbose) {
 		printf("reg: cs in %02x %02x %02x (addr/ctrl/li), lc_rc=%d\n",
@@ -4437,6 +4497,13 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	       s->sess.stats.status_mails, s->sess.stats.deaths);
 	printf("tx: blocks %u queue_drops %u idle %02x voice_idle %02x\n",
 	       s->tx_blocks, s->txq_drops, s->tx_idle, s->tx_voice_idle);
+	printf("cc: setups_in %u alerting %u connected %u released %u "
+	       "collisions %u represented %u setup_timeouts %u closed_unknown %u\n",
+	       s->reg.link.cc.stats.setup, s->reg.link.cc.stats.alerting,
+	       s->reg.link.cc.stats.connected, s->reg.link.cc.stats.released,
+	       s->reg.link.cc.stats.collisions, s->reg.link.cc.stats.represented,
+	       s->reg.link.cc.stats.setup_timeouts,
+	       s->reg.link.cc.stats.closed_unknown);
 	printf("rx: mails %u seq_gaps %u csum_errors %u framing_errors %u resyncs %u\n",
 	       s->rx.stats.mails, s->rx.stats.seq_gaps, s->rx.stats.csum_errors,
 	       s->rx.stats.framing_errors, s->rx.stats.resyncs);
@@ -4566,6 +4633,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->handover_ms = (unsigned)v;
 		else if (klen == 4 && !memcmp(key, "ring", 4))
 			a->ring_ms = (unsigned)v;
+		else if (klen == 10 && !memcmp(key, "ringattach", 10))
+			a->ring_attach_ms = (unsigned)v;
 		else if (klen == 7 && !memcmp(key, "clipton", 7))
 			a->clip_ton = (uint8_t)v;
 		else if (klen == 7 && !memcmp(key, "clipnpi", 7))
@@ -4935,6 +5004,9 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           ringattach=MS same, but MS ms after the handset's FIRST\n"
+		"                     C-plane contact (unattended runs; a lost A540\n"
+		"                     re-locks anywhere from 2 s to minutes later)\n"
 		"           ring=MS calls the handset MS ms after start-up: page\n"
 		"           (0x0300) then an FP-originated CC-SETUP\n"
 		"           play=FILE transmits a raw G.722 stream (8000 bytes/s) to\n"

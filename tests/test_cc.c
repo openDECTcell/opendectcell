@@ -153,11 +153,90 @@ static void test_answers_the_handsets_iwu_session_open(void)
 
 	body = dect_nwk_find_ie(ies, ies_len, DECT_IE_IWU_TO_IWU, &body_len);
 	CHECK(body != NULL);
-	CHECK_EQ(body_len, 11u);
+	CHECK_EQ(body_len, 10u);
 	CHECK_EQ(body[0], 0xC3u);
-	CHECK_EQ(body[1], 0x01u);		/* open response */
-	CHECK_EQ(body[2], 0x05u);		/* the handset's session id */
-	CHECK_EQ(cc.iwu.stats.opened, 1u);
+	CHECK_EQ(body[1], 0x01u);		/* start session confirm */
+	CHECK_EQ(body[2], 0x05u);		/* the list it asked for (contacts) */
+	/* ... which we do not serve: session 0, 'list not supported' */
+	CHECK_EQ(body[3], 0x80u);
+	CHECK_EQ(body[8], DECT_LIA_REJ_LIST_UNSUPPORTED);
+	CHECK_EQ(cc.iwu.stats.rejected, 1u);
+}
+
+/*
+ * A read on a served list answers with TWO messages on the same
+ * transaction, the confirm and the data packet, each its own {CC-IWU-INFO}.
+ */
+static void test_list_read_queues_confirm_and_data_packet(void)
+{
+	static const uint8_t start[] = { 0x03, 0x60, 0x77, 0x04, 0xC3, 0x00, 0x00, 0x00 };
+	static const uint8_t read[] = { 0x03, 0x60, 0x77, 0x07, 0xC3, 0x06, 0x81,
+					0x81, 0x01, 0x00, 0x01 };
+	struct dect_cc cc;
+	struct dect_nwk_hdr h;
+	const uint8_t *ies, *body;
+	size_t ies_len, body_len, n;
+	uint8_t out[64];
+
+	dect_cc_init(&cc);
+	dect_cc_rx(&cc, start, sizeof(start));
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK(n > 0);
+	dect_cc_rx(&cc, read, sizeof(read));
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_IWU_INFO);
+	CHECK_EQ(ti_flag_of(out, n), DECT_TI_RESPONDER);
+	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	body = dect_nwk_find_ie(ies, ies_len, DECT_IE_IWU_TO_IWU, &body_len);
+	CHECK(body != NULL);
+	CHECK_EQ(body[1], DECT_LIA_READ_ENTRIES_CFM);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_IWU_INFO);
+	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	body = dect_nwk_find_ie(ies, ies_len, DECT_IE_IWU_TO_IWU, &body_len);
+	CHECK(body != NULL);
+	CHECK_EQ(body[1], DECT_LIA_DATA_LAST);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+	CHECK_EQ(cc.iwu.stats.entries_sent, 1u);
+}
+
+/*
+ * TS 102 527-3 7.4.10.6.1: a list-access service call (call class 0010) is
+ * answered with {CC-CALL-PROC} alone and is never connected. A voice call
+ * still gets CALL-PROC then CONNECT (the daemon is its own far end).
+ */
+static void test_list_access_call_gets_call_proc_only(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x28);	/* LiA, wideband */
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
+	CHECK_EQ(dect_cc_busy(&cc), 1);
+	CHECK_EQ(dect_cc_peer_is_speech(&cc), 0);
+
+	/* and it releases like any other call */
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_RELEASE);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
+
+	dect_cc_init(&cc);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);	/* normal, wideband */
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CONNECT);
+	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
 }
 
 /*
@@ -553,8 +632,14 @@ static void test_peer_basic_service_decides_speech(void)
 		dect_cc_rx(&cc, buf, n);
 		CHECK_EQ(cc.peer_basic_service, cases[i].svc);
 		CHECK_EQ(dect_cc_peer_is_speech(&cc), cases[i].speech);
-		/* The call itself is answered either way -- list access works. */
-		CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+		/*
+		 * The call itself is answered either way -- list access works.
+		 * A LiA service call (class 0010) is only CALL-PROC'd, never
+		 * connected (TS 102 527-3 7.4.10.6.1); every other class is
+		 * taken through to CONNECT.
+		 */
+		CHECK_EQ(cc.state, (cases[i].svc >> 4) == 0x2u
+			 ? DECT_CC_ST_PROCEEDING : DECT_CC_ST_CONNECT_PENDING);
 	}
 }
 
@@ -986,8 +1071,178 @@ static void test_setup_timer_does_not_run_for_a_pp_originated_call(void)
 	CHECK_EQ(cc.stats.setup_timeouts, 0u);
 }
 
+/*
+ * EN 300 175-5 §9.5.2.3, the FT's half: while our incoming call is in CALL
+ * PRESENT, a {CC-SETUP} from the handset on its own transaction is a setup
+ * collision. We release THAT call with {CC-RELEASE-COM} "insufficient
+ * resources" on its transaction (flag inverted, its value), and our call is
+ * untouched. Measured on the A540: it opens a list-access call 60-160 ms after
+ * answering the page, every time, and we used to ignore it.
+ */
+static void test_setup_collision_releases_the_handsets_call(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_next_ti(&cc, 1);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));	/* our SETUP, TV 1 */
+	CHECK_EQ(out[0] >> 4, 0x1u);			/* F=0, TV=1 */
+
+	/* The handset's own call crosses ours: SETUP, F=0, TV 0, LiA class. */
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x28);
+	dect_cc_rx(&cc, buf, n);
+
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 4u);
+	CHECK_EQ(out[0], 0x83u);			/* F=1, TV=0, PD CC */
+	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[2], DECT_IE_RELEASE_REASON);
+	CHECK_EQ(out[3], DECT_CC_REASON_INSUFFICIENT_RESOURCES);
+	CHECK_EQ(cc.stats.collisions, 1u);
+	CHECK_EQ(cc.stats.closed_unknown, 0u);
+	/* Ours is still pending, on its own transaction. */
+	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+	CHECK_EQ(cc.ti_value, 1u);
+	CHECK_EQ(cc.incoming, 1u);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+}
+
+/*
+ * §9.5.2.3, the other half: the handset releases OUR call with "insufficient
+ * resources" (its {CC-SETUP} crossed ours, or was about to). We re-present
+ * the identical {CC-SETUP} at once, at most DECT_CC_REPRESENT_MAX times, and
+ * F<CC.03> restarts. A third such release ends the call.
+ */
+static void test_insufficient_resources_represents_the_setup(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	struct dect_cc cc;
+	uint8_t first[64], out[64], rel[8];
+	size_t n, first_len, off;
+	unsigned i;
+
+	dect_cc_init(&cc);
+	dect_cc_set_next_ti(&cc, 1);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	first_len = dect_cc_poll(&cc, first, sizeof(first));
+	CHECK(first_len > 0);
+	dect_cc_tick(&cc, 1000);			/* arms F<CC.03> */
+	CHECK_EQ(dect_cc_next_deadline(&cc), 21000u);
+
+	/* {CC-RELEASE-COM} (1, TV1) <<RELEASE-REASON>> insufficient resources */
+	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER,
+				 1, DECT_CC_RELEASE_COM);
+	off = dect_nwk_put_fixed_ie(rel, sizeof(rel), off, DECT_IE_RELEASE_REASON,
+				    DECT_CC_REASON_INSUFFICIENT_RESOURCES);
+
+	for (i = 1; i <= DECT_CC_REPRESENT_MAX; i++) {
+		dect_cc_rx(&cc, rel, off);
+		CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
+		CHECK_EQ(cc.stats.represented, i);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		CHECK_EQ(n, first_len);
+		CHECK_EQ(memcmp(out, first, first_len), 0);	/* byte-identical */
+		/* F<CC.03> was restarted: it is armed afresh on the next tick. */
+		CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+		dect_cc_tick(&cc, 5000 * i);
+		CHECK_EQ(dect_cc_next_deadline(&cc), 5000u * i + 20000u);
+	}
+
+	/* The budget is spent: the next one releases the call for real. */
+	dect_cc_rx(&cc, rel, off);
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
+	CHECK_EQ(cc.stats.represented, DECT_CC_REPRESENT_MAX);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+	CHECK_EQ(dect_cc_busy(&cc), 0);
+}
+
+/* Any other release reason, or a release on another transaction, is final. */
+static void test_other_release_reasons_are_not_represented(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	struct dect_cc cc;
+	uint8_t out[64], rel[8];
+	size_t off;
+
+	/* "User busy" on our transaction: released, nothing re-sent. */
+	dect_cc_init(&cc);
+	dect_cc_set_next_ti(&cc, 1);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	dect_cc_poll(&cc, out, sizeof(out));
+	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER,
+				 1, DECT_CC_RELEASE_COM);
+	off = dect_nwk_put_fixed_ie(rel, sizeof(rel), off, DECT_IE_RELEASE_REASON,
+				    0x14);
+	dect_cc_rx(&cc, rel, off);
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
+	CHECK_EQ(cc.stats.represented, 0u);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+
+	/* A bare {CC-RELEASE-COM} with no reason at all: likewise. */
+	dect_cc_init(&cc);
+	dect_cc_set_next_ti(&cc, 1);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	dect_cc_poll(&cc, out, sizeof(out));
+	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER,
+				 1, DECT_CC_RELEASE_COM);
+	dect_cc_rx(&cc, rel, off);
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
+	CHECK_EQ(cc.stats.represented, 0u);
+}
+
+/*
+ * §17.3.3: a second {CC-SETUP} from the handset while ITS first call is
+ * active is rejected with "insufficient resources" and the first call goes
+ * on. This is the same mechanism seen from the other side of CALL PRESENT.
+ */
+static void test_second_setup_during_an_active_call_is_rejected(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	dect_cc_poll(&cc, out, sizeof(out));	/* CALL-PROC */
+	dect_cc_poll(&cc, out, sizeof(out));	/* CONNECT */
+	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+
+	n = pp_setup(buf, sizeof(buf), 3);	/* another call, TV 3 */
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 4u);
+	CHECK_EQ(out[0], 0xB3u);			/* F=1, TV=3 */
+	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[3], DECT_CC_REASON_INSUFFICIENT_RESOURCES);
+	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.ti_value, 0u);
+	CHECK_EQ(cc.stats.collisions, 1u);
+
+	/* A retransmitted SETUP of the live call itself is not a collision. */
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+	CHECK_EQ(cc.stats.collisions, 1u);
+}
+
 int main(void)
 {
+	test_setup_collision_releases_the_handsets_call();
+	test_insufficient_resources_represents_the_setup();
+	test_other_release_reasons_are_not_represented();
+	test_second_setup_during_an_active_call_is_rejected();
 	test_setup_carries_line_identifier();
 	test_transaction_value_rotates();
 	test_busy_spans_the_whole_call();
@@ -998,6 +1253,8 @@ int main(void)
 	test_release_from_pp();
 	test_release_from_fp();
 	test_answers_the_handsets_iwu_session_open();
+	test_list_read_queues_confirm_and_data_packet();
+	test_list_access_call_gets_call_proc_only();
 	test_iwu_does_not_change_call_state();
 	test_iwu_info_without_the_ie_is_ignored();
 	test_ignores_non_cc();
