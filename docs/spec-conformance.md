@@ -1009,3 +1009,48 @@ Two things settle it, in order, and both are cheap:
    and name anything missing.
 
 Until one of those runs, further sweeps are not worth their bench time.
+
+### The DSP U-plane diff: the reference regions are static here `[2026-10-24]`
+
+`[CR A-0098]` mined a working-call chip dump and named two regions that are
+empty at idle and populated during a live call: `0x3D4`–`0x414` (slot /
+U-plane buffer) and `0xEF4`–`0x1694` (Gen2DSP lane-descriptor table, said to
+be short at idle and rebuilt and grown during a call). The proposal was to
+dump them on our failing page-response connection and diff.
+
+Run: 210 s, `0x3D4:64` and the **whole** `0xEF4:1952` at 15 ms, settle long
+enough for a deep-sleeping A540 (the maintainer confirmed the handset was
+alive, just asleep). 394 inbound C-plane segments and **seven** connections,
+six of them the handset's own working ones and one ours:
+
+| t (ms) | `0x0200` wideband byte | whose |
+| --- | --- | --- |
+| 5679 | 0 | — |
+| 26799, 50411, 81990, 129550, 177109 | 1 | the handset's |
+| **146330** | **0** | **ours, from the page** |
+
+**Of the 63 chunks covering both regions, exactly one ever changed, and it
+changed at `t=1063` — during start-up, 4.6 s before the first connection and
+then never again for 208 seconds.** A boot artefact. Every other chunk is
+byte-identical across all dumps, through idle, through six working
+connections and through ours.
+
+**So these addresses carry no connection state on this chip.** The regions are
+not unreadable and not zero — they hold stable content, and the first attempt
+at a narrow 128-byte window was correctly widened to the full 1 952 bytes in
+case the growth happened past it. It did not.
+
+The instrument is sound: the same `0xFFF1` read is address-sensitive (the six
+chunks differ from each other) and demonstrably tracks live state elsewhere —
+it caught the `0x015E` arm bit flipping at `0x965d` 72 ms after the mail,
+earlier the same night.
+
+The likeliest reading is that the room's `cd3` tool and our host-side read do
+not address the same space, or the idle/active dump it mined came from a
+different firmware. **The diff is closed as inconclusive-by-address**, not as
+evidence either way about our U-plane — and it does not need re-running
+without a corrected address.
+
+Two earlier attempts were void because the A540 had gone into deep sleep and
+answered no pages; that is a handset state, not a fault, and the fix is simply
+a longer settle.
