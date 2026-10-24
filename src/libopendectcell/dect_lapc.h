@@ -108,6 +108,7 @@ struct dect_lapc_stats {
 	uint32_t retransmits;
 	uint32_t msgs_rx;		/* complete NWK messages reassembled */
 	uint32_t msgs_tx;		/* NWK messages fully sent and acked */
+	uint32_t rx_bad_sapi;		/* frames on a SAPI other than 0: ignored */
 };
 
 struct dect_lapc {

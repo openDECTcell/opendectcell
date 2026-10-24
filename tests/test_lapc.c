@@ -196,6 +196,32 @@ static void test_fsm_rx_nlf_resets_reassembly(void)
 	CHECK_EQ(memcmp(out, msg, 3), 0);
 }
 
+/*
+ * EN 300 175-4 §7.3.3: SAPI 0 is connection-oriented signalling, SAPI 3
+ * connectionless. A SAPI-3 I-frame must not touch this link's sequence
+ * numbers or reassembly, and is not acknowledged.
+ */
+static void test_fsm_rx_ignores_other_sapi(void)
+{
+	struct dect_lapc l;
+	uint8_t info[3] = { 0x11, 0x22, 0x33 };
+	uint8_t frame[DECT_LC_LAPC_MAX], out[DECT_LAPC_MSG_MAX], tx[DECT_LC_LAPC_MAX];
+	struct dect_lapc_frame f;
+	size_t n;
+
+	dect_lapc_init(&l, 0);
+	n = dect_lapc_build_i(frame, sizeof(frame), 0, 1, DECT_LAPC_LLN_A, 0, 0, 1, 0,
+			      info, sizeof(info));
+	frame[0] |= (uint8_t)(DECT_LAPC_SAPI_CL << 2);	/* SAPI 3, bits 4-3 */
+	CHECK_EQ(dect_lapc_parse(frame, n, &f), 0);
+	CHECK_EQ(f.sapi, DECT_LAPC_SAPI_CL);
+	CHECK_EQ(dect_lapc_rx(&l, &f, 100, out, sizeof(out)), 0);
+	CHECK_EQ(l.vr, 0);
+	CHECK_EQ(l.stats.rx_bad_sapi, 1u);
+	CHECK_EQ(l.stats.msgs_rx, 0u);
+	CHECK_EQ(dect_lapc_poll_tx(&l, tx, sizeof(tx)), 0);	/* no RR */
+}
+
 /* Send a short message; it goes out as one I-frame and completes on the ack. */
 static void test_fsm_tx_short(void)
 {
@@ -296,6 +322,7 @@ int main(void)
 	test_lapc_over_lc();
 	test_fsm_rx_single();
 	test_fsm_rx_nlf_resets_reassembly();
+	test_fsm_rx_ignores_other_sapi();
 	test_fsm_tx_short();
 	test_fsm_retransmit();
 	test_fsm_loopback_segmented();

@@ -290,6 +290,20 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 {
 	int msg_len = 0;
 
+	/*
+	 * This entity is the connection-oriented link, SAPI 0 (EN 300 175-4
+	 * §7.3.3). A frame for another SAPI -- connectionless signalling is
+	 * SAPI 3 -- must not reach its sequence numbers or its reassembly.
+	 * The LLN is deliberately not checked: the PT may open on a class B
+	 * LLN, which we answer as class A (§9.2.4.3, below). Found by the
+	 * second external review, the clean-room record/an external review-1-24102026.md,
+	 * finding 5; the corpus has no SAPI-0-violating frame from a handset.
+	 */
+	if (f->sapi != DECT_LAPC_SAPI_CO) {
+		l->stats.rx_bad_sapi++;
+		return 0;
+	}
+
 	l->established = 1;
 	/*
 	 * The PT opens the link on an assignable LLN (a class-B request,
