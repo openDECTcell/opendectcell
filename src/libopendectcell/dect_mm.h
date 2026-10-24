@@ -189,6 +189,17 @@ struct dect_mm {
 	int      adopted;
 
 	/*
+	 * What the handset said about itself in its {LOCATE-REQUEST} or
+	 * {ACCESS-RIGHTS-REQUEST}, for diagnostics: <<MODEL-IDENTIFIER>>
+	 * (the C4 sends 0b 74 08; the A540 sends none) and its
+	 * <<CODEC-LIST>> contents. Empty when absent.
+	 */
+	uint8_t peer_model[8];
+	size_t  peer_model_len;
+	uint8_t peer_codecs[16];
+	size_t  peer_codecs_len;
+
+	/*
 	 * Allocated long-term key (UAK). Key allocation derives it from the AC
 	 * (PIN); it is the 16-byte credential the chip stores for the handset via
 	 * 0x020A [CR A-0026]. Valid once `subscribed` is set (authentication OK).

@@ -47,6 +47,7 @@
 #include "dect_mm.h"
 #include "dect_cc.h"
 #include "dect_link.h"
+#include "dect_diag.h"
 #include "dect_audio.h"
 #include "dect_callinfo.h"
 #include "dect_clip.h"
@@ -3714,83 +3715,72 @@ static void dsp_sweep(struct stubd *s, uint64_t now)
 static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 {
 	/*
-	 * Where the eight event counters sit, in parameter-byte offsets, with
-	 * the condition that drives each one [CR A-0089, CR A-0090]. The label
-	 * names the TRIGGER, not the error: "s12b6" is "receive status[0x12]
-	 * bit 6 was clear", and what that bit means is still open -- A-0090
-	 * traced the status byte and could not pin its source, so the per-bit
-	 * names are a recorded gap, not a guess.
-	 *
-	 * "hdrb4"/"hdrb0" are a different kind: they gate on the received
-	 * frame's byte 0 (the slot header) rather than on the status byte --
-	 * bit 4 SET and bit 0 CLEAR respectively [CR A-0090].
+	 * The decode lives in the library now (dect_diag_decode_status()),
+	 * so the LuCI page and the controller read the row the same way. The
+	 * labels name each event counter's TRIGGER, not the error: "s12b6" is
+	 * "receive status[0x12] bit 6 was clear", and what that bit means is
+	 * still open [CR A-0089, A-0090].
 	 */
-	static const unsigned ev[8] = { 0x10u, 0x12u, 0x14u, 0x16u,
-					0x18u, 0x1Cu, 0x1Eu, 0x20u };
-	static const char *const evname[8] = { "s12b6", "s12b1", "s12b0",
-					       "hdrb4", "hdrb0", "unmapped",
-					       "s13hi", "s12b7" };
-	const uint8_t *p = m->param;
-	unsigned n = m->param_len;
-	uint16_t c[11];
-	uint16_t frames, interval;
+	struct dect_diag_status st;
+	struct dect_diag_frames f;
+	struct dect_diag_link d;
+	char js[768];
 	unsigned i, peak;
 
-	if (n < 0x10u) {
-		printf("call: status: short 0xF625 (%u bytes)\n", n);
+	if (dect_diag_decode_status(m->param, m->param_len, &st) < 0) {
+		printf("call: status: short 0xF625 (%u bytes)\n", m->param_len);
 		return;
 	}
 
 	/* Slot, carrier, and how strong the carrier we are on actually is. */
 	peak = 0u;
-	for (i = 1u; i < 10u; i++)
-		if (p[6u + i] > p[6u + peak])
+	for (i = 1u; i < DECT_DIAG_CARRIERS; i++)
+		if (st.rssi[i] > st.rssi[peak])
 			peak = i;
-	printf("call: status: slot %u carrier %u", p[2], p[3]);
-	if (p[3] < 10u)
-		printf(" level 0x%02x%s", p[6u + p[3]],
-		       p[3] == peak ? "" : " (NOT the strongest carrier)");
-	printf(" b5 0x%02x\ncall: status: rssi", p[5]);
-	for (i = 0u; i < 10u; i++)
-		printf(" %02x%s", p[6u + i], i == p[3] ? "*" : "");
+	printf("call: status: slot %u carrier %u", st.time_slot, st.carrier);
+	if (st.carrier < DECT_DIAG_CARRIERS)
+		printf(" level 0x%02x%s", st.rssi[st.carrier],
+		       st.carrier == peak ? "" : " (NOT the strongest carrier)");
+	printf(" b5 0x%02x\ncall: status: rssi", st.b5);
+	for (i = 0u; i < DECT_DIAG_CARRIERS; i++)
+		printf(" %02x%s", st.rssi[i], i == st.carrier ? "*" : "");
 	printf("\n");
 
-	if (n < 0x26u) {
-		printf("call: status: no counters (%u bytes)\n", n);
+	if (!st.has_counters) {
+		printf("call: status: no counters (%u bytes)\n", m->param_len);
 		return;
 	}
-	for (i = 0u; i < 11u; i++)
-		c[i] = (uint16_t)(p[0x10u + 2u * i] | (p[0x11u + 2u * i] << 8));
-	interval = c[5];			/* 0x1A */
-	frames   = c[10];			/* 0x24 */
 
-	/*
-	 * Unwrap. A counter that went backwards without the call restarting
-	 * has wrapped; a real restart shows up as a drop to near zero, which
-	 * reset_call_state() clears have_counters for anyway.
-	 */
-	if (!s->reg.have_counters) {
-		s->reg.frames_total = frames;
-	} else {
-		uint16_t d = (uint16_t)(frames - s->reg.frames_last);
-		s->reg.frames_total += d;
-	}
-	s->reg.frames_last = frames;
+	/* reset_call_state() clears have_counters, so a new call restarts */
+	f.total = s->reg.frames_total;
+	f.last = s->reg.frames_last;
+	f.have = (uint8_t)s->reg.have_counters;
+	s->reg.frames_total = dect_diag_frames_update(&f, &st);
+	s->reg.frames_last = f.last;
 
 	printf("call: status: up %llu frames (%.2f s), %u this interval\n",
 	       (unsigned long long)s->reg.frames_total,
-	       (double)s->reg.frames_total / 100.0, interval);
+	       (double)s->reg.frames_total / 100.0, st.interval_frames);
 
 	printf("call: status: errors");
-	for (i = 0u; i < 8u; i++) {
-		unsigned k = (ev[i] - 0x10u) / 2u;
-		int d = (int)c[k] - (int)s->reg.counter[k];
-		printf(" %s=%u%+d", evname[i], c[k],
-		       s->reg.have_counters ? d : 0);
+	for (i = 0u; i < DECT_DIAG_EVENTS; i++) {
+		int delta = (int)st.events[i] - (int)s->reg.counter[i];
+
+		printf(" %s=%u%+d", dect_diag_event_name(i), st.events[i],
+		       s->reg.have_counters ? delta : 0);
 	}
 	printf("\n");
-	memcpy(s->reg.counter, c, sizeof(c));
+	for (i = 0u; i < DECT_DIAG_EVENTS; i++)
+		s->reg.counter[i] = st.events[i];
 	s->reg.have_counters = 1;
+
+	/* The same row as one object, the shape the Monitor export will use. */
+	memset(&d, 0, sizeof(d));
+	d.radio = st;
+	d.call_frames = s->reg.frames_total;
+	dect_diag_from_link(&s->reg.link, &d);
+	if (dect_diag_json(&d, s->show_params, js, sizeof(js)))
+		printf("diag: %s\n", js);
 }
 
 /*

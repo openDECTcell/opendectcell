@@ -11,7 +11,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 LIBDECT_SRC := src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c src/libopendectcell/dect_audio.c \
 	src/libopendectcell/dect_g722.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c
@@ -27,7 +27,8 @@ STUBD_SRC := src/stubd/dect-stubd.c src/libopendectcell/dect_mail.c src/libopend
 	src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c \
 	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c \
 	src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_audio.c \
-	src/libopendectcell/dect_g722.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c
+	src/libopendectcell/dect_g722.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c \
+	src/libopendectcell/dect_diag.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
 .PHONY: all check cross clean
@@ -135,6 +136,10 @@ $(BUILD)/test_callinfo: tests/test_callinfo.c src/libopendectcell/dect_callinfo.
 $(BUILD)/test_g722: tests/test_g722.c src/libopendectcell/dect_g722.c src/libopendectcell/dect_g722.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_g722.c src/libopendectcell/dect_g722.c -lm
+
+$(BUILD)/test_diag: tests/test_diag.c src/libopendectcell/dect_diag.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_diag.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -Isrc/libopendectcell -o $@ tests/test_diag.c src/libopendectcell/dect_diag.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c
 
 $(BUILD)/test_link: tests/test_link.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_link.h tests/check.h
 	@mkdir -p $(BUILD)

@@ -407,6 +407,25 @@ static void send_locate_reject(struct dect_mm *mm, uint8_t reason)
  * A GAP FP serves subscribed handsets. If the <<PORTABLE-IDENTITY>> does not
  * match the one we hold, reject it.
  */
+/* Keep what the handset declares about itself, for diagnostics. */
+static void learn_self_description(struct dect_mm *mm, const uint8_t *ies,
+				   size_t ies_len)
+{
+	size_t n;
+	const uint8_t *p;
+
+	p = dect_nwk_find_ie(ies, ies_len, DECT_IE_MODEL_IDENTIFIER, &n);
+	if (p && n <= sizeof(mm->peer_model)) {
+		memcpy(mm->peer_model, p, n);
+		mm->peer_model_len = n;
+	}
+	p = dect_nwk_find_ie(ies, ies_len, DECT_IE_CODEC_LIST, &n);
+	if (p && n <= sizeof(mm->peer_codecs)) {
+		memcpy(mm->peer_codecs, p, n);
+		mm->peer_codecs_len = n;
+	}
+}
+
 static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 			      size_t ies_len)
 {
@@ -434,6 +453,7 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 		send_locate_reject(mm, DECT_MM_REJECT_IPUI_UNKNOWN);
 		return;
 	}
+	learn_self_description(mm, ies, ies_len);
 
 	la = dect_nwk_find_ie(ies, ies_len, DECT_IE_LOCATION_AREA, &la_len);
 	send_locate_accept(mm, la, la_len);
@@ -537,6 +557,7 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 	size_t pid_len;
 
 	mm->stats.access_req++;
+	learn_self_description(mm, ies, ies_len);
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
 	/*
 	 * Held aside until the PIN is proven (on_auth_request()). This used to

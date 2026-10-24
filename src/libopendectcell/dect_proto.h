@@ -180,8 +180,17 @@
  *    call it: a busy CC refuses every handset-placed call but list access
  *    with "insufficient resources" (EN 300 175-5 §17.3.3). For links with
  *    no audio path behind them.
+ *
+ * 16: diagnostics as data (2026-10-25). New module dect_diag.[ch]: struct
+ *    dect_diag_link (one per link, the protocol half from
+ *    dect_diag_from_link()), dect_diag_decode_status() for the chip's
+ *    0xF625 row (carrier, time slot, ten RSSI values, eight integrity
+ *    counters, frames since establishment), dect_diag_frames_update() for
+ *    the 16-bit wrap, and dect_diag_json(). Layout change: struct dect_mm
+ *    gains peer_model/peer_codecs, what the handset declares about itself
+ *    in {LOCATE-REQUEST} or {ACCESS-RIGHTS-REQUEST}. Nothing else changes.
  */
-#define OPENDECTCELL_API_VERSION 15
+#define OPENDECTCELL_API_VERSION 16
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
