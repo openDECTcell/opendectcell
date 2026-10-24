@@ -302,6 +302,7 @@ struct stubd {
 	int         led_state;		/* last written, -1 = unknown */
 	uint64_t    led_next;
 	uint32_t    led_traffic, led_traffic_seen;
+	unsigned    led_changes, led_blink_ticks;
 	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
@@ -3856,8 +3857,10 @@ static void led_write(struct stubd *s, int on)
 {
 	if (s->led_fd < 0 || s->led_state == on)
 		return;
-	if (pwrite(s->led_fd, on ? "1" : "0", 1, 0) == 1)
+	if (pwrite(s->led_fd, on ? "1" : "0", 1, 0) == 1) {
 		s->led_state = on;
+		s->led_changes++;
+	}
 }
 
 static void led_open(struct stubd *s)
@@ -3885,6 +3888,7 @@ static void led_tick(struct stubd *s, uint64_t now, int radio_on)
 	}
 	if (s->led_traffic != s->led_traffic_seen || s->reg.call_bound) {
 		s->led_traffic_seen = s->led_traffic;
+		s->led_blink_ticks++;
 		led_write(s, s->led_state != 1);	/* toggle */
 	} else {
 		led_write(s, 1);
@@ -6295,8 +6299,12 @@ int main(int argc, char **argv)
 	led_write(&s, 0);	/* a park or probe run leaves it dark */
 	ret = run_loop(&s, fpb, run_seconds);
 	led_write(&s, 0);
-	if (s.led_fd >= 0)
+	if (s.led_fd >= 0) {
 		close(s.led_fd);
+		if (s.do_register)
+			printf("led: %u changes, %u blink ticks of %u ms\n",
+			       s.led_changes, s.led_blink_ticks, LED_TICK_MS);
+	}
 	if (s.voice_fp) {
 		fclose(s.voice_fp);
 		printf("voice: captured %u bytes from slot %d (%u frames)\n",
