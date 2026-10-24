@@ -174,6 +174,9 @@ static long tz_offset_seconds(time_t t)
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
 #define PROBE_BLOCKS	40u
 #define POLL_MS		100
+/* End-of-run park: how long to wait for the queue, then for the driver. */
+#define PARK_DRAIN_MS	2000u
+#define PARK_FLUSH_MS	200u
 
 static volatile sig_atomic_t stop;
 static uint64_t g_start;		/* for relative timestamps in the log */
@@ -343,6 +346,7 @@ struct stubd {
 	uint8_t     txq[4096];		/* pending control-slot bytes */
 	size_t      txq_head, txq_len;
 	uint32_t    txq_drops;
+	int         parked;		/* run_loop() drained the park mails */
 	uint8_t     tx_idle;		/* filler for unmapped slots (-a txidle) */
 	uint8_t     tx_voice_idle;	/* filler for the voice lanes */
 	uint32_t    tx_blocks;
@@ -4407,13 +4411,63 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		free(txbuf);
 		return -1;
 	}
+	uint64_t park_at = 0, drained_at = 0;
+
 	s->tx_ring = 1;		/* from here on, mails are paced by tx_block() */
 	g_start = start;
-	while (!stop) {
+	for (;;) {
 		struct pollfd pfd = { .fd = s->fd, .events = POLLIN };
-		uint64_t now;
-		int pr = poll(&pfd, 1, POLL_MS);
+		uint64_t now = mono_ms();
+		int pr;
 
+		/*
+		 * End of the run, by -t or by a signal: park the radio from
+		 * INSIDE the loop. Once tx_ring is set, send_mail() only
+		 * appends to txq and only tx_block() -- driven by the blocks
+		 * this loop reads -- moves those bytes onto the wire. The park
+		 * used to be queued after the loop had returned, so it was
+		 * never sent, while the log still said "radio parked" and the
+		 * chip went on beaconing with registration open (AGENTS.md §6).
+		 * Found by the external review, the clean-room record
+		 * an external review-24102026.md, finding 2.
+		 *
+		 * So: queue close-registration and radio-off, stop every
+		 * periodic sender, keep pumping until the queue is empty plus
+		 * PARK_FLUSH_MS for the driver to clock the last block out,
+		 * and give up loudly after PARK_DRAIN_MS.
+		 */
+		if (!park_at && (stop || (run_seconds &&
+		    now - start >= (uint64_t)run_seconds * 1000u))) {
+			if (!s->do_register || s->tx_slot < 0)
+				break;
+			send_mail_spec(s, "0x22:0x02:0x022c:01"); /* close reg */
+			send_mail_spec(s, "0x22:0x02:0x015b:00"); /* radio off */
+			park_at = now;
+			printf("reg: parking the radio, %zu control bytes "
+			       "queued\n", s->txq_len);
+		}
+		if (park_at) {
+			if (s->txq_len)
+				drained_at = 0;
+			else if (!drained_at)
+				drained_at = now;
+			if (drained_at && now - drained_at >= PARK_FLUSH_MS) {
+				s->parked = 1;
+				printf("reg: radio parked -- park mails on the "
+				       "wire %llu ms after queueing\n",
+				       (unsigned long long)(drained_at -
+							    park_at));
+				break;
+			}
+			if (now - park_at >= PARK_DRAIN_MS) {
+				printf("reg: RADIO NOT PARKED -- %zu control "
+				       "bytes still queued after %u ms\n",
+				       s->txq_len, PARK_DRAIN_MS);
+				break;
+			}
+		}
+
+		pr = poll(&pfd, 1, POLL_MS);
 		if (pr < 0 && errno == EINTR)
 			continue;
 		if (pr > 0) {
@@ -4457,6 +4511,10 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				}
 			}
 		}
+
+		/* While parking, nothing may queue behind the park mails. */
+		if (park_at)
+			continue;
 
 		now = mono_ms();
 		if (s->do_register) {
@@ -4570,8 +4628,6 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				s->reg.nonspeech_noted = 0;
 			pump_lapc(s);
 		}
-		if (run_seconds && now - start >= (uint64_t)run_seconds * 1000u)
-			break;
 	}
 	printf("session: state %d contacts %u answers %u status %u deaths %u\n",
 	       s->sess.state, s->sess.stats.contacts_sent, s->sess.stats.answers,
@@ -5580,13 +5636,15 @@ int main(int argc, char **argv)
 		       s.voice_bytes, s.voice_slot, s.voice_bytes / 2u);
 	}
 
-	/* Park the radio so the base does not keep beaconing with registration
-	 * open after we exit. [CR COMMAND_SET §6.2/§6.1] */
-	if (s.do_register && s.tx_slot >= 0) {
-		send_mail_spec(&s, "0x22:0x02:0x022c:01");	/* close registration */
-		send_mail_spec(&s, "0x22:0x02:0x015b:00");	/* radio off */
-		printf("reg: radio parked\n");
-	}
+	/*
+	 * run_loop() parks the radio itself, inside the loop, because only the
+	 * loop drains the transmit queue [CR COMMAND_SET §6.2/§6.1]. Anything
+	 * queued here would never be sent. If the loop could not park -- a
+	 * transport error, or the drain timed out -- say so instead.
+	 */
+	if (s.do_register && s.tx_slot >= 0 && !s.parked)
+		printf("reg: RADIO NOT PARKED -- park it by hand: dect-stubd "
+		       "-M 0x22:0x02:0x022c:01 -M 0x22:0x02:0x015b:00 -t 8\n");
 out:
 	if (s.play_log_fp) {
 		printf("playlog: %ld octets written\n", ftell(s.play_log_fp));
