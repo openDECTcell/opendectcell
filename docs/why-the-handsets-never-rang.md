@@ -132,3 +132,71 @@ Pre-committed outcomes:
 What the six missing `0x015b` parameter bytes mean, and what bits 0..2 of
 `0x0169 = 07` enable. Asked of the clean room. Replaying the bytes is enough
 to test the hypothesis; understanding them is what turns it into a stack.
+
+
+## 2026-10-24, later: the beacon mechanism is withdrawn, the localisation is stronger
+
+`[CR A-0108]` was decoded against **08.25** firmware while this box runs
+**07.56**, where the structures are at entirely different addresses
+(dispatcher `a stock routine` / config base `0x2287` versus `a stock routine` /
+config base `0xc06`). Withdrawn: the beacon mechanism, the addresses, and the
+`0x0243`/`0x2451` byte-change predictions. The contradiction that caught it
+was ours: our QH=4 and QH=C already matched stock byte-for-byte, which a
+"we never configure the beacon" story cannot survive.
+
+**Two things were settled on the way out, and both are worth more than the
+withdrawn mechanism.**
+
+**1. `0x96ad` is built at BRING-UP.** Verified live: dumped with four handsets
+registered, then one deregistered and dumped again — **byte-identical**.
+Combined with A-0106 (unchanged by paging), it is a static table set up at
+init. So our all-zero page table is a **bring-up gap, not a registration
+gap**, and the fix belongs at bring-up. That is now evidenced from two
+independent directions rather than inferred.
+
+**2. The QH=7 question is closed, and there was never a difference.** On 07.56
+the capability templates live at `0x14d`, and stock's read
+`38 49 94 EE` / `C8 01 85 11` / `40 11 10 20 04` / **`73 07 00 00`** — our
+values exactly, QH=7 included. The `70 53 41 47 48` both rooms attributed to
+stock is added at beacon-TX, not held in the template. Days were spent
+looking for a mail that writes QH=7; **no such mail was needed, because our
+beacon was never wrong.**
+
+### What is implemented
+
+`dect-stubd` now replays stock's bring-up order:
+
+```
+0x14:0x02:0x0153:00     ECO_CONFIG
+0x14:0x02:0x0169:07     FEATURE_FLAGS
+0x14:0x02:0x0157:00     CAPABILITY_PROFILE
+0x22:0x02:0x015b:01     radio on
+0x22:0x02:0x022b:41     open registration
+```
+
+`-a nostockcfg` restores the old two-mail bring-up, so the control is one
+flag.
+
+**This is a faithful replay, not an understood mechanism.** What those three
+mails do on 07.56 is re-derived but unproven: `0x0153` writes `0x16c`/`0xdd8`,
+`0x0157` writes `0x989b` bit 4 and `0x1e6` bit 0, `0x0169` sets
+`0x154 |= 0x05`. None of that is a beacon block.
+
+### Judge the test by this, and nothing else
+
+| outcome | meaning |
+| --- | --- |
+| it rings | that was it |
+| `0x96ad` populates, no ring | the bring-up gap is real, with a second cause above it |
+| `0x96ad` still zero | not it; next is the `0x96ad` writer and `a stock routine`'s gate, both of which survive the reflash |
+
+**Do not judge it by `0x0243` turning `2b`.** That prediction came from the
+withdrawn decode.
+
+### Still unproven
+
+Which of the three mails matters, and the chain from it to the no-ring. Five
+mechanisms this week fitted the evidence and died to a control: the bearer
+arm, the `{CC-SETUP}` collision, the DSP regions, the page table, and now the
+beacon. The bring-up gap has survived every control so far — which is not the
+same as being proven.

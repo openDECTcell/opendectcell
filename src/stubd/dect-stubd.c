@@ -422,6 +422,11 @@ struct stubd {
 		 * {handle, 0x40}.
 		 */
 		int earlybind;
+		/*
+		 * nostockcfg: omit the three config mails stock sends before
+		 * radio-on. The control for the bring-up-gap test.
+		 */
+		int no_stock_cfg;
 		/* subslot=N: chip subscription slot, 1..6. 0 = use the store's. */
 		unsigned sub_slot;
 		/*
@@ -4481,6 +4486,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->nocodeclist = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "earlybind", 9))
 			a->earlybind = 1;
+		else if (!eq && klen == 10 && !memcmp(key, "nostockcfg", 10))
+			a->no_stock_cfg = 1;
 		else if (eq && klen == 7 && !memcmp(key, "subslot", 7)) {
 			if (v < 1u || v > DECT_MM_MAX_SLOT)
 				return -1;
@@ -4920,6 +4927,7 @@ static void usage(void)
 		"           codeclist=HEX <<CODEC-LIST>> value octets\n"
 		"           earlybind    assign audio on the page response\n"
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
+		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
 		"           setupdelay=N hold the CC-SETUP N ms after the page\n"
 		"           (default 8; the default 16 s budget is SHORTER than\n"
 		"           our own F<CC.03> timer, so it gives up first)\n"
@@ -5143,7 +5151,48 @@ int main(int argc, char **argv)
 	/* -g auto-sends the MAC bring-up (radio on, open registration) unless the
 	 * caller supplied its own -M mails. [CR COMMAND_SET §6.1/§6.2] */
 	if (s.do_register && s.n_xmail == 0) {
+		/*
+		 * Stock's MAC bring-up, in stock's order, from the 2026-10-24
+		 * capture of FRITZ!OS 175.07.56 on this hardware.
+		 *
+		 * Stock's whole bring-up is three config mails and then the
+		 * radio. We sent only the radio, and `0x0153`, `0x0157` and
+		 * `0x0169` appeared nowhere in this source tree. Every
+		 * FP-originated call to a Gigaset was refused, on three
+		 * handsets, with nineteen per-call variables making no
+		 * difference -- consistent with a gap in one-time init rather
+		 * than anything in a call.
+		 *
+		 * `[CR A-0109]`: 0x96ad is built at BRING-UP. It is unchanged
+		 * by paging (A-0106) and unchanged by registering or
+		 * deregistering a handset, so our all-zero page table is a
+		 * bring-up gap, not a registration gap, and the fix belongs
+		 * here.
+		 *
+		 * The order matters: the radio-on path latches state, so
+		 * configuring afterwards may not re-beacon. Stock sends these
+		 * from src 0x14, the FP-management task, and the dispatcher
+		 * may only accept config from it -- so we match stock exactly
+		 * rather than reusing our own 0x22.
+		 *
+		 * What these mails DO is not established. An earlier decode
+		 * said they configure the beacon capability block; that was
+		 * read against 08.25 firmware while this box runs 07.56, and
+		 * it is withdrawn -- our capability templates are identical to
+		 * stock's, QH=7 included. So this is a faithful replay of
+		 * stock's sequence, not an implementation of an understood
+		 * mechanism. Judge it by whether 0x96ad populates and whether
+		 * the handset rings.
+		 *
+		 * -a nostockcfg restores the old two-mail bring-up, so the
+		 * difference is one flag.
+		 */
 		/* src/dst/prim parse with base 0, so hex needs the 0x prefix. */
+		if (!s.audio.no_stock_cfg) {
+			s.xmail[s.n_xmail++] = "0x14:0x02:0x0153:00";	/* ECO_CONFIG */
+			s.xmail[s.n_xmail++] = "0x14:0x02:0x0169:07";	/* FEATURE_FLAGS */
+			s.xmail[s.n_xmail++] = "0x14:0x02:0x0157:00";	/* CAPABILITY_PROFILE */
+		}
 		s.xmail[s.n_xmail++] = "0x22:0x02:0x015b:01";	/* radio/beacon on */
 		s.xmail[s.n_xmail++] = "0x22:0x02:0x022b:41";	/* 'A': open reg */
 	}
