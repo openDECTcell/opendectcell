@@ -30,6 +30,7 @@
 
 /* <<REJECT-REASON>> codes, EN 300 175-5 §7.7.34 */
 #define DECT_MM_REJECT_IPUI_UNKNOWN	0x02u
+#define DECT_MM_REJECT_IE_ERROR		0x60u	/* "information element error" */
 
 #define DECT_MM_PIN_MAX		16u
 #define DECT_MM_RFPI_LEN	5u
@@ -156,6 +157,13 @@ struct dect_mm {
 	uint8_t rs[16];				/* random seed (RS) */
 	uint8_t port_id[DECT_MM_PORTID_MAX];	/* PP PORTABLE-IDENTITY contents */
 	size_t  port_id_len;
+	/*
+	 * The identity an {ACCESS-RIGHTS-REQUEST} asked for, held here until
+	 * authentication succeeds and only then copied into port_id, so a
+	 * stranger with the wrong PIN cannot displace the identity we hold.
+	 */
+	uint8_t pend_id[DECT_MM_PORTID_MAX];
+	size_t  pend_id_len;
 
 	/*
 	 * Allocated long-term key (UAK). Key allocation derives it from the AC

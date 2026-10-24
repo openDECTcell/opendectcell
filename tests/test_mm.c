@@ -135,6 +135,23 @@ static void test_register_ok(void)
 	CHECK_EQ(h.ti_flag, DECT_TI_RESPONDER);
 	CHECK_EQ(mm.state, DECT_MM_REGISTERED);
 	CHECK_EQ(mm.stats.accepted, 1);
+	/*
+	 * Authenticated, so the identity the request asked for is now the one
+	 * we hold, and the accept carries it back.
+	 */
+	{
+		static const uint8_t asked[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22,
+						  0x33, 0x44 };	/* pp_access_request() */
+		const uint8_t *pid;
+		size_t pid_len;
+
+		CHECK_EQ(mm.port_id_len, sizeof(asked));
+		CHECK(memcmp(mm.port_id, asked, sizeof(asked)) == 0);
+		pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+				       &pid_len);
+		CHECK(pid != NULL && pid_len == sizeof(asked) &&
+		      memcmp(pid, asked, sizeof(asked)) == 0);
+	}
 
 	/*
 	 * The identities an FP-originated {CC-SETUP} needs are both already
@@ -231,11 +248,20 @@ static void test_locate(void)
 	const uint8_t *ies, *rx_la;
 	size_t n, ies_len, rx_la_len;
 
-	dect_mm_init(&mm, &cfg);
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
 
-	/* PP LOCATE-REQUEST (PP-initiated: F=0) carrying a LOCATION-AREA. */
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, ours, sizeof(ours));	/* a subscription we hold */
+	mm.port_id_len = sizeof(ours);
+
+	/*
+	 * PP LOCATE-REQUEST (PP-initiated: F=0) carrying its identity, which
+	 * is mandatory, and a LOCATION-AREA.
+	 */
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
 			       0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    ours, sizeof(ours));
 	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_LOCATION_AREA, la, sizeof(la));
 	dect_mm_rx(&mm, buf, n, NULL, NULL);
 
@@ -340,6 +366,106 @@ static void test_locate_request_from_a_stranger_is_rejected(void)
 	(void)m;
 }
 
+/*
+ * <<PORTABLE-IDENTITY>> is mandatory in {LOCATE-REQUEST} (EN 300 175-5 table
+ * 56). Without it the identity check used to be skipped and the request
+ * accepted; §17.6.4 prescribes {LOCATE-REJECT} "information element error".
+ */
+static void test_locate_request_without_identity_is_rejected(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	uint8_t la[1] = { 0x64 };
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, ours, sizeof(ours));
+	mm.port_id_len = sizeof(ours);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_LOCATION_AREA, la,
+			    sizeof(la));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+
+	dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_MM_LOCATE_REJECT);
+	CHECK_EQ(out[2], DECT_IE_REJECT_REASON);
+	CHECK_EQ(out[4], DECT_MM_REJECT_IE_ERROR);
+	CHECK_EQ(mm.stats.located, 0u);
+}
+
+/* With no subscription held at all, no IPUI is known: reject, not accept. */
+static void test_locate_request_with_no_subscription_is_rejected(void)
+{
+	static const uint8_t someone[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    someone, sizeof(someone));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+
+	dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_MM_LOCATE_REJECT);
+	CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_UNKNOWN);
+	CHECK_EQ(mm.stats.located, 0u);
+}
+
+/*
+ * A stranger who fails authentication must not leave its identity behind:
+ * {ACCESS-RIGHTS-REQUEST} used to overwrite the identity we hold before the
+ * PIN was checked, so the stranger's next {LOCATE-REQUEST} on that link was
+ * accepted and ours would have been refused.
+ */
+static void test_failed_registration_keeps_the_held_identity(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t stranger[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22,
+					     0x33, 0x44 };	/* pp_access_request() */
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1 };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	uint8_t rand_f[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rs[16] = { 8, 7, 6, 5, 4, 3, 2, 1 };	/* dect_mm_rx() reads 16 */
+	uint8_t rand_p[8] = { 0 };
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, ours, sizeof(ours));
+	mm.port_id_len = sizeof(ours);
+
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	while (dect_mm_poll(&mm, out, sizeof(out)) > 0)
+		;					/* KEY-ALLOCATE */
+	n = pp_auth_request(buf, sizeof(buf), 0, "0000", rand_f, rs, rand_p, 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs);		/* wrong PIN */
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
+	CHECK_EQ(mm.port_id_len, sizeof(ours));
+	CHECK(memcmp(mm.port_id, ours, sizeof(ours)) == 0);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    stranger, sizeof(stranger));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_MM_LOCATE_REJECT);
+	CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_UNKNOWN);
+}
+
 /* ... and the handset we DO hold is still accepted. */
 static void test_locate_request_from_our_handset_is_accepted(void)
 {
@@ -374,13 +500,19 @@ static void mm_setup_located(struct dect_mm *mm, uint8_t *out, size_t cap)
 {
 	static struct dect_mm_cfg cfg = { .pin = "1234",
 					  .rfpi = { 1, 2, 3, 4, 5 } };
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
 	uint8_t la[1] = { 0x64 };
 	uint8_t buf[64];
 	size_t n;
 
 	dect_mm_init(mm, &cfg);
+	/* a subscription we hold, and the identity is mandatory in the request */
+	memcpy(mm->port_id, ours, sizeof(ours));
+	mm->port_id_len = sizeof(ours);
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
 			       DECT_TI_ORIGINATOR, 0, DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    ours, sizeof(ours));
 	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_LOCATION_AREA,
 			    la, sizeof(la));
 	dect_mm_rx(mm, buf, n, NULL, NULL);
@@ -531,6 +663,9 @@ int main(void)
 {
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
+	test_locate_request_without_identity_is_rejected();
+	test_locate_request_with_no_subscription_is_rejected();
+	test_failed_registration_keeps_the_held_identity();
 	test_sub_slot_drives_the_tpui();
 	test_register_ok();
 	test_register_bad_pin();

@@ -375,9 +375,21 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
 			       &pid_len);
-	if (mm->port_id_len && pid &&
-	    (pid_len != mm->port_id_len ||
-	     memcmp(pid, mm->port_id, pid_len) != 0)) {
+	/*
+	 * <<PORTABLE-IDENTITY>> is mandatory here (EN 300 175-5 table 56), and
+	 * a missing mandatory element gets the reject with "information
+	 * element error" (§17.6.4). The check used to require the element to
+	 * be present before comparing it, so leaving it out skipped the
+	 * check and won a {LOCATE-ACCEPT}. Found by the second external
+	 * review (the clean-room record/an external review-1-24102026.md, finding 1).
+	 */
+	if (!pid) {
+		send_locate_reject(mm, DECT_MM_REJECT_IE_ERROR);
+		return;
+	}
+	/* Only the handset we hold a subscription for; none held, none known. */
+	if (!mm->port_id_len || pid_len != mm->port_id_len ||
+	    memcmp(pid, mm->port_id, pid_len) != 0) {
 		send_locate_reject(mm, DECT_MM_REJECT_IPUI_UNKNOWN);
 		return;
 	}
@@ -485,11 +497,16 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 
 	mm->stats.access_req++;
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
-	if (pid && pid_len <= sizeof(mm->port_id)) {
-		memcpy(mm->port_id, pid, pid_len);
-		mm->port_id_len = pid_len;
+	/*
+	 * Held aside until the PIN is proven (on_auth_request()). This used to
+	 * overwrite port_id at once, so a stranger with the wrong PIN replaced
+	 * the identity we hold for the rest of the link.
+	 */
+	if (pid && pid_len <= sizeof(mm->pend_id)) {
+		memcpy(mm->pend_id, pid, pid_len);
+		mm->pend_id_len = pid_len;
 	} else {
-		mm->port_id_len = 0;
+		mm->pend_id_len = 0;
 	}
 	send_key_allocate(mm);
 }
@@ -538,6 +555,9 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 	 */
 	memcpy(mm->uak, uak, DECT_MM_UAK_LEN);
 	mm->subscribed = 1;
+	/* Authenticated: the requested identity is now the one we hold. */
+	memcpy(mm->port_id, mm->pend_id, mm->pend_id_len);
+	mm->port_id_len = mm->pend_id_len;
 
 	send_auth_reply(mm, res2);
 	send_access_accept(mm);
