@@ -596,6 +596,20 @@ static void test_a_late_ack_is_visible_as_late(void)
 	CHECK_EQ(mm.tpui_timed_out, 1u);	/* the history is kept */
 }
 
+/* An ACK with no assignment behind it confirms nothing. */
+static void test_an_unsolicited_ack_confirms_nothing(void)
+{
+	static const uint8_t ack[] = { 0x05, 0x5D };
+	struct dect_mm_cfg cfg = { .pin = "1234", .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_rx(&mm, ack, sizeof(ack), NULL, NULL);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
+	CHECK_EQ(mm.stats.tpui_acked, 0u);
+	CHECK_EQ(mm.stats.tpui_unsolicited, 1u);
+}
+
 /* With no assignment outstanding the timer never arms. */
 static void test_no_assignment_means_no_timer(void)
 {
@@ -675,5 +689,6 @@ int main(void)
 	test_tpui_assignment_times_out_at_ten_seconds();
 	test_a_late_ack_is_visible_as_late();
 	test_no_assignment_means_no_timer();
+	test_an_unsolicited_ack_confirms_nothing();
 	return CHECK_DONE();
 }

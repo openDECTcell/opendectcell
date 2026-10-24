@@ -599,7 +599,18 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		 * The PT has taken the TPUI we assigned. Stop <MM_ident.1>.
 		 * No reply: EN 300 175-5 §13.2.2 has the FT issue a local
 		 * confirm primitive, nothing on the air.
+		 *
+		 * Only for an assignment we made: one still pending, or one
+		 * that timed out (a late ACK is accepted but stays visible as
+		 * late, see dect_mm_tick()). An ACK with no assignment behind
+		 * it used to mark the TPUI confirmed all the same; paging
+		 * relies on that flag. Found by the second external review,
+		 * the clean-room record/an external review-1-24102026.md, finding 4.
 		 */
+		if (!mm->ident_pending && !mm->tpui_timed_out) {
+			mm->stats.tpui_unsolicited++;
+			break;
+		}
 		mm->ident_pending = 0;
 		mm->ident_deadline_ms = 0;
 		mm->tpui_confirmed = 1;

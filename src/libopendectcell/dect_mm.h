@@ -121,6 +121,7 @@ struct dect_mm_stats {
 	uint32_t located;	/* LOCATE-ACCEPT sent */
 	uint32_t tpui_acked;	/* {TEMPORARY-IDENTITY-ASSIGN-ACK} received */
 	uint32_t tpui_timeouts;	/* <MM_ident.1> expiries */
+	uint32_t tpui_unsolicited; /* ACKs with no assignment made: ignored */
 };
 
 struct dect_mm {
