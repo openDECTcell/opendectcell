@@ -54,6 +54,8 @@ define Package/opendectcell/install
 	$(INSTALL_DIR) $(1)/etc/init.d $(1)/etc/config $(1)/etc/opendectcell/firmware
 	$(INSTALL_BIN) ./files/opendectcell.init $(1)/etc/init.d/opendectcell
 	$(INSTALL_CONF) ./files/opendectcell.config $(1)/etc/config/opendectcell
+	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
+	$(INSTALL_DATA) ./files/opendectcell.keep $(1)/lib/upgrade/keep.d/opendectcell
 endef
 
 $(eval $(call BuildPackage,opendectcell))

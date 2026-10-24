@@ -36,7 +36,8 @@
 - [ ] Optional: stock-firmware observation with Freetz-NG (`/proc` DECT commands, mail logging) to record reference traces
 
 ## M2: Firmware loader → **Gate G1**
-- [ ] `tools/dect-fw-extract.py` (PC, Python stdlib only): extract `dectfw_*.hex` from a user-supplied AVM image, verify SHA-256, print upload instructions
+- [x] `tools/dect-fw-extract.py` (PC, Python stdlib only): extract `dectfw_*.hex` from a user-supplied AVM image, verify SHA-256, print upload instructions
+  - 2026-10-25: FRITZ!OS `.image` (tar), bare SquashFS (found by magic, any header before it) or an extracted folder; known builds renamed as the service expects, with the `scp`/`uci` lines to run. Tested on synthetic images (`tests/test_fw_extract.py`, part of `make check`); **not yet run on a real AVM image**, and the Lantiq NAND format of the 7412/7362 SL is not wired in
 - [x] Image builder: Intel HEX → length header, segments, patch area via descriptor (chip address 0 for `441`), TLV patching, XOR checksum (`src/fwload/fwimage.c`, `docs/stub-image-format.md`)
 - [x] `kmod-opendectcell-ipq40xx` skeleton: board table (match by DT compatible), `/dev/dect0` with chip reset and boot strap; no PCM yet (`kernel/`, verified 2026-10-17: 50 consecutive uploads, clean unload)
 - [ ] Board profile for the 7520/7530 (`boards/<board_name>`, name read on the box) with the loader keys (firmware names, mode word, UART)

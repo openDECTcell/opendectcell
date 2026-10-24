@@ -1,6 +1,6 @@
 # Firmware sourcing: how users get the STUB onto their box
 
-Status: **decided** 2026-10-17.
+Status: **decided** 2026-10-17. **Built** 2026-10-25: `tools/dect-fw-extract.py` (tar, SquashFS or folder; synthetic tests in `tests/test_fw_extract.py`; not yet run on a real image), the package's `/etc/opendectcell/firmware/` with `keep.d`. The on-box SHA-256 check in the init script is still open.
 
 ## 1. Why every user needs it
 

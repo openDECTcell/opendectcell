@@ -147,6 +147,7 @@ $(BUILD)/test_link: tests/test_link.c src/libopendectcell/dect_link.c src/libope
 
 check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done
+	@python3 -I tests/test_fw_extract.py
 
 clean:
 	rm -rf $(BUILD)
