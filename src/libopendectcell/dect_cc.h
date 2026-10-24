@@ -341,13 +341,21 @@ int dect_cc_busy(const struct dect_cc *cc);
 /*
  * Choose the transaction value the next FP-originated SETUP will use. Values
  * 0..6 are valid for the originating side (7 is the extended-TI escape).
+ * dect_cc_init() leaves it at 0, and callers should normally leave it there.
  *
- * We used to hardcode 0 for every call. A call that ends without a clean
- * release can leave the portable part believing that transaction is still
- * open, and it then acknowledges the next SETUP at the link layer and
- * discards the message -- which is exactly the signature seen on hardware on
- * 2026-10-20 after a call was cut off mid-media. Rotating costs nothing and
- * is what the standard expects anyway.
+ * EN 300 444 §6.9.2: "The transaction identifier value for a CC call shall
+ * always get assigned the lowest available free number." This entity runs
+ * one call at a time, and the handset's own calls carry the other flag, so
+ * the lowest free value for a call we originate is always 0.
+ *
+ * From 2026-10-20 the daemon rotated the value per call, after a call cut off
+ * mid-media left a C4 discarding the next SETUP on the same value; this
+ * comment then claimed rotating "is what the standard expects". It is not,
+ * and it is why every Gigaset refused every incoming call with 0x32: run 15
+ * (value 0) rang the A540, and the control in the same session, run 16
+ * (value 1, otherwise identical), was refused (docs/call-g7.md, runs 14-16).
+ * A transaction left open by a lost call is cleared by releasing it, not
+ * dodged by picking another value. Use this only to override for a test.
  */
 void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti);
 

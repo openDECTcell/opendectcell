@@ -791,12 +791,14 @@ struct stubd {
 		uint8_t  signal_value;
 		/*
 		 * ti=N: pin the CC transaction identifier of an FP-originated
-		 * SETUP instead of rotating it. Stock uses TI 0 in every
-		 * base->handset SETUP we have bytes for, and every call this
-		 * project ever completed used TI 0 (v28, v30, v34, A2, A3, B2);
-		 * every refused one used TI 1. Those are confounded with the
-		 * handset -- the TI-0 runs are all the C4 -- so this exists to
-		 * separate them. -1 keeps the rotation.
+		 * SETUP; -1 (the default) uses the lowest free value, 0.
+		 * Written 2026-10-22 because stock uses TI 0 in every
+		 * base->handset SETUP we have bytes for, every call this
+		 * project ever completed used TI 0 (v28, v30, v34, A2, A3, B2)
+		 * and every refused one used TI 1. The only ti=0 test then ran
+		 * under the drain defect and was void, and the lab scripts
+		 * pinned ti=1 from then on. Settled 2026-10-24: run 15 (ti=0)
+		 * rang the A540, run 16 (ti=1, same session) was refused.
 		 */
 		int      ti_fixed;
 		/*
@@ -919,7 +921,7 @@ struct stubd {
 	int         slot_sweep_cur;	/* slot being written now, -1 = none yet */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
 	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
-	uint8_t     next_ti;		/* rotates per FP-originated call */
+	uint8_t     next_ti;		/* FP-originated TI value: 0, or -a ti= */
 	const char *voice_path;
 	FILE       *voice_fp;
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
@@ -2966,10 +2968,14 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 * first refusal loses the call about as often as not. Retry while the
 	 * paging window is still open.
 	 */
-	if (s->audio.ti_fixed >= 0)
-		s->next_ti = (uint8_t)s->audio.ti_fixed;
-	else
-		s->next_ti = (uint8_t)((s->next_ti + 1u) % 7u);
+	/*
+	 * EN 300 444 §6.9.2: the lowest free transaction value, which for our
+	 * one-call CC entity is always 0. This used to rotate per call, and
+	 * every Gigaset refused every incoming call for it: run 15 (value 0)
+	 * rang the A540, run 16 (value 1, same session) was refused with 0x32.
+	 * See dect_cc_set_next_ti(). -a ti=N still overrides, for tests.
+	 */
+	s->next_ti = s->audio.ti_fixed >= 0 ? (uint8_t)s->audio.ti_fixed : 0u;
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
 	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
 			      s->cc_fixed_id, s->cc_fixed_id_len,
@@ -3585,7 +3591,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	dect_cc_set_signal(&s->reg.link.cc, s->audio.signal_on,
 			   s->audio.signal_value);
 	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
-	/* a fresh transaction per call; see dect_cc_set_next_ti() */
+	/* the lowest free value, 0, unless -a ti= says otherwise */
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
 }

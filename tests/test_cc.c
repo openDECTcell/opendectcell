@@ -420,9 +420,46 @@ static void test_busy_spans_the_whole_call(void)
 }
 
 /*
- * A fresh transaction value per FP-originated call. Reusing 0 after a call
- * that ended without a clean release left a C4 acknowledging the next SETUP
- * at the link layer and then discarding it (hardware, 2026-10-20).
+ * EN 300 444 §6.9.2: an FP-originated call takes the lowest free transaction
+ * value, which for this one-call entity is always 0 -- on a fresh entity and
+ * again after a call has been released. The Gigaset A540 refuses a SETUP on
+ * value 1 with 0x32 and rings on 0 (runs 15/16, docs/call-g7.md).
+ */
+static void test_transaction_value_is_lowest_free(void)
+{
+	static const uint8_t port_id[] = { 0x20, 0x10, 0x00, 0x11, 0x22 };
+	static const uint8_t fixed_id[] = { 0x20, 0x09, 0x88, 0x77, 0x66 };
+	struct dect_cc cc;
+	uint8_t msg[DECT_LAPC_MSG_MAX];
+	struct dect_nwk_hdr h;
+	const uint8_t *ies;
+	size_t ies_len, n, off;
+	int call;
+
+	dect_cc_init(&cc);
+	for (call = 0; call < 2; call++) {
+		CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+				       fixed_id, sizeof(fixed_id), 0x88), 0);
+		n = dect_cc_poll(&cc, msg, sizeof(msg));
+		CHECK(n > 0);
+		CHECK_EQ(msg[0], 0x03);		/* TI flag 0, value 0, PD CC */
+		CHECK_EQ(dect_nwk_parse(msg, n, &h, &ies, &ies_len), 0);
+		CHECK_EQ(h.ti_value, 0);
+		CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
+		/* the handset refuses; the next call must still use 0 */
+		off = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+					 DECT_TI_RESPONDER, 0,
+					 DECT_CC_RELEASE_COM);
+		dect_cc_rx(&cc, msg, off);
+		while (dect_cc_poll(&cc, msg, sizeof(msg)) > 0)
+			;
+		CHECK(!dect_cc_busy(&cc));
+	}
+}
+
+/*
+ * dect_cc_set_next_ti() is honoured, for tests that need another value, and
+ * 7 (the extended-TI escape) wraps to 0.
  */
 static void test_transaction_value_rotates(void)
 {
@@ -1244,6 +1281,7 @@ int main(void)
 	test_other_release_reasons_are_not_represented();
 	test_second_setup_during_an_active_call_is_rejected();
 	test_setup_carries_line_identifier();
+	test_transaction_value_is_lowest_free();
 	test_transaction_value_rotates();
 	test_busy_spans_the_whole_call();
 	test_learns_identities_from_setup();
