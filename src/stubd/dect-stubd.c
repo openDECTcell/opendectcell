@@ -197,6 +197,28 @@ static uint64_t mono_ms(void)
 	return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
 }
 
+/*
+ * One subscription store. dect-stubd loads every store -s names; the first is
+ * the handset it rings. struct stubd's sub_*, uak and cc_* fields are the
+ * CURRENT handset's -- the one the link is serving -- and hs_switch() moves
+ * them in and out of this table, so everything that learns, saves or rings
+ * keeps working on "the" handset.
+ */
+struct handset {
+	const char *path;
+	int      loaded;
+	unsigned slot;
+	uint8_t  uak[DECT_MM_UAK_LEN];
+	int      uak_valid;
+	uint8_t  port_id[DECT_MM_PORTID_MAX];
+	size_t   port_id_len;
+	uint8_t  cc_port_id[DECT_CC_ID_MAX];
+	size_t   cc_port_id_len;
+	uint8_t  cc_fixed_id[DECT_CC_ID_MAX];
+	size_t   cc_fixed_id_len;
+	int      cc_id_learned;
+};
+
 struct stubd {
 	int fd;
 	unsigned int slots;
@@ -248,6 +270,9 @@ struct stubd {
 	uint8_t uak[DECT_MM_UAK_LEN];
 	int uak_valid;
 	const char *sub_path;	/* host-side subscription store (holds the UAK) */
+	struct handset hs[DECT_MM_MAX_SLOT];	/* every -s store, [0] = ring target */
+	unsigned n_hs;
+	unsigned cur;		/* which of them the fields here belong to */
 	/* Identities for an FP-originated SETUP, learned and persisted. */
 	/*
 	 * The subscribed handset's MM <<PORTABLE-IDENTITY>>, restored from the
@@ -1999,10 +2024,72 @@ struct sub_record {
  */
 static uint8_t stubd_sub_slot(const struct stubd *s)
 {
-	unsigned v = s->audio.sub_slot ? s->audio.sub_slot : s->sub_slot;
+	unsigned v = s->audio.sub_slot && s->cur == 0 ? s->audio.sub_slot
+						      : s->sub_slot;
 
 	return (v >= 1u && v <= DECT_MM_MAX_SLOT) ? (uint8_t)v
 						  : (uint8_t)DECT_MM_REG_SLOT;
+}
+
+static void hs_stash(struct stubd *s, unsigned i)
+{
+	struct handset *h = &s->hs[i];
+
+	h->slot = s->sub_slot;
+	memcpy(h->uak, s->uak, sizeof(h->uak));
+	h->uak_valid = s->uak_valid;
+	memcpy(h->port_id, s->sub_port_id, sizeof(h->port_id));
+	h->port_id_len = s->sub_port_id_len;
+	memcpy(h->cc_port_id, s->cc_port_id, sizeof(h->cc_port_id));
+	h->cc_port_id_len = s->cc_port_id_len;
+	memcpy(h->cc_fixed_id, s->cc_fixed_id, sizeof(h->cc_fixed_id));
+	h->cc_fixed_id_len = s->cc_fixed_id_len;
+	h->cc_id_learned = s->cc_id_learned;
+}
+
+static void hs_load(struct stubd *s, unsigned i)
+{
+	const struct handset *h = &s->hs[i];
+
+	s->sub_path = h->path;
+	s->sub_slot = h->slot;
+	memcpy(s->uak, h->uak, sizeof(s->uak));
+	s->uak_valid = h->uak_valid;
+	memcpy(s->sub_port_id, h->port_id, sizeof(s->sub_port_id));
+	s->sub_port_id_len = h->port_id_len;
+	memcpy(s->cc_port_id, h->cc_port_id, sizeof(s->cc_port_id));
+	s->cc_port_id_len = h->cc_port_id_len;
+	memcpy(s->cc_fixed_id, h->cc_fixed_id, sizeof(s->cc_fixed_id));
+	s->cc_fixed_id_len = h->cc_fixed_id_len;
+	s->cc_id_learned = h->cc_id_learned;
+	s->cc_id_foreign_warned = 0;
+	s->cc_id_unarmed_warned = 0;
+}
+
+/* Make handset i the current one; a no-op if it already is. */
+static void hs_switch(struct stubd *s, unsigned i, const char *why)
+{
+	if (i == s->cur || i >= s->n_hs)
+		return;
+	hs_stash(s, s->cur);
+	hs_load(s, i);
+	s->cur = i;
+	printf("sub: now serving %s (slot %u)%s\n", s->sub_path,
+	       stubd_sub_slot(s), why);
+}
+
+/*
+ * The identities of the handset we ring, wherever they are: in the fields
+ * while it is current, in the table while the link serves another one.
+ */
+static const uint8_t *ring_target_port_id(const struct stubd *s, size_t *len)
+{
+	if (s->cur == 0 || !s->n_hs) {
+		*len = s->cc_port_id_len;
+		return s->cc_port_id;
+	}
+	*len = s->hs[0].cc_port_id_len;
+	return s->hs[0].cc_port_id;
 }
 
 static void sub_save(struct stubd *s)
@@ -2163,8 +2250,9 @@ static int sub_load(struct stubd *s)
 	 * slot 1 on the next run, taking another handset's UAK slot and TPUI
 	 * with it.
 	 */
-	if (!s->audio.sub_slot && r.slot >= 1u && r.slot <= DECT_MM_MAX_SLOT)
-		s->sub_slot = r.slot;
+	if ((!s->audio.sub_slot || s->cur != 0) &&
+	    r.slot >= 1u && r.slot <= DECT_MM_MAX_SLOT)
+		s->sub_slot = r.slot;	/* subslot= is the ring target's only */
 	printf("sub: restored subscription for slot %u from %s%s\n",
 	       r.slot, s->sub_path,
 	       s->cc_fixed_id_len ? " (with call identities)" : "");
@@ -2203,13 +2291,14 @@ static void sub_audit_send(struct stubd *s, uint8_t mine);
  * another. [CR A-0065] decodes 0x0247 as {slot, op (0 = clear, 1 = set),
  * flag}, which is what makes the fix a three-byte mail per slot.
  */
-static void clear_foreign_slots(struct stubd *s, uint8_t keep)
+static void clear_foreign_slots(struct stubd *s, uint8_t keep,
+				unsigned keep_mask)
 {
 	struct dect_mail m;
 	uint8_t slot;
 
 	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
-		if (slot == keep)
+		if (keep_mask & (1u << slot))
 			continue;
 		memset(&m, 0, sizeof(m));
 		m.src = DECT_TASK_PCM;
@@ -2223,9 +2312,12 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep)
 		if (s->verbose)
 			log_mail(&m, "tx M", s->show_params);
 	}
-	printf("sub: cleared chip subscription slots other than %u -- the chip "
-	       "keeps them across runs and would otherwise still admit a "
-	       "handset we have no record of\n", keep);
+	printf("sub: cleared chip subscription slots other than");
+	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++)
+		if (keep_mask & (1u << slot))
+			printf(" %u", slot);
+	printf(" -- the chip keeps them across runs and would otherwise still "
+	       "admit a handset we have no record of\n");
 	/*
 	 * ...and now check it actually happened. The clear is 0x0247, which
 	 * has no reply and no error path, so until today "cleared" meant
@@ -2234,12 +2326,43 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep)
 	sub_audit_send(s, keep);
 }
 
+static void install_subscription(struct stubd *s, uint8_t slot,
+				 const uint8_t uak[DECT_MM_UAK_LEN]);
+static void send_subscription_tail(struct stubd *s);
+
+/*
+ * Every handset we hold goes into its chip slot, the current one last so its
+ * read-back is the one outstanding; only slots no store uses are cleared.
+ * With one store loaded this is what it always was.
+ */
 static void send_subscription(struct stubd *s)
 {
-	struct dect_mail m;
 	uint8_t slot = stubd_sub_slot(s);
+	unsigned keep = 1u << slot, i;
 
-	clear_foreign_slots(s, slot);
+	for (i = 0; i < s->n_hs; i++)
+		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid &&
+		    s->hs[i].slot >= 1u && s->hs[i].slot <= DECT_MM_MAX_SLOT)
+			keep |= 1u << s->hs[i].slot;
+	clear_foreign_slots(s, slot, keep);
+	for (i = 0; i < s->n_hs; i++)
+		if (i != s->cur && (keep & (1u << s->hs[i].slot)) &&
+		    s->hs[i].loaded && s->hs[i].uak_valid &&
+		    s->hs[i].slot != slot) {
+			install_subscription(s, (uint8_t)s->hs[i].slot,
+					     s->hs[i].uak);
+			printf("sub: %s installed in chip slot %u\n",
+			       s->hs[i].path, s->hs[i].slot);
+		}
+	install_subscription(s, slot, s->uak);
+	uak_verify_send(s, slot);	/* [CR A-0085] the only check that exists */
+	send_subscription_tail(s);
+}
+
+static void install_subscription(struct stubd *s, uint8_t slot,
+				 const uint8_t uak[DECT_MM_UAK_LEN])
+{
+	struct dect_mail m;
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
@@ -2274,7 +2397,7 @@ static void send_subscription(struct stubd *s)
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x020Au;
 	m.param[0] = slot;		/* one-based, 17-byte record stride */
-	memcpy(&m.param[1], s->uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
+	memcpy(&m.param[1], uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
 	/*
 	 * Config byte after the UAK: [CR A-0113] stock sends 0x01 per Gigaset
 	 * (0x02 for the C4). The 0x020A handler stores it at UAK-slot +0x10
@@ -2288,7 +2411,11 @@ static void send_subscription(struct stubd *s)
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)			/* log_mail() masks the UAK */
 		log_mail(&m, "tx M", s->show_params);
-	uak_verify_send(s, slot);	/* [CR A-0085] the only check that exists */
+}
+
+static void send_subscription_tail(struct stubd *s)
+{
+	struct dect_mail m;
 
 	/*
 	 * [CR A-0114] 0x017c sets the traffic-bearer slot-availability mask
@@ -3161,6 +3288,17 @@ static void send_page(struct stubd *s)
 static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 {
 	/*
+	 * Our call goes to the first store's handset. A link that has taken on
+	 * another handset is that handset's; a {CC-SETUP} on it would address
+	 * the wrong one. Wait for it to clear, as for a busy CC entity.
+	 */
+	if (s->cur != 0) {
+		printf("ring: this link serves %s, not the handset we ring -- "
+		       "waiting\n", s->sub_path);
+		s->ring_resp_deadline = now + RING_SETUP_RETRY_MS;
+		return;
+	}
+	/*
 	 * dect_cc_setup_id() refuses unless the CC entity is idle, and this is
 	 * a real collision rather than a rare one: the A540 CAT opens a CAT-iq
 	 * service call of its own roughly every 17 s and holds it for about
@@ -3715,7 +3853,10 @@ static void pump_lapc(struct stubd *s)
 static void reg_start(struct stubd *s, uint8_t handle)
 {
 	struct dect_mm_cfg mcfg;
+	unsigned i;
 
+	/* a new connection is nobody's yet; default to the ring target */
+	hs_switch(s, 0, " (new connection)");
 	memset(&mcfg, 0, sizeof(mcfg));
 	/* subslot=N wins, else the slot the store was saved with, else 0 --
 	 * resolved once, in stubd_sub_slot(). */
@@ -3761,6 +3902,25 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		memcpy(s->reg.link.mm.port_id, s->sub_port_id, s->sub_port_id_len);
 		s->reg.link.mm.port_id_len = s->sub_port_id_len;
 	}
+	/*
+	 * ...and every other handset we hold, so its location registration
+	 * and its calls are served rather than turned away. MM adopts
+	 * whichever one this link turns out to carry; reg_segment() follows.
+	 */
+	for (i = 0; i < s->n_hs; i++) {
+		const struct handset *h = &s->hs[i];
+
+		if (i == s->cur || !h->loaded || !h->port_id_len)
+			continue;
+		if (dect_mm_hold(&s->reg.link.mm, h->port_id, h->port_id_len,
+				 (uint8_t)h->slot, NULL, (int)i) < 0)
+			printf("sub: could not hold %s on this link\n",
+			       h->path);
+	}
+	if (s->sub_port_id_len)
+		(void)dect_mm_hold(&s->reg.link.mm, s->sub_port_id,
+				   s->sub_port_id_len, stubd_sub_slot(s), NULL,
+				   (int)s->cur);
 	dect_cc_init(&s->reg.link.cc);
 	s->cc_rejected_seen = 0;
 	/*
@@ -3775,9 +3935,17 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		uint8_t tid = stubd_sub_slot(s) ? stubd_sub_slot(s) : 1u;
 		char hsname[DECT_IWU_NAME_MAX];
 
-		snprintf(hsname, sizeof(hsname), "DECT %u", (unsigned)tid);
 		dect_iwu_set_line(&s->reg.link.cc.iwu, 1, "Line 1");
+		snprintf(hsname, sizeof(hsname), "DECT %u", (unsigned)tid);
 		dect_iwu_add_handset(&s->reg.link.cc.iwu, tid, hsname);
+		for (i = 0; i < s->n_hs; i++) {
+			if (i == s->cur || !s->hs[i].loaded)
+				continue;
+			snprintf(hsname, sizeof(hsname), "DECT %u",
+				 s->hs[i].slot);
+			dect_iwu_add_handset(&s->reg.link.cc.iwu,
+					     (uint8_t)s->hs[i].slot, hsname);
+		}
 		dect_iwu_set_own(&s->reg.link.cc.iwu, tid);
 	}
 	/*
@@ -3853,6 +4021,18 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	}
 	pump_lapc(s);			/* at least the LAPC ack */
 
+	/*
+	 * MM took on one of the other handsets we hold (its LOCATE-REQUEST,
+	 * or a call it placed). Serve it as itself: its store, its call
+	 * identities, and its own entry in the Internal Names List, set before
+	 * the list-access session that follows its {CC-SETUP} asks for it.
+	 */
+	if (s->reg.link.mm.adopted >= 0 &&
+	    (unsigned)s->reg.link.mm.adopted != s->cur) {
+		hs_switch(s, (unsigned)s->reg.link.mm.adopted, "");
+		dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
+	}
+
 	if (!s->first_contact_ms) {
 		s->first_contact_ms = now;
 		printf("reg: first C-plane contact from the handset at t=%llu ms\n",
@@ -3908,10 +4088,12 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * ring. The standard's answer to it is {LCE-PAGE-REJECT} (§7.3.8.3.1),
 	 * which we do not send yet; we ignore it and keep waiting.
 	 */
+	size_t tgt_len;
+	const uint8_t *tgt = ring_target_port_id(s, &tgt_len);
+
 	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP &&
-	    s->cc_port_id_len &&
-	    (ind.page_id_len != s->cc_port_id_len ||
-	     memcmp(ind.page_id, s->cc_port_id, s->cc_port_id_len) != 0)) {
+	    tgt_len && (ind.page_id_len != tgt_len ||
+			memcmp(ind.page_id, tgt, tgt_len) != 0)) {
 		printf("ring: page response from a handset we did not page "
 		       "(identity differs) -- ignored, still waiting\n");
 		ind.page_response = 0;
@@ -4438,6 +4620,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		if (s->reg.active)
 			printf("reg: connection released\n");
 		s->reg.active = 0;
+		hs_switch(s, 0, " (link released)");
 		break;
 	}
 	case DECT_PRIM_SIGNALLING:
@@ -5411,7 +5594,9 @@ static void usage(void)
 		"           handset can register (parks the radio on exit)\n"
 		"  -P PIN   registration PIN / AC (default 0000; used with -g)\n"
 		"  -s PATH  subscription store, holds the handset key; reloaded into\n"
-		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off)\n"
+		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off).\n"
+		"           Repeat for every handset the base holds: all are served\n"
+		"           and installed in their chip slots; the first is rung\n"
 		"  -k SPEC  EXPERIMENTAL: hand the call's cipher material to the chip\n"
 		"           (0x0208) once the DCK is derived. SPEC is\n"
 		"           SEL[,rs][,norev][,33]: SEL = selector (7..12 is the\n"
@@ -5588,7 +5773,7 @@ int main(int argc, char **argv)
 	const char *dev = "/dev/dect0";
 	unsigned int run_seconds = 0, fpb;
 	struct dect_mail spec_check;	/* -M / -N validated at startup */
-	int c, ret = 1;
+	int c, ret = 1, sub_off = 0;
 
 	memset(&s, 0, sizeof(s));
 	s.tx_slot = s.rx_slot = -1;
@@ -5698,7 +5883,19 @@ int main(int argc, char **argv)
 			break;
 		case 'g': s.do_register = 1; break;
 		case 'P': s.pin = optarg; break;
-		case 's': s.sub_path = optarg[0] ? optarg : NULL; break;
+		case 's':
+			if (!optarg[0]) {
+				sub_off = 1;
+				break;
+			}
+			if (s.n_hs >= DECT_MM_MAX_SLOT) {
+				fprintf(stderr, "-s: at most %u stores\n",
+					DECT_MM_MAX_SLOT);
+				return 2;
+			}
+			s.hs[s.n_hs++].path = optarg;
+			s.sub_path = s.hs[0].path;
+			break;
 		case 'C': s.no_cipher = 1; break;
 		case 'a':
 			/*
@@ -5778,6 +5975,13 @@ int main(int argc, char **argv)
 		usage();
 		return 2;
 	}
+	if (sub_off) {			/* -s "" */
+		s.sub_path = NULL;
+		s.n_hs = 0;
+	} else if (!s.n_hs && s.sub_path) {
+		s.hs[0].path = s.sub_path;	/* the default store */
+		s.n_hs = 1;
+	}
 	if (!s.audio.remode_set && !(s.audio.flags & 0x40u))
 		s.audio.remode_ms = 0;	/* mode 2 from the first assign */
 
@@ -5786,8 +5990,28 @@ int main(int argc, char **argv)
 	       s.stub_build == STUB_UNKNOWN ? "unknown (no " DECT_STUB_RECORD
 					      ", run fwload.sh)"
 					    : s.stub_name);
-	if (s.do_register)
-		sub_load(&s);		/* restores the UAK; chip reload once up */
+	if (s.do_register && s.n_hs) {
+		unsigned i, j;
+
+		/* restores the UAKs; chip reload once up */
+		for (i = 0; i < s.n_hs; i++) {
+			s.cur = i;
+			hs_load(&s, i);		/* path set, the rest empty */
+			s.hs[i].loaded = sub_load(&s);
+			hs_stash(&s, i);
+			for (j = 0; s.hs[i].loaded && j < i; j++) {
+				if (!s.hs[j].loaded ||
+				    s.hs[j].slot != s.hs[i].slot)
+					continue;
+				printf("sub: %s claims slot %u, which %s "
+				       "holds -- not loaded\n", s.hs[i].path,
+				       s.hs[i].slot, s.hs[j].path);
+				s.hs[i].loaded = 0;
+			}
+		}
+		s.cur = 0;
+		hs_load(&s, 0);
+	}
 
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
