@@ -95,6 +95,47 @@ static void test_page_response_carries_the_identity(void)
 	CHECK_EQ(ind.page_response, 0u);
 }
 
+/*
+ * The link arms the CC identity gate from MM, so the handset whose
+ * {LOCATE-REQUEST} MM would reject cannot place a call either, and a link
+ * that holds no identity takes no call at all.
+ */
+static void test_cc_admits_only_the_handset_mm_holds(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x03, 0x11, 0x22, 0x33, 0x44 };
+	static const uint8_t other[] = { 0x80, 0xa8, 0x02, 0x55, 0x66, 0x77, 0x88 };
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[32];
+	size_t n, k;
+	struct {
+		const uint8_t *held;	/* mm.port_id, NULL = none */
+		const uint8_t *caller;
+		uint32_t setup, rejected;
+	} c[] = {
+		{ ours, ours,  1, 0 },
+		{ ours, other, 0, 1 },
+		{ NULL, ours,  0, 1 },
+	};
+
+	for (k = 0; k < sizeof(c) / sizeof(c[0]); k++) {
+		init(&l);
+		if (c[k].held) {
+			memcpy(l.mm.port_id, c[k].held, sizeof(ours));
+			l.mm.port_id_len = sizeof(ours);
+		}
+		n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+				       DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+		n = dect_nwk_put_ie(msg, sizeof(msg), n,
+				    DECT_IE_PORTABLE_IDENTITY, c[k].caller,
+				    sizeof(ours));
+		feed_nwk(&l, msg, n, &ind);
+		CHECK_EQ(ind.cc_message, 1u);
+		CHECK_EQ(l.cc.stats.setup, c[k].setup);
+		CHECK_EQ(l.cc.stats.rejected_identity, c[k].rejected);
+	}
+}
+
 /* A fresh link owns its own state and has nothing to send. */
 static void test_init_is_quiet(void)
 {
@@ -307,6 +348,7 @@ int main(void)
 {
 	test_init_is_quiet();
 	test_page_response_carries_the_identity();
+	test_cc_admits_only_the_handset_mm_holds();
 	test_two_links_are_independent();
 	test_outbound_message_becomes_an_append_mail();
 	test_a_queued_message_needs_a_tick();

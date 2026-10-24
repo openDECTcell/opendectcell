@@ -517,6 +517,42 @@ uint64_t dect_cc_next_deadline(const struct dect_cc *cc)
 	return cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
 }
 
+void dect_cc_set_gate(struct dect_cc *cc, const uint8_t *port_id,
+		      size_t port_id_len)
+{
+	cc->gate_armed = 1;
+	if (!port_id || port_id_len > sizeof(cc->gate_id))
+		port_id_len = 0;	/* armed, nothing matches */
+	if (port_id_len)
+		memcpy(cc->gate_id, port_id, port_id_len);
+	cc->gate_id_len = port_id_len;
+}
+
+/*
+ * Turn away a {CC-SETUP} from a handset the gate does not recognise; true if
+ * it was turned away. The reply closes the peer's transaction, not ours, so
+ * it goes out like any other transaction we hold no call for.
+ */
+static int setup_from_stranger(struct dect_cc *cc,
+			       const struct dect_nwk_hdr *h,
+			       const uint8_t *ies, size_t ies_len)
+{
+	size_t n;
+	const uint8_t *p;
+
+	if (!cc->gate_armed)
+		return 0;
+	p = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &n);
+	if (p && cc->gate_id_len && n == cc->gate_id_len &&
+	    !memcmp(p, cc->gate_id, n))
+		return 0;
+	queue_release_other(cc, h->ti_flag, h->ti_value,
+			    p ? DECT_CC_REASON_UNKNOWN_IDENTITY
+			      : DECT_CC_REASON_MANDATORY_IE_MISSING);
+	cc->stats.rejected_identity++;
+	return 1;
+}
+
 /*
  * Does a received message belong to the call this entity holds? The peer's
  * messages on our transaction carry our value and the INVERSE of our flag:
@@ -549,6 +585,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 	switch (h.msg_type) {
 	case DECT_CC_SETUP:
 		if (cc->state == DECT_CC_ST_NULL) {
+			if (setup_from_stranger(cc, &h, ies, ies_len))
+				break;
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;

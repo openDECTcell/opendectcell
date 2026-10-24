@@ -61,7 +61,14 @@ enum dect_cc_state {
  */
 #define DECT_CC_REASON_UNEXPECTED_MESSAGE	0x01u
 #define DECT_CC_REASON_UNKNOWN_TRANSACTION	0x02u
+#define DECT_CC_REASON_MANDATORY_IE_MISSING	0x03u
 #define DECT_CC_REASON_INCOMPATIBLE_SERVICE	0x05u
+/*
+ * "Unknown identity": what EN 300 444 table 17 recommends in the
+ * {CC-RELEASE-COM} when "the FT did not recognize the PT by its
+ * <<Portable identity>> IE". See dect_cc_set_gate().
+ */
+#define DECT_CC_REASON_UNKNOWN_IDENTITY		0x0Au
 /*
  * "Insufficient resources": the reason EN 300 175-5 §9.5.2.3 prescribes for
  * the abnormal release of the OTHER side's call when two {CC-SETUP}s cross,
@@ -97,6 +104,8 @@ struct dect_cc_stats {
 	 */
 	uint32_t collisions;
 	uint32_t represented;
+	/* {CC-SETUP}s turned away by the identity gate, dect_cc_set_gate() */
+	uint32_t rejected_identity;
 };
 
 /* No <<BASIC-SERVICE>> was present in the peer's {CC-SETUP}. */
@@ -123,6 +132,11 @@ struct dect_cc {
 	size_t  peer_port_id_len;
 	uint8_t peer_fixed_id[DECT_CC_ID_MAX];
 	size_t  peer_fixed_id_len;
+
+	/* The identity gate, see dect_cc_set_gate(). */
+	uint8_t gate_armed;
+	uint8_t gate_id[DECT_CC_ID_MAX];
+	size_t  gate_id_len;
 
 	/*
 	 * The <<BASIC-SERVICE>> octet of the peer's own {CC-SETUP}, or
@@ -223,6 +237,27 @@ void dect_cc_init(struct dect_cc *cc);
 
 /* Advertise this <<CODEC-LIST>> in FP-originated setups; NULL clears it. */
 void dect_cc_set_codec_list(struct dect_cc *cc, const uint8_t *list, size_t len);
+
+/*
+ * Accept a {CC-SETUP} from a handset only if its <<PORTABLE-IDENTITY>> is
+ * `port_id`. Anything else is answered with {CC-RELEASE-COM}, release reason
+ * "unknown identity" (EN 300 444 §8.2.2.3 and table 17), or "mandatory
+ * information element missing" if it carries no portable identity at all
+ * (EN 300 175-5 §17.6.1), and the call never starts. `port_id_len` 0 arms
+ * the gate with nothing to match, so every setup is turned away: a base that
+ * holds no handset has no handset to recognise. Until this is called the
+ * gate is open, as it is after dect_cc_init().
+ *
+ * dect_link arms it from mm.port_id before every CC message, so the
+ * {LOCATE-REQUEST} gate and this one always agree. It used to be open: on
+ * 2026-10-24 the A540, rejected at location registration, still ran its
+ * list-access call, was served the Internal Names List of whichever handset
+ * the daemon held and showed that handset's name as its own -- and in an
+ * enrolment window, before any identity was held, its {CC-SETUP} was where
+ * the daemon learned the identities it later offered the AS690H's calls to.
+ */
+void dect_cc_set_gate(struct dect_cc *cc, const uint8_t *port_id,
+		      size_t port_id_len);
 
 /* Feed a decoded NWK message (the LAPC I-frame payload). Non-CC messages are
  * ignored. Any responses are queued; pull them with dect_cc_poll(). */

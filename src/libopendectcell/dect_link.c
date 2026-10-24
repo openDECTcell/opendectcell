@@ -195,6 +195,9 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			uint32_t kp_before = l->cc.stats.keypad;
 
 			ind->cc_message = 1;
+			/* the handset MM would accept, and no other */
+			dect_cc_set_gate(&l->cc, l->mm.port_id,
+					 l->mm.port_id_len);
 			dect_cc_rx(&l->cc, ind->nwk, ind->nwk_len);
 			/*
 			 * Report that dialled digits arrived, so the caller

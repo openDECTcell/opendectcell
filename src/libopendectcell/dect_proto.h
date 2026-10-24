@@ -133,8 +133,21 @@
  *    free), CC messages are matched to their transaction, and the API 9 note
  *    above is wrong that a Gigaset refuses incoming calls until its list
  *    sync completes -- the refusal was the transaction value.
+ *
+ * 11: the CC identity gate (2026-10-24). Layout changes: struct dect_cc
+ *    gains gate_armed/gate_id/gate_id_len and dect_cc_stats gains
+ *    rejected_identity. New: dect_cc_set_gate(),
+ *    DECT_CC_REASON_MANDATORY_IE_MISSING, DECT_CC_REASON_UNKNOWN_IDENTITY.
+ *
+ *    CONSUMERS MUST ACT. dect_link now accepts a handset's {CC-SETUP} only
+ *    if its <<PORTABLE-IDENTITY>> equals mm.port_id, and a link with no
+ *    port_id takes no call at all; the others get {CC-RELEASE-COM} "unknown
+ *    identity" (EN 300 444 table 17). API 10 already required arming
+ *    port_id for location registration; a consumer that does not arm it now
+ *    loses handset-placed calls and list access too. Treat a rise in
+ *    rejected_identity as a handset you do not hold, not as a fault.
  */
-#define OPENDECTCELL_API_VERSION 10
+#define OPENDECTCELL_API_VERSION 11
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

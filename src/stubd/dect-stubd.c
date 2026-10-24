@@ -268,6 +268,9 @@ struct stubd {
 	 */
 	int         cc_id_learned;
 	int         cc_id_foreign_warned;
+	int         cc_id_unarmed_warned;
+	/* rejected_identity of this connection's CC, as last reported */
+	uint32_t    cc_rejected_seen;
 	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
@@ -2090,6 +2093,26 @@ static int sub_load(struct stubd *s)
 			memcpy(s->sub_port_id, r.cc_port_id, r.cc_port_id_len);
 			s->sub_port_id_len = r.cc_port_id_len;
 		}
+		/*
+		 * Call identities that are not the subscribed handset's were
+		 * learned from another handset's call (see the learning gate
+		 * where they are kept) and would address every incoming call
+		 * to it. GAP table 10 makes a PT's {CC-SETUP} carry its IPUI,
+		 * the identity it registered with, so the two must agree.
+		 * Drop them; the handset's next call teaches the right pair.
+		 */
+		if (s->cc_port_id_len &&
+		    (s->cc_port_id_len != s->sub_port_id_len ||
+		     memcmp(s->cc_port_id, s->sub_port_id,
+			    s->sub_port_id_len))) {
+			memset(s->cc_port_id, 0, sizeof(s->cc_port_id));
+			memset(s->cc_fixed_id, 0, sizeof(s->cc_fixed_id));
+			s->cc_port_id_len = 0;
+			s->cc_fixed_id_len = 0;
+			printf("sub: *** stored call identities belong to "
+			       "ANOTHER handset *** -- dropped; they are "
+			       "relearned from this handset's next call\n");
+		}
 	}
 	printf("sub: identity gate %s (%zu bytes)\n",
 	       s->sub_port_id_len ? "armed" : "DISABLED -- no stored identity",
@@ -3680,6 +3703,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		s->reg.link.mm.port_id_len = s->sub_port_id_len;
 	}
 	dect_cc_init(&s->reg.link.cc);
+	s->cc_rejected_seen = 0;
 	/*
 	 * The lists a CAT-iq handset reads before it calls itself synchronised
 	 * (TS 102 527-3 7.4.10): one line, and the Internal Names List with
@@ -3900,6 +3924,14 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		fflush(stdout);
 	}
 
+	if (s->reg.link.cc.stats.rejected_identity != s->cc_rejected_seen) {
+		s->cc_rejected_seen = s->reg.link.cc.stats.rejected_identity;
+		printf("call: turned away a call from a handset we are not "
+		       "subscribed to (release reason 0x0a, %u on this "
+		       "link)\n", (unsigned)s->cc_rejected_seen);
+		fflush(stdout);
+	}
+
 	/*
 	 * A call the handset places carries the two identities an
 	 * FP-originated SETUP needs, in the handset's own encoding. Keep the
@@ -3928,6 +3960,24 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			printf("call: ignoring call identities from a handset "
 			       "we are not subscribed to -- not learning, "
 			       "not saving\n");
+			fflush(stdout);
+		}
+	} else if (ind.cc_message && !s->cc_id_learned &&
+		   s->reg.link.cc.peer_fixed_id_len && !s->sub_port_id_len) {
+		/*
+		 * No handset registered yet, so nothing to check the caller
+		 * against, and dect_cc_peer_is() says yes to anyone. On
+		 * 2026-10-24 the A540 placed its list-access call in the
+		 * AS690H's enrolment window, before the AS690H had registered;
+		 * its identities went into the AS690H's store, and the next
+		 * call to the AS690H addressed the A540 and was refused with
+		 * "invalid identity". Learn only once an identity is armed.
+		 */
+		if (!s->cc_id_unarmed_warned) {
+			s->cc_id_unarmed_warned = 1;
+			printf("call: not learning call identities -- no "
+			       "handset registered yet to check them "
+			       "against\n");
 			fflush(stdout);
 		}
 	} else if (ind.cc_message && !s->cc_id_learned &&

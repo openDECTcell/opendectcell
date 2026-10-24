@@ -1376,6 +1376,102 @@ static void test_second_setup_during_an_active_call_is_rejected(void)
 	CHECK_EQ(cc.stats.collisions, 1u);
 }
 
+/*
+ * The identity gate: a {CC-SETUP} from a handset other than the subscribed
+ * one is closed with {CC-RELEASE-COM} "unknown identity" (EN 300 444 table
+ * 17) and no call starts. On 2026-10-24 the A540, rejected at location
+ * registration, still ran its list-access call against a daemon serving the
+ * C430A and took the C430A's Internal Names entry as its own.
+ */
+static void test_gate_turns_away_another_handset(void)
+{
+	static const uint8_t other[7] =
+		{ 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x45 };	/* last byte */
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_gate(&cc, other, sizeof(other));
+	n = pp_setup_svc(buf, sizeof(buf), 2, 0x28);	/* LiA, TV 2 */
+	dect_cc_rx(&cc, buf, n);
+
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 4u);
+	CHECK_EQ(out[0], 0xA3u);			/* F=1, TV=2, PD CC */
+	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[2], DECT_IE_RELEASE_REASON);
+	CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_IDENTITY);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+	/* No call, nothing learned from it. */
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(cc.stats.setup, 0u);
+	CHECK_EQ(cc.stats.rejected_identity, 1u);
+	CHECK_EQ(cc.peer_port_id_len, 0u);
+}
+
+static void test_gate_admits_the_subscribed_handset(void)
+{
+	static const uint8_t subscribed[7] =
+		{ 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_gate(&cc, subscribed, sizeof(subscribed));
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+
+	CHECK_EQ(cc.stats.setup, 1u);
+	CHECK_EQ(cc.stats.rejected_identity, 0u);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+}
+
+/* Armed with no identity: a base holding no handset recognises none. */
+static void test_gate_without_an_identity_turns_away_every_setup(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_gate(&cc, NULL, 0);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 4u);
+	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_IDENTITY);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+}
+
+/* No <<PORTABLE-IDENTITY>> at all: a missing mandatory element, §17.6.1. */
+static void test_gate_setup_without_an_identity(void)
+{
+	static const uint8_t subscribed[7] =
+		{ 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_gate(&cc, subscribed, sizeof(subscribed));
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC,
+			       DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+	buf[n++] = DECT_IE_BASIC_SERVICE;
+	buf[n++] = 0x00;
+	dect_cc_rx(&cc, buf, n);
+
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 4u);
+	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[3], DECT_CC_REASON_MANDATORY_IE_MISSING);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+}
+
 int main(void)
 {
 	test_setup_collision_releases_the_handsets_call();
@@ -1403,6 +1499,10 @@ int main(void)
 	test_closes_a_facility_transaction();
 	test_facility_does_not_disturb_a_live_call();
 	test_peer_identity_gate();
+	test_gate_turns_away_another_handset();
+	test_gate_admits_the_subscribed_handset();
+	test_gate_without_an_identity_turns_away_every_setup();
+	test_gate_setup_without_an_identity();
 	test_peer_basic_service_decides_speech();
 	test_setup_without_basic_service_is_not_speech();
 	test_basic_service_is_not_found_inside_a_payload();
