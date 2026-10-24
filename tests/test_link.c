@@ -160,6 +160,7 @@ static void test_a_segment_for_another_handle_is_rejected(void)
 	m.param_len = 15;
 	m.param[0] = 4;				/* a different connection */
 	m.param[1] = 0x01;
+	m.param[12] = 4;			/* the handle again, as the chip sends it */
 	m.param[2] = 0x11;			/* plausible Cs octets */
 	m.param[3] = 0x02;
 	m.param[4] = 0x59;
@@ -176,6 +177,7 @@ static void test_a_segment_for_another_handle_is_rejected(void)
 
 	/* And our own handle is still accepted afterwards. */
 	m.param[0] = 1;
+	m.param[12] = 1;
 	CHECK_EQ(dect_link_rx_segment(&l, &m, 0, NULL, NULL, &ind), 0);
 	CHECK_EQ(ind.foreign, 0u);
 	CHECK_EQ(ind.seg_handle, 1u);
@@ -218,6 +220,7 @@ static void test_unusable_segment_still_drains_the_queue(void)
 	m.param_len = 15;
 	m.param[0] = 1;
 	m.param[1] = 0x01;
+	m.param[12] = 1;
 	dect_link_rx_segment(&l, &m, 0, NULL, NULL, &ind);
 
 	CHECK_EQ(dect_link_poll_append_mail(&l, &out), 1);
