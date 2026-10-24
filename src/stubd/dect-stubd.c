@@ -557,6 +557,7 @@ struct stubd {
 		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
 		const char *led_path;	/* led=PATH, NULL = the default */
+		int      no_reg_open;	/* noregopen */
 		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
 		/*
@@ -5508,6 +5509,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->nocodeclist = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "earlybind", 9))
 			a->earlybind = 1;
+		else if (!eq && klen == 9 && !memcmp(key, "noregopen", 9))
+			a->no_reg_open = 1;
 		else if (!eq && klen == 10 && !memcmp(key, "nostockcfg", 10))
 			a->no_stock_cfg = 1;
 		else if (eq && klen == 7 && !memcmp(key, "subslot", 7)) {
@@ -5982,6 +5985,8 @@ static void usage(void)
 		"           earlybind    assign audio on the page response\n"
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
 		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
+		"           noregopen    radio on with registration closed (a\n"
+		"           base run as a service; subscribed handsets still attach)\n"
 		"           setupdelay=N hold the CC-SETUP N ms after the page\n"
 		"           (default 8; the default 16 s budget is SHORTER than\n"
 		"           our own F<CC.03> timer, so it gives up first)\n"
@@ -6293,7 +6298,15 @@ int main(int argc, char **argv)
 			s.xmail[s.n_xmail++] = "0x14:0x02:0x0157:00";	/* CAPABILITY_PROFILE */
 		}
 		s.xmail[s.n_xmail++] = "0x22:0x02:0x015b:01";	/* radio/beacon on */
-		s.xmail[s.n_xmail++] = "0x22:0x02:0x022b:41";	/* 'A': open reg */
+		/*
+		 * Registration open ('A') is right for the bench, where every
+		 * run may enrol a handset, and wrong for a base that runs as a
+		 * service: noregopen keeps it closed, explicitly.
+		 */
+		if (s.audio.no_reg_open)
+			s.xmail[s.n_xmail++] = "0x22:0x02:0x022c:01";	/* closed */
+		else
+			s.xmail[s.n_xmail++] = "0x22:0x02:0x022b:41";	/* 'A': open reg */
 	}
 	if (optind != argc) {
 		usage();

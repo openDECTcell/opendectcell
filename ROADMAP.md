@@ -116,9 +116,11 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [ ] Golden-trace regression tests in CI
 
 ## M9: OpenWrt integration
-- [ ] Feed with `kmod-opendectcell-ipq40xx` and the `opendectcell` package (programs plus board profiles; pulls in the right kmod); CI build with the OpenWrt SDK
+- [~] Feed with `kmod-opendectcell-ipq40xx` and the `opendectcell` package (programs plus board profiles; pulls in the right kmod); CI build with the OpenWrt SDK
+  - 2026-10-25: both packages build with SDK 25.12.5 (`opendectcell-0.1-r1.apk`: `dect-stubd`, `dect-fwload`, `dect-pcmcap`, init script, UCI config). The kmod package had gone stale (copied one source file of three) and is fixed. Open: board profiles, a CI build
 - [ ] Board resources: in-module board table first, then an upstream DTS patch for the 7520/7530
-- [ ] procd init script: board detection, profile plus UCI overrides, clear message on unsupported boxes; console/getty handling
+- [~] procd init script: board detection, profile plus UCI overrides, clear message on unsupported boxes; console/getty handling
+  - 2026-10-25: `/etc/init.d/opendectcell` with `/etc/config/opendectcell`, **disabled by default** (nothing loaded, nothing on air until `enabled '1'`); `insmod`, one firmware upload per module load, every store served, registration closed unless `registration '1'` (`-a noregopen`); refuses with a clear log line if firmware is missing or a getty holds the DECT UART. Start/stop verified on the box under procd (stop parks). Open: board detection, the console strategy itself
 - [ ] Firmware storage in `/etc/opendectcell/firmware/`: SHA-256 check against the profile, kept across upgrades (`keep.d`)
 - [ ] LuCI app for non-technical users: status page, firmware upload, basic settings
 - [ ] **LuCI DECT Monitor page** (`docs/diagnostics.md`): one row per registered handset — identity, in range / connected, model, field strength, signal quality, slot type (long/full), time slot, carrier, codec in use, encryption — plus a base section (RFPI, radio state, dummy-bearer slot, carrier, power). The point is that a non-technical user can answer "is this handset in range and what is it doing" without reading a log. AVM ships exactly this as its DECT Monitor; every hard question of 2026-10-23 was a field on that screen. Deliberately **not** a debugging console: raw mails stay in `dect-stubd -v`.
