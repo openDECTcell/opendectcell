@@ -361,3 +361,36 @@ This is the third time this week a confounded null has been presented as a
 clean negative — see also the eighteen void theories and the `0x3D4`/`0xEF4`
 regions. The pattern is the same every time: the instrument could not have
 shown a positive, and nothing in the output said so.
+
+### First clean A540 measurement `[2026-10-24]`
+
+With every other handset powered off, and with the handle routing and
+connection-up guard in place:
+
+```
+page responses:   1   (from the A540)
+foreign traffic:  0
+locates rejected: 0   (nobody else on air)
+C-plane re-arms:  5   (normal for one handset)
+
+ring: paged the handset, attempt 1 of 20
+ring: CC-SETUP queued (page response received)
+nwk out --> 13 05 ... e0 80 7c 04 90 02 00 84
+nwk in  <-- 93 5a e2 32
+```
+
+**The A540 genuinely refuses.** Not the deadline fallback — the setup went
+out on a real page response, to the handset that answered it, with nothing
+else on the air. `re-arms=0` in the summary, and the verdict logic now
+requires a page response before it will call a run a measurement at all.
+
+This is the first result in the FP-originated investigation that can be
+trusted. It does not change what we thought the answer was; it changes
+whether we were entitled to think it. Every earlier `0x32` was measured
+through an instrument that could not have shown a positive.
+
+**The handset question is still open**, and is now one command each: the same
+run against the C430A and the AS690H, each with the others off. If both also
+refuse, it is our base and the stock capture is the only thing left worth
+doing. If either rings, the FP-originated path works and the A540's refusal
+is a device trait.
