@@ -1764,6 +1764,29 @@ struct sub_record {
 	uint8_t  cc_fixed_id[DECT_CC_ID_MAX];
 };
 
+/*
+ * The chip subscription slot this run is working with.
+ *
+ * Resolution order: -a subslot=N, else the slot the store was saved with,
+ * else DECT_MM_REG_SLOT.
+ *
+ * This must NOT go through dect_mm_sub_slot(). MM only learns the slot in
+ * reg_start(), which runs on connection-up, while send_subscription() runs
+ * from the poll loop as soon as the session is up -- before any handset has
+ * connected. Reading it from MM therefore returned the default 1 for every
+ * handset, so all three UAKs were written to chip slot 1, overwriting each
+ * other, while the log cheerfully printed the stored slot from the record.
+ * Measured 2026-10-24: "restored subscription for slot 2" immediately
+ * followed by "cleared chip subscription slots other than 1".
+ */
+static uint8_t stubd_sub_slot(const struct stubd *s)
+{
+	unsigned v = s->audio.sub_slot ? s->audio.sub_slot : s->sub_slot;
+
+	return (v >= 1u && v <= DECT_MM_MAX_SLOT) ? (uint8_t)v
+						  : (uint8_t)DECT_MM_REG_SLOT;
+}
+
 static void sub_save(struct stubd *s)
 {
 	struct sub_record r;
@@ -1773,7 +1796,7 @@ static void sub_save(struct stubd *s)
 		return;
 	memset(&r, 0, sizeof(r));
 	r.magic = SUB_MAGIC;
-	r.slot = dect_mm_sub_slot(&s->reg.link.mm);
+	r.slot = stubd_sub_slot(s);
 	memcpy(r.uak, s->uak, DECT_MM_UAK_LEN);
 	r.magic = SUB_MAGIC2;
 	r.port_id_len = (uint8_t)s->reg.link.mm.port_id_len;
@@ -1937,7 +1960,7 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep)
 static void send_subscription(struct stubd *s)
 {
 	struct dect_mail m;
-	uint8_t slot = dect_mm_sub_slot(&s->reg.link.mm);
+	uint8_t slot = stubd_sub_slot(s);
 
 	clear_foreign_slots(s, slot);
 
@@ -1945,7 +1968,7 @@ static void send_subscription(struct stubd *s)
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0247u;
-	m.param[0] = dect_mm_sub_slot(&s->reg.link.mm);	/* slot */
+	m.param[0] = slot;		/* slot */
 	m.param[1] = 0x01u;		/* op: install/refresh */
 	m.param[2] = 0x00u;		/* status (unknown enumeration) */
 	m.param_len = 3;
@@ -3346,9 +3369,8 @@ static void reg_start(struct stubd *s, uint8_t handle)
 
 	memset(&mcfg, 0, sizeof(mcfg));
 	/* subslot=N wins, else the slot the store was saved with, else 0 --
-	 * and dect_mm_sub_slot() maps 0 to DECT_MM_REG_SLOT. */
-	mcfg.sub_slot = (uint8_t)(s->audio.sub_slot ? s->audio.sub_slot
-						    : s->sub_slot);
+	 * resolved once, in stubd_sub_slot(). */
+	mcfg.sub_slot = stubd_sub_slot(s);
 	if (s->pin)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
@@ -3616,7 +3638,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		send_mail_spec(s, "0x22:0x02:0x022c:01");
 		s->reg.persisted = 1;
 		printf("reg: subscription persisted + registration closed (slot %u)\n",
-		       (unsigned)dect_mm_sub_slot(&s->reg.link.mm));
+		       (unsigned)stubd_sub_slot(s));
 	}
 
 	/*

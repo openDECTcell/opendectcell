@@ -292,3 +292,41 @@ chip RAM if it ever matters.
 other slots, so after registering several handsets only the last is live in
 the chip. The stores on disk are untouched and each run re-asserts its own
 handset's UAK, which is exactly how `ringall.sh` works: one handset per phase.
+
+### The slot never reached the chip `[2026-10-24]`
+
+First multi-handset run, all three stores present and each saved with its own
+slot. `./regall.sh verify` reported:
+
+```
+a540    restored subscription for slot 1 | uak_readback=MATCHES
+c430a   restored subscription for slot 2 | uak_readback=MISSING
+as690h  restored subscription for slot 3 | uak_readback=MISSING
+```
+
+and each log said, two lines apart:
+
+```
+sub: restored subscription for slot 2
+sub: cleared chip subscription slots other than 1
+```
+
+**The restore line prints the record's slot; every chip operation used 1.**
+`send_subscription()` took the slot from `dect_mm_sub_slot(&s->reg.link.mm)`,
+but MM only learns it in `reg_start()`, which runs on connection-up — while
+`send_subscription()` runs from the poll loop as soon as the session is up,
+before any handset has connected. So MM still held the default, and **all
+three UAKs were written to chip slot 1**, overwriting one another, while the
+log looked correct.
+
+`stubd_sub_slot()` now resolves it once from stubd state —
+`-a subslot=N`, else the stored slot, else `DECT_MM_REG_SLOT` — and every
+chip-side user takes it from there. After the fix all three slots verify
+`MATCHES`.
+
+**A note on the FOREIGN SLOT warning.** With several handsets enrolled the
+audit legitimately shows `1=OURS 2=held 3=held`, and
+`*** FOREIGN SLOT(S) STILL HELD ***` fires on the other handsets' own slots.
+The warning was written for a single-handset base and is a false alarm in
+this setup. The underlying `vF426` behaviour — the clear not taking — is
+unchanged and still real; it is the *interpretation* that no longer fits.
