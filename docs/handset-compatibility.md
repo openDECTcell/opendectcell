@@ -394,3 +394,30 @@ run against the C430A and the AS690H, each with the others off. If both also
 refuse, it is our base and the stock capture is the only thing left worth
 doing. If either rings, the FP-originated path works and the A540's refusal
 is a device trait.
+
+### Settled: it is our base `[2026-10-24]`
+
+Three handsets, three models, three separate runs, each with every other
+handset powered off:
+
+| handset | page response | foreign traffic | rejected locates | setup | `0x32` |
+| --- | --- | --- | --- | --- | --- |
+| Gigaset A540 CAT | 1 | 0 | 0 | 1 | **1** |
+| Gigaset C430A | 1 | 0 | 0 | 1 | **1** |
+| Gigaset AS690H | 1 | 0 | 0 | 1 | **1** |
+
+Every run had a real `{LCE-PAGE-RESPONSE}` rather than our deadline fallback,
+no competing C-plane traffic, and a genuine `{CC-RELEASE-COM}` /
+"insufficient resources".
+
+**The handset hypothesis is dead.** The FP-originated path does not work
+against anything we own, and no device profile, capability quirk or
+per-handset adjustment is going to explain it. Every row in this file about
+FP-originated calls describes our base, not a handset.
+
+That also retires the question this file opened with. The C4 "rings" in the
+old notes, but that result predates the drain fix and is not comparable: the
+C4 opens no periodic service call, so it never had the collision the others
+had. It has not been re-tested since, and it is local equipment.
+
+**Next and only step: the stock capture.** See `docs/test-card-2026-10-25.md`.
