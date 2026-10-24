@@ -938,6 +938,9 @@ struct stubd {
 	 */
 	uint32_t uak_check_addr;
 	uint8_t  uak_check_slot;
+	/* Which STUB is loaded, from DECT_STUB_RECORD; see stub_build_read(). */
+	int      stub_build;
+	char     stub_name[64];
 	/*
 	 * Slot audit: which slots we are still waiting to hear about, and
 	 * which came back holding something. Bit (slot-1).
@@ -1003,6 +1006,37 @@ struct stubd {
 #define SUB_UAK_BASE	0x9518u
 #define SUB_UAK_STRIDE	0x11u
 #define SUB_UAK_END	(SUB_UAK_BASE + DECT_MM_MAX_SLOT * SUB_UAK_STRIDE)
+
+/*
+ * Which second-stage STUB the chip runs. The chip says so itself only in the
+ * 0xFFF2 build stamp right after a boot, which a run reusing a loaded STUB
+ * never sees, so fwload.sh records the blob it uploaded here. The UAK table
+ * address above is known for 08.25 only: on 2026-10-24 the box ran 07.56 for
+ * seven hours, every read-back said MISMATCH and every audit five foreign
+ * slots, and all of it was a read of unrelated memory.
+ */
+#define DECT_STUB_RECORD	"/tmp/dect-stub.second"
+#define DECT_STUB_0825		"dectfw_secondlevel_441.hex"
+
+enum { STUB_UNKNOWN, STUB_0825, STUB_OTHER };
+
+static int stub_build_read(char *name, size_t cap)
+{
+	FILE *f = fopen(DECT_STUB_RECORD, "r");
+	size_t n;
+
+	name[0] = '\0';
+	if (!f)
+		return STUB_UNKNOWN;
+	if (!fgets(name, (int)cap, f))
+		name[0] = '\0';
+	fclose(f);
+	n = strcspn(name, "\r\n");
+	name[n] = '\0';
+	if (!n)
+		return STUB_UNKNOWN;
+	return strcmp(name, DECT_STUB_0825) ? STUB_OTHER : STUB_0825;
+}
 
 /*
  * Whether parameter byte i of m is key material: the 16 UAK octets of a
@@ -1186,7 +1220,8 @@ static void verify_report(const struct stubd *s)
 			break;
 		case VERIFY_READBACK:
 			changes += s->verify_n[i];
-			verified += s->verify_n[i];
+			if (s->stub_build == STUB_0825)
+				verified += s->verify_n[i];
 			break;
 		default:
 			changes += s->verify_n[i];
@@ -1201,12 +1236,16 @@ static void verify_report(const struct stubd *s)
 	for (i = 0; i < VERIFY_TBL_N; i++) {
 		if (!s->verify_n[i])
 			continue;
+		int ok = verify_tbl[i].cls == VERIFY_QUERY ||
+			 (verify_tbl[i].cls == VERIFY_READBACK &&
+			  s->stub_build == STUB_0825);
+
 		printf("chip:   0x%04X x%-5u %-22s %s (%s)\n",
 		       verify_tbl[i].prim, s->verify_n[i], verify_tbl[i].what,
-		       (verify_tbl[i].cls == VERIFY_QUERY ||
-			verify_tbl[i].cls == VERIFY_READBACK) ? "verified"
-							      : "NOT VERIFIED",
-		       verify_tbl[i].note);
+		       ok ? "verified" : "NOT VERIFIED",
+		       verify_tbl[i].cls == VERIFY_READBACK && !ok
+			       ? "the read-back address is the 08.25 build's"
+			       : verify_tbl[i].note);
 	}
 	if (s->verify_other)
 		printf("chip:   (%u other command%s, not classified)\n",
@@ -2310,6 +2349,12 @@ static void uak_verify_send(struct stubd *s, uint8_t slot)
 
 	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
 		return;
+	if (s->stub_build == STUB_OTHER) {
+		printf("sub: UAK read-back skipped -- STUB %s is loaded, and the "
+		       "table address we hold is the 08.25 build's [CR A-0085, "
+		       "Q-0059]\n", s->stub_name);
+		return;
+	}
 	addr = SUB_UAK_BASE + (uint32_t)(slot - 1u) * SUB_UAK_STRIDE;
 
 	memset(&m, 0, sizeof(m));
@@ -2366,8 +2411,11 @@ static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
 		 */
 		printf("sub: *** UAK READ-BACK MISMATCH *** slot %u at "
 		       "0x%05X -- the subscription did NOT land. The handset "
-		       "will not attach. [CR A-0085/A-0086]\n",
-		       s->uak_check_slot, addr);
+		       "will not attach. [CR A-0085/A-0086]%s\n",
+		       s->uak_check_slot, addr,
+		       s->stub_build == STUB_UNKNOWN
+			       ? " Unless the STUB is not 08.25: no record in "
+				 DECT_STUB_RECORD " says which is loaded" : "");
 	}
 	fflush(stdout);
 }
@@ -2399,6 +2447,12 @@ static void sub_audit_send(struct stubd *s, uint8_t mine)
 	s->sub_audit_pending = 0;
 	s->sub_audit_occupied = 0;
 	s->sub_audit_mine = mine;
+	if (s->stub_build == STUB_OTHER) {
+		printf("sub: slot audit skipped -- STUB %s is loaded, and the "
+		       "table address we hold is the 08.25 build's\n",
+		       s->stub_name);
+		return;
+	}
 	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
 		struct dect_mail m;
 		uint32_t addr = SUB_UAK_BASE
@@ -2470,6 +2524,10 @@ static void sub_audit_reply(struct stubd *s, uint32_t addr,
 			       "the clear did not take. A handset we hold no "
 			       "record for can attach [vF426]\n",
 			       (unsigned)__builtin_popcount(foreign));
+		if (s->stub_build == STUB_UNKNOWN)
+			printf("sub: (the audit reads the 08.25 build's "
+			       "address; no record in " DECT_STUB_RECORD
+			       " says which STUB is loaded)\n");
 		if (!foreign && (!mine_bit || (s->sub_audit_occupied & mine_bit)))
 			printf("sub: slot table is as we intend it\n");
 		fflush(stdout);
@@ -5710,6 +5768,11 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
+	s.stub_build = stub_build_read(s.stub_name, sizeof(s.stub_name));
+	printf("chip: STUB second stage %s\n",
+	       s.stub_build == STUB_UNKNOWN ? "unknown (no " DECT_STUB_RECORD
+					      ", run fwload.sh)"
+					    : s.stub_name);
 	if (s.do_register)
 		sub_load(&s);		/* restores the UAK; chip reload once up */
 

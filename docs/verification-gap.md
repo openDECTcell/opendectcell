@@ -330,3 +330,20 @@ audit legitimately shows `1=OURS 2=held 3=held`, and
 The warning was written for a single-handset base and is a false alarm in
 this setup. The underlying `vF426` behaviour — the clear not taking — is
 unchanged and still real; it is the *interpretation* that no longer fits.
+
+## The read-back address belongs to one STUB build `[2026-10-25]`
+
+`[CR A-0085]` read `0x9518` from the **08.25** firmware. From 2026-10-24
+~17:20 the box ran **07.56**, and every read of the table returned the same
+unrelated words (`0c 84 02 c9`, `0c 87 02 c9`, ..., second byte rising by
+3) in all six slots, whichever handset had just been written. So every
+`UAK READ-BACK MISMATCH` and `FOREIGN SLOT(S) STILL HELD` after the switch
+was a read of the wrong memory. The "transient MISMATCH" note above was
+written before the switch and is not an explanation for these.
+
+`fwload.sh` now records the uploaded second stage in
+`/tmp/dect-stub.second`; `dect-stubd` reads it at start and prints
+`chip: STUB second stage ...`. On 08.25 it checks as before. On another
+build it skips the read-back and the audit and says so; the summary then
+lists `0x020A`/`0x0247` as NOT VERIFIED. With no record it checks and says
+the verdict assumes 08.25. `Q-0059` asks for the 07.56 table.
