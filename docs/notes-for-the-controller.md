@@ -515,3 +515,48 @@ malformed 0x0203 segments are rejected. Counters: `mm.stats.tpui_unsolicited`,
 chip release (0x0201) names a handle, and only the release of *your*
 connection ends your link. The chip reports old connections' releases just
 after a new connection comes up (102 times in the corpus).
+
+## API 11-15: a base with several handsets `[2026-10-25 night]`
+
+`OPENDECTCELL_API_VERSION` is 15. Five steps in one night, each with a full entry
+in `dect_proto.h`; struct layouts changed in `dect_cc`, `dect_mm`,
+`dect_link`, `dect_link_ind` and their stats. Recompile. All verified on the
+three Gigasets unless marked.
+
+**Act on these:**
+
+1. **CC is gated like MM (API 11).** `dect_link` admits a handset's
+   `{CC-SETUP}` only if its IPUI is `mm.port_id` (or a held handset, below);
+   everyone else gets `{CC-RELEASE-COM}` "unknown identity" `0x0A`, and a
+   link with no identity armed takes no call at all. If you were relying on
+   un-armed links accepting calls, they no longer do.
+2. **Hold every handset you serve (API 12).** `dect_mm_hold(mm, ipui, len,
+   slot, tpui, tag)` after every `dect_link_init()`, once per subscribed
+   handset. `{LOCATE-REQUEST}` and `{CC-SETUP}` from any of them are
+   accepted, and the link adopts that handset: `mm.port_id`, the slot and
+   the TPUI become its own, and `mm.adopted` is your tag. Read
+   `mm.adopted` to know whose link it is; serve its Internal Names entry
+   with the own-flag accordingly (`dect_iwu_set_own()`). Without this a
+   base with three handsets turned two of them away twenty times a minute.
+3. **Page with the target's TPUI, not the link's.** A link's MM holds
+   whichever handset last used that link. `dect-stubd` paged the wrong
+   handset for exactly that reason (runs 32-33); build the page TPUI from
+   the target's slot (or pool TPUI) with `dect_mm_tpui()` on a fresh MM.
+4. **Answer a foreign page response (API 13).** `dect_link_page_reject(l,
+   ind.page_id, ind.page_id_len, ind.page_ti)`, then release the link
+   (TS 102 527-1 §7.3.8.3.1). Seen once on hardware.
+5. **Links without audio: `dect_cc_set_busy()` (API 15)** refuses every
+   handset-placed call except list access with "insufficient resources".
+   `dect-stubd` uses it for side links (a connection that arrives while
+   the main link carries a call); a controller with one audio path per
+   call wants the same for every link but the one it bound.
+
+**Behaviour you get for free (API 14):** a handset-placed call whose SETUP
+negotiates gets G.726 named in our `{CC-CONNECT}` (TS 102 527-1 §7.3.3);
+read `cc.chosen_codec` before binding audio. Not yet seen on hardware.
+
+**Defaults that changed in `dect-stubd`, worth mirroring:** no
+<<CODEC-LIST>> in our `{CC-SETUP}` (basic speech means G.726; a list must
+hold G.722 and G.726 if present); the first `0x0230` with flag bit 6 clear,
+and no 500 ms re-assign, which removes the half second of noise at the start
+of every call; every UAK in its own chip slot, clear only unused slots.
