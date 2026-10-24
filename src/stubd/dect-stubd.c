@@ -455,6 +455,27 @@ struct stubd {
 		uint8_t  att_cfg;
 		uint8_t  att_flag;
 		/*
+		 * slotmask=N / noslotcfg: the traffic-bearer slot-availability
+		 * mask the chip searches when allocating a bearer for an
+		 * INCOMING call. [CR A-0114] found THE cause of GAP handsets
+		 * refusing with 0x32: the chip inits 0xdb3 = 0x3f (all six slots
+		 * marked in-use) and the CC state machine's free-slot search
+		 * finds nothing, so no bearer slot is allocated and the handset
+		 * releases "insufficient bearers available". Stock sends
+		 * 0x017c 00 09 at attach -> 0xdb3 = 0x09 (keeps slots 0 and 3
+		 * reserved, frees 1,2,4,5). We never sent 0x017c at all.
+		 *
+		 * 0xdb3 is global, so sending it once per subscription load is
+		 * enough. Default 0x09 matches stock exactly; do NOT use 0x00
+		 * (frees the reserved dummy-bearer/scan slots). noslotcfg omits
+		 * the mail entirely (the pre-A-0114 behaviour, as a control).
+		 * The C4 does not depend on it -- CAT-iq opens its own bearer
+		 * PP-side -- which is why it rang without this and the three
+		 * Gigasets did not.
+		 */
+		uint8_t  slot_mask;
+		int      no_slot_cfg;
+		/*
 		 * setupdelay=N: wait N ms after the page response before the
 		 * {CC-SETUP}. [CR A-StockTrace-5 §15] measured a connection
 		 * bearer on stock ~360 ms before its setup; we send ours
@@ -2077,6 +2098,30 @@ static void send_subscription(struct stubd *s)
 	if (s->verbose)			/* params carry the UAK: -p is local only */
 		log_mail(&m, "tx M", s->show_params);
 	uak_verify_send(s, slot);	/* [CR A-0085] the only check that exists */
+
+	/*
+	 * [CR A-0114] 0x017c sets the traffic-bearer slot-availability mask
+	 * 0xdb3. Without it 0xdb3 stays at its init 0x3f (all slots in-use)
+	 * and the CC state machine allocates no bearer slot for an incoming
+	 * call, so a GAP handset refuses with 0x32 "insufficient bearers".
+	 * Stock sends this right after 0x020A; 0xdb3 is global so once is
+	 * enough. The handler takes the second payload byte into 0xdb3.
+	 */
+	if (!s->audio.no_slot_cfg) {
+		memset(&m, 0, sizeof(m));
+		m.src = DECT_TASK_PCM;
+		m.dst = DECT_TASK_CONTACT_DST;
+		m.prim = 0x017Cu;
+		m.param[0] = 0x00u;		/* unused by the handler */
+		m.param[1] = s->audio.slot_mask;	/* -> 0xdb3; stock 0x09 */
+		m.param_len = 2;
+		send_mail(s, (unsigned int)s->tx_slot, &m);
+		if (s->verbose)
+			log_mail(&m, "tx M", s->show_params);
+		printf("sub: slot-availability mask 0x017c 00 %02x "
+		       "(0xdb3; frees bearer slots) [CR A-0114]\n",
+		       s->audio.slot_mask);
+	}
 }
 
 /*
@@ -4604,7 +4649,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
-		if (eq && klen == 6 && !memcmp(key, "attcfg", 6))
+		if (eq && klen == 8 && !memcmp(key, "slotmask", 8))
+			a->slot_mask = (uint8_t)v;
+		else if (!eq && klen == 9 && !memcmp(key, "noslotcfg", 9))
+			a->no_slot_cfg = 1;
+		else if (eq && klen == 6 && !memcmp(key, "attcfg", 6))
 			a->att_cfg = (uint8_t)v;
 		else if (eq && klen == 7 && !memcmp(key, "attflag", 7))
 			a->att_flag = (uint8_t)v;
@@ -5044,6 +5093,9 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
+		"           slotmask=N 0x017c byte -> 0xdb3 bearer-slot mask (stock\n"
+		"                     0x09; default 0x09; THE incoming-call fix,\n"
+		"                     [CR A-0114]); noslotcfg omits it (control)\n"
 		"           attcfg=N  0x020A config byte after the UAK (stock 0x01\n"
 		"                     per Gigaset, 0x02 C4; default 0x00) [CR A-0113]\n"
 		"           attflag=N 0x0247 install flag byte (stock bit0=1,\n"
@@ -5207,6 +5259,7 @@ int main(int argc, char **argv)
 	s.rx_word_prev = 0xFFFFFFFFu;	/* no word seen yet */
 	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
+	s.audio.slot_mask = 0x09u;	/* [CR A-0114] stock's 0x017c 00 09 */
 	/*
 	 * -1, not 0: the struct is memset to zero above, and a zero here
 	 * would append a fourth page byte of 0x00 on every run -- changing
