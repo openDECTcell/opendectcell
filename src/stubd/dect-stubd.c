@@ -219,6 +219,24 @@ struct handset {
 	int      cc_id_learned;
 };
 
+/*
+ * A second connection while the main link is busy. It gets a link of its own
+ * for location registration and list access -- the gates and adoption work
+ * as on the main link -- but no audio, no ringing and no learning: those
+ * stay with the main link. Runs 25-28 refused 1-6 connection-ups per call,
+ * handsets that wanted to locate or sync their lists while we were on a
+ * call.
+ */
+#define SIDE_MAX	3u
+
+struct side_link {
+	int      active;
+	uint8_t  handle;
+	int      adopted;	/* handset table index, -1 = nobody yet */
+	uint32_t rejected_seen;
+	struct dect_link link;
+};
+
 struct stubd {
 	int fd;
 	unsigned int slots;
@@ -297,6 +315,8 @@ struct stubd {
 	/* rejected_identity of this connection's CC, as last reported */
 	uint32_t    cc_rejected_seen;
 	unsigned    page_rejects;	/* {LCE-PAGE-REJECT}s sent */
+	struct side_link side[SIDE_MAX];
+	unsigned    side_started;
 	/* The Fon/DECT LED, see led_tick(). */
 	int         led_fd;
 	int         led_state;		/* last written, -1 = unknown */
@@ -3947,6 +3967,8 @@ static void pump_lapc(struct stubd *s)
 	}
 }
 
+static struct side_link *side_find(struct stubd *s, uint8_t handle);
+
 static void reg_start(struct stubd *s, uint8_t handle)
 {
 	struct dect_mm_cfg mcfg;
@@ -3954,6 +3976,12 @@ static void reg_start(struct stubd *s, uint8_t handle)
 
 	/* a new connection is nobody's yet; default to the ring target */
 	hs_switch(s, 0, " (new connection)");
+	{
+		struct side_link *sl = side_find(s, handle);
+
+		if (sl)
+			sl->active = 0;		/* the main link takes it */
+	}
 	memset(&mcfg, 0, sizeof(mcfg));
 	/* subslot=N wins, else the slot the store was saved with, else 0 --
 	 * resolved once, in stubd_sub_slot(). */
@@ -4067,6 +4095,152 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	/* the lowest free value, 0, unless -a ti= says otherwise */
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
+}
+
+/* Slot and identity of handset table entry i, current or stashed. */
+static unsigned hs_slot(const struct stubd *s, unsigned i)
+{
+	return i == s->cur ? stubd_sub_slot(s) : s->hs[i].slot;
+}
+
+static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
+				 size_t *len)
+{
+	if (i == s->cur) {
+		*len = s->sub_port_id_len;
+		return s->sub_port_id;
+	}
+	*len = s->hs[i].port_id_len;
+	return s->hs[i].port_id;
+}
+
+static struct side_link *side_find(struct stubd *s, uint8_t handle)
+{
+	unsigned i;
+
+	for (i = 0; i < SIDE_MAX; i++)
+		if (s->side[i].active && s->side[i].handle == handle)
+			return &s->side[i];
+	return NULL;
+}
+
+static void log_nwk_out_side(void *ctx, const uint8_t *msg, size_t len)
+{
+	const struct stubd *s = ctx;
+	size_t i;
+
+	if (!s->verbose)
+		return;
+	printf("side: nwk out --> ");
+	for (i = 0; i < len; i++)
+		printf("%02x ", msg[i]);
+	printf("\n");
+	fflush(stdout);
+}
+
+/* Give connection `handle` a side link. Returns 0, or -1 if none is free. */
+static int side_start(struct stubd *s, uint8_t handle)
+{
+	struct dect_mm_cfg mcfg;
+	struct side_link *sl = side_find(s, handle);
+	unsigned i;
+
+	if (sl) {
+		printf("side: connection up (handle %u) repeated -- keeping "
+		       "its side link\n", handle);
+		return 0;
+	}
+	for (i = 0; i < SIDE_MAX && !sl; i++)
+		if (!s->side[i].active)
+			sl = &s->side[i];
+	if (!sl)
+		return -1;
+
+	memset(&mcfg, 0, sizeof(mcfg));
+	mcfg.sub_slot = DECT_MM_REG_SLOT;	/* adoption sets the real one */
+	if (s->pin)
+		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
+	mcfg.authenticate = 1;
+	mcfg.narrowband_only = (uint8_t)s->audio.nbcodec;
+	if (s->have_rfpi)
+		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
+	dect_link_init(&sl->link, handle, &mcfg);
+	dect_link_set_tx_log(&sl->link, log_nwk_out_side, s);
+
+	/* every handset we hold; strangers meet the gates as usual */
+	dect_iwu_set_line(&sl->link.cc.iwu, 1, "Line 1");
+	for (i = 0; i < s->n_hs; i++) {
+		size_t len;
+		const uint8_t *id = hs_port_id(s, i, &len);
+		char name[DECT_IWU_NAME_MAX];
+
+		if (!len || (i != s->cur && !s->hs[i].loaded))
+			continue;
+		(void)dect_mm_hold(&sl->link.mm, id, len,
+				   (uint8_t)hs_slot(s, i), NULL, (int)i);
+		snprintf(name, sizeof(name), "DECT %u", hs_slot(s, i));
+		dect_iwu_add_handset(&sl->link.cc.iwu, (uint8_t)hs_slot(s, i),
+				     name);
+	}
+	dect_cc_set_signal(&sl->link.cc, s->audio.signal_on,
+			   s->audio.signal_value);
+	sl->active = 1;
+	sl->handle = handle;
+	sl->adopted = -1;
+	sl->rejected_seen = 0;
+	s->side_started++;
+	printf("side: connection up (handle %u) -- handle %u is busy, so it "
+	       "gets a side link (location registration and list access "
+	       "only)\n", handle, s->reg.handle);
+	return 0;
+}
+
+static void side_pump(struct stubd *s, struct side_link *sl)
+{
+	struct dect_mail m;
+
+	while (sizeof(s->txq) - s->txq_len >= DECT_TX_ELEM_MAX &&
+	       dect_link_poll_append_mail(&sl->link, &m)) {
+		if (send_mail(s, (unsigned int)s->tx_slot, &m))
+			printf("side: C-plane mail LOST (%u bytes)\n",
+			       (unsigned)m.param_len);
+		else
+			s->led_traffic++;
+	}
+}
+
+static void side_segment(struct stubd *s, struct side_link *sl,
+			 const struct dect_mail *m, uint64_t now)
+{
+	struct dect_link_ind ind;
+	uint8_t rand_f[8], rs[16];
+	int a;
+
+	gen_rand(s, rand_f, sizeof(rand_f));
+	gen_rand(s, rs, sizeof(rs));
+	if (dect_link_rx_segment(&sl->link, m, now, rand_f, rs, &ind) < 0) {
+		side_pump(s, sl);
+		return;
+	}
+	a = sl->link.mm.adopted;
+	if (a >= 0 && a != sl->adopted && (unsigned)a < s->n_hs) {
+		sl->adopted = a;
+		dect_iwu_set_own(&sl->link.cc.iwu,
+				 (uint8_t)hs_slot(s, (unsigned)a));
+		printf("side: handle %u serves %s (slot %u)\n", sl->handle,
+		       s->hs[a].path, hs_slot(s, (unsigned)a));
+	}
+	if (sl->link.cc.stats.rejected_identity != sl->rejected_seen) {
+		sl->rejected_seen = sl->link.cc.stats.rejected_identity;
+		printf("side: turned away a call from a handset we are not "
+		       "subscribed to (handle %u, release reason 0x0a)\n",
+		       sl->handle);
+	}
+	if (ind.page_response)
+		printf("side: page response on handle %u while the main link "
+		       "is busy -- not ours to ring here, ignored\n",
+		       sl->handle);
+	side_pump(s, sl);
 }
 
 /* Drain queued NWK responses (MM and CC) into LAPC, one per free window. */
@@ -4671,6 +4845,8 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 				       "state\n", h);
 				break;
 			}
+			if (busy && side_start(s, h) == 0)
+				break;
 			if (busy) {
 				s->foreign_conn++;
 				printf("reg: connection up (handle %u) IGNORED "
@@ -4721,7 +4897,13 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * an external review-24102026.md, finding 10).
 		 */
 		uint8_t h = m->param_len ? m->param[0] : 0;
+		struct side_link *sl = m->param_len ? side_find(s, h) : NULL;
 
+		if (sl && !(s->reg.active && h == s->reg.handle)) {
+			sl->active = 0;
+			printf("side: connection released (handle %u)\n", h);
+			break;
+		}
 		if (s->reg.active && m->param_len && h != s->reg.handle) {
 			printf("reg: release of handle %u ignored -- our "
 			       "connection is handle %u\n", (unsigned)h,
@@ -4734,11 +4916,19 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		hs_switch(s, 0, " (link released)");
 		break;
 	}
-	case DECT_PRIM_SIGNALLING:
+	case DECT_PRIM_SIGNALLING: {
+		struct side_link *sl = m->param_len ? side_find(s, m->param[0])
+						    : NULL;
+
 		s->led_traffic++;
+		if (sl && !(s->reg.active && m->param[0] == s->reg.handle)) {
+			side_segment(s, sl, m, now);
+			break;
+		}
 		if (s->reg.active)
 			reg_segment(s, m, now);
 		break;
+	}
 	case 0x0242:
 		/*
 		 * {handle, chan_flags, mask}. The low nibble is the channel
@@ -5205,6 +5395,16 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			 * docs/spec-conformance.md.
 			 */
 			dect_link_tick(&s->reg.link, now);
+			{
+				unsigned k;
+
+				for (k = 0; k < SIDE_MAX; k++) {
+					if (!s->side[k].active)
+						continue;
+					dect_link_tick(&s->side[k].link, now);
+					side_pump(s, &s->side[k]);
+				}
+			}
 			/*
 			 * The call has gone away: release the audio channel.
 			 * Without this it stays armed for the life of the link
