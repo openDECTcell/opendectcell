@@ -109,6 +109,7 @@ struct dect_lapc_stats {
 	uint32_t msgs_rx;		/* complete NWK messages reassembled */
 	uint32_t msgs_tx;		/* NWK messages fully sent and acked */
 	uint32_t rx_bad_sapi;		/* frames on a SAPI other than 0: ignored */
+	uint32_t rx_truncated;		/* messages over DECT_LAPC_MSG_MAX, cut */
 };
 
 struct dect_lapc {
@@ -130,6 +131,7 @@ struct dect_lapc {
 	/* Inbound NWK message under reassembly. */
 	uint8_t  rxmsg[DECT_LAPC_MSG_MAX];
 	size_t   rxmsg_len;
+	uint8_t  rx_discard;		/* over-long message: drop to its last segment */
 
 	/* Outbound frame queue. */
 	struct { uint8_t buf[DECT_LC_LAPC_MAX]; size_t len; } txq[DECT_LAPC_TXQ];

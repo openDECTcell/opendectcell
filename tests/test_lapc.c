@@ -222,6 +222,59 @@ static void test_fsm_rx_ignores_other_sapi(void)
 	CHECK_EQ(dect_lapc_poll_tx(&l, tx, sizeof(tx)), 0);	/* no RR */
 }
 
+/*
+ * A message longer than the reassembly buffer: the first DECT_LAPC_MSG_MAX
+ * octets come out once, the rest is discarded up to the segment with M = 0
+ * (EN 300 444 §6.9.3), and the next message is clean. The old code reset the
+ * buffer and kept appending, so the long message's tail came out as a
+ * message of its own.
+ */
+static void test_fsm_rx_overlong_message_is_cut_once(void)
+{
+	struct dect_lapc l;
+	uint8_t seg[DECT_LC_INFO_MAX], tail[3] = { 0xEE, 0xEE, 0xEE };
+	uint8_t next[2] = { 0x05, 0x06 };
+	uint8_t frame[DECT_LC_LAPC_MAX], out[DECT_LAPC_MSG_MAX], tx[DECT_LC_LAPC_MAX];
+	struct dect_lapc_frame f;
+	size_t n, i, total = 0;
+	uint8_t ns = 0;
+	int r;
+
+	dect_lapc_init(&l, 0);
+	/* Enough full segments, M = 1, to overflow the buffer. */
+	for (i = 0; total <= DECT_LAPC_MSG_MAX; i++) {
+		memset(seg, (int)(0x10 + i), sizeof(seg));
+		n = dect_lapc_build_i(frame, sizeof(frame), 0, i == 0, DECT_LAPC_LLN_A,
+				      ns, 0, 0, 1, seg, sizeof(seg));
+		CHECK_EQ(dect_lapc_parse(frame, n, &f), 0);
+		CHECK_EQ(dect_lapc_rx(&l, &f, 100, out, sizeof(out)), 0);
+		ns ^= 1u;
+		total += sizeof(seg);
+		while (dect_lapc_poll_tx(&l, tx, sizeof(tx)) > 0)
+			;			/* every segment is acknowledged */
+	}
+	/* The last segment of the long message, M = 0: the prefix comes out. */
+	n = dect_lapc_build_i(frame, sizeof(frame), 0, 0, DECT_LAPC_LLN_A, ns, 0, 0, 0,
+			      tail, sizeof(tail));
+	CHECK_EQ(dect_lapc_parse(frame, n, &f), 0);
+	r = dect_lapc_rx(&l, &f, 110, out, sizeof(out));
+	CHECK_EQ(r, (int)DECT_LAPC_MSG_MAX);
+	CHECK_EQ(out[0], 0x10);				/* starts at the start */
+	CHECK_EQ(l.stats.rx_truncated, 1u);
+	ns ^= 1u;
+	while (dect_lapc_poll_tx(&l, tx, sizeof(tx)) > 0)
+		;
+
+	/* The next message is delivered whole and alone. */
+	n = dect_lapc_build_i(frame, sizeof(frame), 0, 0, DECT_LAPC_LLN_A, ns, 0, 0, 0,
+			      next, sizeof(next));
+	CHECK_EQ(dect_lapc_parse(frame, n, &f), 0);
+	r = dect_lapc_rx(&l, &f, 120, out, sizeof(out));
+	CHECK_EQ(r, 2);
+	CHECK_EQ(memcmp(out, next, 2), 0);
+	CHECK_EQ(l.stats.msgs_rx, 2u);
+}
+
 /* Send a short message; it goes out as one I-frame and completes on the ack. */
 static void test_fsm_tx_short(void)
 {
@@ -323,6 +376,7 @@ int main(void)
 	test_fsm_rx_single();
 	test_fsm_rx_nlf_resets_reassembly();
 	test_fsm_rx_ignores_other_sapi();
+	test_fsm_rx_overlong_message_is_cut_once();
 	test_fsm_tx_short();
 	test_fsm_retransmit();
 	test_fsm_loopback_segmented();

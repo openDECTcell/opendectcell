@@ -315,6 +315,7 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	if (f->nlf) {
 		l->vr = 0;		/* new link: discard the old receive state */
 		l->rxmsg_len = 0;	/* and any partial reassembly from the old link */
+		l->rx_discard = 0;
 		l->nlf_pending = 0;	/* PT established the link; our frames are subsequent */
 	}
 
@@ -323,6 +324,7 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 		l->vs = l->va = l->vr = 0;
 		l->outstanding = 0;
 		l->rxmsg_len = 0;
+		l->rx_discard = 0;
 		queue_ua(l, f->pf);
 		return 0;
 
@@ -330,6 +332,7 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 		queue_ua(l, f->pf);
 		l->established = 0;
 		l->rxmsg_len = 0;	/* drop any partial reassembly on disconnect */
+		l->rx_discard = 0;
 		return 0;
 
 	case DECT_LAPC_RR:
@@ -350,15 +353,35 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 		 * nothing is delivered for it.
 		 */
 		if (f->ns == l->vr) {		/* in sequence */
-			if (l->rxmsg_len + f->info_len > sizeof(l->rxmsg))
-				l->rxmsg_len = 0;	/* overflow: drop */
-			else if (f->info_len) {
-				memcpy(&l->rxmsg[l->rxmsg_len], f->info, f->info_len);
-				l->rxmsg_len += f->info_len;
+			/*
+			 * A message longer than the buffer: keep what fits and
+			 * discard the remaining segments up to the one with
+			 * M = 0, then deliver the kept prefix once. EN 300 444
+			 * §6.9.3 has the DLC convey the first segment and lets
+			 * it discard the rest; mandatory IEs sit in the first
+			 * 63 octets. The old code reset the buffer and went on
+			 * appending, so the tail of the long message came out
+			 * as a message of its own (second external review,
+			 * finding 3). Acknowledging the discarded segments is
+			 * correct: they were received.
+			 */
+			if (!l->rx_discard && f->info_len) {
+				size_t room = sizeof(l->rxmsg) - l->rxmsg_len;
+				size_t take = f->info_len < room ? f->info_len
+								 : room;
+
+				memcpy(&l->rxmsg[l->rxmsg_len], f->info, take);
+				l->rxmsg_len += take;
+				if (take < f->info_len) {
+					l->rx_discard = 1;
+					l->stats.rx_truncated++;
+				}
 			}
 			l->vr = seq_inc(l, l->vr);
 			l->stats.rx_i++;
 			queue_rr(l, f->nlf, f->pf);
+			if (!f->more)
+				l->rx_discard = 0;	/* the long message ends */
 			if (!f->more && l->rxmsg_len) {		/* complete NWK message */
 				if (out_cap >= l->rxmsg_len) {
 					memcpy(out, l->rxmsg, l->rxmsg_len);
