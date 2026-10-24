@@ -4869,6 +4869,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->signal_value = (uint8_t)v;
 			a->signal_on = 1;
 		}
+		else if (!eq && klen == 8 && !memcmp(key, "nosignal", 8))
+			a->signal_on = 0;	/* control runs only, see run 18 */
 		else if (!eq && klen == 8 && !memcmp(key, "playsync", 8))
 			a->play_sync = 1;
 		else if (!eq && klen == 7 && !memcmp(key, "playinv", 7))
@@ -5172,8 +5174,9 @@ static void usage(void)
 		"           downlink source, unlike the loopback\n"
 		"           playpcm=FILE does the same from 16 kHz signed 16-bit\n"
 		"           little-endian PCM, encoding it to G.722 at start-up\n"
-		"           signal=N adds <<SIGNAL>> N to the SETUP (0x40..0x47 =\n"
-		"           alerting pattern 0..7); omitted, the handset picks\n"
+		"           signal=N <<SIGNAL>> N in the SETUP (0x40..0x47 =\n"
+		"           alerting pattern 0..7; default 0x41, external call)\n"
+		"           nosignal     omit it: the A540 then rings silently\n"
 		"           pagemail=SPEC sends a raw mail (same syntax as -M)\n"
 		"           IMMEDIATELY after each page; repeatable, up to 4, in\n"
 		"           order. For 0x015E, which stock sends twice around\n"
@@ -5347,7 +5350,14 @@ int main(int argc, char **argv)
 	 * overwritten. 500 ms is the only value with evidence behind it.
 	 */
 	s.audio.remode_ms = 500;
-	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN0;
+	/*
+	 * <<SIGNAL>> 0x41 (external-call alerting) in every FP-originated
+	 * SETUP by default. EN 300 444 §8.14 requires the FT to alert; without
+	 * it the A540 shows the call and stays silent (run 18). -a nosignal
+	 * omits it, -a signal=N picks another pattern.
+	 */
+	s.audio.signal_on = 1;
+	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN1;
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;

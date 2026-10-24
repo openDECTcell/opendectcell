@@ -302,14 +302,21 @@ static void test_outgoing_call_to_handset(void)
 			       fixed_id, sizeof(fixed_id), 0x88), 0);
 	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
 
-	/* The queued SETUP: originator side, with the three mandatory IEs. */
+	/*
+	 * The queued SETUP: originator side, the three mandatory IEs, and
+	 * <<SIGNAL>> 0x41 by default (EN 300 444 §8.14; without it the A540
+	 * rings silently, run 18).
+	 */
 	n = dect_cc_poll(&cc, out, sizeof(out));
-	CHECK_EQ(n, 2u + 2u + sizeof(port_id) + 2u + sizeof(fixed_id) + 2u);
+	CHECK_EQ(n, 2u + 2u + sizeof(port_id) + 2u + sizeof(fixed_id) + 2u
+		    + 2u);
 	CHECK_EQ(out[1], DECT_CC_SETUP);
 	CHECK_EQ(out[2], DECT_IE_PORTABLE_IDENTITY);
 	CHECK_EQ(out[2 + 2 + sizeof(port_id)], DECT_IE_FIXED_IDENTITY);
-	CHECK_EQ(out[n - 2], DECT_IE_BASIC_SERVICE);
-	CHECK_EQ(out[n - 1], 0x88);
+	CHECK_EQ(out[n - 4], DECT_IE_BASIC_SERVICE);
+	CHECK_EQ(out[n - 3], 0x88);
+	CHECK_EQ(out[n - 2], DECT_IE_SIGNAL);
+	CHECK_EQ(out[n - 1], DECT_SIGNAL_ALERT_PATTERN1);
 
 	/* The handset rings. */
 	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
@@ -584,7 +591,8 @@ static void test_transaction_value_rotates(void)
 /*
  * <<CALL-INFORMATION>> goes after everything else, caller identity included,
  * and dect_cc_init() forgets it -- so the daemon has to set it again on every
- * new link, exactly like <<SIGNAL>>.
+ * new link. <<SIGNAL>>, by contrast, comes back with its default 0x41, so the
+ * "plain" SETUP below includes it.
  */
 static void test_setup_carries_line_identifier(void)
 {
@@ -593,7 +601,7 @@ static void test_setup_carries_line_identifier(void)
 	static const uint8_t ie[] = { 0x7E, 0x06, 0x00, 0x00, 0x80,
 				      0x00, 0x05, 0x81 };
 	const size_t plain = 2u + 2u + sizeof(port_id) + 2u + sizeof(fixed_id)
-			     + 2u;
+			     + 2u + 2u;	/* BASIC-SERVICE, SIGNAL */
 	struct dect_callinfo ci;
 	struct dect_clip id;
 	struct dect_cc cc;
@@ -616,7 +624,7 @@ static void test_setup_carries_line_identifier(void)
 	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id,
 				  sizeof(fixed_id), 0x88, &id), 0);
 	n = dect_cc_poll(&cc, out, sizeof(out));
-	/* ... BASIC-SERVICE, CALLING-PARTY-NUMBER (2 + 2 + 4), then ours */
+	/* ... BASIC-SERVICE, SIGNAL, CALLING-PARTY-NUMBER (2 + 2 + 4), then ours */
 	CHECK_EQ(n, plain + 8u + sizeof(ie));
 	CHECK_EQ(out[plain], DECT_IE_CALLING_PARTY_NUMBER);
 	CHECK(memcmp(out + n - sizeof(ie), ie, sizeof(ie)) == 0);

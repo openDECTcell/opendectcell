@@ -314,9 +314,15 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 		     const struct dect_clip *id);
 
 /*
- * Ask for a <<SIGNAL>> IE in the next FP-originated SETUP. `value` is the
- * signal code, e.g. DECT_SIGNAL_ALERT_PATTERN0. Passing enable = 0 goes back
- * to sending no IE and letting the handset choose.
+ * Choose the <<SIGNAL>> IE of the next FP-originated SETUP. `value` is the
+ * signal code: DECT_SIGNAL_ALERT_PATTERN1 (0x41, external call) is the
+ * default from dect_cc_init(), DECT_SIGNAL_ALERT_PATTERN0 (0x40) marks an
+ * internal call (EN 300 444 table 23).
+ *
+ * enable = 0 sends no IE. That is for tests only: EN 300 444 §8.14 makes
+ * alerting the FT's job, and with no <<SIGNAL>> the Gigaset A540 displays
+ * the call and blinks but makes no sound (run 18, 2026-10-24). This comment
+ * used to say the handset would "choose"; it does not.
  */
 void dect_cc_set_signal(struct dect_cc *cc, int enable, uint8_t value);
 

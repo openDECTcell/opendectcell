@@ -17,6 +17,14 @@ void dect_cc_init(struct dect_cc *cc)
 	cc->peer_basic_service = DECT_CC_SVC_NONE;
 	cc->ti_flag = DECT_TI_RESPONDER;	/* until a call says otherwise */
 	cc->represent_max = DECT_CC_REPRESENT_MAX;
+	/*
+	 * EN 300 444 §8.14: the FT starts PT alerting with <<SIGNAL>> in the
+	 * {CC-SETUP} or in a {CC-INFO}, and must support one of the two.
+	 * Without it the Gigaset A540 shows the call and rings silently
+	 * (run 18, 2026-10-24). External-call alerting unless told otherwise.
+	 */
+	cc->signal_on = 1;
+	cc->signal_value = DECT_SIGNAL_ALERT_PATTERN1;
 	dect_iwu_init(&cc->iwu);
 }
 

@@ -145,7 +145,8 @@
  * is why a call-class-3 SETUP arrived silently (v33).
  */
 #define DECT_IE_SIGNAL			0xE4u	/* + signal value */
-#define DECT_SIGNAL_ALERT_PATTERN0	0x40u
+#define DECT_SIGNAL_ALERT_PATTERN0	0x40u	/* GAP table 23: internal call */
+#define DECT_SIGNAL_ALERT_PATTERN1	0x41u	/* GAP table 23: external call */
 #define DECT_SIGNAL_ALERT_OFF		0x4Fu
 
 struct dect_nwk_hdr {
