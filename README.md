@@ -2,7 +2,12 @@
 
 **Goal:** turn cheap, used AVM FRITZ!Boxes into **open-source DECT base stations** running OpenWrt, so that GAP/CAT-iq handsets can make calls via SIP. In a later stage, several boxes should form a **multi-cell DECT-over-IP network** with one central controller.
 
-> Status: **research / reverse-engineering phase.** Nothing works on hardware yet.
+> Status (2026-10-25): **working on the FRITZ!Box 7520 as a lab base.** GAP
+> handsets register, ring and talk: a FRITZ!Fon C4 and the Gigaset A540,
+> C430A and AS690H, several at once, with narrowband audio both ways. Not yet
+> an end-user product: no SIP side (that is the controller's job), no
+> wideband, and one call at a time. Progress and next steps:
+> the maintainers' notes, [ROADMAP.md](ROADMAP.md).
 
 ## Why this is possible
 
@@ -15,7 +20,7 @@
 
 | Box | SoC | DECT PCM bus | Status |
 |---|---|---|---|
-| **FRITZ!Box 7520 / 7530** (first target) | Qualcomm IPQ4019 (4× ARM Cortex-A7), 256 MB RAM / 128 MB NAND, DECT chip SC14448 | IPQ40xx ADSS TDM | Analysed, first observations on a running box ([docs/models/7520-DECT-analysis.md](docs/models/7520-DECT-analysis.md)) |
+| **FRITZ!Box 7520 / 7530** (first target) | Qualcomm IPQ4019 (4× ARM Cortex-A7), 256 MB RAM / 128 MB NAND, DECT chip SC14448 | IPQ40xx ADSS TDM | **Works**: chip boot, PCM/TDM, registration, calls with audio, several handsets; OpenWrt packages build ([docs/models/7520-DECT-analysis.md](docs/models/7520-DECT-analysis.md), [docs/call-g7.md](docs/call-g7.md)) |
 | FRITZ!Box 7412 | Lantiq VRX220 (MIPS 34Kc, 2 VPEs), 128 MB RAM / 128 MB NAND | VR9 **SSC in SPI-slave "SPI-TDM" mode** | Analysed ([docs/models/7412-DECT-analysis.md](docs/models/7412-DECT-analysis.md)) |
 | FRITZ!Box 7362 SL | Lantiq VR9 | VR9 TDM | Analysed ([docs/models/7362SL-DECT-analysis.md](docs/models/7362SL-DECT-analysis.md)) |
 
