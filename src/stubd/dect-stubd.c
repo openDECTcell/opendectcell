@@ -19,6 +19,7 @@
  * framing and the state machine are platform-free and unit-tested on the PC.
  */
 #define _POSIX_C_SOURCE 200809L
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -1584,15 +1585,21 @@ lane_done:
 	s->tx_blocks++;
 }
 
-/* Parse "SRC:DST:PRIM[:HEX]" and send it as a mail in the control slot. */
-static int send_mail_spec(struct stubd *s, const char *spec)
+/*
+ * Parse "SRC:DST:PRIM[:HEX]" into a mail. HEX must be pairs of hex digits:
+ * the loop used to step two characters at a time with "%2x", which takes
+ * one digit as readily as two, so an odd-length string ("...:1") stepped
+ * past the terminating NUL and read beyond it. Found by the second external
+ * review, the clean-room record/an external review-1-24102026.md, finding 8.
+ */
+static int parse_mail_spec(const char *spec, struct dect_mail *m)
 {
-	struct dect_mail m;
 	unsigned long src, dst, prim;
 	const char *par = NULL;
 	char *end;
+	size_t plen = 0, k;
 
-	memset(&m, 0, sizeof(m));
+	memset(m, 0, sizeof(*m));
 	src = strtoul(spec, &end, 0);
 	if (*end != ':')
 		return -1;
@@ -1606,17 +1613,34 @@ static int send_mail_spec(struct stubd *s, const char *spec)
 		return -1;
 	if (src > 0xff || dst > 0xff || prim > 0xffff)
 		return -1;
-	m.src = (uint8_t)src;
-	m.dst = (uint8_t)dst;
-	m.prim = (uint16_t)prim;
-	for (; par && *par; par += 2) {
+	if (par) {
+		plen = strlen(par);
+		if (plen % 2u || plen / 2u > DECT_MAIL_PARAM_MAX)
+			return -1;
+		for (k = 0; k < plen; k++)
+			if (!isxdigit((unsigned char)par[k]))
+				return -1;
+	}
+	m->src = (uint8_t)src;
+	m->dst = (uint8_t)dst;
+	m->prim = (uint16_t)prim;
+	for (k = 0; k < plen; k += 2) {
 		unsigned int v;
 
-		if (sscanf(par, "%2x", &v) != 1 ||
-		    m.param_len >= DECT_MAIL_PARAM_MAX)
+		if (sscanf(par + k, "%2x", &v) != 1)
 			return -1;
-		m.param[m.param_len++] = (uint8_t)v;
+		m->param[m->param_len++] = (uint8_t)v;
 	}
+	return 0;
+}
+
+/* Parse a mail spec and send it in the control slot. */
+static int send_mail_spec(struct stubd *s, const char *spec)
+{
+	struct dect_mail m;
+
+	if (parse_mail_spec(spec, &m))
+		return -1;
 	if (send_mail(s, (unsigned int)s->tx_slot, &m))
 		return -1;
 	if (s->verbose)
@@ -5337,6 +5361,7 @@ int main(int argc, char **argv)
 	};
 	const char *dev = "/dev/dect0";
 	unsigned int run_seconds = 0, fpb;
+	struct dect_mail spec_check;	/* -M / -N validated at startup */
 	int c, ret = 1;
 
 	memset(&s, 0, sizeof(s));
@@ -5415,11 +5440,23 @@ int main(int argc, char **argv)
 				fprintf(stderr, "too many -N mails\n");
 				return 2;
 			}
+			if (parse_mail_spec(optarg, &spec_check)) {
+				fprintf(stderr, "bad -N mail spec: %s "
+					"(SRC:DST:PRIM[:HEX], hex in pairs)\n",
+					optarg);
+				return 2;
+			}
 			s.cmail[s.n_cmail++] = optarg;
 			break;
 		case 'M':
 			if (s.n_xmail >= sizeof(s.xmail) / sizeof(s.xmail[0])) {
 				usage();
+				return 2;
+			}
+			if (parse_mail_spec(optarg, &spec_check)) {
+				fprintf(stderr, "bad -M mail spec: %s "
+					"(SRC:DST:PRIM[:HEX], hex in pairs)\n",
+					optarg);
 				return 2;
 			}
 			s.xmail[s.n_xmail++] = optarg;
