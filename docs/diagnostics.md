@@ -482,3 +482,59 @@ condition that a clean slot does not produce. So the F4.37 control —
 **clean link, strong signal, five minutes, all eight read zero** — is no longer
 just a sanity check on our reading; it is the room's prediction too. A nonzero
 column on a genuinely clean link means one of them is not an error counter.
+
+## The six-connection filter: is a region worth diffing at all? `[CR A-0100]`
+
+Before reading a defect into any region that differs between our stack and
+stock, classify it with data we already produce. It needs no firmware access
+and no stock capture.
+
+**The test.** A run that pages the handset also catches several connections
+the handset opens by itself. Those are TDM-routed exactly as our
+page-response connection is, so they are a controlled sample:
+
+- a region that **moves** across those handset connections is
+  protocol / C-plane / MAC-driven. Both stacks drive it, so a difference
+  there is a **real defect** — diff it;
+- a region that is **static** across them is architecture-dependent. It will
+  diff as "missing" against any stock reference for architectural reasons,
+  because stock's chip DSP carries the U-plane and ours does not — the audio
+  goes over the IPQ4019 TDM block and the chip DSP is never engaged. **Do not
+  read a defect into it.**
+
+`0x3D4` and `0xEF4` both fail this test, which is exactly why they told us
+nothing: one change in 63 chunks, at `t=1063 ms` during start-up, static
+through six working connections and ours.
+
+**Run every candidate region through it before trusting a null.** This is the
+general form of the mistake that cost 2026-10-23/24 — see
+[[verify-the-variable-arrived]] in spirit: a clean null from an instrument
+that cannot move is not evidence.
+
+### Where the firmware can and cannot help
+
+`[CR A-0100]`, stated as a limit rather than a result: **below ~`0x1Axx` the
+firmware image and live data RAM diverge.** At `0xEF4` the image holds
+executable code, so the RAM our `0xFFF1` read returns there is a different
+bank from what the image maps, and a dump address in that range cannot be
+given a firmware meaning at all.
+
+Consequently A-0098's "`0xEF4` = DSP lane-descriptor table" was read from the
+dumped bytes alone, not cross-referenced, and is **withdrawn as structure**.
+Only the behaviour stands: static, architecture-dependent on a TDM-routed
+stack.
+
+**Above ~`0x1800` the clean room can cross-reference and the classification is
+firm.** Confirmed protocol/MAC targets:
+
+| region | note |
+| --- | --- |
+| `0x1AB9 + handle × 0x148` | connection record. `+0xFD` rx slot, `+0x104` tx slot, `+0x116` slot/bearer state word, `+0x137` saved audio/flags — the MAC bearer handler sets and clears bit 6 of `+0x137` directly, so it is a protocol flag, not a TDM artefact |
+| `0x965d` | bearer arm table; bit 15 observed moving 72 ms after an `0x015E` mail |
+| `0x96ad` | page table |
+| `0x2269` | beacon — live but continuous, so not connection-diagnostic |
+
+Below `0x1800`, **the six-connection test is the only authority.**
+
+> `0x9518 + (slot−1) × 0x11` holds the UAK. It is key material: never add it
+> to a dump list, and exclude it from any analysis that prints bytes.
