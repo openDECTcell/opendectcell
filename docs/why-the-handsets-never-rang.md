@@ -1,5 +1,14 @@
 # Why the Gigasets never rang
 
+> **The real answer, 2026-10-24 night: the CC transaction value.** Every
+> FP-originated `{CC-SETUP}` went out on transaction value 1. EN 300 444
+> §6.9.2 requires the lowest free value, 0. The A540 rang on value 0 (run 15)
+> and refused value 1 in the same session (runs 14 and 16). Fixed in
+> `dd5a630`. Everything below -- the bring-up config, the beacon, the page
+> table, the subscription bytes, the chip bearer -- was measured honestly and
+> was not the cause; the A540 rang with the same `0x0242` and the same
+> missing `0x0209` as every refusal. Read `call-g7.md`, "Runs 14-16 result".
+
 Answered 2026-10-24 by diffing our own logs against the stock capture
 (`freetz-ng/captures/2026-10-24-stockcap/`). This supersedes every earlier
 theory in this repo about FP-originated calls.

@@ -24,7 +24,7 @@ materially weaker than the public one. Two conditionals matter:
 | **N.2 Off hook** | 8.2 outgoing call request, 8.15 incoming call connection | done |
 | **N.3 On hook (full release)** | 8.7 normal call release, 8.8 abnormal call release | done |
 | **N.4 Dialled digits (basic)** | 8.10 sending keypad information | **implemented 2026-10-23**, not yet seen on hardware |
-| **N.8 Incoming call** | 8.12 request, 8.13 confirmation, 8.14 PT alerting, 8.15 connection | done, verified on the C4 |
+| **N.8 Incoming call** | 8.12 request, 8.13 confirmation, 8.14 PT alerting, 8.15 connection | 8.12/8.13/8.15 done; verified on the C4, and on the A540 since the transaction-value fix of 2026-10-24 (below). **8.14 only with `-a signal=`**: the default sends no alerting |
 | **N.15 Alerting** | — | done |
 | **N.18 Subscription registration on-air** | 8.30 obtaining access rights | done, verified on two vendors' handsets |
 | **N.19 Link control** | 8.35 indirect FT-initiated establishment, 8.36 direct PT-initiated, 8.37 normal release, 8.38 abnormal release | done |
@@ -140,3 +140,14 @@ it as a feature module (C10, "date/time module").
 
 Flagged here because "the clock is wrong" reads as a basic defect to anyone
 using the thing, even though no profile mandates it.
+
+## General requirements we broke, found 2026-10-24 night
+
+Three clauses outside the feature table, found by the external review
+(`the clean-room record/an external review-24102026.md`) and checked against the text:
+
+| clause | requirement | status |
+|---|---|---|
+| **6.9.2** | "The transaction identifier value for a CC call shall always get assigned the lowest available free number." | **broken from 2026-10-20 to 2026-10-24 and the cause of every Gigaset refusal**; fixed in `dd5a630`, verified on the A540 (run 15 rang, control run 16 refused) |
+| **8.14** | PT alerting by `<<SIGNAL>>` in `{CC-SETUP}` or in `{CC-INFO}`; "FT is required to support one of the methods" | **open**: the default build uses neither; `-a signal=0x41` (external) or `0x40` (internal) does it and should become the default |
+| **6.9.4** | an unexpected or unrecognised CC message "shall be ignored" (except release messages) | **open**: `dect_cc_rx()`'s default branch closes it with "unknown transaction", and its flag test is inverted, so it would close our own live call; see `spec-conformance.md` |

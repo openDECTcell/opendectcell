@@ -27,7 +27,8 @@ two demonstrably *conformant* handsets need genuinely different FP behaviour.**
 |---|---|---|---|---|
 | GAP registration against our MM stack | passes | **passes** | not attempted | our MM is not AVM-specific |
 | post-LOCATE message | not recorded | bare `0x5D`, `nwk_len=2`, no IEs | bare `0x5D` **and** `0x64` + escape `0x59` | `0x5D` is common; `0x64`/`0x59` is C430A-specific |
-| accepts our 3-IE CC-SETUP (no bearer) | **rings** | **rejects**, `0x32` "Insufficient resources" | not attempted | the C4 is *tolerant*; the A540 is *correct* (§9.3.2.3) |
+| incoming `{CC-SETUP}` on transaction value 1 | **rings** | **rejects**, `0x32` "Insufficient resources" | not attempted | the C4 is *tolerant*; the A540 enforces EN 300 444 §6.9.2, lowest free value = 0 (runs 14, 16) |
+| incoming `{CC-SETUP}` on transaction value 0 | **rings** (v28 and every completed C4 call) | **rings**, G.722 chosen in `{CC-ALERTING}` (run 15, 2026-10-24) | not attempted | the default since `dd5a630`; the earlier reading "no bearer, §9.3.2.3" was wrong |
 | PP-originated call binds audio | yes | yes | yes | the handset builds the bearer, so this path always worked |
 | opens a periodic CAT-iq service call unprompted | no | **yes** -- `03 05`, then `03 60 77 04 c3 00 NN 00` with an advancing counter, then `03 4d` normal release, ~13 s cycle | not measured | likely LiA list access; harmless, but it misled the collision investigation |
 | re-sync time after our base leaves the air | not measured | **~30 s** | not measured | paging must outlast this (now 20 pages / 60 s) |
@@ -421,3 +422,18 @@ C4 opens no periodic service call, so it never had the collision the others
 had. It has not been re-tested since, and it is local equipment.
 
 **Next and only step: the stock capture.** See `docs/test-card-2026-10-25.md`.
+
+## Solved: the A540 rings on transaction value 0 `[2026-10-24 night]`
+
+The defect this file spent two days on was ours, as its opening paragraph
+predicts. The daemon rotated the CC transaction value per call from
+2026-10-20, so every incoming call a Gigaset was ever offered carried value 1
+or higher. EN 300 444 §6.9.2 requires the lowest free value, 0. The C4 accepts
+any value; the A540 refuses anything but 0 with `0x32`. Measured in one
+session (`call-g7.md`, runs 14-16): value 0 rang, value 1 was refused twice,
+once with stock's full SETUP content and once as a control.
+
+So the recommendation at the top stands, now with its strongest example: no
+device profile, because the A540 was conformant and we were not. Still to
+measure on the default build: the C430A and the AS690H, after re-registering
+them.

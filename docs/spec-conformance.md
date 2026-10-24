@@ -1116,3 +1116,31 @@ query supported entry fields. Not served, and said so in list 00: the
 call lists (01–04, 09), the Contact List (05) and the DECT System
 Settings List (07). Table 41 makes 01, 03, 05 and 07 mandatory for an FP,
 so that is the next conformance gap, in that order of handset impact.
+
+## The review of 2026-10-24: one cause found, the rest still open `[2026-10-24 night]`
+
+An external review of commit `e899958` (`the clean-room record/an external review-24102026.md`)
+listed ten findings. All ten were checked against the code, `docs/specs/` and
+the thirteen clean `vCOLLIDE` logs (`call-g7.md`, "External review").
+
+**Fixed:**
+
+| finding | clause | commit |
+|---|---|---|
+| transaction value rotated per call | EN 300 444 §6.9.2, lowest free value | `dd5a630`. **This was the Gigaset refusal**: run 15 (value 0) rang the A540, run 16 (value 1) was refused |
+| mail parser copied 64 KiB on a length field below 2 | host/chip framing | `aa41389`, with an ASan-reproduced test |
+| end-of-run park queued after the loop, never sent | AGENTS.md §6 | `8ded31a`, verified on hardware in runs 14-16 |
+
+**Open, none of them a cause of the refusal (each checked against the logs):**
+
+| finding | clause | where |
+|---|---|---|
+| a `{CC-RELEASE}` / `{CC-RELEASE-COM}` on any transaction releases our call; the reply goes out on our transaction | EN 300 175-5 §17.3.2.1: no action for an unknown transaction | `dect_cc_rx()` |
+| the default branch tests the TI flag the opposite way from the SETUP branch, so an unhandled message on our own call is closed as "unknown transaction"; `{CC-CALL-PROC}` has no case | §17.3.2.1; EN 300 444 §6.9.4: ignore | `dect_cc_rx()` |
+| `{CC-ALERTING}` / `{CC-CONNECT}` change our call without checking the transaction | §17.4.1 | `dect_cc_rx()` |
+| link release sends a Class B DISC with P/F set on a Class A link; the bench saw it fail on 2026-10-23 | EN 300 175-4 §7.11.8, §9.2.1.1, §9.2.3.7 | `dect_lapc_disconnect()` |
+| no alerting by default | EN 300 444 §8.14 | `-a signal=` |
+| default call codec list is G.726 only; our CONNECT for PP-originated calls names no chosen codec | TS 102 527-1 §7.3.3 | daemon default, `on_setup()` |
+| no line identifier / call identifier in the incoming SETUP by default | TS 102 527-3 §7.4.5.3.2, §7.4.6.3 | controller-owned data, `-a lineid=,callid=` |
+| no pseudo call waiting when a voice call meets an open LiA session | TS 102 527-3 §7.4.10.6.3 | `ring_queue_setup()` |
+| any LCE message counts as the page response; `CONN_DOWN` is not checked against its handle | TS 102 527-1 §7.3.8.2.1, §7.3.8.3.1 | `dect_link_rx_segment()`, daemon |
