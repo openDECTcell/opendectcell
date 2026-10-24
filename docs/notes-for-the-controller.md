@@ -401,3 +401,53 @@ audit (`sub: chip slot audit: 1=OURS 2=- ...`) and the UAK read-back, both
 landed 2026-10-23. "Does the chip actually hold this handset's subscription"
 is answerable today, per cell, and is exactly the sort of thing your alerting
 item wants.
+
+## API 6: list access is real, the IWU responder's interface changed `[2026-10-24 evening]`
+
+**The ringer defect has a cause you should know about, because it shapes
+how you will present incoming calls.** Every refusal of an FP-originated
+call by a Gigaset in our corpus (60 of 60) coincided with the handset's own
+CAT-iq list-access call, and the handset never finished its list sync
+against us because our responder confirmed reads and never sent a data
+packet. Full account in `call-g7.md` ("THE REFUSAL IS A {CC-SETUP}
+COLLISION") and `spec-conformance.md` (the corpus table and the TS 102 527-3
+audit).
+
+**What changed in `libopendectcell`:**
+
+- `dect_iwu` is now a TS 102 527-3 §7.4.10 list-access responder, not a
+  byte-echo. `dect_iwu_reply()`, `dect_iwu_set_open_params()` and the
+  `DECT_IWU_TAG`/`REQ_06`/`RESP_07`/`REQ_10`/`RESP_12`/`PUSH_14` names are
+  **gone**. In their place: `dect_iwu_handle(iwu, in, len, &out)` fills a
+  `struct dect_iwu_out` with 0..12 reply contents, each to go in its own
+  `{CC-IWU-INFO}`; `dect_iwu_add_handset()`, `dect_iwu_set_line()`,
+  `dect_iwu_set_own()`, `dect_iwu_reset_sessions()` carry the data. Lists
+  served: 00 (supported lists), 06 (internal names), 08 (line settings).
+  **The data is yours to supply:** the handset table and the line are
+  exactly what the controller knows and the cell does not. For now the
+  daemon installs its one subscription slot as terminal id `n`, name
+  `DECT n`, and a line `1` named `Line 1`.
+- `dect_cc`: a list-access service call (call class `0010`) is answered
+  with `{CC-CALL-PROC}` only and never connected; it parks in
+  `DECT_CC_ST_PROCEEDING` until the handset releases it. `dect_cc_busy()`
+  is true meanwhile, `dect_cc_peer_is_speech()` is false.
+- `dect_cc`: EN 300 175-5 §9.5.2.3 / §17.3.3. A peer `{CC-SETUP}` on another
+  transaction while a call is in progress gets `{CC-RELEASE-COM}`
+  "insufficient resources" (`DECT_CC_REASON_INSUFFICIENT_RESOURCES`); a
+  0x32 release of our unanswered incoming call re-presents the identical
+  SETUP at once, at most `DECT_CC_REPRESENT_MAX` (2) times. New stats:
+  `collisions`, `represented`. `DECT_CC_TXQ` is 16 (a list read queues a
+  confirm plus data packets).
+- `struct dect_cc` grew (`setup_msg`, 256 bytes); anything embedding it by
+  value is recompiled, nothing else.
+
+**For your design, two consequences.** (1) The Internal Names List and the
+Line Settings List are what a CAT-iq handset shows as "INT n" and the line
+name; the controller owns both and will eventually feed them per cell —
+plan a small table (terminal id, name) and (line id, name, attached
+handsets) in the cell API. (2) TS 102 527-3 §7.4.10.6.3 says an incoming
+voice call that arrives while the handset has a list-access session open is
+presented *inside* that call as a pseudo call waiting (`{CC-CONNECT}` first,
+then the call-waiting indication), not with a fresh `{CC-SETUP}`. We do not
+do that yet; it only matters while a sync is running, which with real data
+is seconds after attach rather than for ever.

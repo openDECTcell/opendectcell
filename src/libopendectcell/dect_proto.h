@@ -94,8 +94,27 @@
  *    handset gets its clock; without this every timestamp it shows, call
  *    lists above all, is invented. The library has no clock, so the caller
  *    supplies the time and decides whether its own is trustworthy.
+ *
+ * 9: CAT-iq list access served for real, and {CC-SETUP} collision handling.
+ *    dect_iwu.h is rewritten: the byte-echo responder (dect_iwu_reply,
+ *    dect_iwu_set_open_params, DECT_IWU_TAG/REQ_06/...) is GONE, replaced by
+ *    a TS 102 527-3 7.4.10 responder -- dect_iwu_handle() filling a struct
+ *    dect_iwu_out, plus dect_iwu_add_handset/set_line/set_own/
+ *    reset_sessions. struct dect_iwu is entirely new, so struct dect_cc
+ *    (which embeds it) changes layout; dect_cc also gains setup_msg[] and
+ *    the represent/collision fields, and DECT_CC_TXQ is now 16.
+ *
+ *    CONSUMERS MUST ACT. A CAT-iq handset will not treat itself as
+ *    synchronised -- and a Gigaset refuses incoming calls -- until its list
+ *    sync completes, which needs the Internal Names and Line Settings lists
+ *    served with real data. The owner supplies the data via
+ *    dect_iwu_add_handset()/dect_iwu_set_line() on each link's cc.iwu;
+ *    nothing is served if nothing is set. A list-access service call (call
+ *    class 0010) is now CALL-PROC'd only, never connected, so anything
+ *    keyed on "a call reached ACTIVE" is unaffected but anything counting
+ *    CONNECTs will see fewer.
  */
-#define OPENDECTCELL_API_VERSION 8
+#define OPENDECTCELL_API_VERSION 9
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

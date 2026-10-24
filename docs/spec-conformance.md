@@ -1054,3 +1054,65 @@ without a corrected address.
 Two earlier attempts were void because the A540 had gone into deep sleep and
 answered no pages; that is a handset state, not a fault, and the fix is simply
 a longer settle.
+
+## 2026-10-24, evening: the corpus, tabulated — every refusal sits on a handset-originated call
+
+The question that had not been asked: not *what is in our SETUP*, but
+*what was the handset's own CC transaction doing when it arrived*. Every
+FP-originated `{CC-SETUP}` in `work/box-tmp/*.log` (93 logs), classified
+by the peer's state:
+
+| outcome | handset's own CC at our SETUP | runs |
+|---|---|---|
+| ALERTING / CONNECT (the C4) | no handset-originated call near | **26** |
+| `{CC-RELEASE-COM}` 0x32 | its own SETUP crossed ours by 100–300 ms, or its call was active | **33** |
+| `{CC-RELEASE-COM}` 0x32 | nothing of the handset's visible before the refusal | 25 |
+| `{CC-RELEASE-COM}` 0x32 | poisoned-identity runs (C430A, AS690H) | 2, void |
+| no reply | mixed | 9 |
+
+No successful ring coincides with a handset-originated call; no refusal
+is free of one on the wire except the 25, and in those the handset's
+next list-access call follows the refusal by 1–7 s in most runs. The
+33 are EN 300 175-5 §9.5.2.3 verbatim — the clause's own figure shows a
+PT's *LiA service call* crossing an FT's *normal call setup*, with
+exactly our signature as the mandated PT answer.
+
+Two readings were left. (1) A pure §9.5.2.3 crossing, with the PT's half
+sometimes suppressed before its SETUP reached the air; our half (release
+its call with 0x32, re-present ours immediately) was never implemented.
+(2) The handset refuses any incoming call while its list sync is pending,
+and the sync is pending for ever because our list-access replies never
+delivered an entry. Both were implemented; the bench separates them —
+`call-g7.md`, "THE REFUSAL IS A {CC-SETUP} COLLISION" and the two runs
+after it.
+
+### Earlier rejections of the collision reading, re-read
+
+Both earlier rejections (2026-10-22, and "The content sweep: it is not the
+message" above) rested on *"no competing `03 05` from the handset"* in a
+few traces. The absence was real and the inference was not: a PT in CALL
+INITIATED has accepted an MNCC_SETUP-req and not necessarily transmitted
+anything yet, and a handset with a permanently pending sync enters that
+state on every link-up. Absence of the handset's SETUP on the air was
+never evidence that the handset had no call pending.
+
+### List access, audited against TS 102 527-3 V1.7.1
+
+What the first responder sent, and what the standard says:
+
+| item | ours (until 2026-10-24) | TS 102 527-3 |
+|---|---|---|
+| LiA service call answer | `{CC-CALL-PROC}` + `{CC-CONNECT}` | CALL-PROC only, "no {CC-CONNECT} is used" (7.4.10.6.1) |
+| start session confirm, total entries | always 2 | the list's count (table 43) |
+| start session confirm, sorting fields | always 1 field | 0 for the one-entry lists, the default field otherwise (7.4.10.4.1.2) |
+| read entries confirm | "3 entries" | the count actually delivered (table 49) |
+| data packets after the confirm | **none, ever** | mandatory: "Content of list entry is transmitted in data packets" (7.4.10.4.3.2) |
+| unsupported list | confirmed like any other | session 0, reason "list not supported" |
+| search entries | NACK reason 01 "entry not available" | NACK 06 "procedure not supported" |
+
+Now served: List of Supported Lists, Internal Names List, Line Settings
+List, with the field codings of 7.4.10.5.1.1/2/3/13 and 7.4.11.4.1–3, and
+query supported entry fields. Not served, and said so in list 00: the
+call lists (01–04, 09), the Contact List (05) and the DECT System
+Settings List (07). Table 41 makes 01, 03, 05 and 07 mandatory for an FP,
+so that is the next conformance gap, in that order of handset impact.
