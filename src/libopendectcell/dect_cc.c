@@ -211,6 +211,7 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 	cc->incoming = 1;
 	cc->ti_flag = DECT_TI_ORIGINATOR;
 	cc->ti_value = cc->next_ti;
+	cc->chosen_codec = 0;		/* the handset names it, see rx */
 
 	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
 				 cc->ti_flag, cc->ti_value, DECT_CC_SETUP);
@@ -342,7 +343,8 @@ static void learn_id(const uint8_t *ies, size_t ies_len, uint8_t id,
  * (EN 300 175-5 §7.7.54): a negotiation octet, then 3 octets per codec --
  * identifier, MAC/DLC service, last-flag + C-plane routing + slot size.
  */
-#define CODEC_ID_G726		0x02u
+#define CODEC_ID_G726		DECT_CC_CODEC_G726
+#define CODEC_ID_G722		DECT_CC_CODEC_G722
 #define CODEC_LAST		0x80u	/* octet c, bit 8: last in the list */
 #define CODEC_NEGOTIATION	0x90u	/* "codec negotiation possible" */
 
@@ -354,6 +356,7 @@ static void learn_codec_offer(struct dect_cc *cc, const uint8_t *ies,
 					    &n);
 
 	cc->peer_has_g726 = 0;
+	cc->peer_has_g722 = 0;
 	cc->chosen_codec = 0;
 	cc->peer_negotiates = p != NULL ||
 		(cc->peer_basic_service != DECT_CC_SVC_NONE &&
@@ -366,17 +369,23 @@ static void learn_codec_offer(struct dect_cc *cc, const uint8_t *ies,
 		 * full slot, MAC/DLC service 0.
 		 */
 		static const uint8_t g726[3] = { CODEC_ID_G726, 0x00u, 0x04u };
+		/* and G.722 on a long slot, the service it asked for */
+		static const uint8_t g722[3] = { CODEC_ID_G722, 0x00u, 0x01u };
 
 		memcpy(cc->peer_g726, g726, sizeof(g726));
 		cc->peer_has_g726 = cc->peer_negotiates;
+		memcpy(cc->peer_g722, g722, sizeof(g722));
+		cc->peer_has_g722 = cc->peer_negotiates;
 		return;
 	}
 	for (i = 1; i + 3u <= n; i += 3u) {
-		if (p[i] != CODEC_ID_G726)
-			continue;
-		memcpy(cc->peer_g726, &p[i], 3);
-		cc->peer_has_g726 = 1;
-		return;
+		if (p[i] == CODEC_ID_G726 && !cc->peer_has_g726) {
+			memcpy(cc->peer_g726, &p[i], 3);
+			cc->peer_has_g726 = 1;
+		} else if (p[i] == CODEC_ID_G722 && !cc->peer_has_g722) {
+			memcpy(cc->peer_g722, &p[i], 3);
+			cc->peer_has_g722 = 1;
+		}
 	}
 }
 
@@ -478,8 +487,9 @@ void dect_cc_clear_keypad(struct dect_cc *cc)
  * {CC-CONNECT} for a call the handset placed. If its SETUP negotiated, it
  * names the codec we chose, alone (TS 102 527-1 §7.3.3: "at latest" in
  * CC-CONNECT, "only one codec shall be in the list", negotiation octet
- * "codec negotiation possible"). G.726 from the handset's own entry; if it
- * offered none we name nothing rather than a codec it did not offer.
+ * "codec negotiation possible"). G.722 when the link carries wideband and
+ * the handset offered it, else G.726, from the handset's own entry; if it
+ * offered neither we name nothing rather than a codec it did not offer.
  */
 static void queue_connect(struct dect_cc *cc)
 {
@@ -487,12 +497,14 @@ static void queue_connect(struct dect_cc *cc)
 	uint8_t *b;
 	size_t off;
 	uint8_t cl[4];
+	int g722;
 
 	if (!cc->peer_negotiates) {
 		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
 		return;
 	}
-	if (!cc->peer_has_g726) {
+	g722 = cc->wideband && cc->peer_has_g722;
+	if (!g722 && !cc->peer_has_g726) {
 		cc->stats.codec_unmatched++;
 		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
 		return;
@@ -504,7 +516,7 @@ static void queue_connect(struct dect_cc *cc)
 				 DECT_TI_RESPONDER, cc->ti_value,
 				 DECT_CC_CONNECT);
 	cl[0] = CODEC_NEGOTIATION;
-	memcpy(&cl[1], cc->peer_g726, 3);
+	memcpy(&cl[1], g722 ? cc->peer_g722 : cc->peer_g726, 3);
 	cl[3] |= CODEC_LAST;
 	if (off)
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
@@ -512,7 +524,33 @@ static void queue_connect(struct dect_cc *cc)
 	if (!off)
 		return;
 	txq_commit(cc, idx, off);
-	cc->chosen_codec = CODEC_ID_G726;
+	cc->chosen_codec = g722 ? CODEC_ID_G722 : CODEC_ID_G726;
+}
+
+/*
+ * The handset's choice for a call we placed: the first entry of the
+ * <<CODEC-LIST>> in its {CC-ALERTING} or {CC-CONNECT} (TS 102 527-1
+ * §7.3.3, "at latest" in CONNECT). A later list wins.
+ */
+static void learn_codec_choice(struct dect_cc *cc, const uint8_t *ies,
+			       size_t ies_len)
+{
+	size_t n;
+	const uint8_t *p = dect_nwk_find_ie(ies, ies_len, DECT_IE_CODEC_LIST,
+					    &n);
+
+	if (p && n >= 4u)
+		cc->chosen_codec = p[1];
+}
+
+void dect_cc_set_wideband(struct dect_cc *cc, int on)
+{
+	cc->wideband = on ? 1u : 0u;
+}
+
+uint8_t dect_cc_codec(const struct dect_cc *cc)
+{
+	return cc->chosen_codec;
 }
 
 static void on_setup(struct dect_cc *cc)
@@ -728,6 +766,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		/* Incoming call: the handset is ringing. */
 		if (our_transaction(cc, &h) && cc->incoming &&
 		    cc->state == DECT_CC_ST_CALL_PRESENT) {
+			learn_codec_choice(cc, ies, ies_len);
 			cc->state = DECT_CC_ST_RINGING;
 			cc->stats.alerting++;
 		}
@@ -741,6 +780,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		if (our_transaction(cc, &h) && cc->incoming &&
 		    (cc->state == DECT_CC_ST_CALL_PRESENT ||
 		     cc->state == DECT_CC_ST_RINGING)) {
+			learn_codec_choice(cc, ies, ies_len);
 			queue_msg(cc, cc->ti_flag, DECT_CC_CONNECT_ACK);
 			cc->state = DECT_CC_ST_ACTIVE;
 			cc->stats.connected++;

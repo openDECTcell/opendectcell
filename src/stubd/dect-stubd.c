@@ -100,6 +100,7 @@ static uint64_t fs_free_bytes(const char *path)
  * drew {CC-RELEASE-COM} 0x32), so this is a conformance fix, not a defect fix.
  */
 #define RING_BASIC_SVC	0x80u		/* normal call setup, basic speech */
+#define RING_BASIC_SVC_WB 0x88u		/* ... wideband speech, the default */
 
 /*
  * Below this the box clock is certainly unset: the 7520 has no RTC, so a
@@ -801,6 +802,17 @@ struct stubd {
 		 * parsed, so the call class is the first thing to sweep.
 		 */
 		uint8_t  basic_svc;
+		int      basic_svc_set;	/* basicsvc= given */
+		/*
+		 * narrowband: never wideband. By default (since bench tests
+		 * 10-11, 2026-10-25) our SETUP asks for wideband (0x88), our
+		 * CONNECT chooses G.722 when offered, and a call whose codec
+		 * is G.722 gets stock's wideband bind -- flags 0x41, codec
+		 * byte 0, no mode-2 re-assign -- with the downlink phase-locked
+		 * to the chip's two-frame words (playsync). Any other call
+		 * gets the narrowband bind (mode 2, linear PCM) as before.
+		 */
+		int      narrowband;
 		/*
 		 * pagehdr=N: a FOURTH payload byte on the 0x0300 page.
 		 *
@@ -1060,6 +1072,7 @@ struct stubd {
 		int sweep_done;
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
+		int call_wideband;	/* this call's bind is the G.722 one */
 		enum dect_mm_state reported_state;	/* last one logged */
 		uint8_t handle;
 		/*
@@ -1567,7 +1580,8 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 			if (w < s->slots && w != (unsigned int)s->tx_slot) {
 				int advance;
 
-				if (s->audio.play_sync && rx) {
+				if ((s->audio.play_sync ||
+				     s->reg.call_wideband) && rx) {
 					const uint8_t *src = rx
 						+ (f * s->slots + w) * 2u;
 					uint32_t v = (uint32_t)src[0]
@@ -2921,6 +2935,7 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 {
 	const struct audio_cfg *a = &s->audio;
 	struct dect_mail m;
+	int wb;
 
 	if (!a->no_gain) {
 		memset(&m, 0, sizeof(m));
@@ -2940,12 +2955,14 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0230u;		/* ASSIGN_AUDIO_CHANNEL, full form */
+	/* a wideband call: stock's bind, flags 0x41 and codec byte 0 */
+	wb = s->reg.call_wideband;
 	m.param[0] = handle;
-	m.param[1] = a->flags;		/* mode: low nibble = channel, 0x40 = wideband */
+	m.param[1] = wb ? (uint8_t)(a->flags | 0x40u) : a->flags;
 	m.param[2] = (uint8_t)(a->mask & 0xFFu);	/* slot mask (LE) */
 	m.param[3] = (uint8_t)(a->mask >> 8);
 	m.param[4] = a->mode;		/* master */
-	m.param[5] = a->codec;		/* extra */
+	m.param[5] = wb ? 0u : a->codec;	/* extra */
 	m.param_len = 6;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
@@ -2954,7 +2971,7 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	printf("call: audio assign: 0x0251 %s(sel %u gain 0x%02x), "
 	       "0x0230 {%02x %04x %02x %02x}%s\n",
 	       a->no_gain ? "SKIPPED " : "", a->sel, a->gain,
-	       a->flags, a->mask, a->mode, a->codec,
+	       m.param[1], a->mask, a->mode, m.param[5],
 	       a->nowait ? "" : " -- 0x022D waits for 0x0242");
 	if (a->tone_hz)
 		printf("call: tx tone: %u Hz %s into raw word %u%s\n",
@@ -4304,6 +4321,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.active = 1;
 	s->reg.persisted = 0;
 	s->reg.call_bound = 0;
+	s->reg.call_wideband = 0;
 	s->reg.nonspeech_noted = 0;
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
@@ -4400,6 +4418,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		dect_cc_set_codec_list(&s->reg.link.cc, NULL, 0);
 	dect_cc_set_signal(&s->reg.link.cc, s->audio.signal_on,
 			   s->audio.signal_value);
+	dect_cc_set_wideband(&s->reg.link.cc, !s->audio.narrowband);
 	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
 	/* the lowest free value, 0, unless -a ti= says otherwise */
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
@@ -5049,6 +5068,22 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.sweep_idx = 1;
 		s->reg.sweep_ms = now;	/* let the call settle for one step */
 		s->reg.sweep_done = 0;
+		/*
+		 * Wideband when the call's codec is G.722 -- named by the
+		 * handset in its ALERTING/CONNECT, or by our CONNECT -- and
+		 * the bind is ours to choose (flags= with bit 6 set is a lab
+		 * run that picked its own).
+		 */
+		s->reg.call_wideband = !s->audio.narrowband &&
+			!(s->audio.flags & 0x40u) &&
+			dect_cc_codec(&s->reg.link.cc) == DECT_CC_CODEC_G722;
+		printf("call: codec %s -- %s bind\n",
+		       dect_cc_codec(&s->reg.link.cc) == DECT_CC_CODEC_G722 ?
+		       "G.722" : dect_cc_codec(&s->reg.link.cc) ==
+		       DECT_CC_CODEC_G726 ? "G.726" : "not named (basic speech)",
+		       s->reg.call_wideband ? "wideband (coded G.722 lane)" :
+		       (s->audio.flags & 0x40u) ? "the configured" :
+		       "narrowband (mode 2, linear PCM)");
 		send_audio_bind(s, s->reg.handle);
 		s->reg.call_bound = 1;
 		s->reg.nonspeech_noted = 0;
@@ -5430,7 +5465,7 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 			       "%u rx transitions, %u held -> %u octets/s%s\n",
 			       s->pl_frames, s->pl_adv, s->pl_rxchg, s->pl_held,
 			       s->pl_adv * 2u,
-			       s->audio.play_sync
+			       (s->audio.play_sync || s->reg.call_wideband)
 			       ? (s->play_locked ? " (phase locked)"
 						 : " (phase NOT yet locked)")
 			       : "");
@@ -5757,6 +5792,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			if (s->reg.call_bound && !dect_cc_busy(&s->reg.link.cc)) {
 				s->reg.call_bound = 0;
 				send_audio_disconnect(s, s->reg.handle);
+				s->reg.call_wideband = 0;
 			}
 			if (!dect_cc_busy(&s->reg.link.cc))
 				s->reg.nonspeech_noted = 0;
@@ -5938,7 +5974,9 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->play_log = path;
 		}
 		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
-			a->basic_svc = (uint8_t)v;
+			a->basic_svc = (uint8_t)v, a->basic_svc_set = 1;
+		else if (!eq && klen == 10 && !memcmp(key, "narrowband", 10))
+			a->narrowband = 1;
 		else if (klen == 8 && !memcmp(key, "pagemail", 8)) {
 			/* text, not a number: a mail spec, taken verbatim */
 			size_t n = (size_t)(spec - (eq + 1));
@@ -6381,7 +6419,14 @@ static void usage(void)
 		"           has ever set this byte, so the builder has been\n"
 		"           reading whatever was in the buffer. OFF by default.\n"
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
-		"           nibble call class, low nibble 8 = wideband speech)\n"
+		"           nibble call class, low nibble 8 = wideband speech;\n"
+		"           0x80 with narrowband)\n"
+		"           narrowband   never wideband: SETUP basic speech, CONNECT\n"
+		"           chooses G.726, every call gets the mode-2 bind. By\n"
+		"           default a call whose codec is G.722 gets the wideband\n"
+		"           bind (flags 0x41, codec byte 0) and a phase-locked\n"
+		"           G.722 downlink (play=/playpcm=); playraw= lanes are\n"
+		"           format-specific, so use narrowband with linear ones\n"
 		"           playbyte=0|1|2 lane layout: 0 = a 16-bit word held\n"
 		"           two frames, 1 = one octet per frame in the low byte,\n"
 		"           2 = the high byte\n"
@@ -6719,6 +6764,9 @@ int main(int argc, char **argv)
 	}
 	if (!s.audio.remode_set && !(s.audio.flags & 0x40u))
 		s.audio.remode_ms = 0;	/* mode 2 from the first assign */
+	if (!s.audio.basic_svc_set)
+		s.audio.basic_svc = s.audio.narrowband ? RING_BASIC_SVC
+						       : RING_BASIC_SVC_WB;
 
 	s.stub_build = stub_build_read(s.stub_name, sizeof(s.stub_name));
 	printf("chip: STUB second stage %s\n",

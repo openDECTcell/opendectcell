@@ -141,14 +141,19 @@ struct dect_cc {
 	 * Codec negotiation for a call the handset places (TS 102 527-1
 	 * §7.3.3): its SETUP negotiates when it carries <<CODEC-LIST>> or the
 	 * wideband basic service, and we then choose one codec in our
-	 * {CC-CONNECT}. We choose G.726, the only one our audio path carries
-	 * (chip mode 2), as the handset's own 3-octet entry. chosen_codec is
-	 * 0 when no codec was chosen.
+	 * {CC-CONNECT}. We choose G.722 when dect_cc_set_wideband() allows it
+	 * and the handset offers it, else G.726, as the handset's own 3-octet
+	 * entry. For a call WE place, chosen_codec is what the handset named
+	 * in its {CC-ALERTING} or {CC-CONNECT}. 0 when no codec was chosen
+	 * (basic speech: G.726). Read it with dect_cc_codec().
 	 */
 	uint8_t peer_negotiates;
 	uint8_t peer_g726[3];
 	uint8_t peer_has_g726;
+	uint8_t peer_g722[3];
+	uint8_t peer_has_g722;
 	uint8_t chosen_codec;
+	uint8_t wideband;	/* dect_cc_set_wideband() */
 
 	uint8_t busy;		/* dect_cc_set_busy() */
 
@@ -287,6 +292,26 @@ void dect_cc_set_gate(struct dect_cc *cc, const uint8_t *port_id,
  * link carries the call -- so a handset is not connected into silence.
  */
 void dect_cc_set_busy(struct dect_cc *cc, int busy);
+
+/* <<CODEC-LIST>> codec identifiers (EN 300 175-5 §7.7.54) */
+#define DECT_CC_CODEC_G726	0x02u	/* narrowband, full slot */
+#define DECT_CC_CODEC_G722	0x03u	/* wideband, long slot */
+
+/*
+ * Allow G.722 in our {CC-CONNECT} for a handset-placed call that offers it
+ * (TS 102 527-1 §7.3.3). Off by default: set it only when the audio path
+ * behind this link carries wideband (dect-stubd: chip bind flags 0x41,
+ * codec byte 0, a G.722 lane).
+ */
+void dect_cc_set_wideband(struct dect_cc *cc, int on);
+
+/*
+ * The codec of the current call: what we chose in {CC-CONNECT}, or what
+ * the handset chose in {CC-ALERTING}/{CC-CONNECT} for a call we placed.
+ * DECT_CC_CODEC_G722, DECT_CC_CODEC_G726, or 0 = none named (basic
+ * speech, G.726).
+ */
+uint8_t dect_cc_codec(const struct dect_cc *cc);
 
 /* Feed a decoded NWK message (the LAPC I-frame payload). Non-CC messages are
  * ignored. Any responses are queued; pull them with dect_cc_poll(). */

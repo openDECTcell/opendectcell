@@ -221,8 +221,15 @@
  *    non-digit or more than two digits per AC octet (8 for GAP's 32-bit
  *    AC). It used to write in front of the buffer for 9 or more digits.
  *    Validate user PINs with it.
+ *
+ * 22: wideband codec choice (2026-10-25). Layout change: struct dect_cc
+ *    gains peer_g722, peer_has_g722, wideband. New: dect_cc_set_wideband()
+ *    (CONNECT chooses G.722 when offered; off by default),
+ *    dect_cc_codec() (the call's codec, including the one the handset
+ *    names in ALERTING/CONNECT for a call we place), DECT_CC_CODEC_G722/
+ *    G726. Bench tests 10-11: the coded G.722 path works on 07.56.
  */
-#define OPENDECTCELL_API_VERSION 21
+#define OPENDECTCELL_API_VERSION 22
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

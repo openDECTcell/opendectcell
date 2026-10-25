@@ -1580,6 +1580,92 @@ static void test_offer_without_g726_names_nothing(void)
 }
 
 /*
+ * With wideband allowed, CONNECT names G.722 from the handset's own
+ * entry, flagged last (bench tests 10-11: the coded path works on 07.56).
+ */
+static void test_wideband_link_chooses_g722(void)
+{
+	static const uint8_t a540[] = { 0x90, 0x03, 0x00, 0x01,
+					0x02, 0x00, 0x84 };
+	static const uint8_t g726_only[] = { 0x90, 0x02, 0x00, 0x84 };
+	static const uint8_t want722[] = { 0x7C, 0x04, 0x90, 0x03, 0x00,
+					   0x81 };
+	static const uint8_t want726[] = { 0x7C, 0x04, 0x90, 0x02, 0x00,
+					   0x84 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_wideband(&cc, 1);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, a540, sizeof(a540));
+	dect_cc_rx(&cc, buf, n);
+	n = connect_of(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u + sizeof(want722));
+	CHECK(memcmp(&out[2], want722, sizeof(want722)) == 0);
+	CHECK_EQ(dect_cc_codec(&cc), DECT_CC_CODEC_G722);
+
+	/* wideband service, no list: G.722 long slot from registration */
+	dect_cc_init(&cc);
+	dect_cc_set_wideband(&cc, 1);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, NULL, 0);
+	dect_cc_rx(&cc, buf, n);
+	n = connect_of(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u + sizeof(want722));
+	CHECK(memcmp(&out[2], want722, sizeof(want722)) == 0);
+
+	/* a handset that offers only G.726 gets G.726 */
+	dect_cc_init(&cc);
+	dect_cc_set_wideband(&cc, 1);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, g726_only,
+			    sizeof(g726_only));
+	dect_cc_rx(&cc, buf, n);
+	n = connect_of(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u + sizeof(want726));
+	CHECK(memcmp(&out[2], want726, sizeof(want726)) == 0);
+	CHECK_EQ(dect_cc_codec(&cc), DECT_CC_CODEC_G726);
+}
+
+/* A call we place: the handset names the codec in ALERTING or CONNECT. */
+static void test_handset_choice_is_learned_on_our_call(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t fixed_id[] = { 0xa0, 0x11, 0x22, 0x33, 0x44 };
+	static const uint8_t g722[] = { 0x90, 0x03, 0x00, 0x81 };
+	struct dect_cc cc;
+	uint8_t msg[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
+			       0, DECT_CC_ALERTING);
+	n = dect_nwk_put_ie(msg, sizeof(msg), n, DECT_IE_CODEC_LIST, g722,
+			    sizeof(g722));
+	dect_cc_rx(&cc, msg, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_RINGING);
+	CHECK_EQ(dect_cc_codec(&cc), DECT_CC_CODEC_G722);
+
+	/* a fresh call forgets it; no list anywhere means basic speech */
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
+			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
+			       0, DECT_CC_ALERTING);
+	dect_cc_rx(&cc, msg, n);
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
+			       0, DECT_CC_CONNECT);
+	dect_cc_rx(&cc, msg, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+	CHECK_EQ(dect_cc_codec(&cc), 0u);
+}
+
+/*
  * A busy link takes list access and refuses speech: "insufficient
  * resources", as §17.3.3 does for a SETUP while another call is up.
  */
@@ -1643,6 +1729,8 @@ int main(void)
 	test_gate_without_an_identity_turns_away_every_setup();
 	test_gate_setup_without_an_identity();
 	test_connect_names_the_chosen_codec();
+	test_wideband_link_chooses_g722();
+	test_handset_choice_is_learned_on_our_call();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();
