@@ -216,8 +216,13 @@
  * 20: location validity (2026-10-25). Layout change: dect_mm_cfg gains
  *    locate_validity. Non-zero adds <<DURATION>> to {LOCATE-ACCEPT}, so
  *    the PT locates again after that many 40.96 s units.
+ *
+ * 21: dect_dsaa_pin_to_ac() returns int (2026-10-25): -1 for a PIN with a
+ *    non-digit or more than two digits per AC octet (8 for GAP's 32-bit
+ *    AC). It used to write in front of the buffer for 9 or more digits.
+ *    Validate user PINs with it.
  */
-#define OPENDECTCELL_API_VERSION 20
+#define OPENDECTCELL_API_VERSION 21
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

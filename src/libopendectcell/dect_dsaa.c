@@ -207,11 +207,17 @@ void dect_dsaa(const uint8_t rand[8], const uint8_t key[16], uint8_t out[16])
 	out[12] = bb[3]; out[13] = bb[2]; out[14] = bb[1]; out[15] = bb[0];
 }
 
-void dect_dsaa_pin_to_ac(const char *pin, uint8_t *ac, size_t ac_len)
+int dect_dsaa_pin_to_ac(const char *pin, uint8_t *ac, size_t ac_len)
 {
 	size_t i, len = strlen(pin);
 
 	memset(ac, 0xff, ac_len);
+	/* two BCD digits per octet, so at most 8 for GAP's 32-bit AC */
+	if (len > 2 * ac_len)
+		return -1;
+	for (i = 0; i < len; i++)
+		if (pin[i] < '0' || pin[i] > '9')
+			return -1;
 	for (i = 0; i < len; i++) {
 		unsigned shift = (i & 1u) ? 4u : 0u;
 		size_t idx = ac_len - i / 2 - 1;
@@ -219,6 +225,7 @@ void dect_dsaa_pin_to_ac(const char *pin, uint8_t *ac, size_t ac_len)
 		ac[idx] &= (uint8_t)~(0xfu << shift);
 		ac[idx] |= (uint8_t)((unsigned)(pin[len - i - 1] - '0') << shift);
 	}
+	return 0;
 }
 
 void dect_dsaa_b1(const uint8_t *val, size_t len, uint8_t k[16])

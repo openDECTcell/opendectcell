@@ -45,6 +45,7 @@
 #include "dect_lapc.h"
 #include "dect_nwk.h"
 #include "dect_mm.h"
+#include "dect_dsaa.h"
 #include "dect_cc.h"
 #include "dect_link.h"
 #include "dect_diag.h"
@@ -1059,6 +1060,7 @@ struct stubd {
 		int sweep_done;
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
+		enum dect_mm_state reported_state;	/* last one logged */
 		uint8_t handle;
 		/*
 		 * The C-plane stack, one per connection, from libopendectcell
@@ -4984,10 +4986,14 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		}
 	}
 
-	if (s->reg.link.mm.state == DECT_MM_REGISTERED)
+	/* once per outcome, not on every message that follows it */
+	if (s->reg.link.mm.state != s->reg.reported_state &&
+	    s->reg.link.mm.state == DECT_MM_REGISTERED)
 		printf("reg: handset registered\n");
-	else if (s->reg.link.mm.state == DECT_MM_FAILED)
+	else if (s->reg.link.mm.state != s->reg.reported_state &&
+		 s->reg.link.mm.state == DECT_MM_FAILED)
 		printf("reg: registration rejected\n");
+	s->reg.reported_state = s->reg.link.mm.state;
 
 	/*
 	 * Bind the voice path once we have answered the call (CONNECT sent). The
@@ -6591,7 +6597,19 @@ int main(int argc, char **argv)
 			s.xmail[s.n_xmail++] = optarg;
 			break;
 		case 'g': s.do_register = 1; break;
-		case 'P': s.pin = optarg; break;
+		case 'P': {
+			uint8_t ac[4];
+
+			/* GAP: up to 8 decimal digits (a 32-bit AC) */
+			if (!optarg[0] ||
+			    dect_dsaa_pin_to_ac(optarg, ac, sizeof(ac))) {
+				fprintf(stderr, "-P wants 1 to 8 decimal "
+					"digits\n");
+				return 2;
+			}
+			s.pin = optarg;
+			break;
+		}
 		case 's':
 			if (!optarg[0]) {
 				sub_off = 1;

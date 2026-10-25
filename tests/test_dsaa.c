@@ -44,6 +44,27 @@ static void test_pin_ac_b1(void)
 	check_bytes("K", k, want_k, 16);
 }
 
+/* GAP's AC is 32 bits: 8 digits fill it; more, or a non-digit, refused */
+static void test_pin_ac_limits(void)
+{
+	uint8_t ac[4];
+	uint8_t want8[4] = { 0x12, 0x34, 0x56, 0x78 };
+	uint8_t none[4] = { 0xff, 0xff, 0xff, 0xff };
+	uint8_t want5[4] = { 0xff, 0xf1, 0x23, 0x45 };
+
+	check_bytes("rc 8", (uint8_t[]){ (uint8_t)dect_dsaa_pin_to_ac(
+		"12345678", ac, sizeof(ac)) }, (uint8_t[]){ 0 }, 1);
+	check_bytes("AC 8", ac, want8, 4);
+	dect_dsaa_pin_to_ac("12345", ac, sizeof(ac));
+	check_bytes("AC 5", ac, want5, 4);
+	check_bytes("rc 9", (uint8_t[]){ (uint8_t)dect_dsaa_pin_to_ac(
+		"123456789", ac, sizeof(ac)) }, (uint8_t[]){ 0xff }, 1);
+	check_bytes("AC 9", ac, none, 4);
+	check_bytes("rc x", (uint8_t[]){ (uint8_t)dect_dsaa_pin_to_ac(
+		"12a4", ac, sizeof(ac)) }, (uint8_t[]){ 0xff }, 1);
+	check_bytes("AC x", ac, none, 4);
+}
+
 /*
  * Thesis §3.4.1: the UAK after step2 is 93638b457afd40fa585feb6030d572a2. In the
  * key-allocation flow the UAK is KS' = A21(K, RS) (= DSAA XOR 0xAA per byte), so
@@ -97,6 +118,7 @@ static void test_annex_k(void)
 int main(void)
 {
 	test_pin_ac_b1();
+	test_pin_ac_limits();
 	test_dsaa_core_vector();
 	test_annex_k();
 	return CHECK_DONE();

@@ -26,7 +26,8 @@
 #define DECT_CIPHER_KEY_LEN	8u	/* DCK */
 
 /* PIN (decimal string) -> authentication code AC: BCD, left-padded with 0xF. */
-void dect_dsaa_pin_to_ac(const char *pin, uint8_t *ac, size_t ac_len);
+/* -1 (AC all 0xff) for a non-digit or more digits than ac_len holds */
+int dect_dsaa_pin_to_ac(const char *pin, uint8_t *ac, size_t ac_len);
 
 /* B1: derive the 16-byte auth key K by repeating the UAK or AC. */
 void dect_dsaa_b1(const uint8_t *val, size_t len, uint8_t k[DECT_AUTH_KEY_LEN]);
