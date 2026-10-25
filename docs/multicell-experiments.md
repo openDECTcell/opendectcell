@@ -120,3 +120,47 @@ start; the A540's and AS690H's at 60 s), 150 s, host holds all three.
 | the A540 connects **before** 60 s | **world A** on 07.56: the chip admits without a key |
 | the A540 connects only **after** 60 s, within seconds of the install | **world B**; a handset retries fast enough for on-demand loading, if the cell learns of the attempt (M3) |
 | the A540 does not connect at all | void: it went back to sleep; run again after M0-style wake-up |
+
+### M1 result: world A on 07.56 -- the chip admits handsets it holds no key for `[M1c-*, 2026-10-25 04:38]`
+
+Fresh chip (reset by the firmware reload), the C430A's key installed at
+start, the A540's and AS690H's held back to 60 s; `clear_foreign_slots`
+also cleared slots 1 and 3 explicitly at start.
+
+| t | event |
+|---|---|
+| 29.2 s | **AS690H** connects, `{LOCATE-REQUEST}` with its IPUI; key not in the chip |
+| 33.3 s | **A540** connects (its list-access call); key not in the chip |
+| 52.1 s | A540 again, `{LOCATE-REQUEST}` |
+| 60.0 s | the held-back keys installed |
+
+Pre-committed row: "the A540 connects before 60 s -- world A on 07.56: the
+chip admits without a key". **That is what happened, twice, and the AS690H
+did the same.** The chip's subscription table does not decide who may open
+a link on this build; the host's identity gates do. The UAK slots matter for
+what the chip itself does with the key (ciphering), still to be pinned.
+
+**For multi-cell:** a cell learns a roaming handset's IPUI from its
+`{LOCATE-REQUEST}` and can ask the controller for the record then; the
+budget is the handset's `<MM_locate.1>`. The six chip slots do not cap how
+many handsets a cell can admit.
+
+**This contradicts `vF427`** (08.25, 2026-10-23), where clearing the other
+slots stopped a foreign C4 dead, minutes after it had connected 51 times.
+Either the builds differ (08.25 gates, 07.56 does not), or the clear does
+something on 08.25 that it does not on 07.56 -- run 23 already saw a
+"cleared" handset connect on 07.56. Unresolved; a run on 08.25 with the same
+design would settle it. Until then, every multi-cell claim here is
+**07.56 only**.
+
+### M2': does ringing work for a handset with no key in the chip? `[pre-commit]`
+
+Admission is not the whole of roaming: the cell must also page and ring a
+handset it has just learned about. Fresh chip, `-a nochipkeys` (every slot
+cleared, no key installed), ring the A540, ~5 s.
+
+| shows | meaning |
+|---|---|
+| ALERTING | paging and ringing need no chip key either: a cell can serve a roamer end to end from host records |
+| page sent, no page response | the chip pages only handsets in its table: a roamer must be installed before it can be called |
+| page response, SETUP refused | something in the call path wants the key; read the release reason |

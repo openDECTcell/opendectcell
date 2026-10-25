@@ -564,6 +564,7 @@ struct stubd {
 		int      no_state;	/* nostatefile */
 		int      no_reg_open;	/* noregopen */
 		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
+		int      no_chip_keys;	/* nochipkeys, multi-cell test M2 */
 		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
 		/*
@@ -2316,6 +2317,8 @@ static unsigned hs_slot(const struct stubd *s, unsigned i);
  */
 static int held_back(const struct stubd *s, unsigned i)
 {
+	if (s->audio.no_chip_keys)	/* every slot cleared, no key at all */
+		return 1;
 	return s->audio.holdback_ms && !s->holdback_done && i != 0;
 }
 
@@ -2435,7 +2438,8 @@ static void send_subscription_tail(struct stubd *s);
 static void send_subscription(struct stubd *s)
 {
 	uint8_t slot = stubd_sub_slot(s);
-	unsigned keep = s->uak_valid ? 1u << slot : 0u, i;
+	unsigned keep = s->uak_valid && !held_back(s, s->cur) ? 1u << slot : 0u;
+	unsigned i;
 
 	for (i = 0; i < s->n_hs; i++) {
 		unsigned hsl = hs_slot(s, i);
@@ -2456,7 +2460,7 @@ static void send_subscription(struct stubd *s)
 			       s->hs[i].path, hsl);
 		}
 	}
-	if (s->uak_valid) {
+	if (s->uak_valid && !held_back(s, s->cur)) {
 		install_subscription(s, slot, s->uak);
 		uak_verify_send(s, slot);	/* [CR A-0085] the only check */
 	}
@@ -5999,6 +6003,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			memcpy(path, eq + 1, n);
 			path[n] = '\0';
 			a->state_path = path;
+		} else if (!eq && klen == 10 && !memcmp(key, "nochipkeys", 10)) {
+			a->no_chip_keys = 1;
 		} else if (klen == 8 && !memcmp(key, "holdback", 8)) {
 			a->holdback_ms = (unsigned)v;
 		} else if (!eq && klen == 11 && !memcmp(key, "nostatefile", 11)) {
