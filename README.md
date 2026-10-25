@@ -23,12 +23,13 @@
    /etc/init.d/opendectcell start`.
 4. **Register a handset:** press *Register a handset* on Status > DECT (or run
    `/etc/init.d/opendectcell register`), then start the registration on the
-   handset and enter the PIN (`option pin`, default `0000`). Registration is
+   handset and enter the PIN shown next to the button (random per install,
+   `option pin` to choose your own). Registration is
    closed at all other times; the window closes after 2 minutes
    (`option regwindow`) or as soon as one handset has registered.
 
 Settings live in `/etc/config/opendectcell`: `wideband`, `overlap`/`dialwait`,
-`pin`, `regwindow`. Stopping the service parks the radio.
+`pin`, `regwindow`, `cipher`. Stopping the service parks the radio.
 
 ## Why this is possible
 

@@ -3,6 +3,7 @@
 'require fs';
 'require poll';
 'require ui';
+'require uci';
 
 /*
  * The DECT Monitor: what the base is doing, for someone who should not have
@@ -130,7 +131,10 @@ function renderState(st) {
 }
 
 return view.extend({
-	load: readState,
+	load: function() {
+		return Promise.all([ readState(), uci.load('opendectcell').catch(function() {}) ])
+			.then(function(r) { return r[0]; });
+	},
 
 	render: function(st) {
 		var box = E('div', { 'id': 'opendectcell-monitor' }, renderState(st));
@@ -167,7 +171,11 @@ return view.extend({
 		return E('div', {}, [
 			E('h2', {}, _('DECT Monitor')),
 			box,
-			E('div', { 'class': 'cbi-page-actions' }, [ reg ])
+			E('div', { 'class': 'cbi-page-actions' }, [
+				reg, ' ',
+				E('span', {}, _('Registration PIN: %s').format(
+					uci.get('opendectcell', 'main', 'pin') || '-'))
+			])
 		]);
 	},
 
