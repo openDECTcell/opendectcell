@@ -35,15 +35,34 @@ struct dect_diag_status {
 	uint8_t  rssi[DECT_DIAG_CARRIERS];	/* [6..15], larger = stronger */
 	uint8_t  has_counters;		/* the 0x26-byte form arrived */
 	/*
-	 * Per-interval receive-integrity counters (per-slot failures), in the
-	 * order 0x10 0x12 0x14 0x16 0x18 0x1C 0x1E 0x20. Which failure each
-	 * one counts is a recorded gap [CR A-0090]; dect_diag_event_name()
-	 * names the trigger, not the error.
+	 * Per-interval counters, cleared by each read, in the order 0x10 0x12
+	 * 0x14 0x16 0x18 0x1C 0x1E 0x20: ACRC, XCRC, ZCRC, QBIT1, QBIT2,
+	 * HANDOVER, SLIDEERR, SYNCERR, as the vendor's DECT application names them (clean room
+	 * A-0123; the bit triggers we had traced match). dect_diag_event_name().
 	 */
 	uint16_t events[DECT_DIAG_EVENTS];
-	uint16_t interval_frames;	/* 0x1A: frames in this poll interval */
-	uint16_t frames;		/* 0x24: since establishment, wraps */
+	uint16_t interval_frames;	/* 0x1A: RXCOUNT, frames received */
+	uint16_t frames;		/* 0x24 low half, see uptime */
+	uint8_t  has_long;		/* the 0x28-byte form arrived */
+	uint16_t connect_frames;	/* 0x22: CONNECTTIME, this interval */
+	uint32_t uptime;		/* 0x24: 32-bit frames since establishment */
 };
+
+/*
+ * The raw RSSI octet in tenths of a dBm, as FRITZ!OS converts it on the
+ * 7520 (clean room A-0121): (raw - 20) * 80/37 - 110 dBm. Raw 0 and 255
+ * carry no value: returns DECT_DIAG_NO_DBM.
+ */
+#define DECT_DIAG_NO_DBM	(-32768)
+int dect_diag_rssi_dbm10(uint8_t raw);
+
+/*
+ * FRITZ!OS's "Quality %" of a link (clean room A-0121): from the dBm of
+ * the call's carrier, discounted by ACRC + XCRC + ZCRC + QBIT1 + QBIT2
+ * over CONNECTTIME. -1 when there is nothing to judge (no counters, or
+ * no frames this interval).
+ */
+int dect_diag_quality(const struct dect_diag_status *st);
 
 /* Frames since establishment, unwrapped across polls. Zero it per call. */
 struct dect_diag_frames {

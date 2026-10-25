@@ -102,7 +102,9 @@ function renderState(st) {
 			h.link ? (l ? callText(l) : _('connected')) : _('idle'),
 			ago(h.seen_ms_ago),
 			l ? channel(l) : '-',
-			l ? level(l) : '-'
+			l ? level(l) : '-',
+			l && l.radio && l.radio.quality != null ?
+				_('%d %%').format(l.radio.quality) : '-'
 		];
 	});
 
@@ -118,7 +120,7 @@ function renderState(st) {
 		E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('Handsets')),
 			table([ _('Name'), _('Slot'), _('State'), _('Last contact'),
-				_('Channel'), _('Signal Strength') ], handsets)
+				_('Channel'), _('Signal Strength'), _('Quality') ], handsets)
 		])
 	]);
 }

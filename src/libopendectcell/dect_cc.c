@@ -57,6 +57,43 @@ static void queue_msg(struct dect_cc *cc, uint8_t ti_flag, uint8_t msg_type)
 	txq_commit(cc, idx, off);
 }
 
+size_t dect_cc_put_call_status(const struct dect_cc *cc, uint8_t *b,
+			       size_t cap, size_t off, uint8_t status)
+{
+	struct dect_callinfo ci;
+	size_t next;
+
+	if (!cc->call_status)
+		return off;
+	dect_callinfo_init(&ci);
+	ci.has_line = cc->callinfo.has_line;
+	ci.line_id = cc->callinfo.line_id;
+	ci.has_line_type = cc->callinfo.has_line_type;
+	ci.line_type = cc->callinfo.line_type;
+	ci.has_call_id = 1;
+	ci.call_id = cc->status_call_id;
+	ci.has_call_status = 1;
+	ci.call_status = status;
+	next = dect_callinfo_put(b, cap, off, &ci);
+	return next ? next : off;
+}
+
+/* A responder message with our call status, for a handset-placed call. */
+static void queue_with_status(struct dect_cc *cc, uint8_t msg_type,
+			      uint8_t status)
+{
+	unsigned idx;
+	uint8_t *b = txq_slot(cc, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 DECT_TI_RESPONDER, cc->ti_value, msg_type);
+	off = dect_cc_put_call_status(cc, b, DECT_LAPC_MSG_MAX, off, status);
+	txq_commit(cc, idx, off);
+}
+
 /*
  * Queue a {CC-IWU-INFO} carrying one <<IWU-TO-IWU>>, our reply to the peer's.
  * The transaction is the peer's: these records ride the call's transaction,
@@ -521,12 +558,12 @@ static void queue_connect(struct dect_cc *cc)
 	int g722 = cc->chosen_codec == CODEC_ID_G722;
 
 	if (!cc->peer_negotiates) {
-		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
+		queue_with_status(cc, DECT_CC_CONNECT, DECT_CS_CALL_CONNECT);
 		return;
 	}
 	if (!cc->chosen_codec) {
 		cc->stats.codec_unmatched++;
-		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
+		queue_with_status(cc, DECT_CC_CONNECT, DECT_CS_CALL_CONNECT);
 		return;
 	}
 	b = txq_slot(cc, &idx);
@@ -543,6 +580,9 @@ static void queue_connect(struct dect_cc *cc)
 				      DECT_IE_CODEC_LIST, cl, sizeof(cl));
 	if (!off)
 		return;
+	/* 0x7E after 0x7C: CS call connect, the handset's timer (A-0122) */
+	off = dect_cc_put_call_status(cc, b, DECT_LAPC_MSG_MAX, off,
+				      DECT_CS_CALL_CONNECT);
 	txq_commit(cc, idx, off);
 }
 
@@ -560,6 +600,12 @@ static void learn_codec_choice(struct dect_cc *cc, const uint8_t *ies,
 
 	if (p && n >= 4u)
 		cc->chosen_codec = p[1];
+}
+
+void dect_cc_set_call_status(struct dect_cc *cc, int on, uint8_t call_id)
+{
+	cc->call_status = on ? 1u : 0u;
+	cc->status_call_id = call_id & 0x7Fu;
 }
 
 void dect_cc_set_wideband(struct dect_cc *cc, int on)
@@ -601,7 +647,8 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 	}
 	if (cc->overlap && !sending_complete) {
 		if (cc->answered != DECT_CC_SETUP_ACK)
-			queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_SETUP_ACK);
+			queue_with_status(cc, DECT_CC_SETUP_ACK,
+					  DECT_CS_CALL_SETUP_ACK);
 		cc->state = DECT_CC_ST_OVERLAP;
 		cc->overlap_deadline_ms = 0;	/* armed by the tick */
 		return;
@@ -616,7 +663,7 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 static void proceed(struct dect_cc *cc)
 {
 	if (!cc->proceeded && cc->answered != DECT_CC_CALL_PROC)
-		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
+		queue_with_status(cc, DECT_CC_CALL_PROC, DECT_CS_CALL_PROC);
 	cc->proceeded = 1;
 	cc->answered = 0;
 	cc->state = DECT_CC_ST_PROCEEDING;
@@ -669,7 +716,7 @@ int dect_cc_alert(struct dect_cc *cc)
 	if (!connectable(cc) || cc->alerted)
 		return -1;
 	proceed(cc);
-	queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_ALERTING);
+	queue_with_status(cc, DECT_CC_ALERTING, DECT_CS_CALL_ALERTING);
 	cc->alerted = 1;
 	return 0;
 }

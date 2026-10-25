@@ -49,6 +49,11 @@ static void answer_held_setup(struct dect_link *l, const uint8_t *ies,
 			       DECT_TI_RESPONDER, l->setup_ti, type);
 	if (!n)
 		return;
+	if (!lia)
+		n = dect_cc_put_call_status(&l->cc, l->lce, sizeof(l->lce), n,
+					    type == DECT_CC_SETUP_ACK ?
+					    DECT_CS_CALL_SETUP_ACK :
+					    DECT_CS_CALL_PROC);
 	l->lce_len = n;
 	l->setup_answered = type;
 }

@@ -1767,6 +1767,67 @@ static void test_handset_call_in_steps(void)
 	CHECK_EQ(dect_cc_alert(&cc), -1);
 }
 
+/* the trailing <<CALL-INFORMATION>> of a message: call id 1, status st */
+static int ends_with_status(const uint8_t *m, size_t n, uint8_t st)
+{
+	const uint8_t want[] = { 0x7E, 0x06, 0x01, 0x00, 0x81,
+				 0x02, 0x01, (uint8_t)(0x80u | st) };
+
+	return n >= sizeof(want) &&
+	       memcmp(m + n - sizeof(want), want, sizeof(want)) == 0;
+}
+
+/*
+ * TS 102 527-3 §7.4.6.4.3: "CS call connect" shall always be sent in our
+ * {CC-CONNECT}; stock also marks SETUP-ACK, CALL-PROC and ALERTING
+ * (clean room A-0122). The CONNECT is exactly A-0122's test element after
+ * the codec list.
+ */
+static void test_call_status_in_our_answers(void)
+{
+	static const uint8_t a540[] = { 0x90, 0x03, 0x00, 0x01,
+					0x02, 0x00, 0x84 };
+	static const uint8_t connect[] = { 0x7C, 0x04, 0x90, 0x03, 0x00, 0x81,
+					   0x7E, 0x06, 0x01, 0x00, 0x81,
+					   0x02, 0x01, 0x85 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	dect_cc_set_wideband(&cc, 1);
+	dect_cc_set_call_status(&cc, 1, 1);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, a540, sizeof(a540));
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_SETUP_ACK);
+	CHECK(ends_with_status(out, n, DECT_CS_CALL_SETUP_ACK));
+	CHECK_EQ(dect_cc_alert(&cc), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	CHECK(ends_with_status(out, n, DECT_CS_CALL_PROC));
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_ALERTING);
+	CHECK(ends_with_status(out, n, DECT_CS_CALL_ALERTING));
+	CHECK_EQ(dect_cc_connect(&cc), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CONNECT);
+	CHECK_EQ(n, 2u + sizeof(connect));
+	CHECK(memcmp(&out[2], connect, sizeof(connect)) == 0);
+
+	/* basic speech, nothing negotiated: CONNECT carries only the status */
+	dect_cc_init(&cc);
+	dect_cc_set_call_status(&cc, 1, 1);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x80, NULL, 0);
+	dect_cc_rx(&cc, buf, n);
+	(void)dect_cc_poll(&cc, out, sizeof(out));		/* CALL-PROC */
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CONNECT);
+	CHECK_EQ(n, 2u + 8u);
+	CHECK(ends_with_status(out, n, DECT_CS_CALL_CONNECT));
+}
+
 /* F<CC.01>: 20 s, restarted by every CC-INFO, then "timer expiry". */
 static void test_overlap_timer(void)
 {
@@ -1903,6 +1964,7 @@ int main(void)
 	test_overlap_receiving();
 	test_overlap_timer();
 	test_handset_call_in_steps();
+	test_call_status_in_our_answers();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();

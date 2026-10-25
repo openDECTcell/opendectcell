@@ -255,8 +255,19 @@
  *    §9.3.1.8); CONNECT PENDING is no longer used for these calls, and
  *    stats.connected counts on CONNECT. The codec is chosen when the
  *    SETUP arrives, so dect_cc_codec() can drive a bind before CONNECT.
+ *
+ * 26: call status and FRITZ!OS's link numbers (2026-10-25). Layout
+ *    change: struct dect_cc gains call_status, status_call_id;
+ *    struct dect_diag_status gains has_long, connect_frames, uptime. New:
+ *    dect_cc_set_call_status() -- <<CALL-INFORMATION>> "CS call connect"
+ *    in our CONNECT to a handset's call, which TS 102 527-3 §7.4.6.4.3
+ *    requires and the handset's call timer keys on (A-0122) -- and
+ *    dect_cc_put_call_status(); dect_diag_rssi_dbm10(), dect_diag_quality()
+ *    (A-0121). **Renamed:** the eight event counters are now acrc, xcrc,
+ *    zcrc, qbit1, qbit2, handover, slideerr, syncerr (A-0123), also as
+ *    JSON keys; the JSON radio object gains "dbm" and "quality".
  */
-#define OPENDECTCELL_API_VERSION 25
+#define OPENDECTCELL_API_VERSION 26
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

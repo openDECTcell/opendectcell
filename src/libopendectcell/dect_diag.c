@@ -11,8 +11,8 @@ static const uint8_t event_off[DECT_DIAG_EVENTS] = {
 	0x10u, 0x12u, 0x14u, 0x16u, 0x18u, 0x1Cu, 0x1Eu, 0x20u
 };
 static const char *const event_name[DECT_DIAG_EVENTS] = {
-	"s12b6", "s12b1", "s12b0", "hdrb4", "hdrb0", "unmapped", "s13hi",
-	"s12b7"
+	"acrc", "xcrc", "zcrc", "qbit1", "qbit2", "handover", "slideerr",
+	"syncerr"
 };
 
 static uint16_t le16(const uint8_t *p)
@@ -73,7 +73,59 @@ int dect_diag_decode_status(const uint8_t *p, size_t n,
 		st->events[i] = le16(&p[event_off[i]]);
 	st->interval_frames = le16(&p[0x1Au]);
 	st->frames = le16(&p[0x24u]);
+	st->connect_frames = le16(&p[0x22u]);
+	st->uptime = st->frames;
+	if (n >= 0x28u) {
+		st->has_long = 1;
+		st->uptime = (uint32_t)st->frames |
+			     ((uint32_t)le16(&p[0x26u]) << 16);
+	}
 	return 0;
+}
+
+int dect_diag_rssi_dbm10(uint8_t raw)
+{
+	if (raw == 0u || raw == 0xFFu)
+		return DECT_DIAG_NO_DBM;
+	/* (raw - 20) * 80/37 dB, in tenths, truncated toward zero */
+	return ((int)raw - 20) * 800 / 37 - 1100;
+}
+
+int dect_diag_quality(const struct dect_diag_status *st)
+{
+	int dbm10, q, good;
+	unsigned errs, dur, i;
+
+	if (!st->valid || !st->has_counters || st->carrier >= DECT_DIAG_CARRIERS)
+		return -1;
+	dur = st->connect_frames;
+	if (!dur)
+		return -1;
+	dbm10 = dect_diag_rssi_dbm10(st->rssi[st->carrier]);
+	if (dbm10 == DECT_DIAG_NO_DBM)
+		q = 100;
+	else if (dbm10 > -400) q = 100;
+	else if (dbm10 > -450) q = 90;
+	else if (dbm10 > -500) q = 80;
+	else if (dbm10 > -550) q = 70;
+	else if (dbm10 > -600) q = 60;
+	else if (dbm10 > -650) q = 50;
+	else if (dbm10 > -700) q = 40;
+	else if (dbm10 > -750) q = 30;
+	else q = 20;
+	for (errs = 0, i = 0; i < 5u; i++)	/* ACRC .. QBIT2 */
+		errs += st->events[i];
+	if (!errs)
+		return q;
+	good = 100 - (int)(100u * (errs < dur ? errs : dur) / dur);
+	if (good < 70)
+		return 1;
+	if (good < 80)
+		return 2;
+	if (good < 90)
+		return 5;
+	/* A-0121 as given, including its step to 0 at exactly 90 % good */
+	return ((q * (good - 90) * 10 / 100) + 2) / 5 * 5;
 }
 
 uint64_t dect_diag_frames_update(struct dect_diag_frames *f,
@@ -200,6 +252,19 @@ size_t dect_diag_json(const struct dect_diag_link *d, int with_identity,
 				    d->radio.events[i]);
 			put(buf, cap, &off, &ok, "},\"call_frames\":%llu",
 			    (unsigned long long)d->call_frames);
+			if (dect_diag_quality(&d->radio) >= 0)
+				put(buf, cap, &off, &ok, ",\"quality\":%d",
+				    dect_diag_quality(&d->radio));
+		}
+		if (d->radio.carrier < DECT_DIAG_CARRIERS &&
+		    dect_diag_rssi_dbm10(d->radio.rssi[d->radio.carrier]) !=
+		    DECT_DIAG_NO_DBM) {
+			int t = dect_diag_rssi_dbm10(
+				d->radio.rssi[d->radio.carrier]);
+
+			put(buf, cap, &off, &ok, ",\"dbm\":%s%d.%d",
+			    t < 0 ? "-" : "", (t < 0 ? -t : t) / 10,
+			    (t < 0 ? -t : t) % 10);
 		}
 		put(buf, cap, &off, &ok, "}");
 	}

@@ -833,6 +833,13 @@ struct stubd {
 		unsigned alert_ms;
 		int      bind_first;
 		/*
+		 * nocallstatus: no <<CALL-INFORMATION>> call status in our
+		 * answers to a handset's call. By default CONNECT carries
+		 * "CS call connect", which TS 102 527-3 §7.4.6.4.3 requires and
+		 * the Gigasets key their call timer on (clean room A-0122).
+		 */
+		int      no_call_status;
+		/*
 		 * pagehdr=N: a FOURTH payload byte on the 0x0300 page.
 		 *
 		 * [CR A-0091] corrects [CR A-0076] §2. The page builder does
@@ -4457,6 +4464,9 @@ static void main_cc_setup(struct stubd *s)
 			   s->audio.signal_value);
 	dect_cc_set_wideband(&s->reg.link.cc, !s->audio.narrowband);
 	dect_cc_set_overlap(&s->reg.link.cc, !s->audio.no_overlap);
+	dect_cc_set_call_status(&s->reg.link.cc, !s->audio.no_call_status,
+				s->audio.callinfo.has_call_id ?
+				s->audio.callinfo.call_id : 1u);
 	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
 	/* the lowest free value, 0, unless -a ti= says otherwise */
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
@@ -6191,6 +6201,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->alert_ms = (unsigned)v;
 		else if (!eq && klen == 9 && !memcmp(key, "bindfirst", 9))
 			a->bind_first = 1;
+		else if (!eq && klen == 12 && !memcmp(key, "nocallstatus", 12))
+			a->no_call_status = 1;
 		else if (klen == 8 && !memcmp(key, "pagemail", 8)) {
 			/* text, not a number: a mail spec, taken verbatim */
 			size_t n = (size_t)(spec - (eq + 1));
@@ -6635,6 +6647,8 @@ static void usage(void)
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech;\n"
 		"           0x80 with narrowband)\n"
+		"           nocallstatus no <<CALL-INFORMATION>> call status in our\n"
+		"           SETUP-ACK/CALL-PROC/ALERTING/CONNECT to a handset's call\n"
 		"           alertms=N    ALERTING after CALL-PROC, CONNECT N ms later\n"
 		"           bindfirst    bind the audio after CALL-PROC, CONNECT once\n"
 		"           it is up (EN 300 175-5 9.3.1.8)\n"

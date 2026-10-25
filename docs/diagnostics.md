@@ -340,7 +340,7 @@ error columns, confirmed in shape.
 
 | our byte | increments when |
 |---|---|
-| `[16]` | receive status `[0x12]` bit 6 clear |
+| `[16]` | receive status `[0x12]` bit 6 clear -- **ACRC** (names from the vendor's DECT application, `[CR A-0123]`: `[16]` ACRC, `[18]` XCRC, `[20]` ZCRC, `[22]` QBIT1, `[24]` QBIT2, `[26]` RXCOUNT, `[28]` HANDOVER, `[30]` SLIDEERR, `[32]` SYNCERR, `[34..35]` CONNECTTIME, `[36..39]` 32-bit uptime, `[40..43]` BER) |
 | `[18]` | receive status `[0x12]` bit 1 clear |
 | `[20]` | receive status `[0x12]` bit 0 clear |
 | `[22]` | a derived condition — resolved by `[CR A-0090]` to frame byte 0 bit 4 set |

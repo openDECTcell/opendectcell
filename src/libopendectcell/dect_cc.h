@@ -223,6 +223,8 @@ struct dect_cc {
 	uint8_t  overlap;		/* dect_cc_set_overlap() */
 	uint8_t  answered;		/* dect_cc_note_answered() */
 	uint8_t  proceeded;		/* {CC-CALL-PROC} sent on this call */
+	uint8_t  call_status;		/* dect_cc_set_call_status() */
+	uint8_t  status_call_id;
 	uint8_t  alerted;		/* {CC-ALERTING} sent on this call */
 	uint64_t overlap_deadline_ms;	/* F<CC.01> */
 
@@ -351,6 +353,23 @@ void dect_cc_set_overlap(struct dect_cc *cc, int on);
  * owner can bind its audio after dect_cc_proceed() -- dect_cc_codec() is
  * known from the SETUP -- and connect once it is up.
  */
+/*
+ * Call status in a handset-placed call (TS 102 527-3 §7.4.6.4.3): with it
+ * on, our {CC-SETUP-ACK}, {CC-CALL-PROC}, {CC-ALERTING} and {CC-CONNECT}
+ * carry <<CALL-INFORMATION>> with call id `call_id` and the matching call
+ * status (CS call setup ack / proc / alerting / connect). "CS call
+ * connect shall always be sent in the {CC-CONNECT}": a CAT-iq handset
+ * keys its call timer on it, not on CONNECT itself (clean room A-0122,
+ * from the stock capture). Lines come from dect_cc_set_callinfo() if set.
+ */
+void dect_cc_set_call_status(struct dect_cc *cc, int on, uint8_t call_id);
+
+/* Append our <<CALL-INFORMATION>> with call status `status` at b+off, if
+ * call status is on; returns the new offset (unchanged when off or it
+ * does not fit). For whoever answers a SETUP on CC's behalf (dect_link). */
+size_t dect_cc_put_call_status(const struct dect_cc *cc, uint8_t *b,
+			       size_t cap, size_t off, uint8_t status);
+
 int dect_cc_proceed(struct dect_cc *cc);
 int dect_cc_alert(struct dect_cc *cc);
 int dect_cc_connect(struct dect_cc *cc);

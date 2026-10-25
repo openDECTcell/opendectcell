@@ -49,7 +49,7 @@ static void test_decode_a_real_row(void)
 	CHECK_EQ(st.events[0], 0u);
 	CHECK_EQ(st.interval_frames, 800u);
 	CHECK_EQ(st.frames, 343u);
-	CHECK(strcmp(dect_diag_event_name(5), "unmapped") == 0);
+	CHECK(strcmp(dect_diag_event_name(5), "handover") == 0);	/* A-0123 */
 	CHECK(strcmp(dect_diag_event_name(8), "?") == 0);
 }
 
@@ -167,7 +167,7 @@ static void test_from_link_and_json(void)
 	CHECK(strstr(js, "\"slot\":2") != NULL);
 	CHECK(strstr(js, "\"call\":\"idle\"") != NULL);
 	CHECK(strstr(js, "\"carrier\":6") != NULL);
-	CHECK(strstr(js, "\"unmapped\":2") != NULL);
+	CHECK(strstr(js, "\"handover\":2") != NULL);
 	CHECK(strstr(js, "\"call_frames\":343") != NULL);
 	CHECK(js[0] == '{' && js[n - 1] == '}');
 
@@ -179,8 +179,53 @@ static void test_from_link_and_json(void)
 	CHECK_EQ(tiny[0], '\0');
 }
 
+/*
+ * FRITZ!OS's numbers (clean room A-0121): dBm from the raw RSSI, and the
+ * Quality % from it and the error counters over CONNECTTIME [0x22]; the
+ * 32-bit frame count at [0x24] (A-0123).
+ */
+static void test_dbm_and_quality(void)
+{
+	uint8_t row[0x2D];
+	struct dect_diag_status st;
+
+	CHECK_EQ(dect_diag_rssi_dbm10(30), -884);	/* A-0121: -88.4 */
+	CHECK_EQ(dect_diag_rssi_dbm10(33), -819);	/* -81.9 */
+	CHECK_EQ(dect_diag_rssi_dbm10(59), -257);	/* -25.7 */
+	CHECK_EQ(dect_diag_rssi_dbm10(0), DECT_DIAG_NO_DBM);
+	CHECK_EQ(dect_diag_rssi_dbm10(255), DECT_DIAG_NO_DBM);
+
+	memset(row, 0, sizeof(row));
+	row[3] = 4;				/* carrier */
+	row[6 + 4] = 59;			/* -25.7 dBm: q_rssi 100 */
+	row[0x22] = 0x20; row[0x23] = 0x03;	/* CONNECTTIME 800 */
+	row[0x24] = 0x01; row[0x26] = 0x01;	/* uptime 0x00010001 */
+	CHECK_EQ(dect_diag_decode_status(row, sizeof(row), &st), 0);
+	CHECK_EQ(st.connect_frames, 800u);
+	CHECK_EQ(st.uptime, 0x10001u);
+	CHECK_EQ(dect_diag_quality(&st), 100);	/* no errors */
+
+	row[0x10] = 8;				/* ACRC 8 of 800: 99 % good */
+	dect_diag_decode_status(row, sizeof(row), &st);
+	CHECK_EQ(dect_diag_quality(&st), 90);
+
+	row[0x10] = 100;			/* 87 % good */
+	dect_diag_decode_status(row, sizeof(row), &st);
+	CHECK_EQ(dect_diag_quality(&st), 5);
+
+	row[0x10] = 0;
+	row[6 + 4] = 33;			/* -81.9 dBm: q_rssi 20 */
+	dect_diag_decode_status(row, sizeof(row), &st);
+	CHECK_EQ(dect_diag_quality(&st), 20);
+
+	row[0x22] = 0; row[0x23] = 0;		/* no frames: nothing to judge */
+	dect_diag_decode_status(row, sizeof(row), &st);
+	CHECK_EQ(dect_diag_quality(&st), -1);
+}
+
 int main(void)
 {
+	test_dbm_and_quality();
 	test_decode_a_real_row();
 	test_short_rows();
 	test_frames_unwrap();
