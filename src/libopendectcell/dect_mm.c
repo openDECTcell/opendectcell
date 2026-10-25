@@ -390,6 +390,13 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	if (la && la_len)
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_LOCATION_AREA, la, la_len);
+	if (mm->cfg.locate_validity) {
+		/* no lock limits, defined time limit 1 (§7.7.13) */
+		const uint8_t dur[2] = { 0x71, mm->cfg.locate_validity };
+
+		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+				      DECT_IE_DURATION, dur, sizeof(dur));
+	}
 	off = put_codec_list(mm, b, off);	/* TS 102 527-1 7.3.1 */
 	txq_commit(mm, idx, off);
 	mm->stats.located++;

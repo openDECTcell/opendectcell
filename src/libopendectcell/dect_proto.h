@@ -212,8 +212,12 @@
  *    With mm.cfg.defer_unknown, a {CC-SETUP} from an IPUI the link cannot
  *    adopt is held instead of turned away: a handset moving within one
  *    location area calls without locating (multi-cell test M4).
+ *
+ * 20: location validity (2026-10-25). Layout change: dect_mm_cfg gains
+ *    locate_validity. Non-zero adds <<DURATION>> to {LOCATE-ACCEPT}, so
+ *    the PT locates again after that many 40.96 s units.
  */
-#define OPENDECTCELL_API_VERSION 19
+#define OPENDECTCELL_API_VERSION 20
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

@@ -573,6 +573,7 @@ struct stubd {
 		int      no_chip_keys;	/* nochipkeys, multi-cell test M2 */
 		const char *remote_path;	/* remote=PATH, test M4 */
 		unsigned fetch_delay_ms;	/* fetchdelay=MS, test M4 */
+		unsigned locate_validity;	/* locvalid=N x 40.96 s, M4 */
 		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
 		/*
@@ -4251,6 +4252,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	 * new handset needs a store of its own as the first -s.
 	 */
 	mcfg.defer_unknown = s->audio.remote_path != NULL;
+	mcfg.locate_validity = (uint8_t)s->audio.locate_validity;
 	s->fetch_at = 0;
 	s->fetch_req_ms = 0;
 	s->fetch_retrans_seen = 0;
@@ -6101,6 +6103,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->remote_path = path;
 		} else if (klen == 10 && !memcmp(key, "fetchdelay", 10)) {
 			a->fetch_delay_ms = (unsigned)v;
+		} else if (klen == 8 && !memcmp(key, "locvalid", 8)) {
+			if (v > 255)
+				return -1;
+			a->locate_validity = (unsigned)v;
 		} else if (!eq && klen == 10 && !memcmp(key, "nochipkeys", 10)) {
 			a->no_chip_keys = 1;
 		} else if (klen == 8 && !memcmp(key, "holdback", 8)) {

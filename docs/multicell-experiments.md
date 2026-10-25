@@ -219,7 +219,7 @@ on-demand fetching far tighter than the standard promises.
 | run | delay | result |
 |---|---|---|
 | `M4-2000-045441` | 2 s | the A540's `{LOCATE-REQUEST}` held, record "fetched", **`{LOCATE-ACCEPT}` at +2.000 s**, TPUI acknowledged: it registered with a cell that did not know it two seconds earlier |
-| `M4-15000-045732` | 15 s | **void**: the A540 sent **no** `{LOCATE-REQUEST}`; it came straight back with its list-access `{CC-SETUP}`, which the CC gate turned away (`0x0A`), twice |
+| `M4-15000-045732` | 15 s | **void**: the A540 sent **no** `{LOCATE-REQUEST}`; it came straight back with its list-access `{CC-SETUP}`, which the CC gate turned away (`0x0A`) -- and it kept trying: **120 turn-aways, one every ~2.4 s, for the whole 300 s** |
 
 The 15 s run is the finding. Three minutes after an accepted location
 registration, with the same RFPI and location area, the A540 considered
@@ -249,3 +249,74 @@ A tool for M4's longer delays: our `{LOCATE-ACCEPT}` may carry <<DURATION>>
 (§13.4.1), a validity after which the PT must locate again. A short one
 would make the A540 re-locate on demand; not built yet. Until then a long
 radio-off pause is the only way to trigger a fresh location registration.
+
+### M4 at 15 s and 30 s: void twice; a radio-off pause does not make the A540 locate `[2026-10-25 05:09-05:25 box time]`
+
+Each run came after six minutes with the radio parked, to trigger a fresh
+location registration.
+
+| run | delay | result |
+|---|---|---|
+| `M4-15000-050948` | 15 s | **void**: the AS690H located at 5.8 s (its record is held: accepted at once); the A540 sent nothing in 300 s |
+| `M4-30000-052049` | 30 s | **void**, the same: the AS690H located at 44 s; nothing from the A540 |
+
+So the variable never arrived (no `{LOCATE-REQUEST}` from the roamer), and
+the 30 s and 45 s rows of the M4 table stay open. What the runs do show:
+
+- **A six-minute outage does not trigger a location registration on the
+  A540.** The AS690H does re-locate after one. That is two models with two
+  policies, and both are allowed: §13.4 leaves the triggers to the PT
+  beyond "new location area" and "switch-on".
+- The A540 that retried its list access 120 times in `045732` did **not**
+  retry it after the outage. Whether it found the base again within 300 s
+  cannot be told from our side: a camped, located Gigaset with nothing to
+  do is silent. The bench card asks for a look at its display.
+
+The pause method for M4 is therefore dead. The longer delays need either
+<<DURATION>> in our `{LOCATE-ACCEPT}` (see above) or a person pressing
+"register" (*Anmelden*) on the A540 while the run is up.
+
+### M5: a held `{CC-SETUP}` from a roamer (API 19) `[pre-commit]`
+
+Build `16486cb` (`e89f0955`) holds an unknown `{CC-SETUP}` in `dect_link`
+and serves it once the record arrives. The daemon "fetches" it after
+`fetchdelay`. Run: `m4.sh 2000` with the A540 as `remote=`, the other two
+held, up to 300 s.
+
+| seen | meaning |
+|---|---|
+| `fetch: CC-SETUP from a handset this cell does not hold`, then `CC-SETUP served at +2000 ms`, then our `{CC-CONNECT}` and list-access traffic | API 19 works on hardware: a roamer that skips location registration is served after a fetch |
+| the SETUP held, but the A540 releases or sends a new SETUP before +2 s | its CC timer is far shorter than `<CC.03>` (20 s); then on-demand fetching for calls needs a pre-pushed record (option 2) |
+| `CC-SETUP served`, then the A540 drops the link right after our reply | the late reply broke something in its CC state; keep the log |
+| `fetch: LOCATE-REQUEST ...` first, then a held SETUP | the M4 2 s case again, now with its list access held instead of turned away |
+| nothing from the A540 in 300 s | void, as in the two runs above |
+
+**Falsifying:** the held SETUP is served but the A540 turns out to have
+abandoned that transaction (a release from it right after our reply).
+
+### M6: does a Gigaset honour <<DURATION>> in `{LOCATE-ACCEPT}`? `[pre-commit]`
+
+The tool M4's longer delays need. API 20 (`locvalid=N`) puts <<DURATION>>
+"defined time limit 1", N x 2^8 multiframes = N x 40.96 s, into every
+`{LOCATE-ACCEPT}` (EN 300 175-5 §7.7.13, table 54). §13.4.1 names "expiry
+of validity of previous location registration" as a reason to locate in the
+same area.
+
+**M6a**, no ring: all three stores held, `locvalid=1`, 240 s. The AS690H
+locates on radio-up by itself (M4 voids), so it is the subject; the A540
+only if it shows up.
+
+| seen | meaning |
+|---|---|
+| the AS690H locates again ~41 s after each accept (41, 82, ... s) | it honours <<DURATION>>: M4 can make a handset locate on demand |
+| it locates again, but not at ~41 s multiples | it honours a validity, with its own reading of the unit; note the interval |
+| one `{LOCATE-REQUEST}` only | it ignores <<DURATION>> (or treats it as a floor, "at least", §13.4.1 wording); M4's long delays need a person |
+| it locates again at once, repeatedly | it cannot parse our element; stop, keep the log |
+
+**Falsifying** (for the method): a handset that drops its registration
+when the validity runs out, instead of renewing it.
+
+**M6b**, only if M6a shows renewal: ring the A540 once with `locvalid=1`
+(paging makes it locate, M2'), park, then M6a again. Its validity has
+expired by then, so it should locate as soon as it sees the base: that
+`{LOCATE-REQUEST}` is the one M4's 30 s and 45 s rows need.

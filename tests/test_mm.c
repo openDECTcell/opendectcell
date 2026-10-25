@@ -917,6 +917,37 @@ static void test_deferred_locate_for_a_roamer(void)
 	CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_UNKNOWN);
 }
 
+/* <<DURATION>> sits after <<LOCATION-AREA>> (table 54), only when set */
+static void test_locate_validity_adds_a_duration(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t dur[] = { DECT_IE_DURATION, 0x02, 0x71, 0x03 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	const uint8_t *la;
+	size_t n, len;
+	int pass;
+
+	for (pass = 0; pass < 2; pass++) {
+		cfg.locate_validity = pass ? 3 : 0;
+		dect_mm_init(&mm, &cfg);
+		memcpy(mm.port_id, ours, sizeof(ours));
+		mm.port_id_len = sizeof(ours);
+		n = locate_ti(buf, sizeof(buf), 0, ours, sizeof(ours));
+		dect_mm_rx(&mm, buf, n, NULL, NULL);
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+		CHECK_EQ(dect_nwk_find_ie(&out[2], n - 2, DECT_IE_DURATION,
+					  &len) != NULL, pass);
+		la = dect_nwk_find_ie(&out[2], n - 2, DECT_IE_LOCATION_AREA,
+				      &len);
+		CHECK(la != NULL);
+		if (pass && la)
+			CHECK(memcmp(la + len, dur, sizeof(dur)) == 0);
+	}
+}
+
 int main(void)
 {
 	test_locate_request_from_a_stranger_is_rejected();
@@ -927,6 +958,7 @@ int main(void)
 	test_hold_rejects_what_it_cannot_serve();
 	test_registration_policy();
 	test_deferred_locate_for_a_roamer();
+	test_locate_validity_adds_a_duration();
 	test_locate_request_without_identity_is_rejected();
 	test_locate_request_with_no_subscription_is_rejected();
 	test_failed_registration_keeps_the_held_identity();

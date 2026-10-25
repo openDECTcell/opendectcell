@@ -128,6 +128,14 @@ struct dect_mm_cfg {
 	 * The PT waits <MM_locate.1> = 20 s, retransmits once, then aborts.
 	 */
 	uint8_t defer_unknown;
+	/*
+	 * Validity of a location registration, in units of 2^8 multiframes
+	 * (40.96 s): {LOCATE-ACCEPT} carries <<DURATION>> "defined time
+	 * limit 1" (EN 300 175-5 §7.7.13), after which the PT locates again
+	 * (§13.4.1). 0 = no <<DURATION>>, i.e. infinite. For tests that need
+	 * a handset to locate on demand (multi-cell M4).
+	 */
+	uint8_t locate_validity;
 };
 
 struct dect_mm_stats {
