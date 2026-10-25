@@ -774,10 +774,12 @@ static void test_peer_basic_service_decides_speech(void)
 		/*
 		 * The call itself is answered either way -- list access works.
 		 * A LiA service call (class 0010) is only CALL-PROC'd, never
-		 * connected (TS 102 527-3 7.4.10.6.1); every other class is
-		 * taken through to CONNECT.
+		 * connected (TS 102 527-3 7.4.10.6.1), and an internal call
+		 * (class 1001) waits for the owner to reach the other handset;
+		 * every other class is taken through to CONNECT.
 		 */
-		CHECK_EQ(cc.state, (cases[i].svc >> 4) == 0x2u
+		CHECK_EQ(cc.state, (cases[i].svc >> 4) == 0x2u ||
+			 (cases[i].svc >> 4) == 0x9u
 			 ? DECT_CC_ST_PROCEEDING : DECT_CC_ST_ACTIVE);
 	}
 }
@@ -1857,6 +1859,14 @@ static void test_internal_call_waits_for_the_owner(void)
 	CHECK_EQ(dect_cc_alert(&cc), 0);		/* the owner's steps */
 	CHECK_EQ(dect_cc_connect(&cc), 0);
 	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+
+	/* without overlap receiving too (review, finding 12) */
+	dect_cc_init(&cc);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x98);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
 }
 
 /* F<CC.01>: 20 s, restarted by every CC-INFO, then "timer expiry". */

@@ -336,6 +336,10 @@ uint8_t dect_cc_codec(const struct dect_cc *cc);
  * Off: CALL-PROC and CONNECT at once, the digits arriving after CONNECT
  * (GAP figure 2, legal, but the Gigasets then show neither "connected"
  * nor a call timer -- bench test 2, 2026-10-25).
+ *
+ * Either way an internal call (call class 9) is never connected by CC:
+ * with its number complete it waits in DECT_CC_ST_PROCEEDING until the
+ * owner has reached the other handset (dect_cc_alert/connect()).
  */
 void dect_cc_set_overlap(struct dect_cc *cc, int on);
 

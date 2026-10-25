@@ -229,6 +229,7 @@ struct handset {
 	int      cc_id_learned;
 	uint64_t last_seen_ms;	/* runtime only: last segment from it */
 	int      remote;	/* remote=: a roamer the cell must fetch */
+	int      absent;	/* the file does not exist: free for enrolment */
 	int      fetched;	/* ... and has, this run */
 };
 
@@ -248,6 +249,7 @@ struct side_link {
 	int      adopted;	/* handset table index, -1 = nobody yet */
 	uint32_t rejected_seen;
 	int      lane;		/* -a twocalls: its xlane, -1 = none */
+	int      ic_tried;	/* this call was checked for internal */
 	size_t   dial_len;	/* overlap receiving, as on the main link */
 	uint64_t dial_change_ms;
 	struct dect_link link;
@@ -263,6 +265,7 @@ struct side_link {
  * lane2= / lane3= override.
  */
 #define XLANE_MAX	2u
+#define IC_PARTY_NONE	(-2)	/* an internal-call party with no link yet */
 
 struct xlane {
 	int      used;		/* bound to a side link's call */
@@ -312,10 +315,11 @@ struct stubd {
 		enum { IC_IDLE, IC_PAGING, IC_SETUP, IC_RINGING, IC_UP } st;
 		int      caller;	/* -1 the main link, else a side index */
 		int      target;	/* handset table index */
-		int      tside;		/* the target's side link, -1 */
+		int      tside;		/* the target's link: as caller, or IC_NONE */
 		uint8_t  tpui[3];
 		unsigned pages;
 		uint64_t page_at;
+		int      warned;	/* codec mismatch reported */
 	} ic;
 	/* The registration window: open now, and until when (0 = no limit). */
 	int      reg_open;
@@ -1164,6 +1168,7 @@ struct stubd {
 		int cipher_done;	/* cipher outcome already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
 		int enrol_routed;	/* this enrolment's store is chosen */
+		int enrol_switched;	/* ... and it moved off store 0 */
 		int ic_tried;		/* this call was checked for internal */
 		size_t   dial_len;	/* digits seen so far in OVERLAP */
 		uint64_t dial_change_ms;	/* when the last ones arrived */
@@ -1738,12 +1743,15 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		 * and visible in vF411 as dir1 8001 -> 0000 one second in).
 		 * There is nothing useful to send in that window.
 		 */
-		if (s->ic.st == IC_UP && s->ic.caller < 0 && rx &&
-		    s->reg.call_bound && ic_word(s, s->ic.tside) >= 0 &&
+		if (s->ic.st == IC_UP && rx && s->reg.call_bound &&
+		    ic_word(s, s->ic.caller == -1 ? s->ic.tside :
+			    s->ic.tside == -1 ? s->ic.caller :
+			    IC_PARTY_NONE) >= 0 &&
 		    s->audio.tone_word < s->slots) {
-			/* internal call: lane 0 hears the target's uplink */
-			const uint8_t *p = rx + (f * s->slots +
-				(unsigned)ic_word(s, s->ic.tside)) * 2u;
+			/* internal call: lane 0 hears the other party */
+			const uint8_t *p = rx + (f * s->slots + (unsigned)
+				ic_word(s, s->ic.caller == -1 ? s->ic.tside :
+					s->ic.caller)) * 2u;
 
 			fr[s->audio.tone_word * 2u] = p[0];
 			fr[s->audio.tone_word * 2u + 1u] = p[1];
@@ -4616,7 +4624,7 @@ static int hs_free(const struct stubd *s)
 	unsigned i;
 
 	for (i = 0; i < s->n_hs; i++)
-		if (!s->hs[i].loaded && !s->hs[i].remote)
+		if (!s->hs[i].loaded && !s->hs[i].remote && s->hs[i].absent)
 			return (int)i;
 	return -1;
 }
@@ -4663,7 +4671,13 @@ static void reg_window(struct stubd *s, int open, unsigned secs,
 /* SIGUSR1 opens a window; a timed one closes itself. */
 static void reg_window_tick(struct stubd *s, uint64_t now)
 {
-	if (s->sess.state != DECT_SESS_UP || s->tx_slot < 0)
+	/*
+	 * Not before the start-up mails are out: one of them sets the chip's
+	 * registration mode, and it would undo a window opened earlier
+	 * (review, finding 11).
+	 */
+	if (s->sess.state != DECT_SESS_UP || s->tx_slot < 0 ||
+	    s->xmail_idx < s->n_xmail)
 		return;
 	if (want_register) {
 		want_register = 0;
@@ -4701,6 +4715,7 @@ static void enrol_route(struct stubd *s)
 		return;
 	}
 	hs_switch(s, (unsigned)target, " (enrolment)");
+	s->reg.enrol_switched = 1;	/* undone if the PIN fails */
 	s->reg.link.mm.cfg.sub_slot = stubd_sub_slot(s);
 	snprintf(name, sizeof(name), "DECT %u", (unsigned)stubd_sub_slot(s));
 	dect_iwu_add_handset(&s->reg.link.cc.iwu, stubd_sub_slot(s), name);
@@ -4772,6 +4787,8 @@ static void main_cc_setup(struct stubd *s)
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
 }
 
+static void xlane_release(struct stubd *s, struct side_link *sl);
+
 static void reg_start(struct stubd *s, uint8_t handle)
 {
 	struct dect_mm_cfg mcfg;
@@ -4782,8 +4799,10 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	{
 		struct side_link *sl = side_find(s, handle);
 
-		if (sl)
+		if (sl) {
+			xlane_release(s, sl);	/* never leak its lane */
 			sl->active = 0;		/* the main link takes it */
+		}
 	}
 	memset(&mcfg, 0, sizeof(mcfg));
 	/* subslot=N wins, else the slot the store was saved with, else 0 --
@@ -4814,6 +4833,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
 	s->reg.enrol_routed = 0;
+	s->reg.enrol_switched = 0;
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
 	s->reg.handle = handle;
@@ -4975,6 +4995,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
 	sl->lane = -1;
+	sl->ic_tried = 0;
 	sl->dial_len = 0;
 	sl->dial_change_ms = 0;
 	sl->active = 1;
@@ -4998,6 +5019,29 @@ static int xlane_free(const struct stubd *s)
 		if (!s->xl[i].used)
 			return (int)i;
 	return -1;
+}
+
+/*
+ * Lanes a new side call can still count on: free ones, less those that
+ * side calls accepted but not yet connected will take (review, finding 6:
+ * one free lane used to admit any number of calls).
+ */
+static int lanes_available(const struct stubd *s, const struct side_link *me)
+{
+	int n = 0;
+	unsigned i;
+
+	for (i = 0; i < XLANE_MAX; i++)
+		if (!s->xl[i].used)
+			n++;
+	for (i = 0; i < SIDE_MAX; i++) {
+		const struct side_link *o = &s->side[i];
+
+		if (o != me && o->active && o->lane < 0 &&
+		    dect_cc_busy(&o->link.cc))
+			n--;
+	}
+	return n;
 }
 
 static struct xlane *xlane_of(struct stubd *s, uint8_t handle)
@@ -5113,7 +5157,18 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 
 	if (!s->audio.two_calls)
 		return;
-	dect_cc_set_busy(cc, !(sl->lane >= 0 || xlane_free(s) >= 0));
+	if (!dect_cc_busy(cc))	/* decided for the next SETUP only */
+		dect_cc_set_busy(cc, sl->lane < 0 &&
+				 lanes_available(s, sl) <= 0);
+	if (cc->state == DECT_CC_ST_PROCEEDING && !cc->incoming &&
+	    !sl->ic_tried && (cc->peer_basic_service >> 4) == 0x9u) {
+		sl->ic_tried = 1;	/* sent complete: route it now */
+		(void)ic_start(s, (int)(sl - s->side), now);
+		dect_link_drain(&sl->link, now);
+		side_pump(s, sl);
+	}
+	if (!dect_cc_busy(cc))
+		sl->ic_tried = 0;
 	if (cc->state == DECT_CC_ST_OVERLAP) {
 		size_t len;
 
@@ -5125,6 +5180,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 			   s->audio.dial_wait_ms) {
 			printf("side: dialled on handle %u -- connecting\n",
 			       sl->handle);
+			sl->ic_tried = 1;
 			if (ic_start(s, (int)(sl - s->side), now) ||
 			    dect_cc_accept(cc) == 0) {
 				dect_link_drain(&sl->link, now);
@@ -5149,6 +5205,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 /* -------------------------------------------------------------------------
  * Internal call
  */
+#define IC_NONE		IC_PARTY_NONE	/* -1 is the main link */
 #define IC_PAGES	20u
 #define IC_PAGE_MS	3000u
 #define IC_BASIC_SVC	0x98u	/* internal call, wideband speech */
@@ -5169,6 +5226,31 @@ static void hs_cc_ids(const struct stubd *s, unsigned i, const uint8_t **port,
 		*port = s->hs[i].cc_port_id; *plen = s->hs[i].cc_port_id_len;
 		*fixed = s->hs[i].cc_fixed_id; *flen = s->hs[i].cc_fixed_id_len;
 	}
+}
+
+static int ic_active(const struct stubd *s, int p)
+{
+	return p == -1 ? s->reg.active : p >= 0 && s->side[p].active;
+}
+
+static struct dect_link *ic_link(struct stubd *s, int p)
+{
+	return p == -1 ? &s->reg.link : &s->side[p].link;
+}
+
+static void ic_drain(struct stubd *s, int p, uint64_t now)
+{
+	dect_link_drain(ic_link(s, p), now);
+	if (p == -1)
+		pump_lapc(s);
+	else
+		side_pump(s, &s->side[p]);
+}
+
+/* the party has its audio channel bound */
+static int ic_has_lane(const struct stubd *s, int p)
+{
+	return p == -1 ? s->reg.call_bound : p >= 0 && s->side[p].lane >= 0;
 }
 
 static void ic_page(struct stubd *s)
@@ -5217,6 +5299,13 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 		(void)dect_cc_release(cc);
 		return 1;
 	}
+	/* lanes: the target lands on a side link; a side caller needs its own */
+	if (lanes_available(s, side >= 0 ? &s->side[side] : NULL) <
+	    (side >= 0 ? 2 : 1)) {
+		printf("intern: no free audio channel -- releasing\n");
+		(void)dect_cc_release(cc);
+		return 1;
+	}
 	for (i = 0; i < s->n_hs; i++)
 		if (s->hs[i].loaded && hs_slot(s, i) == slot)
 			break;
@@ -5235,19 +5324,19 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 	s->ic.st = IC_PAGING;
 	s->ic.caller = side;
 	s->ic.target = (int)i;
-	s->ic.tside = -1;
+	s->ic.tside = IC_NONE;
 	s->ic.pages = 0;
 	s->ic.page_at = now;
+	s->ic.warned = 0;
 	printf("intern: %s calls DECT %u (%s)\n",
 	       side < 0 ? "the main link's handset" : "a side link's handset",
 	       slot, s->hs[i].path);
 	return 1;
 }
 
-static void ic_setup(struct stubd *s, struct side_link *sl, uint64_t now,
-		     const char *how);
+static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how);
 
-/* The target answered our page on side link sl: call it there. */
+/* The target answered our page on side link sl (NULL: the main link). */
 static void ic_target_link(struct stubd *s, struct side_link *sl,
 			   const struct dect_link_ind *ind, uint64_t now)
 {
@@ -5260,7 +5349,7 @@ static void ic_target_link(struct stubd *s, struct side_link *sl,
 	if (!plen || ind->page_id_len != plen ||
 	    memcmp(ind->page_id, port, plen))
 		return;
-	ic_setup(s, sl, now, "answered the page");
+	ic_setup(s, sl ? (int)(sl - s->side) : -1, now, "answered the page");
 }
 
 /*
@@ -5268,35 +5357,37 @@ static void ic_target_link(struct stubd *s, struct side_link *sl,
  * response, or once the link has adopted it (the A540 answers a page with
  * a location registration, M2' and 12b).
  */
-static void ic_setup(struct stubd *s, struct side_link *sl, uint64_t now,
-		     const char *how)
+static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 {
 	const uint8_t *port, *fixed;
 	size_t plen, flen;
+	struct dect_link *l = ic_link(s, p);
 
 	hs_cc_ids(s, (unsigned)s->ic.target, &port, &plen, &fixed, &flen);
-	if (!plen || dect_cc_busy(&sl->link.cc))
+	if (!plen || p == s->ic.caller || dect_cc_busy(&l->cc))
 		return;
-	dect_cc_set_next_ti(&sl->link.cc, 0);
-	if (dect_cc_setup_id(&sl->link.cc, port, plen, fixed, flen,
-			     IC_BASIC_SVC, NULL)) {
+	dect_cc_set_next_ti(&l->cc, 0);
+	if (dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
+			     s->audio.narrowband ? 0x90u : IC_BASIC_SVC, NULL)) {
 		printf("intern: could not queue the SETUP to the target\n");
 		return;
 	}
-	s->ic.tside = (int)(sl - s->side);
+	s->ic.tside = p;
 	s->ic.st = IC_SETUP;
-	printf("intern: the target %s on side link %u -- SETUP sent\n",
-	       how, sl->handle);
-	dect_link_drain(&sl->link, now);
-	side_pump(s, sl);
+	printf("intern: the target %s on %s link %u -- SETUP sent\n", how,
+	       p == -1 ? "the main" : "side", p == -1 ? s->reg.handle :
+	       s->side[p].handle);
+	ic_drain(s, p, now);
 }
 
 static void ic_end(struct stubd *s, const char *why)
 {
 	printf("intern: call ended (%s)\n", why);
 	s->ic.st = IC_IDLE;
-	s->ic.tside = -1;
+	s->ic.tside = IC_NONE;
 }
+
+static int ic_wideband(const struct stubd *s, int p);
 
 static void ic_tick(struct stubd *s, uint64_t now)
 {
@@ -5305,13 +5396,11 @@ static void ic_tick(struct stubd *s, uint64_t now)
 	if (s->ic.st == IC_IDLE)
 		return;
 	c = ic_cc(s, s->ic.caller);
-	if ((s->ic.caller >= 0 && !s->side[s->ic.caller].active) ||
-	    (s->ic.caller < 0 && !s->reg.active) || !dect_cc_busy(c)) {
-		if (s->ic.tside >= 0 && s->side[s->ic.tside].active &&
+	if (!ic_active(s, s->ic.caller) || !dect_cc_busy(c)) {
+		if (s->ic.tside != IC_NONE && ic_active(s, s->ic.tside) &&
 		    dect_cc_busy(ic_cc(s, s->ic.tside))) {
 			(void)dect_cc_release(ic_cc(s, s->ic.tside));
-			dect_link_drain(&s->side[s->ic.tside].link, now);
-			side_pump(s, &s->side[s->ic.tside]);
+			ic_drain(s, s->ic.tside, now);
 		}
 		ic_end(s, "the caller hung up");
 		return;
@@ -5323,8 +5412,17 @@ static void ic_tick(struct stubd *s, uint64_t now)
 			if (s->side[k].active &&
 			    s->side[k].adopted == s->ic.target &&
 			    !dect_cc_busy(&s->side[k].link.cc))
-				ic_setup(s, &s->side[k], now,
+				ic_setup(s, (int)k, now,
 					 "came up (adopted, no page response)");
+		/* or the main link, if the caller is not on it (finding 5) */
+		if (s->ic.st == IC_PAGING && s->ic.caller != -1 &&
+		    s->reg.active && !dect_cc_busy(&s->reg.link.cc) &&
+		    (s->reg.link.mm.adopted == s->ic.target ||
+		     (s->reg.link.mm.adopted < 0 &&
+		      s->cur == (unsigned)s->ic.target &&
+		      s->reg.link.mm.port_id_len)))
+			ic_setup(s, -1, now,
+				 "came up (adopted, no page response)");
 		if (s->ic.st != IC_PAGING)
 			return;
 		if (now >= s->ic.page_at) {
@@ -5338,7 +5436,7 @@ static void ic_tick(struct stubd *s, uint64_t now)
 		}
 		return;
 	}
-	if (s->ic.tside < 0 || !s->side[s->ic.tside].active ||
+	if (s->ic.tside == IC_NONE || !ic_active(s, s->ic.tside) ||
 	    !dect_cc_busy(ic_cc(s, s->ic.tside))) {
 		(void)dect_cc_release(c);
 		ic_end(s, "the target hung up or refused");
@@ -5355,16 +5453,47 @@ static void ic_tick(struct stubd *s, uint64_t now)
 		s->ic.st = IC_UP;
 		printf("intern: the target answered -- connected, bridging\n");
 	}
+	if (s->ic.st == IC_UP && !s->ic.warned &&
+	    ic_wideband(s, s->ic.caller) != ic_wideband(s, s->ic.tside) &&
+	    ic_has_lane(s, s->ic.caller) && ic_has_lane(s, s->ic.tside)) {
+		s->ic.warned = 1;
+		printf("intern: the two calls use different codecs -- no "
+		       "bridge (no transcoder yet), the parties hear silence\n");
+	}
 }
 
-/* The TDM word of an internal call party: lane 0, or its side's xlane. */
+/* Is internal-call party p's lane the coded (wideband) one? */
+static int ic_wideband(const struct stubd *s, int p)
+{
+	if (p == IC_NONE)
+		return 0;
+	return p < 0 ? s->reg.call_wideband
+		     : s->side[p].lane >= 0 && s->xl[s->side[p].lane].wideband;
+}
+
+/*
+ * The TDM word of an internal call party: lane 0, or its side's xlane; -1
+ * while it has none, when the word is out of the frame (review, finding
+ * 10), or when the two parties' lanes differ in mode -- a coded G.722 word
+ * copied into a linear lane is noise, and there is no transcoder yet
+ * (finding 7).
+ */
 static int ic_word(const struct stubd *s, int side)
 {
-	if (side < 0)
-		return s->reg.call_bound ? (int)s->audio.tone_word : -1;
-	if (s->side[side].lane < 0 || !s->xl[s->side[side].lane].connected)
+	int w;
+
+	if (side == IC_NONE || (s->ic.st == IC_UP &&
+	    ic_wideband(s, s->ic.caller) != ic_wideband(s, s->ic.tside)))
 		return -1;
-	return (int)s->xl[s->side[side].lane].word;
+	if (side < 0)
+		w = s->reg.call_bound ? (int)s->audio.tone_word : -1;
+	else if (s->side[side].lane < 0 ||
+		 !s->xl[s->side[side].lane].connected)
+		w = -1;
+	else
+		w = (int)s->xl[s->side[side].lane].word;
+	return w >= 0 && (unsigned)w < s->slots &&
+	       w != s->tx_slot ? w : -1;
 }
 
 static void side_pump(struct stubd *s, struct side_link *sl)
@@ -5402,14 +5531,16 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	int old_main;
 	uint8_t h;
 
+	/* not mid-enrolment either: a side link cannot persist a key */
 	if (s->ring_state != RING_WAIT_PAGE_RESP || !s->reg.active ||
 	    !tgt_len || ind->page_id_len != tgt_len ||
 	    memcmp(ind->page_id, tgt, tgt_len) != 0 ||
 	    s->reg.call_bound || dect_cc_busy(&s->reg.link.cc) ||
+	    s->reg.link.mm.state == DECT_MM_WAIT_AUTH ||
 	    dect_cc_busy(&sl->link.cc))
 		return 0;
-	old_main = s->reg.link.mm.adopted >= 0 ? s->reg.link.mm.adopted
-					       : (int)s->cur;
+	old_main = s->reg.link.mm.adopted >= 0 ? s->reg.link.mm.adopted :
+		   s->reg.link.mm.port_id_len ? (int)s->cur : -1;
 	tmp = s->reg.link;
 	s->reg.link = sl->link;
 	sl->link = tmp;
@@ -5425,10 +5556,14 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	dect_cc_set_busy(&sl->link.cc, 1);
 	sl->rejected_seen = sl->link.cc.stats.rejected_identity;
 
-	/* the new main serves the target, with the main link's policies */
-	if (s->reg.link.mm.adopted >= 0)
-		hs_switch(s, (unsigned)s->reg.link.mm.adopted,
-			  " (promoted side link)");
+	/*
+	 * The new main serves the target: the page response matched the ring
+	 * target (hs[0]), whether or not its link has adopted anyone yet --
+	 * a page response does not adopt (review, finding 2).
+	 */
+	hs_switch(s, s->reg.link.mm.adopted >= 0 ?
+		  (unsigned)s->reg.link.mm.adopted : 0u,
+		  " (promoted side link)");
 	s->reg.link.mm.cfg.registration = reg_policy(s);
 	s->reg.link.mm.cfg.defer_unknown = s->audio.remote_path != NULL;
 	s->reg.link.mm.cfg.locate_validity =
@@ -5438,6 +5573,13 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->reg.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
 	s->reg.enrol_routed = 0;
+	s->reg.enrol_switched = 0;
+	/* what reg_start() resets for a new connection (review, finding 8) */
+	s->reg.persisted = 0;
+	s->reg.cipher_started = 0;
+	s->reg.cipher_done = 0;
+	s->reg.audio_connected = 0;
+	s->reg.time_sent_for = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
 	       "link; handle %u (%s) is a side link now\n", s->reg.handle,
 	       sl->handle, (unsigned)old_main < s->n_hs ?
@@ -5620,6 +5762,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 */
 	size_t tgt_len;
 	const uint8_t *tgt = ring_target_port_id(s, &tgt_len);
+
+	/* an internal call's target answering on the main link (finding 5) */
+	if (ind.page_response && s->ic.st == IC_PAGING && s->ic.caller != -1) {
+		ic_target_link(s, NULL, &ind, now);
+		if (s->ic.st == IC_SETUP)
+			ind.page_response = 0;
+	}
 
 	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP &&
 	    tgt_len && (ind.page_id_len != tgt_len ||
@@ -5924,8 +6073,17 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	    s->reg.link.mm.state == DECT_MM_REGISTERED)
 		printf("reg: handset registered\n");
 	else if (s->reg.link.mm.state != s->reg.reported_state &&
-		 s->reg.link.mm.state == DECT_MM_FAILED)
+		 s->reg.link.mm.state == DECT_MM_FAILED) {
 		printf("reg: registration rejected\n");
+		/* back to the ring target's store (review, finding 13) */
+		if (s->reg.enrol_switched) {
+			s->reg.enrol_switched = 0;
+			hs_switch(s, 0, " (enrolment failed)");
+			s->reg.link.mm.cfg.sub_slot = stubd_sub_slot(s);
+		}
+	}
+	if (s->reg.link.mm.state == DECT_MM_REGISTERED)
+		s->reg.enrol_switched = 0;
 	s->reg.reported_state = s->reg.link.mm.state;
 
 	/*
@@ -6134,6 +6292,23 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 				       "while this link is busy -- keeping "
 				       "state\n", h);
 				break;
+			}
+			/*
+			 * A repeat for a side link that carries a call (or holds
+			 * a lane): keep it there. reg_start() would take the
+			 * handle over and drop the call with its lane (review,
+			 * 2026-10-25, finding 1).
+			 */
+			{
+				struct side_link *sl = side_find(s, h);
+
+				if (sl && (sl->lane >= 0 ||
+					   dect_cc_busy(&sl->link.cc))) {
+					printf("side: connection up (handle %u) "
+					       "repeated during its call -- "
+					       "keeping its side link\n", h);
+					break;
+				}
 			}
 			if (busy && side_start(s, h) == 0)
 				break;
@@ -6675,6 +6850,21 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			s->sub_restored = 1;
 			printf("sub: stored subscription reloaded into the chip\n");
 		}
+		/*
+		 * Side links keep their own timers and queues whether or not
+		 * the main link is up: an internal call's caller can be on a
+		 * side link after the main connection went (review, finding 4).
+		 */
+		if (s->do_register) {
+			unsigned k;
+
+			for (k = 0; k < SIDE_MAX; k++) {
+				if (!s->side[k].active)
+					continue;
+				dect_link_tick(&s->side[k].link, now);
+				side_pump(s, &s->side[k]);
+			}
+		}
 		/* Drive LAPC retransmission timers for the registration link. */
 		if (s->do_register && s->reg.active) {
 			/*
@@ -6703,16 +6893,6 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			 * docs/spec-conformance.md.
 			 */
 			dect_link_tick(&s->reg.link, now);
-			{
-				unsigned k;
-
-				for (k = 0; k < SIDE_MAX; k++) {
-					if (!s->side[k].active)
-						continue;
-					dect_link_tick(&s->side[k].link, now);
-					side_pump(s, &s->side[k]);
-				}
-			}
 			/*
 			 * The call has gone away: release the audio channel.
 			 * Without this it stays armed for the life of the link
@@ -7758,10 +7938,21 @@ int main(int argc, char **argv)
 
 		/* restores the UAKs; chip reload once up */
 		for (i = 0; i < s.n_hs; i++) {
+			struct stat sst;
+
 			s.cur = i;
 			hs_load(&s, i);		/* path set, the rest empty */
 			s.hs[i].loaded = sub_load(&s);
 			hs_stash(&s, i);
+			/*
+			 * Only a store that does not exist yet may take an
+			 * enrolment. One that exists but did not load (wrong
+			 * size or magic, a slot clash) holds someone's record;
+			 * routing a new handset there would overwrite it
+			 * (review, finding 9).
+			 */
+			s.hs[i].absent = s.hs[i].path &&
+				stat(s.hs[i].path, &sst) != 0 && errno == ENOENT;
 			for (j = 0; s.hs[i].loaded && j < i; j++) {
 				if (!s.hs[j].loaded ||
 				    s.hs[j].slot != s.hs[i].slot)
@@ -7818,12 +8009,17 @@ int main(int argc, char **argv)
 		for (i = 1; i < s.n_hs; i++) {
 			unsigned used = 0, slot, k;
 
-			if (s.hs[i].loaded || s.hs[i].remote)
+			if (s.hs[i].loaded || s.hs[i].remote ||
+			    !s.hs[i].absent)
 				continue;
-			for (k = 0; k < s.n_hs; k++)
+			for (k = 0; k < s.n_hs; k++) {
+				unsigned ks = k == 0 && s.audio.sub_slot ?
+					      s.audio.sub_slot : s.hs[k].slot;
+
 				if (k != i && (s.hs[k].loaded ||
 				    (k < i && !s.hs[k].remote)))
-					used |= 1u << s.hs[k].slot;
+					used |= 1u << ks;
+			}
 			for (slot = 1; slot <= DECT_MM_MAX_SLOT &&
 			     (used & (1u << slot)); slot++)
 				;

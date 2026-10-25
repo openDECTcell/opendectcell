@@ -649,11 +649,12 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 	/*
 	 * An internal call (call class 9, GAP N.31) is never connected here:
 	 * the owner has to reach the other handset first. A complete number
-	 * gets CALL-PROC and waits in PROCEEDING for dect_cc_alert/connect().
+	 * -- or any number without overlap receiving -- gets CALL-PROC and
+	 * waits in PROCEEDING for dect_cc_alert/connect().
 	 */
-	if (cc->overlap && sending_complete &&
-	    (cc->peer_basic_service >> 4) == 0x9u) {
-		proceed(cc);
+	if ((cc->peer_basic_service >> 4) == 0x9u &&
+	    (sending_complete || !cc->overlap)) {
+		proceed(cc);	/* with or without overlap receiving */
 		return;
 	}
 	if (cc->overlap && !sending_complete) {
