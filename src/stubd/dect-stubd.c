@@ -4202,9 +4202,11 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 
 		if (i != s->cur && !s->hs[i].loaded)
 			continue;
-		if (s->reg.active && s->reg.link.mm.adopted == (int)i)
+		/* parked: no handset has a link, whatever was up at exit */
+		if (radio_on && s->reg.active &&
+		    s->reg.link.mm.adopted == (int)i)
 			linked = 1;
-		for (k = 0; k < SIDE_MAX; k++)
+		for (k = 0; radio_on && k < SIDE_MAX; k++)
 			if (s->side[k].active && s->side[k].adopted == (int)i)
 				linked = 1;
 		fprintf(f, "%s{\"slot\":%u,\"name\":\"DECT %u\",\"store\":",
@@ -4219,12 +4221,12 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 	}
 	fprintf(f, "],\"links\":[");
 	first = 1;
-	if (s->reg.active)
+	if (radio_on && s->reg.active)
 		state_link(s, f, &s->reg.link,
 			   s->reg.last_status.valid ? &s->reg.last_status
 						    : NULL,
 			   s->reg.frames_total, &first);
-	for (i = 0; i < SIDE_MAX; i++)
+	for (i = 0; radio_on && i < SIDE_MAX; i++)
 		if (s->side[i].active)
 			state_link(s, f, &s->side[i].link, NULL, 0, &first);
 	fprintf(f, "]}\n");

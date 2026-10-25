@@ -64,14 +64,16 @@ function renderState(st) {
 	if (!st)
 		return E('p', {}, _('No state: dect-stubd is not running, or the service is disabled (/etc/config/opendectcell).'));
 
-	var bySlot = {};
-	(st.links || []).forEach(function(l) { bySlot[l.slot] = l; });
+	var bySlot = {}, on = st.radio === 'up';
+	if (on)
+		(st.links || []).forEach(function(l) { bySlot[l.slot] = l; });
 
 	var handsets = (st.handsets || []).map(function(h) {
 		var l = bySlot[h.slot];
 		return [
 			h.name,
 			String(h.slot),
+			!on ? _('base off') :
 			h.link ? (l ? callText(l) : _('connected')) : _('idle'),
 			ago(h.seen_ms_ago),
 			l && l.radio ? String(l.radio.carrier) : '-',
