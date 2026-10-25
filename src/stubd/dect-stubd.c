@@ -326,6 +326,7 @@ struct stubd {
 	uint32_t    led_traffic, led_traffic_seen;
 	unsigned    led_changes, led_blink_ticks;
 	uint64_t    state_next;		/* next state-file write */
+	int         holdback_done;
 	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
@@ -562,6 +563,7 @@ struct stubd {
 		const char *state_path;	/* statefile=PATH, NULL = the default */
 		int      no_state;	/* nostatefile */
 		int      no_reg_open;	/* noregopen */
+		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
 		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
 		/*
@@ -2307,6 +2309,41 @@ static void uak_verify_send(struct stubd *s, uint8_t slot);
 
 static unsigned hs_slot(const struct stubd *s, unsigned i);
 
+/*
+ * holdback=MS (docs/multicell-experiments.md, test M2): every store but the
+ * first stays out of the chip until MS after start, as if a controller
+ * pushed it then. The host still holds them; only the chip lacks the key.
+ */
+static int held_back(const struct stubd *s, unsigned i)
+{
+	return s->audio.holdback_ms && !s->holdback_done && i != 0;
+}
+
+static void install_subscription(struct stubd *s, uint8_t slot,
+				 const uint8_t uak[DECT_MM_UAK_LEN]);
+
+static void holdback_tick(struct stubd *s, uint64_t now)
+{
+	unsigned i;
+
+	if (!s->audio.holdback_ms || s->holdback_done || !s->sub_restored ||
+	    now - g_start < s->audio.holdback_ms)
+		return;
+	s->holdback_done = 1;
+	for (i = 1; i < s->n_hs; i++) {
+		const uint8_t *uak = i == s->cur ? s->uak : s->hs[i].uak;
+		int valid = i == s->cur ? s->uak_valid : s->hs[i].uak_valid;
+
+		if (!s->hs[i].loaded || !valid)
+			continue;
+		install_subscription(s, (uint8_t)hs_slot(s, i), uak);
+		printf("sub: holdback over: %s installed in chip slot %u at "
+		       "t=%llu ms\n", s->hs[i].path, hs_slot(s, i),
+		       (unsigned long long)(now - g_start));
+	}
+	fflush(stdout);
+}
+
 /* Does any handset we hold have a key to put in the chip? */
 static int any_uak(const struct stubd *s)
 {
@@ -2404,7 +2441,7 @@ static void send_subscription(struct stubd *s)
 		unsigned hsl = hs_slot(s, i);
 
 		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid &&
-		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT)
+		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT && !held_back(s, i))
 			keep |= 1u << hsl;
 	}
 	clear_foreign_slots(s, slot, keep);
@@ -2412,7 +2449,8 @@ static void send_subscription(struct stubd *s)
 		unsigned hsl = hs_slot(s, i);
 
 		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid &&
-		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT && hsl != slot) {
+		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT && hsl != slot &&
+		    !held_back(s, i)) {
 			install_subscription(s, (uint8_t)hsl, s->hs[i].uak);
 			printf("sub: %s installed in chip slot %u\n",
 			       s->hs[i].path, hsl);
@@ -5465,6 +5503,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		led_tick(s, now, s->do_register && s->sess.state == DECT_SESS_UP);
 		state_write(s, now, s->do_register &&
 			    s->sess.state == DECT_SESS_UP, 0);
+		holdback_tick(s, now);
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
@@ -5960,6 +5999,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			memcpy(path, eq + 1, n);
 			path[n] = '\0';
 			a->state_path = path;
+		} else if (klen == 8 && !memcmp(key, "holdback", 8)) {
+			a->holdback_ms = (unsigned)v;
 		} else if (!eq && klen == 11 && !memcmp(key, "nostatefile", 11)) {
 			a->no_state = 1;
 		} else if (eq && klen == 3 && !memcmp(key, "led", 3)) {
