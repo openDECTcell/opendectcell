@@ -4476,11 +4476,10 @@ static void reg_window(struct stubd *s, int open, unsigned secs,
 	s->reg_open_until = open && secs ? now + secs * 1000ull : 0;
 	if (s->reg.active)
 		s->reg.link.mm.cfg.registration = reg_policy(s);
-	if (open)
-		printf("reg: registration OPEN%s%s (%s)\n",
-		       secs ? " for " : "", secs ? "" : " until closed", why);
 	if (open && secs)
-		printf("reg: ... %u s\n", secs);
+		printf("reg: registration OPEN for %u s (%s)\n", secs, why);
+	else if (open)
+		printf("reg: registration OPEN until closed (%s)\n", why);
 	if (!open)
 		printf("reg: registration closed (%s)\n", why);
 	fflush(stdout);
