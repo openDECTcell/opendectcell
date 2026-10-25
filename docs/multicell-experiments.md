@@ -76,3 +76,26 @@ AS690H's keys **held back to t = 300 s** (`-a holdback=300000`), 600 s.
 | they connect only **after** 300 s, within seconds of the install, while the A540 connected before | **world B**, and a handset retries access fast enough for on-demand loading once the cell knows to load |
 | they connect after 300 s but late (minutes) | world B likely; the delay is handset back-off, not proof either way |
 | nobody connects in 600 s, the A540 included | void again: the handsets are not searching; needs a key press |
+
+## M1+M2 result: void, and a suspect `[M12-*, 2026-10-25 04:17-04:27]`
+
+600 s, nobody connected, the A540 included (key installed at start); the
+held-back keys went in at 300 s. The radio-on mail went out and the chip
+answered its status and RSSI scans, but there was not one connection.
+
+The suspect is our own `noregopen` (`8abc37c`): on a **freshly booted**
+chip it sends close-registration (`0x022c 01`) and never `0x022b 41`, which
+the verification table calls the "enable token". Last night's `noregopen`
+check ran on a chip that had had `0x022b 41` in every earlier run, and chip
+RAM keeps it. If the chip needs the token once to admit anyone, `noregopen`
+on a fresh chip locks every handset out -- and the service defaults to it.
+
+### M0: the same fresh chip without noregopen `[pre-commit]`
+
+300 s, the A540's store only, registration as the lab always ran it
+(`0x022b 41`).
+
+| shows | meaning |
+|---|---|
+| the A540 connects | the token is needed; `noregopen` must send `0x022b 41` and then `0x022c 01`; M1/M2 rerun |
+| nobody connects again | not the token; the handsets are simply not searching (key press needed) |
