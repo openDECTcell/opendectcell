@@ -213,3 +213,39 @@ the A540's store is not held until MS after its request. Delays 2, 15, 30,
 
 **Falsifying:** a handset that gives up well before 20 s, which would make
 on-demand fetching far tighter than the standard promises.
+
+### M4 results so far: 2 s works; and a roamer need not locate at all `[2026-10-25 04:54-05:03]`
+
+| run | delay | result |
+|---|---|---|
+| `M4-2000-045441` | 2 s | the A540's `{LOCATE-REQUEST}` held, record "fetched", **`{LOCATE-ACCEPT}` at +2.000 s**, TPUI acknowledged: it registered with a cell that did not know it two seconds earlier |
+| `M4-15000-045732` | 15 s | **void**: the A540 sent **no** `{LOCATE-REQUEST}`; it came straight back with its list-access `{CC-SETUP}`, which the CC gate turned away (`0x0A`), twice |
+
+The 15 s run is the finding. Three minutes after an accepted location
+registration, with the same RFPI and location area, the A540 considered
+itself located and simply used the base. In the 2 s run the same happened
+in miniature: while its request was held, its list-access call arrived and
+was turned away; only after the accept was it served.
+
+**For multi-cell:** cells under one controller share a location area, and
+a handset moving between them **does not re-locate** (EN 300 175-5 §13.4:
+location registration is triggered by a new location area, switch-on, or an
+expired validity). The first thing a cell sees from a roamer is then a
+`{CC-SETUP}`, a page response or a list-access call from an unknown IPUI.
+So either:
+
+1. **fetch on any first message from an unknown IPUI**, holding a
+   `{CC-SETUP}` the way MM now holds a `{LOCATE-REQUEST}` (the PT's
+   `<CC.03>` is 20 s too, annex A), or
+2. **the controller pushes records to every cell of the area** before they
+   are needed -- and since the chip's six slots do not limit admission on
+   07.56 (M1), host-side records are cheap.
+
+Option 2 is simpler and has no first-call latency; option 1 scales without
+bound. Either way the identity gate on CC must fetch or know, not just
+reject.
+
+A tool for M4's longer delays: our `{LOCATE-ACCEPT}` may carry <<DURATION>>
+(§13.4.1), a validity after which the PT must locate again. A short one
+would make the A540 re-locate on demand; not built yet. Until then a long
+radio-off pause is the only way to trigger a fresh location registration.
