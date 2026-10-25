@@ -615,3 +615,43 @@ costs host memory only, not chip slots.
 `{LOCATE-ACCEPT}`: the PT locates again after N x 40.96 s (§13.4.1). For
 tests now; possibly useful for presence later (a handset that stops
 renewing is gone). Whether Gigasets honour it is test M6.
+
+## API 21-25: PINs, wideband, dialling, and a call in steps `[2026-10-25 midday]`
+
+All measured at the bench the same day (`docs/bench-2026-10-25.md`).
+
+**API 21, PINs.** `dect_dsaa_pin_to_ac()` returns -1 for a non-digit or more
+than 8 digits; it used to write in front of the buffer at 9+. Validate a
+user's PIN with it. 6- and 8-digit PINs register on the AS690H. A wrong PIN
+now gets `{ACCESS-RIGHTS-REJECT}` "authentication failed" (`0x10`).
+
+**API 22, wideband.** `dect_cc_set_wideband(cc, 1)` lets our `{CC-CONNECT}`
+choose G.722 when the handset offers it; `dect_cc_codec()` tells you the
+call's codec, including the one the handset names in its ALERTING/CONNECT
+on a call you place (ask for wideband with basic service `0x88` in the
+SETUP). **Act on it:** bind the audio per call from `dect_cc_codec()`. On
+the 7520 (07.56 STUB): G.722 means `0x0230` flags `0x41`, codec byte 0, no
+mode-2 re-assign, and a G.722 lane you feed phase-locked to the chip's
+two-frame words; anything else the narrowband bind as before. Clean on all
+three Gigasets.
+
+**API 23, overlap receiving.** `dect_cc_set_overlap(cc, 1)`: a handset's
+speech SETUP gets `{CC-SETUP-ACK}`, its digits arrive in `{CC-INFO}`
+(`dect_cc_keypad()`, `ind.keypad`), and **you** decide when the number is
+complete. F<CC.01> releases the call 20 s after the last digit if you never
+do. `DECT_CC_ST_OVERLAP` is new; `switch` statements over the state need it.
+
+**API 24, a roamer's held SETUP is answered at once.** The link sends
+SETUP-ACK (or CALL-PROC for list access) when it holds the SETUP for your
+fetch, holds the handset's follow-ups (digits, list access) and replays
+them on `dect_link_setup_resume()`. **The 20 s budget from API 19 is gone
+for calls:** the A540 waited 17.5 s showing its digits and connected.
+
+**API 25, a call in steps.** `dect_cc_proceed()` (CALL-PROC: number
+complete), `dect_cc_alert()` (ALERTING: the far end rings), `dect_cc_connect()`
+(CONNECT: it answered). Our CONNECT now enters ACTIVE (EN 300 175-5
+§9.3.1.8); no CONNECT-ACK comes for a handset-placed call. The codec is
+known from the SETUP, so you can bind the audio before CONNECT. Ringback
+from ALERTING was heard on the A540. **Open:** the A540 shows no call timer
+on calls it places, whatever we sent (12e); the C430A/AS690H are next, and
+the room is asked what stock sends (Q-0060).
