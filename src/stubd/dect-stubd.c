@@ -184,12 +184,19 @@ static long tz_offset_seconds(time_t t)
 #define PARK_FLUSH_MS	200u
 
 static volatile sig_atomic_t stop;
+static volatile sig_atomic_t want_register;	/* SIGUSR1: open a window */
 static uint64_t g_start;		/* for relative timestamps in the log */
 
 static void on_signal(int sig)
 {
 	(void)sig;
 	stop = 1;
+}
+
+static void on_usr1(int sig)
+{
+	(void)sig;
+	want_register = 1;
 }
 
 static uint64_t mono_ms(void)
@@ -265,6 +272,9 @@ struct stubd {
 	int verbose;
 	int show_params;	/* log parameter bytes (may hold identity data) */
 	const char *xmail[20];	/* extra mails to send once the session is up */
+	/* The registration window: open now, and until when (0 = no limit). */
+	int      reg_open;
+	uint64_t reg_open_until;
 	unsigned int n_xmail;
 	unsigned int xmail_idx;	/* next extra mail to send (one per loop tick) */
 	/*
@@ -576,6 +586,8 @@ struct stubd {
 		 * tell it to"). noregopen is still accepted, and is the default.
 		 */
 		int      no_reg_open;
+		unsigned reg_window_s;	/* regopen=SECS: close after; 0 = never */
+		unsigned reg_signal_s;	/* regwindow=SECS for SIGUSR1, 120 */
 		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
 		int      no_chip_keys;	/* nochipkeys, multi-cell test M2 */
 		const char *remote_path;	/* remote=PATH, test M4 */
@@ -1104,6 +1116,7 @@ struct stubd {
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
+		int enrol_routed;	/* this enrolment's store is chosen */
 		size_t   dial_len;	/* digits seen so far in OVERLAP */
 		uint64_t dial_change_ms;	/* when the last ones arrived */
 		int      connect_staged;	/* alertms/bindfirst: CONNECT due */
@@ -4337,8 +4350,13 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		(unsigned long long)(now - g_start),
 		radio_on ? "up" : "parked");
 	json_str(f, s->stub_build == STUB_UNKNOWN ? "unknown" : s->stub_name);
-	fprintf(f, ",\"registration\":\"%s\",\"handsets\":[",
-		s->audio.no_reg_open ? "closed" : "open");
+	fprintf(f, ",\"registration\":\"%s\"",
+		radio_on && s->reg_open ? "open" : "closed");
+	if (radio_on && s->reg_open && s->reg_open_until > now)
+		fprintf(f, ",\"registration_left_s\":%llu",
+			(unsigned long long)((s->reg_open_until - now + 999) /
+					     1000));
+	fprintf(f, ",\"handsets\":[");
 	first = 1;
 	for (i = 0; i < s->n_hs; i++) {
 		unsigned k, linked = 0;
@@ -4413,6 +4431,109 @@ static void pump_lapc(struct stubd *s)
 }
 
 static struct side_link *side_find(struct stubd *s, uint8_t handle);
+
+static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
+				 size_t *len);
+
+/* A store that does not exist yet: somewhere a new handset can enrol. */
+static int hs_free(const struct stubd *s)
+{
+	unsigned i;
+
+	for (i = 0; i < s->n_hs; i++)
+		if (!s->hs[i].loaded && !s->hs[i].remote)
+			return (int)i;
+	return -1;
+}
+
+/*
+ * Who may enrol on the main link. Nobody unless the window is open; then
+ * anyone with the PIN when a free store can take a new handset (the
+ * enrolment is routed there, enrol_route()), else only the current
+ * store's own handset re-enrolling.
+ */
+static uint8_t reg_policy(const struct stubd *s)
+{
+	if (!s->reg_open)
+		return DECT_MM_REG_CLOSED;
+	if (hs_free(s) >= 0)
+		return DECT_MM_REG_OPEN;
+	return s->sub_port_id_len ? DECT_MM_REG_SAME : DECT_MM_REG_OPEN;
+}
+
+/*
+ * Open or close the registration window: the chip's mode (0x022B 'A' /
+ * 0x022C 01 [CR COMMAND_SET §6.2]) and MM's policy together. secs = 0
+ * keeps it open until closed.
+ */
+static void reg_window(struct stubd *s, int open, unsigned secs,
+		       uint64_t now, const char *why)
+{
+	if (send_mail_spec(s, open ? "0x22:0x02:0x022b:41"
+				   : "0x22:0x02:0x022c:01"))
+		printf("reg: could not send the registration mode mail\n");
+	s->reg_open = open;
+	s->reg_open_until = open && secs ? now + secs * 1000ull : 0;
+	if (s->reg.active)
+		s->reg.link.mm.cfg.registration = reg_policy(s);
+	if (open)
+		printf("reg: registration OPEN%s%s (%s)\n",
+		       secs ? " for " : "", secs ? "" : " until closed", why);
+	if (open && secs)
+		printf("reg: ... %u s\n", secs);
+	if (!open)
+		printf("reg: registration closed (%s)\n", why);
+	fflush(stdout);
+}
+
+/* SIGUSR1 opens a window; a timed one closes itself. */
+static void reg_window_tick(struct stubd *s, uint64_t now)
+{
+	if (s->sess.state != DECT_SESS_UP || s->tx_slot < 0)
+		return;
+	if (want_register) {
+		want_register = 0;
+		reg_window(s, 1, s->audio.reg_signal_s, now, "SIGUSR1");
+	}
+	if (s->reg_open && s->reg_open_until && now >= s->reg_open_until)
+		reg_window(s, 0, 0, now, "window elapsed");
+}
+
+/*
+ * A handset is enrolling (MM sent KEY-ALLOCATE and waits for its PIN
+ * answer). Serve it from the right store before ACCESS-RIGHTS-ACCEPT goes
+ * out: its own, if we hold it, else a free one -- so a new handset no
+ * longer lands in the first store and overwrites the ring target.
+ */
+static void enrol_route(struct stubd *s)
+{
+	const uint8_t *id = s->reg.link.mm.pend_id;
+	size_t len = s->reg.link.mm.pend_id_len, l;
+	unsigned i;
+	int target = -1;
+	char name[DECT_IWU_NAME_MAX];
+
+	for (i = 0; i < s->n_hs && target < 0; i++) {
+		const uint8_t *p = hs_port_id(s, i, &l);
+
+		if (len && l == len && !memcmp(p, id, len))
+			target = (int)i;
+	}
+	if (target < 0)
+		target = hs_free(s);
+	if (target < 0 || (unsigned)target == s->cur) {
+		printf("reg: enrolment into %s (slot %u)\n", s->sub_path,
+		       (unsigned)stubd_sub_slot(s));
+		return;
+	}
+	hs_switch(s, (unsigned)target, " (enrolment)");
+	s->reg.link.mm.cfg.sub_slot = stubd_sub_slot(s);
+	snprintf(name, sizeof(name), "DECT %u", (unsigned)stubd_sub_slot(s));
+	dect_iwu_add_handset(&s->reg.link.cc.iwu, stubd_sub_slot(s), name);
+	dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
+	printf("reg: enrolment routed to %s (slot %u)\n", s->sub_path,
+	       (unsigned)stubd_sub_slot(s));
+}
 
 /*
  * The main link's CC entity, fresh: what reg_start() installs per
@@ -4510,9 +4631,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	mcfg.defer_unknown = s->audio.remote_path != NULL;
 	mcfg.locate_validity = (uint8_t)s->audio.locate_validity;
 	s->fetch_retrans_seen = 0;	/* MM's counter restarts with the link */
-	mcfg.registration = s->audio.no_reg_open ? DECT_MM_REG_CLOSED :
-			    s->sub_port_id_len ? DECT_MM_REG_SAME :
-						 DECT_MM_REG_OPEN;
+	mcfg.registration = reg_policy(s);
 
 	s->reg.active = 1;
 	s->reg.persisted = 0;
@@ -4520,6 +4639,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.call_wideband = 0;
 	s->reg.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
+	s->reg.enrol_routed = 0;
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
 	s->reg.handle = handle;
@@ -4745,9 +4865,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	if (s->reg.link.mm.adopted >= 0)
 		hs_switch(s, (unsigned)s->reg.link.mm.adopted,
 			  " (promoted side link)");
-	s->reg.link.mm.cfg.registration = s->audio.no_reg_open ?
-		DECT_MM_REG_CLOSED : s->sub_port_id_len ? DECT_MM_REG_SAME :
-		DECT_MM_REG_OPEN;
+	s->reg.link.mm.cfg.registration = reg_policy(s);
 	s->reg.link.mm.cfg.defer_unknown = s->audio.remote_path != NULL;
 	s->reg.link.mm.cfg.locate_validity =
 		(uint8_t)s->audio.locate_validity;
@@ -4755,6 +4873,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->reg.call_wideband = 0;
 	s->reg.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
+	s->reg.enrol_routed = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
 	       "link; handle %u (%s) is a side link now\n", s->reg.handle,
 	       sl->handle, (unsigned)old_main < s->n_hs ?
@@ -5161,7 +5280,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * [CR COMMAND_SET §6.2/§9.7]. Leaving it open keeps the base
 		 * advertising open enrolment and the handset re-attaching.
 		 */
-		send_mail_spec(s, "0x22:0x02:0x022c:01");
+		reg_window(s, 0, 0, now, "handset enrolled");
 		s->reg.persisted = 1;
 		printf("reg: subscription persisted + registration closed (slot %u)\n",
 		       (unsigned)stubd_sub_slot(s));
@@ -5220,6 +5339,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "conditional on ours being valid, and a "
 			       "confidently wrong clock is worse than none\n");
 		}
+	}
+
+	if (s->reg.link.mm.state != DECT_MM_WAIT_AUTH)
+		s->reg.enrol_routed = 0;
+	else if (!s->reg.enrol_routed) {
+		s->reg.enrol_routed = 1;
+		enrol_route(s);
 	}
 
 	/* once per outcome, not on every message that follows it */
@@ -5897,6 +6023,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		fetch_tick(s, now);
 		dial_tick(s, now);
 		connect_tick(s, now);
+		reg_window_tick(s, now);
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
@@ -6121,8 +6248,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->earlybind = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "noregopen", 9))
 			a->no_reg_open = 1;
-		else if (!eq && klen == 7 && !memcmp(key, "regopen", 7))
-			a->no_reg_open = 0;
+		else if (klen == 7 && !memcmp(key, "regopen", 7))
+			a->no_reg_open = 0, a->reg_window_s = eq ? (unsigned)v : 0u;
+		else if (klen == 9 && !memcmp(key, "regwindow", 9))
+			a->reg_signal_s = (unsigned)v;
 		else if (!eq && klen == 10 && !memcmp(key, "nostockcfg", 10))
 			a->no_stock_cfg = 1;
 		else if (eq && klen == 7 && !memcmp(key, "subslot", 7)) {
@@ -6804,6 +6933,7 @@ int main(int argc, char **argv)
 	s.audio.basic_svc = RING_BASIC_SVC;
 	s.audio.dial_wait_ms = 3000u;
 	s.audio.no_reg_open = 1;	/* closed unless -a regopen */
+	s.audio.reg_signal_s = 120u;
 	s.audio.slot_mask = 0x09u;	/* [CR A-0114] stock's 0x017c 00 09 */
 	/*
 	 * -1, not 0: the struct is memset to zero above, and a zero here
@@ -7007,6 +7137,10 @@ int main(int argc, char **argv)
 	}
 	if (!s.audio.remode_set && !(s.audio.flags & 0x40u))
 		s.audio.remode_ms = 0;	/* mode 2 from the first assign */
+	/* the window the start-up mail opens (0x022B), if regopen asked */
+	s.reg_open = !s.audio.no_reg_open;
+	s.reg_open_until = s.reg_open && s.audio.reg_window_s ?
+			   mono_ms() + s.audio.reg_window_s * 1000ull : 0;
 	if (!s.audio.basic_svc_set)
 		s.audio.basic_svc = s.audio.narrowband ? RING_BASIC_SVC
 						       : RING_BASIC_SVC_WB;
@@ -7071,7 +7205,36 @@ int main(int argc, char **argv)
 			s.hs[0].slot = slot;
 			printf("sub: %s is new; it gets chip slot %u\n",
 			       s.hs[0].path, slot);
-		} else if (!s.hs[0].loaded) {
+		}
+		/*
+		 * Every other store that does not exist yet is a place a new
+		 * handset can enrol (enrol_route()): it needs a slot of its
+		 * own as well, distinct from the loaded stores and from each
+		 * other.
+		 */
+		for (i = 1; i < s.n_hs; i++) {
+			unsigned used = 0, slot, k;
+
+			if (s.hs[i].loaded || s.hs[i].remote)
+				continue;
+			for (k = 0; k < s.n_hs; k++)
+				if (k != i && (s.hs[k].loaded ||
+				    (k < i && !s.hs[k].remote)))
+					used |= 1u << s.hs[k].slot;
+			for (slot = 1; slot <= DECT_MM_MAX_SLOT &&
+			     (used & (1u << slot)); slot++)
+				;
+			if (slot > DECT_MM_MAX_SLOT) {
+				printf("sub: no chip slot left for %s; it cannot "
+				       "take an enrolment\n", s.hs[i].path);
+				s.hs[i].remote = 1;	/* never a free store */
+				continue;
+			}
+			s.hs[i].slot = slot;
+			printf("sub: %s is free for an enrolment, chip slot %u\n",
+			       s.hs[i].path, slot);
+		}
+		if (!s.hs[0].loaded && s.audio.sub_slot) {
 			for (i = 1; i < s.n_hs; i++)
 				if (s.hs[i].loaded &&
 				    s.hs[i].slot == s.audio.sub_slot)
@@ -7085,6 +7248,7 @@ int main(int argc, char **argv)
 
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
+	signal(SIGUSR1, on_usr1);
 	dect_rx_init(&s.rx);
 	dect_session_init(&s.sess, &scfg);
 

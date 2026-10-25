@@ -1,9 +1,14 @@
 {
 	"luci-app-opendectcell": {
-		"description": "Read the DECT base's state file",
+		"description": "Read the DECT base's state file, open registration",
 		"read": {
 			"file": {
 				"/tmp/opendectcell-state.json": [ "read" ]
+			}
+		},
+		"write": {
+			"file": {
+				"/etc/init.d/opendectcell register": [ "exec" ]
 			}
 		}
 	}

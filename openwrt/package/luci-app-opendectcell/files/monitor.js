@@ -2,6 +2,7 @@
 'require view';
 'require fs';
 'require poll';
+'require ui';
 
 /*
  * The DECT Monitor: what the base is doing, for someone who should not have
@@ -113,7 +114,10 @@ function renderState(st) {
 			E('h3', {}, _('Base')),
 			table([ _('Radio'), _('Registration'), _('Chip firmware') ], [[
 				st.radio === 'up' ? _('on') : _('parked'),
-				st.registration === 'open' ? _('open') : _('closed'),
+				st.registration !== 'open' ? _('closed') :
+				st.registration_left_s != null ?
+					_('open, %d s left').format(st.registration_left_s) :
+					_('open'),
 				st.stub
 			]])
 		]),
@@ -142,9 +146,28 @@ return view.extend({
 			});
 		}, 2);
 
+		/*
+		 * Registration is closed unless asked for: this opens it for the
+		 * service's regwindow (120 s) and the daemon closes it again
+		 * after one handset enrolled (/etc/init.d/opendectcell register).
+		 */
+		var reg = E('button', {
+			'class': 'cbi-button cbi-button-action',
+			'click': ui.createHandlerFn(this, function() {
+				return fs.exec('/etc/init.d/opendectcell', [ 'register' ])
+					.then(function(r) {
+						ui.addNotification(null, E('p', r.code == 0 ?
+							_('Registration is open. Start the registration on the handset now.') :
+							_('Could not open registration: is the DECT service running?')),
+							r.code == 0 ? 'info' : 'warning');
+					});
+			})
+		}, _('Register a handset'));
+
 		return E('div', {}, [
 			E('h2', {}, _('DECT Monitor')),
-			box
+			box,
+			E('div', { 'class': 'cbi-page-actions' }, [ reg ])
 		]);
 	},
 
