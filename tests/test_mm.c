@@ -233,6 +233,8 @@ static void test_register_bad_pin(void)
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
+	CHECK_EQ(out[2], DECT_IE_REJECT_REASON);
+	CHECK_EQ(out[4], DECT_MM_REJECT_AUTH_FAILED);
 	CHECK_EQ(mm.state, DECT_MM_FAILED);
 	CHECK_EQ(mm.stats.auth_fail, 1);
 }

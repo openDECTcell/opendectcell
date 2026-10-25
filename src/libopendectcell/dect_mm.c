@@ -327,10 +327,13 @@ static void send_access_reject_reason(struct dect_mm *mm, uint8_t why)
 	mm->stats.rejected++;
 }
 
-/* The historical reject for a failed PIN; 0x10 would name it better. */
+/*
+ * A failed PIN is "authentication failed" (EN 300 175-5 §7.7.34). We used
+ * to send 0x01, which means "TPUI unknown".
+ */
 static void send_access_reject(struct dect_mm *mm)
 {
-	send_access_reject_reason(mm, 0x01u);
+	send_access_reject_reason(mm, DECT_MM_REJECT_AUTH_FAILED);
 }
 
 /*
@@ -662,7 +665,7 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 	rand_p = dect_nwk_find_ie(ies, ies_len, DECT_IE_RAND, &rand_p_len);
 	if (!res1 || res1_len != 4 || !rand_p || rand_p_len != DECT_AUTH_RAND_LEN) {
 		mm->stats.auth_fail++;
-		send_access_reject(mm);
+		send_access_reject_reason(mm, DECT_MM_REJECT_IE_ERROR);
 		return;
 	}
 

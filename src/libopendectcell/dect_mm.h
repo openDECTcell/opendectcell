@@ -32,6 +32,7 @@
 #define DECT_MM_REJECT_IPUI_UNKNOWN	0x02u
 #define DECT_MM_REJECT_IE_ERROR		0x60u	/* "information element error" */
 #define DECT_MM_REJECT_IPUI_NOT_ACCEPTED 0x06u
+#define DECT_MM_REJECT_AUTH_FAILED	0x10u	/* "authentication failed" */
 
 /*
  * Who may obtain access rights ({ACCESS-RIGHTS-REQUEST}) on a link. A base
