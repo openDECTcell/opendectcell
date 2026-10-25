@@ -222,6 +222,8 @@ struct dect_cc {
 	uint64_t setup_deadline_ms;
 	uint8_t  overlap;		/* dect_cc_set_overlap() */
 	uint8_t  answered;		/* dect_cc_note_answered() */
+	uint8_t  proceeded;		/* {CC-CALL-PROC} sent on this call */
+	uint8_t  alerted;		/* {CC-ALERTING} sent on this call */
 	uint64_t overlap_deadline_ms;	/* F<CC.01> */
 
 	/*
@@ -335,8 +337,23 @@ uint8_t dect_cc_codec(const struct dect_cc *cc);
  */
 void dect_cc_set_overlap(struct dect_cc *cc, int on);
 
-/* Dialling is complete: {CC-CALL-PROC} and {CC-CONNECT}. 0, or -1 when
- * the call is not waiting in DECT_CC_ST_OVERLAP. */
+/*
+ * The steps of a handset-placed call, for an owner that has somewhere to
+ * route it (EN 300 175-5 §9.3.1.6-8): dect_cc_proceed() sends
+ * {CC-CALL-PROC} (dialling is complete), dect_cc_alert() {CC-ALERTING}
+ * (the far end rings), dect_cc_connect() {CC-CONNECT} (it answered) and
+ * enters ACTIVE -- no {CC-CONNECT-ACK} is expected. Each sends the
+ * earlier ones it needs, once. dect_cc_accept() is dect_cc_connect().
+ * They act on a speech call in DECT_CC_ST_OVERLAP or PROCEEDING and
+ * return 0, else -1 (list access is never connected).
+ *
+ * §9.3.1.8 also has the FT confirm the U-plane before {CC-CONNECT}: an
+ * owner can bind its audio after dect_cc_proceed() -- dect_cc_codec() is
+ * known from the SETUP -- and connect once it is up.
+ */
+int dect_cc_proceed(struct dect_cc *cc);
+int dect_cc_alert(struct dect_cc *cc);
+int dect_cc_connect(struct dect_cc *cc);
 int dect_cc_accept(struct dect_cc *cc);
 
 /*

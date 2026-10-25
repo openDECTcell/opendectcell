@@ -348,6 +348,25 @@ static void learn_id(const uint8_t *ies, size_t ies_len, uint8_t id,
 #define CODEC_LAST		0x80u	/* octet c, bit 8: last in the list */
 #define CODEC_NEGOTIATION	0x90u	/* "codec negotiation possible" */
 
+/*
+ * Our choice, made when the SETUP arrives rather than when CONNECT is
+ * built, so an owner that installs the U-plane before CONNECT (EN 300
+ * 175-5 §9.3.1.8) already knows which audio path to bind: G.722 when the
+ * link carries wideband and the handset offered it, else G.726; 0 when
+ * the SETUP did not negotiate or offered neither.
+ */
+static void choose_codec(struct dect_cc *cc)
+{
+	if (!cc->peer_negotiates)
+		cc->chosen_codec = 0;
+	else if (cc->wideband && cc->peer_has_g722)
+		cc->chosen_codec = CODEC_ID_G722;
+	else if (cc->peer_has_g726)
+		cc->chosen_codec = CODEC_ID_G726;
+	else
+		cc->chosen_codec = 0;
+}
+
 static void learn_codec_offer(struct dect_cc *cc, const uint8_t *ies,
 			      size_t ies_len)
 {
@@ -376,6 +395,7 @@ static void learn_codec_offer(struct dect_cc *cc, const uint8_t *ies,
 		cc->peer_has_g726 = cc->peer_negotiates;
 		memcpy(cc->peer_g722, g722, sizeof(g722));
 		cc->peer_has_g722 = cc->peer_negotiates;
+		choose_codec(cc);
 		return;
 	}
 	for (i = 1; i + 3u <= n; i += 3u) {
@@ -387,6 +407,7 @@ static void learn_codec_offer(struct dect_cc *cc, const uint8_t *ies,
 			cc->peer_has_g722 = 1;
 		}
 	}
+	choose_codec(cc);
 }
 
 static void learn_basic_service(struct dect_cc *cc, const uint8_t *ies,
@@ -497,14 +518,13 @@ static void queue_connect(struct dect_cc *cc)
 	uint8_t *b;
 	size_t off;
 	uint8_t cl[4];
-	int g722;
+	int g722 = cc->chosen_codec == CODEC_ID_G722;
 
 	if (!cc->peer_negotiates) {
 		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
 		return;
 	}
-	g722 = cc->wideband && cc->peer_has_g722;
-	if (!g722 && !cc->peer_has_g726) {
+	if (!cc->chosen_codec) {
 		cc->stats.codec_unmatched++;
 		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CONNECT);
 		return;
@@ -524,7 +544,6 @@ static void queue_connect(struct dect_cc *cc)
 	if (!off)
 		return;
 	txq_commit(cc, idx, off);
-	cc->chosen_codec = g722 ? CODEC_ID_G722 : CODEC_ID_G726;
 }
 
 /*
@@ -591,18 +610,76 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 }
 
 /*
- * Accept the call: CALL-PROC ("I am handling it") then CONNECT (we are
- * the far end for the loopback test, so we answer at once). Both are
- * responder-side in the PP-originated transaction.
+ * {CC-CALL-PROC}: "I am handling it" (EN 300 175-5 §9.3.1.6). Stops
+ * F<CC.01>; once only, and not when whoever held the SETUP already sent it.
+ */
+static void proceed(struct dect_cc *cc)
+{
+	if (!cc->proceeded && cc->answered != DECT_CC_CALL_PROC)
+		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
+	cc->proceeded = 1;
+	cc->answered = 0;
+	cc->state = DECT_CC_ST_PROCEEDING;
+	cc->overlap_deadline_ms = 0;
+}
+
+/*
+ * {CC-CONNECT}, and with it ACTIVE: EN 300 175-5 §9.3.1.8 has the F-CC
+ * "send a {CC-CONNECT} message to the P-CC. It shall then enter the
+ * ACTIVE state." No {CC-CONNECT-ACK} comes for a call the handset placed
+ * -- the A540 sends none (bench test 12b) -- so waiting in CONNECT PENDING
+ * for one left us, and the Monitor, at "connecting" for the whole call.
+ */
+static void connect_now(struct dect_cc *cc)
+{
+	queue_connect(cc);
+	cc->state = DECT_CC_ST_ACTIVE;
+	cc->stats.connected++;
+}
+
+/*
+ * Accept the call: CALL-PROC then CONNECT (we are the far end for the
+ * loopback test, so we answer at once). Both are responder-side in the
+ * PP-originated transaction.
  */
 static void accept_now(struct dect_cc *cc)
 {
-	if (cc->answered != DECT_CC_CALL_PROC)
-		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
-	cc->answered = 0;
-	queue_connect(cc);
-	cc->state = DECT_CC_ST_CONNECT_PENDING;
-	cc->overlap_deadline_ms = 0;
+	proceed(cc);
+	connect_now(cc);
+}
+
+/* a handset-placed call that can be connected: not list access */
+static int connectable(const struct dect_cc *cc)
+{
+	return !cc->incoming && (cc->peer_basic_service >> 4) != 0x2u &&
+	       (cc->state == DECT_CC_ST_OVERLAP ||
+		cc->state == DECT_CC_ST_PROCEEDING);
+}
+
+int dect_cc_proceed(struct dect_cc *cc)
+{
+	if (!connectable(cc))
+		return -1;
+	proceed(cc);
+	return 0;
+}
+
+int dect_cc_alert(struct dect_cc *cc)
+{
+	if (!connectable(cc) || cc->alerted)
+		return -1;
+	proceed(cc);
+	queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_ALERTING);
+	cc->alerted = 1;
+	return 0;
+}
+
+int dect_cc_connect(struct dect_cc *cc)
+{
+	if (!connectable(cc))
+		return -1;
+	accept_now(cc);
+	return 0;
 }
 
 void dect_cc_set_overlap(struct dect_cc *cc, int on)
@@ -617,10 +694,7 @@ void dect_cc_note_answered(struct dect_cc *cc, uint8_t msg_type)
 
 int dect_cc_accept(struct dect_cc *cc)
 {
-	if (cc->state != DECT_CC_ST_OVERLAP)
-		return -1;
-	accept_now(cc);
-	return 0;
+	return dect_cc_connect(cc);
 }
 
 static void on_connect_ack(struct dect_cc *cc)
@@ -779,6 +853,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;
+			cc->proceeded = 0;
+			cc->alerted = 0;
 			learn_id(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
 				 cc->peer_port_id, &cc->peer_port_id_len);
 			learn_id(ies, ies_len, DECT_IE_FIXED_IDENTITY,
@@ -892,7 +968,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		    (cc->state == DECT_CC_ST_CALL_PRESENT ||
 		     cc->state == DECT_CC_ST_CONNECT_PENDING ||
 		     cc->state == DECT_CC_ST_ACTIVE ||
-		     cc->state == DECT_CC_ST_OVERLAP)) {
+		     cc->state == DECT_CC_ST_OVERLAP ||
+		     cc->state == DECT_CC_ST_PROCEEDING)) {
 			size_t before = cc->keypad_len;
 
 			learn_keypad(cc, ies, ies_len);

@@ -247,8 +247,16 @@
  *    on dect_link_setup_resume(); a release from the handset ends the hold
  *    with {CC-RELEASE-COM}. Answering stops the PT's 20 s P<CC.03>, so the
  *    fetch budget is no longer 20 s for a call (bench test 7: "---").
+ *
+ * 25: a handset-placed call in steps (2026-10-25). Layout change: struct
+ *    dect_cc gains proceeded, alerted. New: dect_cc_proceed(),
+ *    dect_cc_alert(), dect_cc_connect() (dect_cc_accept() is the last).
+ *    **Behaviour change:** our {CC-CONNECT} enters ACTIVE (EN 300 175-5
+ *    §9.3.1.8); CONNECT PENDING is no longer used for these calls, and
+ *    stats.connected counts on CONNECT. The codec is chosen when the
+ *    SETUP arrives, so dect_cc_codec() can drive a bind before CONNECT.
  */
-#define OPENDECTCELL_API_VERSION 24
+#define OPENDECTCELL_API_VERSION 25
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

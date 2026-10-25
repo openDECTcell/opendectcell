@@ -61,7 +61,7 @@ static void test_incoming_setup(void)
 	n = pp_setup(buf, sizeof(buf), 0);
 	dect_cc_rx(&cc, buf, n);
 	CHECK_EQ(cc.stats.setup, 1);
-	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
 
 	/* First response is CALL-PROC, responder-side (F=1). */
 	n = dect_cc_poll(&cc, out, sizeof(out));
@@ -236,7 +236,7 @@ static void test_list_access_call_gets_call_proc_only(void)
 	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
 	n = dect_cc_poll(&cc, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_CC_CONNECT);
-	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
 }
 
 /*
@@ -778,7 +778,7 @@ static void test_peer_basic_service_decides_speech(void)
 		 * taken through to CONNECT.
 		 */
 		CHECK_EQ(cc.state, (cases[i].svc >> 4) == 0x2u
-			 ? DECT_CC_ST_PROCEEDING : DECT_CC_ST_CONNECT_PENDING);
+			 ? DECT_CC_ST_PROCEEDING : DECT_CC_ST_ACTIVE);
 	}
 }
 
@@ -853,7 +853,7 @@ static void test_collects_the_dialled_digits_from_a_real_capture(void)
 	/* The handset dials: its SETUP first, so we are in a call. */
 	n = pp_setup(buf, sizeof(buf), 0);
 	dect_cc_rx(&cc, buf, n);
-	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
 	while (dect_cc_poll(&cc, buf, sizeof(buf)) > 0)
 		;		/* drain CALL-PROC and CONNECT */
 
@@ -867,7 +867,7 @@ static void test_collects_the_dialled_digits_from_a_real_capture(void)
 
 	/* No reply: 8.10 leaves the FT in the same state, LAPC has acked. */
 	CHECK_EQ(dect_cc_poll(&cc, buf, sizeof(buf)), 0);
-	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
 }
 
 /* "in one or several {CC-INFO} messages" -- digits append in arrival order. */
@@ -1356,7 +1356,7 @@ static void test_second_setup_during_an_active_call_is_rejected(void)
 	dect_cc_rx(&cc, buf, n);
 	dect_cc_poll(&cc, out, sizeof(out));	/* CALL-PROC */
 	dect_cc_poll(&cc, out, sizeof(out));	/* CONNECT */
-	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
 
 	n = pp_setup(buf, sizeof(buf), 3);	/* another call, TV 3 */
 	dect_cc_rx(&cc, buf, n);
@@ -1365,7 +1365,7 @@ static void test_second_setup_during_an_active_call_is_rejected(void)
 	CHECK_EQ(out[0], 0xB3u);			/* F=1, TV=3 */
 	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
 	CHECK_EQ(out[3], DECT_CC_REASON_INSUFFICIENT_RESOURCES);
-	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
 	CHECK_EQ(cc.ti_value, 0u);
 	CHECK_EQ(cc.stats.collisions, 1u);
 
@@ -1682,7 +1682,7 @@ static void test_overlap_receiving(void)
 	CHECK_EQ(types_of(&cc, t, sizeof(t)), 2u);
 	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
 	CHECK_EQ(t[1], DECT_CC_CONNECT);
-	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
 	CHECK_EQ(dect_cc_accept(&cc), -1);		/* only once */
 
 	/* <<SENDING-COMPLETE>> in a CC-INFO moves it on by itself */
@@ -1695,7 +1695,7 @@ static void test_overlap_receiving(void)
 	dect_cc_rx(&cc, buf, n);
 	CHECK_EQ(types_of(&cc, t, sizeof(t)), 2u);
 	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
-	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
 
 	/* ... and in the SETUP: no SETUP-ACK at all */
 	dect_cc_init(&cc);
@@ -1714,6 +1714,57 @@ static void test_overlap_receiving(void)
 	dect_cc_rx(&cc, buf, n);
 	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
 	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+}
+
+/*
+ * The steps for an owner that routes the call: CALL-PROC, ALERTING,
+ * CONNECT, each once; ACTIVE on CONNECT (§9.3.1.8, no CONNECT-ACK); the
+ * codec known from the SETUP, so the U-plane can go up before CONNECT.
+ */
+static void test_handset_call_in_steps(void)
+{
+	static const uint8_t a540[] = { 0x90, 0x03, 0x00, 0x01,
+					0x02, 0x00, 0x84 };
+	struct dect_cc cc;
+	uint8_t buf[64], t[8], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	dect_cc_set_wideband(&cc, 1);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, a540, sizeof(a540));
+	dect_cc_rx(&cc, buf, n);
+	(void)types_of(&cc, t, sizeof(t));			/* SETUP-ACK */
+	CHECK_EQ(dect_cc_codec(&cc), DECT_CC_CODEC_G722);	/* already */
+
+	CHECK_EQ(dect_cc_proceed(&cc), 0);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
+	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);	/* F<CC.01> off */
+
+	CHECK_EQ(dect_cc_alert(&cc), 0);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);		/* no 2nd PROC */
+	CHECK_EQ(t[0], DECT_CC_ALERTING);
+	CHECK_EQ(dect_cc_alert(&cc), -1);
+
+	CHECK_EQ(dect_cc_connect(&cc), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CONNECT);
+	CHECK_EQ(out[5], DECT_CC_CODEC_G722);	/* 7c 04 90 [03] 00 81 */
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+	CHECK_EQ(cc.stats.connected, 1u);
+	CHECK_EQ(dect_cc_connect(&cc), -1);
+
+	/* list access is never connected */
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x28);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
+	CHECK_EQ(dect_cc_connect(&cc), -1);
+	CHECK_EQ(dect_cc_alert(&cc), -1);
 }
 
 /* F<CC.01>: 20 s, restarted by every CC-INFO, then "timer expiry". */
@@ -1851,6 +1902,7 @@ int main(void)
 	test_handset_choice_is_learned_on_our_call();
 	test_overlap_receiving();
 	test_overlap_timer();
+	test_handset_call_in_steps();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();

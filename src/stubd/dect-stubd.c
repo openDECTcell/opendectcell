@@ -824,6 +824,15 @@ struct stubd {
 		int      no_overlap;
 		unsigned dial_wait_ms;
 		/*
+		 * The call timer on handset-placed calls (bench test 12b: none
+		 * on the A540). alertms=N: {CC-ALERTING} after CALL-PROC and
+		 * CONNECT N ms later. bindfirst: bind the audio after CALL-PROC
+		 * and CONNECT once it is up, as EN 300 175-5 §9.3.1.8 orders
+		 * it. Both: CONNECT when both hold.
+		 */
+		unsigned alert_ms;
+		int      bind_first;
+		/*
 		 * pagehdr=N: a FOURTH payload byte on the 0x0300 page.
 		 *
 		 * [CR A-0091] corrects [CR A-0076] §2. The page builder does
@@ -1085,6 +1094,8 @@ struct stubd {
 		int call_wideband;	/* this call's bind is the G.722 one */
 		size_t   dial_len;	/* digits seen so far in OVERLAP */
 		uint64_t dial_change_ms;	/* when the last ones arrived */
+		int      connect_staged;	/* alertms/bindfirst: CONNECT due */
+		uint64_t connect_at;		/* ... not before this */
 		enum dect_mm_state reported_state;	/* last one logged */
 		uint8_t handle;
 		/*
@@ -2499,7 +2510,46 @@ static void dial_tick(struct stubd *s, uint64_t now)
 	       "digit, connecting\n", (int)len, (const char *)k,
 	       s->audio.dial_wait_ms);
 	fflush(stdout);
+	if (s->audio.alert_ms || s->audio.bind_first) {
+		/* the steps a routed call takes; connect_tick() finishes */
+		if (dect_cc_proceed(&s->reg.link.cc) == 0) {
+			if (s->audio.alert_ms) {
+				(void)dect_cc_alert(&s->reg.link.cc);
+				printf("call: ALERTING sent, CONNECT in %u ms\n",
+				       s->audio.alert_ms);
+			}
+			s->reg.connect_staged = 1;
+			s->reg.connect_at = now + s->audio.alert_ms;
+			dect_link_drain(&s->reg.link, now);
+			pump_lapc(s);
+		}
+		return;
+	}
 	if (dect_cc_accept(&s->reg.link.cc) == 0) {
+		dect_link_drain(&s->reg.link, now);
+		pump_lapc(s);
+	}
+}
+
+/* alertms / bindfirst: send the CONNECT once its conditions hold. */
+static void connect_tick(struct stubd *s, uint64_t now)
+{
+	if (!s->reg.connect_staged)
+		return;
+	if (!s->reg.active ||
+	    s->reg.link.cc.state != DECT_CC_ST_PROCEEDING) {
+		s->reg.connect_staged = 0;	/* released meanwhile */
+		return;
+	}
+	if (now < s->reg.connect_at ||
+	    (s->audio.bind_first && !s->reg.audio_connected))
+		return;
+	s->reg.connect_staged = 0;
+	printf("call: CONNECT now%s%s\n",
+	       s->audio.alert_ms ? ", after ALERTING" : "",
+	       s->audio.bind_first ? ", the U-plane is up (0x022D sent)" : "");
+	fflush(stdout);
+	if (dect_cc_connect(&s->reg.link.cc) == 0) {
 		dect_link_drain(&s->reg.link, now);
 		pump_lapc(s);
 	}
@@ -3601,6 +3651,18 @@ static void send_page(struct stubd *s)
 static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 {
 	/*
+	 * No link to send it on: the handsets that woke for the page took
+	 * their links and dropped them again (12d, 2026-10-25: the SETUP was
+	 * queued at 45.0 s with every link gone, and nothing rang). Page
+	 * again; the page budget still bounds it.
+	 */
+	if (!s->reg.active) {
+		printf("ring: no link up at the page-response deadline -- "
+		       "paging again\n");
+		s->ring_state = RING_PAGING;
+		return;
+	}
+	/*
 	 * Our call goes to the first store's handset. A link that has taken on
 	 * another handset is that handset's; a {CC-SETUP} on it would address
 	 * the wrong one. Wait for it to clear, as for a busy CC entity.
@@ -4288,8 +4350,9 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 			first ? "" : ",", hs_slot(s, i), hs_slot(s, i));
 		json_str(f, s->hs[i].path);
 		fprintf(f, ",\"link\":%s", linked ? "true" : "false");
-		if (seen)
-			fprintf(f, ",\"seen_ms_ago\":%llu",
+		/* in contact right now while it holds a link */
+		if (seen || linked)
+			fprintf(f, ",\"seen_ms_ago\":%llu", linked ? 0ull :
 				(unsigned long long)(now - seen));
 		fprintf(f, "}");
 		first = 0;
@@ -4378,6 +4441,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.persisted = 0;
 	s->reg.call_bound = 0;
 	s->reg.call_wideband = 0;
+	s->reg.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
@@ -5099,7 +5163,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 
 	if (!s->reg.call_bound &&
 	    (s->reg.link.cc.state == DECT_CC_ST_CONNECT_PENDING ||
-	     s->reg.link.cc.state == DECT_CC_ST_ACTIVE) &&
+	     s->reg.link.cc.state == DECT_CC_ST_ACTIVE ||
+	     (s->audio.bind_first && s->reg.connect_staged &&
+	      s->reg.link.cc.state == DECT_CC_ST_PROCEEDING)) &&
 	    (s->reg.link.cc.incoming ||
 	     dect_cc_peer_is_speech(&s->reg.link.cc))) {
 		s->reg.audio_connected = 0;
@@ -5734,6 +5800,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		holdback_tick(s, now);
 		fetch_tick(s, now);
 		dial_tick(s, now);
+		connect_tick(s, now);
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
@@ -6039,6 +6106,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->no_overlap = 1;
 		else if (klen == 8 && !memcmp(key, "dialwait", 8))
 			a->dial_wait_ms = (unsigned)v;
+		else if (klen == 7 && !memcmp(key, "alertms", 7))
+			a->alert_ms = (unsigned)v;
+		else if (!eq && klen == 9 && !memcmp(key, "bindfirst", 9))
+			a->bind_first = 1;
 		else if (klen == 8 && !memcmp(key, "pagemail", 8)) {
 			/* text, not a number: a mail spec, taken verbatim */
 			size_t n = (size_t)(spec - (eq + 1));
@@ -6483,6 +6554,9 @@ static void usage(void)
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech;\n"
 		"           0x80 with narrowband)\n"
+		"           alertms=N    ALERTING after CALL-PROC, CONNECT N ms later\n"
+		"           bindfirst    bind the audio after CALL-PROC, CONNECT once\n"
+		"           it is up (EN 300 175-5 9.3.1.8)\n"
 		"           nooverlap    CONNECT a handset's call at once instead of\n"
 		"           SETUP-ACK, digits, then CONNECT dialwait=MS (3000)\n"
 		"           after the last digit\n"
