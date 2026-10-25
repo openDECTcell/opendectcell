@@ -29,6 +29,19 @@
 /* -1 (AC all 0xff) for a non-digit or more digits than ac_len holds */
 int dect_dsaa_pin_to_ac(const char *pin, uint8_t *ac, size_t ac_len);
 
+/*
+ * Registration PIN lengths. GAP's AC is 32 bits, so 8 digits fill it, and 8
+ * is what a base should hand out; 6 and 4 are fallbacks for a handset that
+ * will not take more. dect_mm refuses to register with fewer than
+ * DECT_PIN_DIGITS_MIN (a PIN that short is guessed within one window).
+ */
+#define DECT_PIN_DIGITS_MAX	8u
+#define DECT_PIN_DIGITS_DEFAULT	8u
+#define DECT_PIN_DIGITS_MIN	4u
+
+/* 0 if pin is min_digits..DECT_PIN_DIGITS_MAX decimal digits, else -1 */
+int dect_dsaa_pin_check(const char *pin, unsigned min_digits);
+
 /* B1: derive the 16-byte auth key K by repeating the UAK or AC. */
 void dect_dsaa_b1(const uint8_t *val, size_t len, uint8_t k[DECT_AUTH_KEY_LEN]);
 

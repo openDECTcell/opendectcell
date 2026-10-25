@@ -42,11 +42,16 @@
 #define ARC_A_LEN		36u	/* class-A ARI length in bits */
 #define AC_LEN			4u
 
+/* NUL-terminated within cfg.pin and DECT_PIN_DIGITS_MIN..MAX digits */
+static int pin_usable(const struct dect_mm *mm)
+{
+	return memchr(mm->cfg.pin, 0, sizeof(mm->cfg.pin)) &&
+	       !dect_dsaa_pin_check(mm->cfg.pin, DECT_PIN_DIGITS_MIN);
+}
+
 static void pin_ac(const struct dect_mm *mm, uint8_t ac[AC_LEN])
 {
-	const char *pin = mm->cfg.pin[0] ? mm->cfg.pin : "0000";
-
-	dect_dsaa_pin_to_ac(pin, ac, AC_LEN);
+	dect_dsaa_pin_to_ac(mm->cfg.pin, ac, AC_LEN);
 }
 
 void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg)
@@ -626,7 +631,11 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 	mm->stats.access_req++;
 	learn_self_description(mm, ies, ies_len);
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
-	if (mm->cfg.registration == DECT_MM_REG_CLOSED ||
+	/*
+	 * No usable PIN, no registration. An empty PIN used to mean "0000",
+	 * so an owner that forgot to set one opened the base to anybody.
+	 */
+	if (mm->cfg.registration == DECT_MM_REG_CLOSED || !pin_usable(mm) ||
 	    (mm->cfg.registration == DECT_MM_REG_SAME &&
 	     (!pid || !mm->port_id_len || pid_len != mm->port_id_len ||
 	      memcmp(pid, mm->port_id, pid_len)))) {

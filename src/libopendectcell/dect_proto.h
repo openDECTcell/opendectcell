@@ -266,8 +266,14 @@
  *    (A-0121). **Renamed:** the eight event counters are now acrc, xcrc,
  *    zcrc, qbit1, qbit2, handover, slideerr, syncerr (A-0123), also as
  *    JSON keys; the JSON radio object gains "dbm" and "quality".
+ *
+ * 27: registration PIN length (2026-10-25). No layout change. New:
+ *    dect_dsaa_pin_check() and DECT_PIN_DIGITS_MIN/DEFAULT/MAX (4/8/8).
+ *    **Behaviour change:** dect_mm_cfg.pin no longer defaults to "0000"
+ *    when empty; a PIN that is not 4 to 8 digits refuses every
+ *    {ACCESS-RIGHTS-REQUEST} ("IPUI not accepted") before KEY-ALLOCATE.
  */
-#define OPENDECTCELL_API_VERSION 26
+#define OPENDECTCELL_API_VERSION 27
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

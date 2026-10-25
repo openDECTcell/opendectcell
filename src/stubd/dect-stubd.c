@@ -7473,7 +7473,8 @@ static void usage(void)
 		"  -g       GAP registration mode: bring up the radio + open\n"
 		"           registration, then run the host C-plane stack so a\n"
 		"           handset can register (parks the radio on exit)\n"
-		"  -P PIN   registration PIN / AC (default 0000; used with -g)\n"
+		"  -P PIN   registration PIN / AC, 4 to 8 digits (default 0000;\n"
+		"           used with -g)\n"
 		"  -s PATH  subscription store, holds the handset key; reloaded into\n"
 		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off).\n"
 		"           Repeat for every handset the base holds: all are served\n"
@@ -7763,6 +7764,7 @@ int main(int argc, char **argv)
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
+	s.pin = "0000";		/* the lab's; the library has no default */
 	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:N:gP:s:k:w:V:Ca:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
@@ -7799,19 +7801,16 @@ int main(int argc, char **argv)
 			s.xmail[s.n_xmail++] = optarg;
 			break;
 		case 'g': s.do_register = 1; break;
-		case 'P': {
-			uint8_t ac[4];
-
+		case 'P':
 			/* GAP: up to 8 decimal digits (a 32-bit AC) */
-			if (!optarg[0] ||
-			    dect_dsaa_pin_to_ac(optarg, ac, sizeof(ac))) {
-				fprintf(stderr, "-P wants 1 to 8 decimal "
-					"digits\n");
+			if (dect_dsaa_pin_check(optarg, DECT_PIN_DIGITS_MIN)) {
+				fprintf(stderr, "-P wants %u to %u decimal "
+					"digits\n", DECT_PIN_DIGITS_MIN,
+					DECT_PIN_DIGITS_MAX);
 				return 2;
 			}
 			s.pin = optarg;
 			break;
-		}
 		case 's':
 			if (!optarg[0]) {
 				sub_off = 1;

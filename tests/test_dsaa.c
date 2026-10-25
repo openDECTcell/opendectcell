@@ -65,6 +65,20 @@ static void test_pin_ac_limits(void)
 	check_bytes("AC x", ac, none, 4);
 }
 
+/* 8 digits is the default length; 6 and 4 pass only with a lower minimum */
+static void test_pin_check(void)
+{
+	CHECK_EQ(dect_dsaa_pin_check("12345678", DECT_PIN_DIGITS_DEFAULT), 0);
+	CHECK_EQ(dect_dsaa_pin_check("123456", DECT_PIN_DIGITS_DEFAULT), -1);
+	CHECK_EQ(dect_dsaa_pin_check("123456", 6), 0);
+	CHECK_EQ(dect_dsaa_pin_check("1234", DECT_PIN_DIGITS_MIN), 0);
+	CHECK_EQ(dect_dsaa_pin_check("123", DECT_PIN_DIGITS_MIN), -1);
+	CHECK_EQ(dect_dsaa_pin_check("123456789", DECT_PIN_DIGITS_MIN), -1);
+	CHECK_EQ(dect_dsaa_pin_check("1234a678", DECT_PIN_DIGITS_MIN), -1);
+	CHECK_EQ(dect_dsaa_pin_check("", 0), -1);
+	CHECK_EQ(dect_dsaa_pin_check(NULL, 0), -1);
+}
+
 /*
  * Thesis §3.4.1: the UAK after step2 is 93638b457afd40fa585feb6030d572a2. In the
  * key-allocation flow the UAK is KS' = A21(K, RS) (= DSAA XOR 0xAA per byte), so
@@ -119,6 +133,7 @@ int main(void)
 {
 	test_pin_ac_b1();
 	test_pin_ac_limits();
+	test_pin_check();
 	test_dsaa_core_vector();
 	test_annex_k();
 	return CHECK_DONE();

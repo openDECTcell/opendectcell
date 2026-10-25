@@ -239,6 +239,62 @@ static void test_register_bad_pin(void)
 	CHECK_EQ(mm.stats.auth_fail, 1);
 }
 
+/* An 8-digit PIN fills the AC and registers. */
+static void test_register_8_digit_pin(void)
+{
+	struct dect_mm_cfg cfg = { .pin = "31415926", .authenticate = 1 };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rand_p[8] = { 9, 9, 9, 9, 9, 9, 9, 9 };
+	uint8_t rs[8] = { 0 };
+	uint8_t rs16[16] = { 0 };
+	uint8_t buf[256], out[256];
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	n = pp_access_request(buf, sizeof(buf), 1);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_KEY_ALLOCATE);
+	n = pp_auth_request(buf, sizeof(buf), 1, "31415926", rand_f, rs,
+			    rand_p, 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	CHECK_EQ(mm.stats.auth_ok, 1);
+	CHECK_EQ(mm.subscribed, 1);
+}
+
+/*
+ * No usable PIN, no registration: refused before KEY-ALLOCATE, so not even
+ * "0000" (the old default for "") gets a challenge. Three digits and a
+ * PIN filling cfg.pin without a terminator count as unusable too.
+ */
+static void test_register_without_a_usable_pin(void)
+{
+	static const char *const pins[] = { "", "123", "12a4", NULL };
+	uint8_t rand_f[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rs16[16] = { 0 };
+	uint8_t buf[256], out[256];
+	unsigned i;
+	size_t n;
+
+	for (i = 0; i < 4u; i++) {
+		struct dect_mm_cfg cfg = { .authenticate = 1 };
+		struct dect_mm mm;
+
+		if (pins[i])
+			strcpy(cfg.pin, pins[i]);
+		else
+			memset(cfg.pin, '1', sizeof(cfg.pin));
+		dect_mm_init(&mm, &cfg);
+		n = pp_access_request(buf, sizeof(buf), 1);
+		dect_mm_rx(&mm, buf, n, rand_f, rs16);
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
+		CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_NOT_ACCEPTED);
+		CHECK_EQ(mm.stats.key_alloc_sent, 0);
+	}
+}
+
 /* After registration the PP runs location registration; we must LOCATE-ACCEPT. */
 static void test_locate(void)
 {
@@ -967,6 +1023,8 @@ int main(void)
 	test_sub_slot_drives_the_tpui();
 	test_register_ok();
 	test_register_bad_pin();
+	test_register_8_digit_pin();
+	test_register_without_a_usable_pin();
 	test_locate();
 	test_cipher();
 	test_tpui_assignment_is_confirmed_by_the_ack();

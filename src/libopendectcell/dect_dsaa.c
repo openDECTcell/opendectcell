@@ -228,6 +228,16 @@ int dect_dsaa_pin_to_ac(const char *pin, uint8_t *ac, size_t ac_len)
 	return 0;
 }
 
+int dect_dsaa_pin_check(const char *pin, unsigned min_digits)
+{
+	uint8_t ac[DECT_PIN_DIGITS_MAX / 2u];
+	size_t len = pin ? strlen(pin) : 0u;
+
+	if (!len || len < min_digits || dect_dsaa_pin_to_ac(pin, ac, sizeof(ac)))
+		return -1;
+	return 0;
+}
+
 void dect_dsaa_b1(const uint8_t *val, size_t len, uint8_t k[16])
 {
 	size_t i;

@@ -84,7 +84,11 @@ enum dect_mm_cipher_state {
 #define DECT_MM_TXQ	3u		/* pending outbound NWK messages */
 
 struct dect_mm_cfg {
-	char    pin[DECT_MM_PIN_MAX];		/* decimal PIN (AC); "" = default */
+	/*
+	 * Decimal PIN (AC), DECT_PIN_DIGITS_MIN..MAX digits. Anything else
+	 * (including "") refuses every registration: there is no default.
+	 */
+	char    pin[DECT_MM_PIN_MAX];
 	uint8_t rfpi[DECT_MM_RFPI_LEN];		/* base identity for FIXED-IDENTITY */
 	uint8_t authenticate;			/* 1 = challenge the PP (default) */
 	/*

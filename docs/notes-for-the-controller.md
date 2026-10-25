@@ -655,3 +655,45 @@ known from the SETUP, so you can bind the audio before CONNECT. Ringback
 from ALERTING was heard on the A540. **Open:** the A540 shows no call timer
 on calls it places, whatever we sent (12e); the C430A/AS690H are next, and
 the room is asked what stock sends (Q-0060).
+
+## API 26-27: the call timer, radio numbers, and 8-digit PINs `[2026-10-25 evening]`
+
+**API 26, call status and FRITZ!OS's link numbers.** Layout change:
+`struct dect_cc` gains `call_status` and `status_call_id`;
+`struct dect_diag_status` gains `has_long`, `connect_frames` and `uptime`.
+`dect_cc_set_call_status(cc, 1, call_id)` puts
+<<CALL-INFORMATION>> "CS call connect" (`7e 06 01 00 81 02 01 85`) into our
+`{CC-CONNECT}` to a handset's call. TS 102 527-3 §7.4.6.4.3 requires it, and
+stock sends it (A-0122). It is the best candidate for the missing call
+timer, but it is **not yet tested on air** (bench test 15).
+`dect_diag_rssi_dbm10()` and `dect_diag_quality()` turn the chip's link
+numbers into dBm and a quality percentage (A-0121). **Renamed:** the eight
+event counters are now `acrc`, `xcrc`, `zcrc`, `qbit1`, `qbit2`, `handover`,
+`slideerr` and `syncerr` (A-0123), and the JSON keys follow. The JSON radio
+object gains `"dbm"` and `"quality"`.
+
+**API 27, registration PIN length.** No layout change, but behaviour
+changed. **Act on it before the libopendectcell integration thaws:**
+
+- **The library has no default PIN any more.** An empty `dect_mm_cfg.pin`
+  used to mean "0000", so an owner that forgot to set a PIN opened
+  registration to anybody nearby. A PIN that is not 4 to 8 decimal digits
+  now refuses every `{ACCESS-RIGHTS-REQUEST}` with "IPUI not accepted"
+  (`0x06`), before any KEY-ALLOCATE. Always set the window's PIN.
+- **New:** `dect_dsaa_pin_check(pin, min_digits)` returns 0 for
+  `min_digits` to 8 decimal digits. The constants `DECT_PIN_DIGITS_MIN` (4),
+  `DECT_PIN_DIGITS_DEFAULT` (8) and `DECT_PIN_DIGITS_MAX` (8) go with it.
+- **The maintainer's decision:** the controller hands out **8-digit PINs by
+  default**, with 6 or 4 as a fallback for a handset that will not take
+  8. Today `registration_pin_digits` defaults to 6 and allows 4 to 8
+  (`openapi.yaml`, `threat-model.md` B1 and §"Tokens and PINs", plus the
+  open question in `threat-model.md` and the maintainers' notes). Make the default 8,
+  restrict the choices to 8, 6 and 4, and close the open question as
+  decided.
+- **Evidence:** 6- and 8-digit PINs registered the AS690H on 2026-10-25
+  (bench test 8). The A540 and C430A have only been registered with 4
+  digits, so we do not know yet whether they take 8 (bench test 20).
+  That is what the fallback is for.
+
+Generating the PIN stays with the controller: use uniform random digits
+(rejection sampling, not a modulus), as with RAND_F and RS.
