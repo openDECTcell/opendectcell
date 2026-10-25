@@ -2349,7 +2349,7 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 {
 	const uint8_t *id;
 	size_t len;
-	unsigned i;
+	unsigned i, delay;
 	int r, setup;
 
 	if (!s->audio.remote_path || !s->reg.active)
@@ -2369,14 +2369,23 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 			if (s->hs[i].remote && s->hs[i].port_id_len == len &&
 			    !memcmp(s->hs[i].port_id, id, len))
 				s->fetch_idx = (int)i;
-		s->fetch_at = now + (s->fetch_idx >= 0 ? s->audio.fetch_delay_ms
-						       : 0u);
+		/*
+		 * A record fetched earlier this run is here already: a
+		 * {CC-SETUP} held behind the {LOCATE-REQUEST} that fetched
+		 * it is served at once. Waiting again let the A540's
+		 * <CC.03> (20 s) run out (M4-30000-x-054928).
+		 */
+		delay = s->fetch_idx < 0 ? 0u :
+			s->hs[s->fetch_idx].fetched ? 0u :
+			s->audio.fetch_delay_ms;
+		s->fetch_at = now + delay;
 		printf("fetch: %s from a handset this cell does not hold -- %s "
 		       "(simulated, %u ms)\n",
 		       setup ? "CC-SETUP" : "LOCATE-REQUEST",
-		       s->fetch_idx >= 0 ? "asking the controller"
-					 : "unknown to the controller too",
-		       s->fetch_idx >= 0 ? s->audio.fetch_delay_ms : 0u);
+		       s->fetch_idx < 0 ? "unknown to the controller too" :
+		       s->hs[s->fetch_idx].fetched ? "record already fetched" :
+						     "asking the controller",
+		       delay);
 	}
 	if (s->reg.link.mm.stats.locate_retrans != s->fetch_retrans_seen) {
 		s->fetch_retrans_seen = s->reg.link.mm.stats.locate_retrans;

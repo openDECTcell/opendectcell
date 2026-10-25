@@ -593,8 +593,13 @@ a `{LOCATE-REQUEST}` from an identity the link does not hold is held, not
 rejected. `dect_mm_locate_pending()` gives you the identity; fetch the
 record, `dect_mm_hold()` it, then `dect_mm_locate_resume()` (accept; or
 reject "IPUI unknown" if you held nothing). The PT waits `<MM_locate.1>`
-= 20 s, retransmits once, then aborts. Measured: accepted at +2 s on the
-A540 (`M4-2000-045441`); 15 s and up not yet measured.
+= 20 s, retransmits once, then aborts. Measured on the A540: accepted at +2 s and
++15 s; at +30 s the request dies with its link and the next one is
+accepted. **Your real budget is the PT's `<CC.03>`, 20 s**: a Gigaset
+opens list access ~2 s after locating, holds that call 20 s, then
+releases it with "timer expiry" and takes the link (and the held LOCATE)
+with it. Keep a fetch under ~15 s. Serve a held SETUP the moment its
+record arrives.
 
 **API 19, a held `{CC-SETUP}`.** Same idea in `dect_link`:
 `dect_link_setup_pending()` / `dect_link_setup_resume()`. **This is the

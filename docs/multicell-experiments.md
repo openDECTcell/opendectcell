@@ -336,3 +336,109 @@ park, and the AS690H had located in M5 five minutes before. A short outage
 does not make it locate; six minutes did, twice (M4 voids). So no
 `{LOCATE-ACCEPT}` with <<DURATION>> went out. Re-run after six minutes
 parked.
+
+### M6a rerun: the AS690H honours <<DURATION>> to the half second `[M6-v1-054356]`
+
+After six minutes parked, `locvalid=1` (40.96 s), 300 s:
+
+| t (s) | `{LOCATE-REQUEST}` from | interval |
+|---|---|---|
+| 24.0 | AS690H | first, after the outage |
+| 65.5 | AS690H | 41.5 |
+| 107.1 | AS690H | 41.6 |
+| 148.6 | AS690H | 41.5 |
+| 190.1 | AS690H | 41.5 |
+| 231.6 | AS690H | 41.5 |
+| 258.8 | A540 | first |
+| 263.4 | C430A | first |
+| 273.2 | AS690H | 41.6 |
+
+All nine accepted with <<DURATION>> (`72 02 71 01`, after <<LOCATION-AREA>>),
+nine TPUI acknowledgements, no reject. Pre-committed row 1: **the AS690H
+re-locates 41.5 s after each accept**, i.e. 40.96 s plus ~0.5 s for its own
+scheduling. It keeps its registration. The A540 and C430A located once each
+inside the run; the run ended before their 41 s were up, so whether they
+honour it is open (M4 below tests the A540).
+
+So a cell **can make a handset locate on demand**. With `locvalid` the
+controller also gets presence for free: a handset that stops renewing has
+left the area or is off. (With a validity of minutes, not 41 s: every
+renewal costs the handset a link setup and battery.)
+
+### M4 at 30 s, with `locvalid=1`: the A540 locates, and its `<CC.03>` is 20 s `[M4-30000-x-054928]`
+
+Right after M6a, with the A540's 41 s validity expired. Times from radio up:
+
+| t (s) | event |
+|---|---|
+| 2.1 | the A540's `{LOCATE-REQUEST}` (IPUI): held, fetch started |
+| 4.0 | its list-access `{CC-SETUP}` on the same link: held behind the LOCATE |
+| 23.9 | it releases that call itself, `{CC-RELEASE-COM}` reason `0x0D` "timer expiry" (19.9 s after its SETUP); link down at 24.8, which ends the held LOCATE too |
+| 29.3 | new link, list-access `{CC-SETUP}` again: held, new 30 s fetch |
+| 43.0 | `{LOCATE-REQUEST}` again on that link |
+| 48.5 | releases the call, `0x0D` (19.2 s) |
+| 50.8 | `{CC-SETUP}` again |
+| 56.0 | the fetch completes: **`{LOCATE-ACCEPT}`** (with <<DURATION>>) answers the 43.0 request; TPUI acknowledged at 59.5 |
+| 59.3 | the held 50.8 SETUP starts *another* 30 s fetch -- **a daemon bug**, the record was already here |
+| 70.7 | releases it, `0x0D` (19.9 s); link down |
+| 73.0 | `{CC-SETUP}` once more: the A540 is held now, **served at once**, the internal names list ("DECT 1", "Line 1") read, released normally |
+
+Against the pre-commit: the 30 s row ("retransmits at ~20 s; our accept still
+lands") is **not cleanly measured**. There was no `{LOCATE-REQUEST}`
+retransmission at 22 s. The first request died with its link when the
+handset's CC timer ran out, and the accept that landed answered a second
+request 13 s old. What is measured:
+
+- **The A540's `<CC.03>` is 20 s**, as the standard says (annex A): three
+  held SETUPs, each released with "timer expiry" 19.2-19.9 s after it was
+  sent. A held `{CC-SETUP}` must be served inside ~19 s.
+- **The A540 does not give up on location registration**: it located again
+  on its next link, and the late fetch registered it.
+- **A held SETUP takes its LOCATE down with it.** The release ends the link,
+  and the link carries the MM transaction. For the controller: a fetch that
+  answers a roamer's call must land inside `<CC.03>`, not `<MM_locate.1>`.
+
+**Fix** (this commit): a held `{CC-SETUP}` from a handset whose record was
+already fetched this run is served at once ("record already fetched"),
+not after another delay.
+
+### M4 at 15 s with the fix `[pre-commit]`
+
+Same setup, build with the fix. The A540 should locate on radio up (its
+validity has run out again).
+
+| seen | meaning |
+|---|---|
+| LOCATE held, `{LOCATE-ACCEPT}` at +15 s, TPUI acked; the list-access SETUP held behind it is served right after ("record already fetched"), before its 20 s | a 15 s fetch serves a roamer's location registration **and** the call it made meanwhile; the M4 15 s row holds |
+| the accept at +15 s, but the SETUP released with `0x0D` first | the SETUP arrived early enough that 15 s + its offset passed 20 s; note the offset |
+| no `{LOCATE-REQUEST}` from the A540 | void; it did not honour <<DURATION>> after all, or did not see the base |
+
+### M4 at 15 s with the fix: registration and the waiting call both served `[M4-15000-x-055218, build d486c55b]`
+
+| t (s) | event |
+|---|---|
+| 1.9 | the A540's `{LOCATE-REQUEST}`: held, 15 s fetch |
+| 3.8 | its list-access `{CC-SETUP}`: held behind it |
+| 16.4 | `{LOCATE-ACCEPT}` at **+15.000 s**; TPUI acknowledged at 17.2 |
+| 16.9 | the held SETUP: "record already fetched", **served at once**, 13.1 s after the handset sent it |
+| 17.1-19.0 | internal names list read ("DECT 1", "Line 1"), released normally by the A540 |
+| 25.0, 29.1 | the C430A and the AS690H locate again (validity expired), accepted |
+
+Pre-committed row 1. **A 15 s fetch serves a roamer's location
+registration and the call it placed meanwhile.**
+
+### M4 summary (07.56, A540)
+
+| controller latency | location registration | a call placed meanwhile |
+|---|---|---|
+| 2 s | accepted on the first request | served (since the fix) |
+| 15 s | accepted on the first request | served, 13 s after it was sent |
+| 30 s | the first request dies with its link when the call times out; the **next** request is accepted | released by the handset at 20 s (`<CC.03>`, "timer expiry"); the following one is served |
+| 45 s | not run; by the 30 s run, it adds nothing new | |
+
+**The budget for the controller is the PT's `<CC.03>`, 20 s, minus the
+seconds between the handset's LOCATE and its first call** (1.9 s here). A
+fetch under ~15 s is invisible to the user. Longer ones still register the
+handset, one link later, but a call placed in the gap fails. And a roamer in
+the same location area does not locate at all, so its first message is a
+`{CC-SETUP}` with the full 20 s and no LOCATE in front.
