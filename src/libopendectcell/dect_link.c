@@ -233,7 +233,27 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 					ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
 					&pid_len);
 
-				(void)dect_mm_adopt(&l->mm, pid, pid_len);
+				/*
+				 * A roamer that did not locate here (same
+				 * location area) calls straight away: hold
+				 * its SETUP while the owner fetches the
+				 * record, as MM holds a LOCATE-REQUEST.
+				 */
+				if (!dect_mm_adopt(&l->mm, pid, pid_len) &&
+				    pid && l->mm.cfg.defer_unknown &&
+				    !l->setup_len &&
+				    ind->nwk_len <= sizeof(l->setup) &&
+				    pid_len <= sizeof(l->setup_id)) {
+					memcpy(l->setup, ind->nwk, ind->nwk_len);
+					l->setup_len = ind->nwk_len;
+					memcpy(l->setup_id, pid, pid_len);
+					l->setup_id_len = pid_len;
+					goto drained;
+				}
+				if (l->setup_len && pid &&
+				    pid_len == l->setup_id_len &&
+				    !memcmp(pid, l->setup_id, pid_len))
+					goto drained;	/* its repeat */
 			}
 			dect_cc_set_gate(&l->cc, l->mm.port_id,
 					 l->mm.port_id_len);
@@ -252,6 +272,36 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			dect_mm_rx(&l->mm, ind->nwk, ind->nwk_len, rand_f, rs);
 		}
 	}
+drained:
 	drain_nwk(l, now);
 	return 0;
+}
+
+int dect_link_setup_pending(const struct dect_link *l, const uint8_t **id,
+			    size_t *id_len)
+{
+	if (!l->setup_len)
+		return 0;
+	if (id)
+		*id = l->setup_id;
+	if (id_len)
+		*id_len = l->setup_id_len;
+	return 1;
+}
+
+int dect_link_setup_resume(struct dect_link *l, uint64_t now)
+{
+	uint8_t msg[DECT_LAPC_MSG_MAX];
+	size_t n = l->setup_len;
+	int known;
+
+	if (!n)
+		return 0;
+	memcpy(msg, l->setup, n);
+	l->setup_len = 0;
+	known = dect_mm_adopt(&l->mm, l->setup_id, l->setup_id_len);
+	dect_cc_set_gate(&l->cc, l->mm.port_id, l->mm.port_id_len);
+	dect_cc_rx(&l->cc, msg, n);
+	drain_nwk(l, now);
+	return known ? 1 : -1;
 }

@@ -67,6 +67,11 @@ struct dect_link {
 	 */
 	uint8_t  ciss[DECT_LAPC_MSG_MAX];
 	size_t   ciss_len;
+	/* A held {CC-SETUP} from an unknown IPUI, see dect_link_setup_resume(). */
+	uint8_t  setup[DECT_LAPC_MSG_MAX];
+	size_t   setup_len;
+	uint8_t  setup_id[DECT_MM_PORTID_MAX];
+	size_t   setup_id_len;
 	/* One pending LCE message: the {LCE-PAGE-REJECT}, sent first. */
 	uint8_t  lce[DECT_LAPC_MSG_MAX];
 	size_t   lce_len;
@@ -176,6 +181,19 @@ int dect_link_send_time(struct dect_link *l, const struct dect_time *t);
  */
 int dect_link_page_reject(struct dect_link *l, const uint8_t *ipui,
 			  size_t ipui_len, uint8_t ti_value);
+
+/*
+ * With mm.cfg.defer_unknown, a {CC-SETUP} whose IPUI the link cannot adopt
+ * is held, unanswered, instead of being turned away: a roamer in the same
+ * location area calls without locating first. Fetch the record,
+ * dect_mm_hold() it, then dect_link_setup_resume(): the SETUP goes through
+ * the gate again and is served, or turned away as before. Returns 1 served
+ * (the identity is held now), -1 turned away, 0 nothing pending. The PT
+ * waits <CC.03> = 20 s for an answer (EN 300 175-5 annex A).
+ */
+int dect_link_setup_pending(const struct dect_link *l, const uint8_t **id,
+			    size_t *id_len);
+int dect_link_setup_resume(struct dect_link *l, uint64_t now);
 
 /* Watch every NWK message the link sends. Pass NULL to stop watching. */
 void dect_link_set_tx_log(struct dect_link *l,

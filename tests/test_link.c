@@ -202,6 +202,52 @@ static void test_page_reject_is_built_from_the_response(void)
 	CHECK_EQ(l.lce_len, 0u);
 }
 
+/*
+ * A roamer in the same location area calls without locating: with
+ * defer_unknown its {CC-SETUP} is held while the record is fetched, then
+ * served on resume -- or turned away if the record never came.
+ */
+static void test_unknown_setup_is_held_for_a_fetch(void)
+{
+	static const uint8_t roamer[] = { 0x80, 0xa8, 0x02, 0x55, 0x66, 0x77, 0x88 };
+	struct dect_mm_cfg cfg;
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[32];
+	size_t n;
+	int pass;
+
+	for (pass = 0; pass < 2; pass++) {
+		memset(&cfg, 0, sizeof(cfg));
+		cfg.defer_unknown = 1;
+		dect_link_init(&l, 1, &cfg);
+		n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+				       DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+		n = dect_nwk_put_ie(msg, sizeof(msg), n,
+				    DECT_IE_PORTABLE_IDENTITY, roamer,
+				    sizeof(roamer));
+		feed_nwk(&l, msg, n, &ind);
+		CHECK_EQ(ind.cc_message, 1u);
+		CHECK_EQ(l.cc.stats.setup, 0u);			/* held */
+		CHECK_EQ(l.cc.stats.rejected_identity, 0u);
+		CHECK_EQ(dect_link_setup_pending(&l, NULL, NULL), 1);
+
+		if (pass == 0) {	/* the record arrives */
+			CHECK_EQ(dect_mm_hold(&l.mm, roamer, sizeof(roamer),
+					      4, NULL, 6), 0);
+			CHECK_EQ(dect_link_setup_resume(&l, 0), 1);
+			CHECK_EQ(l.cc.stats.setup, 1u);
+			CHECK_EQ(l.mm.adopted, 6);
+		} else {		/* it never does */
+			CHECK_EQ(dect_link_setup_resume(&l, 0), -1);
+			CHECK_EQ(l.cc.stats.setup, 0u);
+			CHECK_EQ(l.cc.stats.rejected_identity, 1u);
+		}
+		CHECK_EQ(dect_link_setup_pending(&l, NULL, NULL), 0);
+		CHECK_EQ(dect_link_setup_resume(&l, 0), 0);
+	}
+}
+
 /* A fresh link owns its own state and has nothing to send. */
 static void test_init_is_quiet(void)
 {
@@ -416,6 +462,7 @@ int main(void)
 	test_page_response_carries_the_identity();
 	test_cc_admits_only_the_handset_mm_holds();
 	test_page_reject_is_built_from_the_response();
+	test_unknown_setup_is_held_for_a_fetch();
 	test_two_links_are_independent();
 	test_outbound_message_becomes_an_append_mail();
 	test_a_queued_message_needs_a_tick();

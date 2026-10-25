@@ -2349,10 +2349,17 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 	const uint8_t *id;
 	size_t len;
 	unsigned i;
-	int r;
+	int r, setup;
 
-	if (!s->audio.remote_path || !s->reg.active ||
-	    !dect_mm_locate_pending(&s->reg.link.mm, &id, &len))
+	if (!s->audio.remote_path || !s->reg.active)
+		return;
+	/* a held LOCATE-REQUEST, or a held CC-SETUP from a roamer that did
+	 * not locate (same location area) */
+	if (dect_mm_locate_pending(&s->reg.link.mm, &id, &len))
+		setup = 0;
+	else if (dect_link_setup_pending(&s->reg.link, &id, &len))
+		setup = 1;
+	else
 		return;
 	if (!s->fetch_req_ms) {
 		s->fetch_req_ms = now;
@@ -2363,8 +2370,9 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 				s->fetch_idx = (int)i;
 		s->fetch_at = now + (s->fetch_idx >= 0 ? s->audio.fetch_delay_ms
 						       : 0u);
-		printf("fetch: LOCATE-REQUEST from a handset this cell does not "
-		       "hold -- %s (simulated, %u ms)\n",
+		printf("fetch: %s from a handset this cell does not hold -- %s "
+		       "(simulated, %u ms)\n",
+		       setup ? "CC-SETUP" : "LOCATE-REQUEST",
 		       s->fetch_idx >= 0 ? "asking the controller"
 					 : "unknown to the controller too",
 		       s->fetch_idx >= 0 ? s->audio.fetch_delay_ms : 0u);
@@ -2383,9 +2391,11 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 				   (uint8_t)h->slot, NULL, s->fetch_idx);
 		h->fetched = 1;
 	}
-	r = dect_mm_locate_resume(&s->reg.link.mm);
+	r = setup ? dect_link_setup_resume(&s->reg.link, now)
+		  : dect_mm_locate_resume(&s->reg.link.mm);
 	printf("fetch: %s at +%llu ms after the request\n",
-	       r > 0 ? "LOCATE-ACCEPT sent" : "LOCATE-REJECT sent",
+	       setup ? (r > 0 ? "CC-SETUP served" : "CC-SETUP turned away")
+		     : (r > 0 ? "LOCATE-ACCEPT sent" : "LOCATE-REJECT sent"),
 	       (unsigned long long)(now - s->fetch_req_ms));
 	fflush(stdout);
 	s->fetch_req_ms = 0;

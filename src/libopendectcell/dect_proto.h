@@ -205,8 +205,15 @@
  *    from an identity the link does not hold is held instead of rejected:
  *    fetch the record, dect_mm_hold() it, then resume. The PT waits
  *    <MM_locate.1> = 20 s and retransmits once.
+ *
+ * 19: a held CC-SETUP, for roamers that do not locate (2026-10-25).
+ *    Layout change: struct dect_link gains setup/setup_len/setup_id/
+ *    setup_id_len. New: dect_link_setup_pending(), dect_link_setup_resume().
+ *    With mm.cfg.defer_unknown, a {CC-SETUP} from an IPUI the link cannot
+ *    adopt is held instead of turned away: a handset moving within one
+ *    location area calls without locating (multi-cell test M4).
  */
-#define OPENDECTCELL_API_VERSION 18
+#define OPENDECTCELL_API_VERSION 19
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
