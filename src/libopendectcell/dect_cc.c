@@ -619,6 +619,7 @@ uint8_t dect_cc_codec(const struct dect_cc *cc)
 }
 
 static void accept_now(struct dect_cc *cc);
+static void proceed(struct dect_cc *cc);
 
 static void on_setup(struct dect_cc *cc, int sending_complete)
 {
@@ -643,6 +644,16 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 		queue_release_com(cc, DECT_CC_REASON_INSUFFICIENT_RESOURCES);
 		cc->state = DECT_CC_ST_NULL;
 		cc->stats.rejected_busy++;
+		return;
+	}
+	/*
+	 * An internal call (call class 9, GAP N.31) is never connected here:
+	 * the owner has to reach the other handset first. A complete number
+	 * gets CALL-PROC and waits in PROCEEDING for dect_cc_alert/connect().
+	 */
+	if (cc->overlap && sending_complete &&
+	    (cc->peer_basic_service >> 4) == 0x9u) {
+		proceed(cc);
 		return;
 	}
 	if (cc->overlap && !sending_complete) {
@@ -1025,7 +1036,11 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			if (cc->state == DECT_CC_ST_OVERLAP) {
 				cc->overlap_deadline_ms = 0;	/* restart */
 				if (dect_nwk_find_fixed_ie(ies, ies_len,
-				    DECT_IE_SENDING_COMPLETE) >= 0)
+				    DECT_IE_SENDING_COMPLETE) < 0)
+					;
+				else if ((cc->peer_basic_service >> 4) == 0x9u)
+					proceed(cc);	/* internal: see on_setup */
+				else
 					accept_now(cc);
 			}
 		}

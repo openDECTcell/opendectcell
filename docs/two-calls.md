@@ -55,6 +55,21 @@ Steps 1-3 can be tested with two handsets each on its own call (each
 hears the test file); step 4 is the first feature a user sees -- a call
 between two handsets without any SIP side.
 
+**Implemented (step 4, `-a twocalls`):** a handset's SETUP with call class
+9 and the target's slot in its digits (the INT key; GAP N.31, EN 300 444
+§8.18-8.19) gets CALL-PROC; we page the target by its TPUI and, when it
+answers the page -- or comes up on a side link without a page response, as
+the A540 does -- place our SETUP there (basic service 0x98). Its ALERTING
+gives the caller ringback (ALERTING), its CONNECT our CONNECT to the
+caller; each call binds its own channel, and the host copies each party's
+uplink word into the other's downlink. No phase lock is needed for the
+copy: every coded word is held for two frames, so the other channel always
+reads a whole one. Either side hanging up releases the other. CC never
+connects a class-9 call by itself, even with a complete number. Limits: one
+internal call at a time; the caller must be on the main link or a side
+link and the target on a side link; both calls the same codec (no
+transcoding yet).
+
 ## Test plan
 
 | step | how | unattended? |

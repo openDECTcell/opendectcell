@@ -1828,6 +1828,37 @@ static void test_call_status_in_our_answers(void)
 	CHECK(ends_with_status(out, n, DECT_CS_CALL_CONNECT));
 }
 
+/* An internal call (class 9) is never connected by CC itself. */
+static void test_internal_call_waits_for_the_owner(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], t[8];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x98);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);		/* no CONNECT */
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x98);
+	dect_cc_rx(&cc, buf, n);
+	(void)types_of(&cc, t, sizeof(t));		/* SETUP-ACK */
+	n = pp_info(buf, sizeof(buf), "2", 1);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
+	CHECK_EQ(dect_cc_alert(&cc), 0);		/* the owner's steps */
+	CHECK_EQ(dect_cc_connect(&cc), 0);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+}
+
 /* F<CC.01>: 20 s, restarted by every CC-INFO, then "timer expiry". */
 static void test_overlap_timer(void)
 {
@@ -1965,6 +1996,7 @@ int main(void)
 	test_overlap_timer();
 	test_handset_call_in_steps();
 	test_call_status_in_our_answers();
+	test_internal_call_waits_for_the_owner();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();
