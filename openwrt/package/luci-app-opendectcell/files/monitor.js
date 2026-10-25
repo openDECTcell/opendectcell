@@ -41,7 +41,7 @@ function callText(link) {
 		idle: _('idle'), proceeding: _('setting up'),
 		connecting: _('connecting'), active: _('in a call'),
 		released: _('released'), calling: _('being called'),
-		ringing: _('ringing')
+		ringing: _('ringing'), dialling: _('dialling')
 	};
 	return names[link.call] || link.call;
 }

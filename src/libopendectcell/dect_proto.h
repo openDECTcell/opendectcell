@@ -228,8 +228,17 @@
  *    dect_cc_codec() (the call's codec, including the one the handset
  *    names in ALERTING/CONNECT for a call we place), DECT_CC_CODEC_G722/
  *    G726. Bench tests 10-11: the coded G.722 path works on 07.56.
+ *
+ * 23: overlap receiving (2026-10-25). Layout change: struct dect_cc gains
+ *    overlap, overlap_deadline_ms; dect_cc_stats gains overlap_timeouts;
+ *    enum dect_cc_state gains DECT_CC_ST_OVERLAP (appended). New:
+ *    dect_cc_set_overlap(), dect_cc_accept(), DECT_IE_SENDING_COMPLETE;
+ *    dect_nwk_find_fixed_ie() now also finds single-octet elements
+ *    (returns 0). **Act on it:** switch statements over dect_cc_state
+ *    need the new state; with overlap on you must call dect_cc_accept()
+ *    when dialling is complete, or F<CC.01> releases the call at 20 s.
  */
-#define OPENDECTCELL_API_VERSION 22
+#define OPENDECTCELL_API_VERSION 23
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

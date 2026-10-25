@@ -120,6 +120,7 @@
  * built through dect_nwk_put_ie (which is for variable-length IEs).
  */
 #define DECT_IE_BASIC_SERVICE		0xE0u	/* + {call class, service} */
+#define DECT_IE_SENDING_COMPLETE	0xA1u	/* single octet, §7.6.2 */
 /*
  * <<BASIC-SERVICE>> value octet (§7.6.4): high nibble call class, low nibble
  * basic service. Call classes, which we had only half-written down:
@@ -189,8 +190,9 @@ size_t dect_nwk_put_fixed_ie(uint8_t *out, size_t cap, size_t off, uint8_t id,
  * absent. Single-octet fixed IEs (bit 8 = 1) are skipped.
  */
 /*
- * Find a double-octet fixed-format element (0xE0-0xEF: <<BASIC-SERVICE>>,
- * <<RELEASE-REASON>>, ...) and return its value octet, or -1 if absent. Walks
+ * Find a fixed-format element and return its value octet: double-octet
+ * (0xE0-0xEF: <<BASIC-SERVICE>>, <<RELEASE-REASON>>, ...) its value, a
+ * single-octet one (<<SENDING-COMPLETE>> 0xA1, ...) 0; -1 if absent. Walks
  * the list the same way dect_nwk_find_ie() does, so a byte inside another
  * element's payload cannot be mistaken for an element id.
  */

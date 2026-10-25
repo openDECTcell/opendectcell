@@ -814,6 +814,16 @@ struct stubd {
 		 */
 		int      narrowband;
 		/*
+		 * Overlap receiving, on unless nooverlap: a handset-placed call
+		 * gets {CC-SETUP-ACK}, its digits arrive in {CC-INFO}, and the
+		 * call is accepted (CALL-PROC, CONNECT) dialwait=MS after the
+		 * last digit (default 3000). Without it we CONNECT before the
+		 * digits arrive and the Gigasets show neither "connected" nor a
+		 * call timer (bench test 2, 2026-10-25).
+		 */
+		int      no_overlap;
+		unsigned dial_wait_ms;
+		/*
 		 * pagehdr=N: a FOURTH payload byte on the 0x0300 page.
 		 *
 		 * [CR A-0091] corrects [CR A-0076] §2. The page builder does
@@ -1073,6 +1083,8 @@ struct stubd {
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
+		size_t   dial_len;	/* digits seen so far in OVERLAP */
+		uint64_t dial_change_ms;	/* when the last ones arrived */
 		enum dect_mm_state reported_state;	/* last one logged */
 		uint8_t handle;
 		/*
@@ -2458,6 +2470,39 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 	s->fetch_at = 0;
 	dect_link_drain(&s->reg.link, now);
 	pump_lapc(s);
+}
+
+/*
+ * Overlap receiving: accept a handset-placed call once its digits have
+ * been quiet for dialwait ms. Stands in for a dial plan or the
+ * controller, which would decide on the number instead.
+ */
+static void dial_tick(struct stubd *s, uint64_t now)
+{
+	const uint8_t *k;
+	size_t len;
+
+	if (!s->reg.active || s->reg.link.cc.state != DECT_CC_ST_OVERLAP) {
+		s->reg.dial_len = 0;
+		s->reg.dial_change_ms = 0;
+		return;
+	}
+	k = dect_cc_keypad(&s->reg.link.cc, &len);
+	if (!s->reg.dial_change_ms || len != s->reg.dial_len) {
+		s->reg.dial_len = len;
+		s->reg.dial_change_ms = now;
+		return;
+	}
+	if (!len || now - s->reg.dial_change_ms < s->audio.dial_wait_ms)
+		return;		/* no digit yet: F<CC.01> covers it */
+	printf("call: dialled \"%.*s\" -- complete after %u ms without a "
+	       "digit, connecting\n", (int)len, (const char *)k,
+	       s->audio.dial_wait_ms);
+	fflush(stdout);
+	if (dect_cc_accept(&s->reg.link.cc) == 0) {
+		dect_link_drain(&s->reg.link, now);
+		pump_lapc(s);
+	}
 }
 
 static void holdback_tick(struct stubd *s, uint64_t now)
@@ -4419,6 +4464,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	dect_cc_set_signal(&s->reg.link.cc, s->audio.signal_on,
 			   s->audio.signal_value);
 	dect_cc_set_wideband(&s->reg.link.cc, !s->audio.narrowband);
+	dect_cc_set_overlap(&s->reg.link.cc, !s->audio.no_overlap);
 	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
 	/* the lowest free value, 0, unless -a ti= says otherwise */
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
@@ -5676,6 +5722,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			    s->sess.state == DECT_SESS_UP, 0);
 		holdback_tick(s, now);
 		fetch_tick(s, now);
+		dial_tick(s, now);
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
@@ -5977,6 +6024,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->basic_svc = (uint8_t)v, a->basic_svc_set = 1;
 		else if (!eq && klen == 10 && !memcmp(key, "narrowband", 10))
 			a->narrowband = 1;
+		else if (!eq && klen == 9 && !memcmp(key, "nooverlap", 9))
+			a->no_overlap = 1;
+		else if (klen == 8 && !memcmp(key, "dialwait", 8))
+			a->dial_wait_ms = (unsigned)v;
 		else if (klen == 8 && !memcmp(key, "pagemail", 8)) {
 			/* text, not a number: a mail spec, taken verbatim */
 			size_t n = (size_t)(spec - (eq + 1));
@@ -6421,6 +6472,9 @@ static void usage(void)
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech;\n"
 		"           0x80 with narrowband)\n"
+		"           nooverlap    CONNECT a handset's call at once instead of\n"
+		"           SETUP-ACK, digits, then CONNECT dialwait=MS (3000)\n"
+		"           after the last digit\n"
 		"           narrowband   never wideband: SETUP basic speech, CONNECT\n"
 		"           chooses G.726, every call gets the mode-2 bind. By\n"
 		"           default a call whose codec is G.722 gets the wideband\n"
@@ -6560,6 +6614,7 @@ int main(int argc, char **argv)
 	s.rx_word_prev = 0xFFFFFFFFu;	/* no word seen yet */
 	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
+	s.audio.dial_wait_ms = 3000u;
 	s.audio.slot_mask = 0x09u;	/* [CR A-0114] stock's 0x017c 00 09 */
 	/*
 	 * -1, not 0: the struct is memset to zero above, and a zero here

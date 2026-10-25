@@ -109,6 +109,7 @@ const char *dect_diag_call_state_name(enum dect_cc_state st)
 	case DECT_CC_ST_RELEASED:	 return "released";
 	case DECT_CC_ST_CALL_PRESENT:	 return "calling";
 	case DECT_CC_ST_RINGING:	 return "ringing";
+	case DECT_CC_ST_OVERLAP:	 return "dialling";
 	}
 	return "unknown";
 }

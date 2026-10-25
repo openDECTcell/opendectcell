@@ -77,6 +77,8 @@ int dect_nwk_find_fixed_ie(const uint8_t *ies, size_t ies_len, uint8_t id)
 		if (ie & IE_FIXED) {
 			int dbl = (ie & IE_DOUBLE_MASK) == IE_DOUBLE;
 
+			if (ie == id && !dbl)
+				return 0;	/* single octet: present */
 			if (ie == id && dbl)
 				return (pos + 1 < ies_len) ? ies[pos + 1] : -1;
 			pos += dbl ? 2 : 1;

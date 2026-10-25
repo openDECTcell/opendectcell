@@ -43,6 +43,8 @@ enum dect_cc_state {
 	/* Incoming call (we originate towards the handset). */
 	DECT_CC_ST_CALL_PRESENT,	/* SETUP sent, awaiting the PP's answer */
 	DECT_CC_ST_RINGING,		/* PP sent ALERTING: the handset is ringing */
+	/* PP-originated, dect_cc_set_overlap(): SETUP-ACK sent, digits come */
+	DECT_CC_ST_OVERLAP,
 };
 
 /*
@@ -95,6 +97,7 @@ struct dect_cc_stats {
 	uint32_t alerting;	/* ALERTING received: the handset is ringing */
 	uint32_t closed_unknown;/* transactions we closed with {CC-RELEASE} */
 	uint32_t setup_timeouts;	/* F<CC.03> expiries */
+	uint32_t overlap_timeouts;	/* F<CC.01> expiries: no dialling end */
 	uint32_t keypad;	/* {CC-INFO} messages that carried keypad input */
 	/*
 	 * {CC-SETUP} collisions (EN 300 175-5 §9.5.2.3 / §17.3.3): a peer
@@ -217,6 +220,8 @@ struct dect_cc {
 	 * and only a daemon restart cleared it.
 	 */
 	uint64_t setup_deadline_ms;
+	uint8_t  overlap;		/* dect_cc_set_overlap() */
+	uint64_t overlap_deadline_ms;	/* F<CC.01> */
 
 	/*
 	 * The last FP-originated {CC-SETUP} as sent, kept for re-presentation.
@@ -312,6 +317,26 @@ void dect_cc_set_wideband(struct dect_cc *cc, int on);
  * speech, G.726).
  */
 uint8_t dect_cc_codec(const struct dect_cc *cc);
+
+/*
+ * Overlap receiving (EN 300 444 §8.3, EN 300 175-5 §9.3.1.4/5). With it on,
+ * a handset-placed speech call whose {CC-SETUP} lacks <<SENDING-COMPLETE>>
+ * gets {CC-SETUP-ACK} and waits in DECT_CC_ST_OVERLAP while the digits
+ * arrive in {CC-INFO} (dect_cc_keypad()). The owner decides when dialling
+ * is complete -- a dial plan, an inter-digit timeout, the controller --
+ * and calls dect_cc_accept(). A <<SENDING-COMPLETE>> in a {CC-INFO} moves
+ * the call on by itself. F<CC.01> (20 s, restarted by every {CC-INFO})
+ * releases a call nobody accepted with "timer expiry".
+ *
+ * Off: CALL-PROC and CONNECT at once, the digits arriving after CONNECT
+ * (GAP figure 2, legal, but the Gigasets then show neither "connected"
+ * nor a call timer -- bench test 2, 2026-10-25).
+ */
+void dect_cc_set_overlap(struct dect_cc *cc, int on);
+
+/* Dialling is complete: {CC-CALL-PROC} and {CC-CONNECT}. 0, or -1 when
+ * the call is not waiting in DECT_CC_ST_OVERLAP. */
+int dect_cc_accept(struct dect_cc *cc);
 
 /* Feed a decoded NWK message (the LAPC I-frame payload). Non-CC messages are
  * ignored. Any responses are queued; pull them with dect_cc_poll(). */

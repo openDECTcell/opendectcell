@@ -553,7 +553,9 @@ uint8_t dect_cc_codec(const struct dect_cc *cc)
 	return cc->chosen_codec;
 }
 
-static void on_setup(struct dect_cc *cc)
+static void accept_now(struct dect_cc *cc);
+
+static void on_setup(struct dect_cc *cc, int sending_complete)
 {
 	cc->stats.setup++;
 	/*
@@ -577,14 +579,39 @@ static void on_setup(struct dect_cc *cc)
 		cc->stats.rejected_busy++;
 		return;
 	}
-	/*
-	 * Accept the call: CALL-PROC ("I am handling it") then CONNECT (we are
-	 * the far end for the loopback test, so we answer at once). Both are
-	 * responder-side in the PP-originated transaction.
-	 */
+	if (cc->overlap && !sending_complete) {
+		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_SETUP_ACK);
+		cc->state = DECT_CC_ST_OVERLAP;
+		cc->overlap_deadline_ms = 0;	/* armed by the tick */
+		return;
+	}
+	accept_now(cc);
+}
+
+/*
+ * Accept the call: CALL-PROC ("I am handling it") then CONNECT (we are
+ * the far end for the loopback test, so we answer at once). Both are
+ * responder-side in the PP-originated transaction.
+ */
+static void accept_now(struct dect_cc *cc)
+{
 	queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
 	queue_connect(cc);
 	cc->state = DECT_CC_ST_CONNECT_PENDING;
+	cc->overlap_deadline_ms = 0;
+}
+
+void dect_cc_set_overlap(struct dect_cc *cc, int on)
+{
+	cc->overlap = on ? 1u : 0u;
+}
+
+int dect_cc_accept(struct dect_cc *cc)
+{
+	if (cc->state != DECT_CC_ST_OVERLAP)
+		return -1;
+	accept_now(cc);
+	return 0;
 }
 
 static void on_connect_ack(struct dect_cc *cc)
@@ -610,8 +637,22 @@ static void on_release(struct dect_cc *cc)
 /* Release reason "timer expiry" (EN 300 175-5 7.7.18). */
 #define RELEASE_REASON_TIMER_EXPIRY	0x0Du
 
+/* EN 300 175-5 A.1: F<CC.01>, overlap sending, 20 s. */
+#define CC_OVERLAP_TIMER_MS	20000u
+
 void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 {
+	if (cc->state == DECT_CC_ST_OVERLAP) {
+		if (!cc->overlap_deadline_ms) {
+			cc->overlap_deadline_ms = now_ms + CC_OVERLAP_TIMER_MS;
+		} else if (now_ms >= cc->overlap_deadline_ms) {
+			/* GAP 8.3.2.3: the normal release, "timer expiry" */
+			cc->overlap_deadline_ms = 0;
+			queue_release_com(cc, RELEASE_REASON_TIMER_EXPIRY);
+			cc->state = DECT_CC_ST_NULL;
+			cc->stats.overlap_timeouts++;
+		}
+	}
 	/*
 	 * The timer runs only while an FP-originated SETUP is unanswered.
 	 * "Stop: a response message has been received" (A.1), and the first
@@ -642,7 +683,11 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 
 uint64_t dect_cc_next_deadline(const struct dect_cc *cc)
 {
-	return cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
+	uint64_t a = cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
+	uint64_t b = cc->overlap_deadline_ms ? cc->overlap_deadline_ms
+					     : UINT64_MAX;
+
+	return a < b ? a : b;
 }
 
 void dect_cc_set_busy(struct dect_cc *cc, int busy)
@@ -730,7 +775,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_basic_service(cc, ies, ies_len);
 			learn_codec_offer(cc, ies, ies_len);
 			learn_keypad(cc, ies, ies_len);
-			on_setup(cc);
+			on_setup(cc, dect_nwk_find_fixed_ie(ies, ies_len,
+				 DECT_IE_SENDING_COMPLETE) >= 0);
 		} else if (!our_transaction(cc, &h)) {
 			/*
 			 * A second call while one is in progress. The peer's
@@ -832,12 +878,19 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		if (our_transaction(cc, &h) &&
 		    (cc->state == DECT_CC_ST_CALL_PRESENT ||
 		     cc->state == DECT_CC_ST_CONNECT_PENDING ||
-		     cc->state == DECT_CC_ST_ACTIVE)) {
+		     cc->state == DECT_CC_ST_ACTIVE ||
+		     cc->state == DECT_CC_ST_OVERLAP)) {
 			size_t before = cc->keypad_len;
 
 			learn_keypad(cc, ies, ies_len);
 			if (cc->keypad_len != before)
 				cc->stats.keypad++;
+			if (cc->state == DECT_CC_ST_OVERLAP) {
+				cc->overlap_deadline_ms = 0;	/* restart */
+				if (dect_nwk_find_fixed_ie(ies, ies_len,
+				    DECT_IE_SENDING_COMPLETE) >= 0)
+					accept_now(cc);
+			}
 		}
 		break;
 	case DECT_CC_RELEASE_COM:

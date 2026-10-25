@@ -1626,6 +1626,124 @@ static void test_wideband_link_chooses_g722(void)
 	CHECK_EQ(dect_cc_codec(&cc), DECT_CC_CODEC_G726);
 }
 
+/* A {CC-INFO} from the handset on its call (transaction 0). */
+static size_t pp_info(uint8_t *out, size_t cap, const char *digits,
+		      int complete)
+{
+	size_t n = dect_nwk_build_hdr(out, cap, DECT_PD_CC,
+				      DECT_TI_ORIGINATOR, 0, DECT_CC_INFO);
+
+	if (complete)
+		out[n++] = DECT_IE_SENDING_COMPLETE;
+	if (digits)
+		n = dect_nwk_put_ie(out, cap, n, DECT_IE_MULTI_KEYPAD,
+				    (const uint8_t *)digits, strlen(digits));
+	return n;
+}
+
+static uint8_t types_of(struct dect_cc *cc, uint8_t *types, size_t cap)
+{
+	uint8_t out[64];
+	size_t n, k = 0;
+
+	while ((n = dect_cc_poll(cc, out, sizeof(out))) > 0 && k < cap)
+		types[k++] = msg_type_of(out, n);
+	return (uint8_t)k;
+}
+
+/*
+ * Overlap receiving (GAP figure 1): SETUP-ACK, digits in CC-INFO, and the
+ * owner accepts when dialling is complete.
+ */
+static void test_overlap_receiving(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], t[8];
+	const uint8_t *k;
+	size_t n, klen;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_SETUP_ACK);
+	CHECK_EQ(cc.state, DECT_CC_ST_OVERLAP);
+	CHECK(dect_cc_busy(&cc));
+
+	n = pp_info(buf, sizeof(buf), "123", 0);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 0u);	/* nothing sent */
+	k = dect_cc_keypad(&cc, &klen);
+	CHECK(klen == 3 && k && !memcmp(k, "123", 3));
+	CHECK_EQ(cc.state, DECT_CC_ST_OVERLAP);
+
+	CHECK_EQ(dect_cc_accept(&cc), 0);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 2u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+	CHECK_EQ(t[1], DECT_CC_CONNECT);
+	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+	CHECK_EQ(dect_cc_accept(&cc), -1);		/* only once */
+
+	/* <<SENDING-COMPLETE>> in a CC-INFO moves it on by itself */
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	dect_cc_rx(&cc, buf, n);
+	(void)types_of(&cc, t, sizeof(t));
+	n = pp_info(buf, sizeof(buf), "42", 1);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 2u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+	CHECK_EQ(cc.state, DECT_CC_ST_CONNECT_PENDING);
+
+	/* ... and in the SETUP: no SETUP-ACK at all */
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 2u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+	CHECK_EQ(t[1], DECT_CC_CONNECT);
+
+	/* list access is not dialled: CALL-PROC as before */
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x28);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+}
+
+/* F<CC.01>: 20 s, restarted by every CC-INFO, then "timer expiry". */
+static void test_overlap_timer(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	dect_cc_tick(&cc, 1000);			/* armed: 21000 */
+	CHECK_EQ(dect_cc_next_deadline(&cc), 21000u);
+	n = pp_info(buf, sizeof(buf), "1", 0);
+	dect_cc_rx(&cc, buf, n);
+	dect_cc_tick(&cc, 11000);			/* re-armed: 31000 */
+	dect_cc_tick(&cc, 30999);
+	CHECK_EQ(cc.state, DECT_CC_ST_OVERLAP);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	dect_cc_tick(&cc, 31000);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(cc.stats.overlap_timeouts, 1u);
+}
+
 /* A call we place: the handset names the codec in ALERTING or CONNECT. */
 static void test_handset_choice_is_learned_on_our_call(void)
 {
@@ -1731,6 +1849,8 @@ int main(void)
 	test_connect_names_the_chosen_codec();
 	test_wideband_link_chooses_g722();
 	test_handset_choice_is_learned_on_our_call();
+	test_overlap_receiving();
+	test_overlap_timer();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();
