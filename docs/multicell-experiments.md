@@ -54,3 +54,25 @@ From M1's log when it shows world B: compare the received mails against a
 run with all stores loaded. A mail type, or a count of an existing one,
 that appears only while the unknown handsets are trying, is the hook for
 on-demand loading. Nothing: on-demand loading is not possible host-side.
+
+## M1 first runs: void `[2026-10-25 04:12-04:16]`
+
+`M1-041214`: started seconds after the chip reload, "control slot not found",
+exited before any mail; nothing transmitted. `M1b-041531`: ran 180 s on the
+fresh chip, parked, and **nobody connected, the A540 included**, although its
+key was installed. The void row. The handsets had been without a base for
+~70 minutes, and an idle Gigaset's search backs off (162 s after 17 min off,
+run 20), so 180 s proves nothing about the chip.
+
+## M1+M2 combined: one run that separates back-off from gating `[pre-commit]`
+
+Fresh chip (still the one loaded at 04:10), all three stores held by the
+host, the A540's key installed at start (positive control), the C430A's and
+AS690H's keys **held back to t = 300 s** (`-a holdback=300000`), 600 s.
+
+| shows | meaning |
+|---|---|
+| C430A/AS690H connect **before** 300 s (keys not in the chip) | **world A**: the chip admits without a key |
+| they connect only **after** 300 s, within seconds of the install, while the A540 connected before | **world B**, and a handset retries access fast enough for on-demand loading once the cell knows to load |
+| they connect after 300 s but late (minutes) | world B likely; the delay is handset back-off, not proof either way |
+| nobody connects in 600 s, the A540 included | void again: the handsets are not searching; needs a key press |
