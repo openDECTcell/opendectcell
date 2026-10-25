@@ -570,7 +570,12 @@ struct stubd {
 		const char *led_path;	/* led=PATH, NULL = the default */
 		const char *state_path;	/* statefile=PATH, NULL = the default */
 		int      no_state;	/* nostatefile */
-		int      no_reg_open;	/* noregopen */
+		/*
+		 * Registration closed unless regopen (since 2026-10-25, the
+		 * maintainer: "we don't want anything to register unless we
+		 * tell it to"). noregopen is still accepted, and is the default.
+		 */
+		int      no_reg_open;
 		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
 		int      no_chip_keys;	/* nochipkeys, multi-cell test M2 */
 		const char *remote_path;	/* remote=PATH, test M4 */
@@ -6116,6 +6121,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->earlybind = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "noregopen", 9))
 			a->no_reg_open = 1;
+		else if (!eq && klen == 7 && !memcmp(key, "regopen", 7))
+			a->no_reg_open = 0;
 		else if (!eq && klen == 10 && !memcmp(key, "nostockcfg", 10))
 			a->no_stock_cfg = 1;
 		else if (eq && klen == 7 && !memcmp(key, "subslot", 7)) {
@@ -6632,8 +6639,9 @@ static void usage(void)
 		"           earlybind    assign audio on the page response\n"
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
 		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
-		"           noregopen    radio on with registration closed (a\n"
-		"           base run as a service; subscribed handsets still attach)\n"
+		"           regopen      open registration while running (enrol a\n"
+		"           handset; default closed, subscribed handsets attach)\n"
+		"           noregopen    closed, the default\n"
 		"           setupdelay=N hold the CC-SETUP N ms after the page\n"
 		"           (default 8; the default 16 s budget is SHORTER than\n"
 		"           our own F<CC.03> timer, so it gives up first)\n"
@@ -6795,6 +6803,7 @@ int main(int argc, char **argv)
 	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
 	s.audio.dial_wait_ms = 3000u;
+	s.audio.no_reg_open = 1;	/* closed unless -a regopen */
 	s.audio.slot_mask = 0x09u;	/* [CR A-0114] stock's 0x017c 00 09 */
 	/*
 	 * -1, not 0: the struct is memset to zero above, and a zero here
@@ -6977,9 +6986,8 @@ int main(int argc, char **argv)
 		}
 		s.xmail[s.n_xmail++] = "0x22:0x02:0x015b:01";	/* radio/beacon on */
 		/*
-		 * Registration open ('A') is right for the bench, where every
-		 * run may enrol a handset, and wrong for a base that runs as a
-		 * service: noregopen keeps it closed, explicitly.
+		 * Registration open ('A') only when asked (-a regopen): nothing
+		 * enrols unless we mean it to. Closed is 0x022C 01.
 		 */
 		if (s.audio.no_reg_open)
 			s.xmail[s.n_xmail++] = "0x22:0x02:0x022c:01";	/* closed */

@@ -102,7 +102,7 @@ start_service() {
 	config_get stores main stores '/etc/opendectcell-sub.*'
 	config_get options main options ''
 	config_get_bool reg main registration 0
-	[ "$reg" = 1 ] || options="${options:+$options,}noregopen"
+	[ "$reg" = 1 ] && options="${options:+$options,}regopen"
 	config_get_bool wb main wideband 1
 	[ "$wb" = 1 ] || options="${options:+$options,}narrowband"
 	config_get_bool ov main overlap 1
