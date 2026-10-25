@@ -135,7 +135,8 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 
 ## M11: Multi-cell
 - [ ] Research: DECT identities for a multi-cell system (ARI classes, allocation of EMC/EIC/FPN, uniqueness, which classes GAP/CAT-iq handsets accept); define how the controller assigns the system ARI and per-cell RPNs on first run
-- [ ] Idle roaming across cells with a shared registration database (controller)
+- [~] Idle roaming across cells with a shared registration database (controller)
+  - 2026-10-25, one box (`docs/multicell-experiments.md`, 07.56 only): the chip admits, pages and rings handsets with no key in it, so admission is a host decision; deferred location registration (API 18) fetched a roamer's record in 2 s and registered it; a handset moving within one location area does not re-locate, so cells must fetch on any first message from an unknown IPUI or be pushed records ahead of time
 - [ ] Research: inter-cell synchronisation (host-driven FSC on the 7412? STUB sync modes?) for seamless handover
 - [ ] Capacity per cell (about 3 calls); verify against the mode byte
 
