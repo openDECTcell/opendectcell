@@ -99,3 +99,24 @@ on a fresh chip locks every handset out -- and the service defaults to it.
 |---|---|
 | the A540 connects | the token is needed; `noregopen` must send `0x022b 41` and then `0x022c 01`; M1/M2 rerun |
 | nobody connects again | not the token; the handsets are simply not searching (key press needed) |
+
+### M0 result: the token is not needed; the voids were back-off `[2026-10-25 04:28-04:37]`
+
+`M0-*` (fresh chip, `0x022b 41`): the A540 connected at 293.7 s, which fits
+either reading. The decisive pair, with the A540 awake from that contact:
+chip reset again, then `M0n-043310` **with `noregopen`**: first contact at
+**8.9 s**, `{LOCATE-ACCEPT}`; `M0o-043511` without: 1.4 s. **`noregopen` works
+on a fresh chip.** The suspect row is falsified, and M1b and M1+M2 were void
+for the reason first given: the handsets were not searching.
+
+### M1, redone with an awake subject `[pre-commit]`
+
+The A540 is awake; the others are not. So the A540 is the subject: chip
+reset, `-s c430a -s a540 -s as690h`, `holdback=60000` (the C430A's key at
+start; the A540's and AS690H's at 60 s), 150 s, host holds all three.
+
+| shows | meaning |
+|---|---|
+| the A540 connects **before** 60 s | **world A** on 07.56: the chip admits without a key |
+| the A540 connects only **after** 60 s, within seconds of the install | **world B**; a handset retries fast enough for on-demand loading, if the cell learns of the attempt (M3) |
+| the A540 does not connect at all | void: it went back to sleep; run again after M0-style wake-up |
