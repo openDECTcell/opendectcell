@@ -4,7 +4,7 @@
 
 - Each milestone (`## M…`) maps to a GitHub milestone, and each checkbox to an issue. Items marked **[hw]** need a real box.
 - **State and gaps as of 2026-10-25:** `docs/review-2026-10-25.md` (what works, what is built but unproven, what the roadmap still lacks, and the order of work).
-- **Order of work (maintainer, 2026-10-25):** finish the DECT basics (the open bench tests), then the handset abstraction layer (M8b), then productising the cell (M9, top priority after those two). The controller's DECT integration waits; whether a standalone VoIP mode (M9b) comes first is proposed and not yet decided.
+- **Order of work (maintainer, 2026-10-25, revised the same evening):** finish the DECT basics (the open bench tests), then the handset abstraction layer (M8b), then **a working standalone OpenWrt package with VoIP (M9b, baresip)** together with productising the cell (M9). The controller freeze is **lifted**: the controller works in parallel. Still open: whether the standalone package includes controller functions (a decision for Wednesday; `docs/review-2026-10-25.md`).
 - **Gates G1–G7 are go/no-go points on real hardware.** Work that depends on a gate starts only after the gate has passed (see `AGENTS.md` §6). The controller (separate repo `opendectcell-controller`) is designed in parallel but **implemented only after G7**.
 
 | Gate | Proves | Pass criterion |
@@ -127,6 +127,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [ ] Golden-trace regression tests in CI
 
 ## M8b: Handset abstraction layer (new 2026-10-25; after the DECT basics, before M9)
+- **The maintainer's model** (2026-10-25): layered profiles. A **manufacturer profile** (for example "FRITZ!Fon") builds on the standards (GAP, CAT-iq) and adds manufacturer features and quirks. A **device profile** (for example "FRITZ!Fon C4") builds on the manufacturer profile and adds device quirks. Profiles can be **imported**, so new handsets need no new release. Why: on the Eventphone list, some FRITZ!Fons show incoming numbers and phonebook names and others do not. To refine in detail on Wednesday; points to settle are in the review
 - [ ] Design: a per-handset profile chosen from what the handset tells us (<<MODEL-IDENTIFIER>>, terminal capability, CAT-iq level), carrying (a) **quirks**, such as the A540 showing no call timer, plus the measured rules that once looked like quirks and turned out to be the standard (TI 0, <<SIGNAL>>), and (b) **feature modules** a handset can use. Decide where it lives: libopendectcell, so that the cell, a standalone box and the controller share one table (the controller's AGENTS.md §6 already requires a feature-module framework and a model-quirks table)
 - [ ] Handsets outside GAP/CAT-iq: several on the Eventphone compatibility list do not meet the specs. The layer should let a motivated user add a "driver" for such a handset from **on-air captures of their own handset**. Clean-room rules apply: never vendor firmware or analysed code
 - [ ] Vendor features as modules: the FRITZ!Fon phonebook and its online services (RSS and similar). What they use on air is unknown and needs stock captures (the hardware-analysis step / Freetz room questions), then a module written from the facts
@@ -145,7 +146,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [~] **Export diagnostics from `dect-stubd`** — 2026-10-25: `/tmp/opendectcell-state.json`, rewritten atomically at most once a second (radio, STUB build, registration, every stored handset with slot/name/link/last seen, a `dect_diag` object per live link; IPUIs only with `-p`). A file rather than a socket: LuCI/rpcd read it without a protocol and the poll loop stays as it is. Verified on the box. Original item:: periodic chip reads into the `dect_diag` struct and a way out of the process — a JSON line on a UNIX socket, since both consumers (LuCI, controller) are out-of-process. The slot audit and UAK read-back already exist and should feed this rather than only printing.
 - [ ] Cell mode: tunnel mails (TCP, optional TLS) and audio (UDP, optional SRTP/DTLS) to the controller
 
-## M9b: Standalone VoIP on one box (proposed 2026-10-25, not decided)
+## M9b: Standalone VoIP on one box (**decided 2026-10-25: prioritised**, baresip)
 - [ ] Prove the whole path, handset ↔ cell ↔ SIP ↔ PBX, on one OpenWrt box before committing to the controller: one SIP account per handset, calls in and out, caller ID, wideband, configured in LuCI. Candidate SIP stack: baresip from the OpenWrt telephony feed (BSD), driven by `dect-stubd` through a small bridge. This revisits the controller decision "multi-cell only" (the maintainers' notes) for the single-box case only
 
 ## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
