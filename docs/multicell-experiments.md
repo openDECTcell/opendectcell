@@ -181,3 +181,35 @@ awake A540, ring 10 s after first contact).
 |---|---|
 | `{LCE-PAGE-RESPONSE}` after the page | the key matters for how a paged handset comes back; a roamer should be installed before it is paged, or the cell must accept a LOCATE as the answer |
 | `{LOCATE-REQUEST}` again | the fresh chip (the handset's location state), not the key; keyless paging behaves like keyed paging |
+
+### M2' control result: keyless paging behaves like keyed paging `[vRINGA540-20261025-074747-1]`
+
+Keys installed, fresh chip: the A540 answered the page with
+`{LOCATE-REQUEST}` too, and rang. Runs 31 and 34 (keyed, last night) did the
+same. Pre-committed row: "the fresh chip (the handset's location state), not
+the key". **On 07.56 a handset with no key in the cell's chip can attach,
+locate, be paged and ring.** The key matters for ciphering only, not yet
+exercised (`-C`).
+
+## Test M4: how long may a cell take to fetch a roamer's record? `[pre-commit]`
+
+With admission free, roaming becomes: a `{LOCATE-REQUEST}` arrives with an
+IPUI the cell does not hold; the cell asks the controller; the answer comes
+back; the cell accepts. EN 300 175-5 annex A: the PT's `<MM_locate.1>` is
+**20 s**, retransmit at the first expiry, abort at the second; the FT may
+restart it with `{MM-NOTIFY}` <<TIMER-RESTART>> (NOTE 4: "communication with
+external networks").
+
+Method: MM holds an unknown `{LOCATE-REQUEST}` instead of rejecting it
+(API 18); `dect-stubd -a remote=PATH,fetchdelay=MS` plays the controller:
+the A540's store is not held until MS after its request. Delays 2, 15, 30,
+45 s, back to back so the A540 stays awake.
+
+| delay | predicted |
+|---|---|
+| 2 s, 15 s | accepted on the first `{LOCATE-REQUEST}` |
+| 30 s | the A540 retransmits at ~20 s; our accept still lands |
+| 45 s | past both timers: the A540 aborts; our late accept finds no transaction |
+
+**Falsifying:** a handset that gives up well before 20 s, which would make
+on-demand fetching far tighter than the standard promises.
