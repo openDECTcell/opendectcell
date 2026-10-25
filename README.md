@@ -3,11 +3,32 @@
 **Goal:** turn cheap, used AVM FRITZ!Boxes into **open-source DECT base stations** running OpenWrt, so that GAP/CAT-iq handsets can make calls via SIP. In a later stage, several boxes should form a **multi-cell DECT-over-IP network** with one central controller.
 
 > Status (2026-10-25): **working on the FRITZ!Box 7520 as a lab base.** GAP
-> handsets register, ring and talk: a FRITZ!Fon C4 and the Gigaset A540,
-> C430A and AS690H, several at once, with narrowband audio both ways. Not yet
-> an end-user product: no SIP side (that is the controller's job), no
-> wideband, and one call at a time. Progress and next steps:
+> and CAT-iq handsets register, ring and talk: a FRITZ!Fon C4 and the Gigaset
+> A540, C430A and AS690H, several at once, with **wideband (G.722) audio**
+> both ways and narrowband as the fallback. Handsets dial out with overlap
+> sending; a LuCI page shows each handset's state, channel, signal strength
+> and link quality. Not yet an end-user product: no SIP side (that is the
+> controller's job), and one call at a time. Progress and next steps:
 > the maintainers' notes, [ROADMAP.md](ROADMAP.md).
+
+## Using it (FRITZ!Box 7520/7530, OpenWrt)
+
+1. Install the packages `kmod-opendectcell-ipq40xx`, `opendectcell` and, for the web
+   page, `luci-app-opendectcell`.
+2. Extract the DECT chip firmware from an official FRITZ!OS image on your PC
+   and copy it to the box (openDECTcell cannot ship it):
+   `python3 tools/dect-fw-extract.py FRITZ.Box_7520-07.56.image`, then the
+   `scp` and `uci` lines it prints ([docs/firmware-sourcing.md](docs/firmware-sourcing.md)).
+3. Enable the service: `uci set opendectcell.main.enabled=1; uci commit openDECTcell;
+   /etc/init.d/opendectcell start`.
+4. **Register a handset:** press *Register a handset* on Status > DECT (or run
+   `/etc/init.d/opendectcell register`), then start the registration on the
+   handset and enter the PIN (`option pin`, default `0000`). Registration is
+   closed at all other times; the window closes after 2 minutes
+   (`option regwindow`) or as soon as one handset has registered.
+
+Settings live in `/etc/config/opendectcell`: `wideband`, `overlap`/`dialwait`,
+`pin`, `regwindow`. Stopping the service parks the radio.
 
 ## Why this is possible
 
