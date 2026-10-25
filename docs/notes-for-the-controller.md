@@ -580,3 +580,33 @@ link that cannot persist a subscription, and outside an enrolment window.
 Without it a handset enrolling on such a link shows "registered" with a key
 the base never stored -- an independent review found exactly that in
 `dect-stubd`'s side links.
+
+## API 18-20: roaming between cells of one controller `[2026-10-25 morning]`
+
+Results and method: `docs/multicell-experiments.md`. On STUB 07.56 the
+chip admits, pages and rings a handset whose key it does not hold (M1, M2');
+so a cell can serve a roamer from host records alone. What the controller
+has to do differently:
+
+**API 18, deferred location registration.** `dect_mm_cfg.defer_unknown`:
+a `{LOCATE-REQUEST}` from an identity the link does not hold is held, not
+rejected. `dect_mm_locate_pending()` gives you the identity; fetch the
+record, `dect_mm_hold()` it, then `dect_mm_locate_resume()` (accept; or
+reject "IPUI unknown" if you held nothing). The PT waits `<MM_locate.1>`
+= 20 s, retransmits once, then aborts. Measured: accepted at +2 s on the
+A540 (`M4-2000-045441`); 15 s and up not yet measured.
+
+**API 19, a held `{CC-SETUP}`.** Same idea in `dect_link`:
+`dect_link_setup_pending()` / `dect_link_setup_resume()`. **This is the
+one you need most.** A handset moving between cells of one location area
+does **not** locate again (EN 300 175-5 §13.4; seen on the A540), so the
+first thing a new cell sees is a call or list-access `{CC-SETUP}` from an
+unknown IPUI. Without the hold, the CC identity gate turns it away
+(`0x0A`) and a Gigaset retries every ~2.4 s for minutes. The alternative
+is to push every record to every cell of the area up front; on 07.56 that
+costs host memory only, not chip slots.
+
+**API 20, `dect_mm_cfg.locate_validity`.** Non-zero adds <<DURATION>> to
+`{LOCATE-ACCEPT}`: the PT locates again after N x 40.96 s (§13.4.1). For
+tests now; possibly useful for presence later (a handset that stops
+renewing is gone). Whether Gigasets honour it is test M6.

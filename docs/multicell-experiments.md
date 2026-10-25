@@ -294,6 +294,14 @@ held, up to 300 s.
 **Falsifying:** the held SETUP is served but the A540 turns out to have
 abandoned that transaction (a release from it right after our reply).
 
+### M5 result: void `[M4-2000-052819, build 16486cb]`
+
+The AS690H located at 54 s (held, accepted at once); the A540 sent nothing
+in 300 s, neither a `{LOCATE-REQUEST}` nor a `{CC-SETUP}`. The held-SETUP
+path is unit-tested (`tests/test_link.c`) but **not yet seen on hardware**.
+It needs the A540 to place a call or open its call list while it is a
+roamer: a key press, so it goes on the bench card.
+
 ### M6: does a Gigaset honour <<DURATION>> in `{LOCATE-ACCEPT}`? `[pre-commit]`
 
 The tool M4's longer delays need. API 20 (`locvalid=N`) puts <<DURATION>>
@@ -320,3 +328,11 @@ when the validity runs out, instead of renewing it.
 (paging makes it locate, M2'), park, then M6a again. Its validity has
 expired by then, so it should locate as soon as it sees the base: that
 `{LOCATE-REQUEST}` is the one M4's 30 s and 45 s rows need.
+
+### M6a result: void `[M6-v1-053334]`
+
+No handset made any contact in 240 s. The run started ~10 s after M5's
+park, and the AS690H had located in M5 five minutes before. A short outage
+does not make it locate; six minutes did, twice (M4 voids). So no
+`{LOCATE-ACCEPT}` with <<DURATION>> went out. Re-run after six minutes
+parked.
