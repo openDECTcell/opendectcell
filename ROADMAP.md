@@ -25,8 +25,10 @@
 - [x] 7412 SSC/SPI-TDM register setup, STUB patch mechanism (TLV, tag 1 = RFPI, tag 7 = mode byte)
 - [x] Stock-firmware observation on a 7520 via the FRITZ!OS support data: PCM timing, STUB patching, channel count, chip SC14448 (`docs/models/7520-DECT-analysis.md` §8)
 - [x] Hardware abstraction for several models: kernel board table plus per-model board profiles (`docs/hardware-abstraction.md`)
-- [ ] Complete mail header layout (source/destination task, primitive, length)
-- [ ] Primitive-ID catalogue host↔STUB (`docs/stub-api.md`)
+- [x] Complete mail header layout (source/destination task, primitive, length)
+  - `docs/stub-api.md` §1 (2026-10-25)
+- [x] Primitive-ID catalogue host↔STUB (`docs/stub-api.md`)
+  - 2026-10-25: written by an outside helper from this repository only (brief: `docs/briefs/stub-api-catalogue.md`), and reviewed. Every claim is labelled measured, answered, inferred or unknown. §5 lists stale statements in our own docs and code comments (the `0x0202` "trigger" helper name, the "`0x017C` never sent" comment, the DLC split in `AGENTS.md` §1a) to fix
 - [ ] STUB (CR16C) analysis: meaning of mode byte tag 7; channel configuration
 - [x] Minimal mail sequence for MAC start (G5): `0x015B:01` + `0x022B:41` [CR COMMAND_SET]. Registration/call-setup sequences (G6/G7) still to establish from COMMAND_SET §6.2-§6.4 + ETSI
 
