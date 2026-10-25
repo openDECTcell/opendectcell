@@ -1,0 +1,56 @@
+# Multi-cell experiments on one box
+
+ROADMAP M11. A handset roams between cells (FPs) managed by one controller.
+Each cell's chip holds at most six subscriptions (`DECT_MM_MAX_SLOT`), so a
+large installation cannot preload every handset into every cell. Whether it
+must depends on one chip property, measurable on a single box.
+
+## Test M1: does the chip admit a handset whose key it does not hold? `[pre-commit, 2026-10-25 morning, unattended]`
+
+Two worlds, two designs:
+
+- **A, the chip admits any handset locked to our RFPI.** The handset opens a
+  link and sends `{LOCATE-REQUEST}` with its IPUI; the cell asks the
+  controller for the record and installs it. Budget: the handset's
+  `<MM_locate.1>`, seconds.
+- **B, the chip refuses handsets it holds no key for.** The host never hears
+  from the handset, so on-demand loading needs some chip report of the
+  access attempt; otherwise records must be in the chip before the handset
+  arrives, six per cell.
+
+Evidence so far conflicts. `vF427` (08.25 STUB, 2026-10-23): clearing the
+other chip slots stopped a foreign C4 dead, zero connections: **B**. Run 23
+(07.56, 2026-10-25): the A540 connected twenty times after its slot was
+"cleared"; but on 07.56 the clear cannot be audited (`Q-0059`), so that is
+either A or a clear that did not take.
+
+**Method.** Reload the chip firmware (`fwload.sh`, 07.56): a chip reset
+empties its RAM, so no stale slot survives. Then `dect-stubd` with **only**
+the A540's store (`ALLSTORES=0`) for 180 s, no ring, `-p`. The C430A and
+AS690H stay on, idle, out of the host's records too.
+
+| shows | meaning |
+|---|---|
+| C430A/AS690H send `{LOCATE-REQUEST}` (we answer "IPUI unknown") | **world A on 07.56**: the chip admits; on-demand loading at location registration is possible |
+| **no connection from them at all in 180 s**, the A540 connects | **world B on 07.56**: the chip gates on its table; go to M2 and M3 |
+| nobody connects, the A540 included | void: the fresh chip or the bring-up failed; read the log |
+
+## Test M2: how fast does a handset attach once its key is installed? `[pre-commit]`
+
+Only if M1 shows world B. Fresh chip, all three stores held by the host,
+but the C430A's key installed in the chip only at t = 60 s
+(`-a holdback=60000`). Measure from the install to the C430A's first
+contact.
+
+| shows | meaning |
+|---|---|
+| contact within a few seconds of the install | a cell can load on demand **if** it learns of the attempt (M3); the handset retries access often |
+| contact only after tens of seconds or more | the handset backs off; on-demand loading would feel like a dead cell; preloading per cell |
+| no contact by the end | the late install does not work at all; void, read the log |
+
+## Test M3: does the chip report an access attempt by an unknown handset? `[pre-commit]`
+
+From M1's log when it shows world B: compare the received mails against a
+run with all stores loaded. A mail type, or a count of an existing one,
+that appears only while the unknown handsets are trying, is the hook for
+on-demand loading. Nothing: on-demand loading is not possible host-side.
