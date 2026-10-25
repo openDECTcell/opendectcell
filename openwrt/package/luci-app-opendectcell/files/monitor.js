@@ -28,12 +28,37 @@ function ago(ms) {
 	return _('%d h ago').format(Math.round(s / 3600));
 }
 
-/* RSSI byte, larger is stronger; the absolute scale is not known yet. */
-function level(link) {
+/*
+ * The chip's raw RSSI of the call's carrier, as FRITZ!OS converts it on
+ * the 7520 (clean room A-0121): dBm = (raw - 20) * 80/37 - 110; 0 and 255
+ * carry no value. The bars follow AVM's own quality steps (>-40 dBm 100 %,
+ * then 10 % per 5 dB down to 20 %), two steps per bar.
+ */
+function dbm(link) {
 	var r = link.radio;
 	if (!r || !r.rssi || r.carrier >= r.rssi.length)
+		return null;
+	var raw = r.rssi[r.carrier];
+	if (raw == 0 || raw == 255)
+		return null;
+	return (raw - 20) * 80 / 37 - 110;
+}
+
+function level(link) {
+	var d = dbm(link);
+	if (d == null)
 		return '-';
-	return '0x' + ('0' + r.rssi[r.carrier].toString(16)).slice(-2);
+	var bars = d > -40 ? 5 : d > -50 ? 4 : d > -60 ? 3 : d > -70 ? 2 : 1;
+	return '\u25ae'.repeat(bars) + '\u25af'.repeat(5 - bars) + ' ' +
+		_('%.1f dBm').format(d);
+}
+
+/* DECT carrier c, EN 300 175-2: 1897.344 MHz - c * 1.728 MHz */
+function channel(link) {
+	var r = link.radio;
+	if (!r || r.carrier == null)
+		return '-';
+	return _('%d (%.1f MHz)').format(r.carrier, 1897.344 - 1.728 * r.carrier);
 }
 
 function callText(link) {
@@ -76,7 +101,7 @@ function renderState(st) {
 			!on ? _('base off') :
 			h.link ? (l ? callText(l) : _('connected')) : _('idle'),
 			ago(h.seen_ms_ago),
-			l && l.radio ? String(l.radio.carrier) : '-',
+			l ? channel(l) : '-',
 			l ? level(l) : '-'
 		];
 	});

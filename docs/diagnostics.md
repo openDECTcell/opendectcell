@@ -288,7 +288,7 @@ a guess.
 | `[3]` | **carrier in use** | certain |
 | `[4]` | `0x00` always | — |
 | `[5]` | `01`/`02`; the `+0x116`-derived byte of `A-0077` | unknown |
-| `[6..15]` | **per-carrier RSSI, larger = stronger** | certain `[CR A-0088]` |
+| `[6..15]` | **per-carrier RSSI, larger = stronger**; dBm = (raw − 20) × 80/37 − 110 as FRITZ!OS converts it on the 7520, raw 0/255 = no value; index = carrier 0..9 = 1897.344 − 1.728·c MHz | certain `[CR A-0088]`, scale `[CR A-0121]` |
 | `[16..25]`, `[28..33]` | eight 16-bit LE per-interval event counters | strong |
 | `[26..27]`, `[34..35]` | frames in this polling interval | certain |
 | `[36..37]` | **frames since link establishment** (wraps at ~10m55s) | certain |

@@ -4055,8 +4055,10 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 		if (st.rssi[i] > st.rssi[peak])
 			peak = i;
 	printf("call: status: slot %u carrier %u", st.time_slot, st.carrier);
+	/* dBm as FRITZ!OS converts it on the 7520 (clean room A-0121) */
 	if (st.carrier < DECT_DIAG_CARRIERS)
-		printf(" level 0x%02x%s", st.rssi[st.carrier],
+		printf(" level 0x%02x (%.1f dBm)%s", st.rssi[st.carrier],
+		       (st.rssi[st.carrier] - 20) * 80.0 / 37.0 - 110.0,
 		       st.carrier == peak ? "" : " (NOT the strongest carrier)");
 	printf(" b5 0x%02x\ncall: status: rssi", st.b5);
 	for (i = 0u; i < DECT_DIAG_CARRIERS; i++)
