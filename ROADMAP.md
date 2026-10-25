@@ -4,6 +4,7 @@
 
 - Each milestone (`## M…`) maps to a GitHub milestone, and each checkbox to an issue. Items marked **[hw]** need a real box.
 - **State and gaps as of 2026-10-25:** `docs/review-2026-10-25.md` (what works, what is built but unproven, what the roadmap still lacks, and the order of work).
+- **Order of work (maintainer, 2026-10-25):** finish the DECT basics (the open bench tests), then the handset abstraction layer (M8b), then productising the cell (M9, top priority after those two). The controller's DECT integration waits; whether a standalone VoIP mode (M9b) comes first is proposed and not yet decided.
 - **Gates G1–G7 are go/no-go points on real hardware.** Work that depends on a gate starts only after the gate has passed (see `AGENTS.md` §6). The controller (separate repo `opendectcell-controller`) is designed in parallel but **implemented only after G7**.
 
 | Gate | Proves | Pass criterion |
@@ -125,7 +126,11 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
   - 2026-10-25 evening: **the radio half is built (API 26)**. dBm from the chip's RSSI, a quality percentage from AVM's thresholds plus the CRC and Q-bit counters (A-0121, A-0123), and the counters renamed to their meaning. Shown on the Monitor page as signal bars, dBm and quality
 - [ ] Golden-trace regression tests in CI
 
-## M9: OpenWrt integration
+## M8b: Handset abstraction layer (new 2026-10-25; after the DECT basics, before M9)
+- [ ] Design: a per-handset profile chosen from what the handset tells us (<<MODEL-IDENTIFIER>>, terminal capability, CAT-iq level), carrying (a) **quirks**, such as the A540 showing no call timer, plus the measured rules that once looked like quirks and turned out to be the standard (TI 0, <<SIGNAL>>), and (b) **feature modules** a handset can use. Decide where it lives: libopendectcell, so that the cell, a standalone box and the controller share one table (the controller's AGENTS.md §6 already requires a feature-module framework and a model-quirks table)
+- [ ] Handsets outside GAP/CAT-iq: several on the Eventphone compatibility list do not meet the specs. The layer should let a motivated user add a "driver" for such a handset from **on-air captures of their own handset**. Clean-room rules apply: never vendor firmware or analysed code
+- [ ] Vendor features as modules: the FRITZ!Fon phonebook and its online services (RSS and similar). What they use on air is unknown and needs stock captures (the hardware-analysis step / Freetz room questions), then a module written from the facts
+
 - [~] Feed with `kmod-opendectcell-ipq40xx` and the `opendectcell` package (programs plus board profiles; pulls in the right kmod); CI build with the OpenWrt SDK
   - 2026-10-25: both packages build with SDK 25.12.5 (`opendectcell-0.1-r1.apk`: `dect-stubd`, `dect-fwload`, `dect-pcmcap`, init script, UCI config). The kmod package had gone stale (copied one source file of three) and is fixed. Open: board profiles, a CI build
 - [ ] Board resources: in-module board table first, then an upstream DTS patch for the 7520/7530
@@ -134,10 +139,14 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
   - 2026-10-25 evening: `register` command and timed window (SIGUSR1, `regwindow`, default 120 s), a random PIN per install, the getty handled, procd respawn, options `wideband`, `overlap`/`dialwait`, `cipher`. The service was tested end to end on the box. **[hw]** A ciphered call through it is untested (bench test 17)
 - [ ] Firmware storage in `/etc/opendectcell/firmware/`: SHA-256 check against the profile, kept across upgrades (`keep.d`)
 - [ ] LuCI app for non-technical users: status page, firmware upload, basic settings
+  - 2026-10-25: status page and register button done. **A settings page is wanted** (maintainer): enable, PIN, registration window, wideband, overlap and dial wait, ciphering, the stores. Every option already exists in `/etc/config/opendectcell`
 - [~] **LuCI DECT Monitor page** (`docs/diagnostics.md`): 2026-10-25 first version, `openwrt/package/luci-app-opendectcell` (Status > DECT: base radio/registration/firmware, per handset name, slot, state, last contact, carrier, level; refreshes every 2 s from the state file). Installed on the lab box by hand, served and readable; seen in a browser at the bench on 2026-10-25. Since then it has had columns named Channel (frequency), Signal Strength (bars and dBm) and Quality, "base off" while parked, a registration countdown, and a "Register a handset" button showing the PIN. Original item: one row per registered handset — identity, in range / connected, model, field strength, signal quality, slot type (long/full), time slot, carrier, codec in use, encryption — plus a base section (RFPI, radio state, dummy-bearer slot, carrier, power). The point is that a non-technical user can answer "is this handset in range and what is it doing" without reading a log. AVM ships exactly this as its DECT Monitor; every hard question of 2026-10-23 was a field on that screen. Deliberately **not** a debugging console: raw mails stay in `dect-stubd -v`.
 - [x] Fon/DECT LED (`green:fon`): on while the radio is up, ~5 Hz blink on C-plane traffic or a call, off when parked (`dce3ad7`, verified run 30)
 - [~] **Export diagnostics from `dect-stubd`** — 2026-10-25: `/tmp/opendectcell-state.json`, rewritten atomically at most once a second (radio, STUB build, registration, every stored handset with slot/name/link/last seen, a `dect_diag` object per live link; IPUIs only with `-p`). A file rather than a socket: LuCI/rpcd read it without a protocol and the poll loop stays as it is. Verified on the box. Original item:: periodic chip reads into the `dect_diag` struct and a way out of the process — a JSON line on a UNIX socket, since both consumers (LuCI, controller) are out-of-process. The slot audit and UAK read-back already exist and should feed this rather than only printing.
 - [ ] Cell mode: tunnel mails (TCP, optional TLS) and audio (UDP, optional SRTP/DTLS) to the controller
+
+## M9b: Standalone VoIP on one box (proposed 2026-10-25, not decided)
+- [ ] Prove the whole path, handset ↔ cell ↔ SIP ↔ PBX, on one OpenWrt box before committing to the controller: one SIP account per handset, calls in and out, caller ID, wideband, configured in LuCI. Candidate SIP stack: baresip from the OpenWrt telephony feed (BSD), driven by `dect-stubd` through a small bridge. This revisits the controller decision "multi-cell only" (the maintainers' notes) for the single-box case only
 
 ## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
 - [x] Architecture, VoIP requirements and DECT feature framework (design docs in opendectcell-controller)
