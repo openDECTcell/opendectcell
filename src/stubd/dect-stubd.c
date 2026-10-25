@@ -4035,6 +4035,8 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 	d.radio = st;
 	d.call_frames = s->reg.frames_total;
 	dect_diag_from_link(&s->reg.link, &d);
+	if (d.handset_tag < 0)		/* serving the current store */
+		d.handset_tag = (int)s->cur;
 	if (dect_diag_json(&d, s->show_params, js, sizeof(js)))
 		printf("diag: %s\n", js);
 }
@@ -4228,6 +4230,8 @@ static void state_link(struct stubd *s, FILE *f, const struct dect_link *l,
 		d.radio = *st;
 	d.call_frames = frames;
 	dect_diag_from_link(l, &d);
+	if (d.handset_tag < 0 && l == &s->reg.link)
+		d.handset_tag = (int)s->cur;	/* the current store */
 	if (dect_diag_json(&d, s->show_params, js, sizeof(js))) {
 		fprintf(f, "%s%s", *first ? "" : ",", js);
 		*first = 0;
@@ -4266,9 +4270,16 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 
 		if (i != s->cur && !s->hs[i].loaded)
 			continue;
-		/* parked: no handset has a link, whatever was up at exit */
+		/*
+		 * parked: no handset has a link, whatever was up at exit.
+		 * adopted -1 means the link serves the current store itself
+		 * (a call we placed to it): that handset is linked too, or the
+		 * Monitor shows it "idle" mid-call (bench test 12a).
+		 */
 		if (radio_on && s->reg.active &&
-		    s->reg.link.mm.adopted == (int)i)
+		    (s->reg.link.mm.adopted == (int)i ||
+		     (s->reg.link.mm.adopted < 0 && i == s->cur &&
+		      s->reg.link.mm.port_id_len)))
 			linked = 1;
 		for (k = 0; radio_on && k < SIDE_MAX; k++)
 			if (s->side[k].active && s->side[k].adopted == (int)i)
