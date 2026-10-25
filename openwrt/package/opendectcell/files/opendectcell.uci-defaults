@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# The FRITZ!Box 7520/7530 has one usable UART, and it belongs to the DECT
+# chip: the firmware upload and the chip's boot replies run over it. A
+# login getty on it reads those bytes away. Disable it (from the next boot
+# on); /etc/init.d/opendectcell freezes a running one until then. Kept as
+# /etc/inittab.opendectcell-orig.
+
+uart=$(uci -q get opendectcell.main.uart)
+uart=${uart:-/dev/ttyMSM0}
+tty=${uart##*/}
+if grep -q "^$tty::" /etc/inittab 2>/dev/null; then
+	[ -e /etc/inittab.opendectcell-orig ] || cp /etc/inittab /etc/inittab.opendectcell-orig
+	sed -i "s|^$tty::|#$tty::|" /etc/inittab
+	logger -t opendectcell "disabled the console getty on $tty, the DECT UART"
+fi
+exit 0

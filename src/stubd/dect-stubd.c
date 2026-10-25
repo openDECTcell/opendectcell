@@ -7307,9 +7307,23 @@ int main(int argc, char **argv)
 	fpb = cfg.frames_per_block;
 
 	if (s.tx_slot < 0 || s.rx_slot < 0) {
-		if (find_control_slot(&s, fpb)) {
-			fprintf(stderr, "control slot not found\n");
-			goto out;
+		/*
+		 * Straight after a firmware upload the chip may not answer
+		 * yet: the service starts us the moment dect-fwload returns,
+		 * and the first search came back empty (2026-10-25, service
+		 * test; the same transient as run M1 that morning). Three
+		 * passes, ~4 s each, before giving up.
+		 */
+		int pass;
+
+		for (pass = 1; find_control_slot(&s, fpb); pass++) {
+			if (pass >= 3 || stop) {
+				fprintf(stderr, "control slot not found\n");
+				goto out;
+			}
+			fprintf(stderr, "control slot not found yet (pass %d of "
+				"3) -- the chip may still be starting\n", pass);
+			sleep(1);
 		}
 	} else {
 		printf("control slot given: tx %d, rx %d\n", s.tx_slot, s.rx_slot);

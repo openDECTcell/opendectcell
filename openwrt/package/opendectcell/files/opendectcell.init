@@ -35,13 +35,19 @@ fw_known() {
 	return 1
 }
 
-# The DECT UART is also the serial console on this box; a getty on it
-# corrupts the firmware upload. Refuse rather than fight it.
-console_free() {
+# The DECT UART is also the serial console on this box; a getty on it reads
+# the chip's replies away, and kernel messages land in the upload. Freeze a
+# running getty (until the next reboot: resuming it hangs up the UART; the
+# package's uci-defaults script disables it for good) and quiet the kernel
+# console -- what the lab's fwload.sh has done before every upload.
+console_claim() {
 	local uart="$1" p
+	echo 1 > /proc/sys/kernel/printk
 	for p in /proc/[0-9]*; do
 		[ "$(cat "$p/comm" 2>/dev/null)" = askfirst ] || continue
-		ls -l "$p/fd" 2>/dev/null | grep -q "${uart##*/}" && return 1
+		ls -l "$p/fd" 2>/dev/null | grep -q "${uart##*/}" || continue
+		kill -STOP "${p#/proc/}" &&
+			log "froze the console getty on $uart, the DECT UART"
 	done
 	return 0
 }
@@ -76,10 +82,7 @@ load_chip() {
 	}
 	# Already booted since the last module load: keep it.
 	[ -s /tmp/dect-stub.second ] && return 0
-	console_free "$uart" || {
-		log "a console getty holds $uart, the DECT UART; disable it first"
-		return 1
-	}
+	console_claim "$uart"
 	/usr/sbin/dect-fwload --uart "$uart" --dect-dev /dev/dect0 \
 		--first "$dir/$first" --second "$dir/$second" --mode "$mode" \
 		--factory-mtd "$mtd" --factory-offset "$off" \
@@ -135,6 +138,8 @@ start_service() {
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 	procd_set_param term_timeout 10
+	# a crash restarts it; five quick failures in a row give up
+	procd_set_param respawn 3600 5 5
 	procd_close_instance
 }
 
