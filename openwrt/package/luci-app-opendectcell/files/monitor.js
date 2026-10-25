@@ -93,7 +93,7 @@ function renderState(st) {
 		E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('Handsets')),
 			table([ _('Name'), _('Slot'), _('State'), _('Last contact'),
-				_('Carrier'), _('Level') ], handsets)
+				_('Channel'), _('Signal Strength') ], handsets)
 		])
 	]);
 }
