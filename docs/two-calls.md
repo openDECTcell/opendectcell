@@ -15,14 +15,20 @@ lock of the G.722 downlink, the delay ring of the loop-back, the cadence
 counters -- is global state in `struct stubd`, used by the frame loop for
 TDM word `audio.tone_word` (0).
 
-## What the chip side needs (Q-0063)
+## What the chip side needs (answered: A-0124)
 
-Today's bind: `0x0251 {h, sel 1, gain}`, `0x0230 {h, flags, mask 0x0002,
-00, codec}` with flags low nibble = **audio channel 1**, then `0x022D {h, 00}`;
-the call's audio is on **TDM word 0**. The 08.25 loop-back bench mapped
-channel 1 -> word 0, **channel 2 -> word 3**, channel 3 -> word 2. The
-working prediction: a second call binds **channel 2** and its audio is on
-**word 3**. To confirm with the room before any dial.
+From two stock captures with two calls up: the second connection binds
+`0x0251 {h, 02, 2b}`, `0x0230 {h, 42, 04 00, 00, 00}`, `0x022D {h, 00}`. Only
+the channel k changes: the flags nibble is a **bit** (k = 1, 2, 3 -> 0x1,
+0x2, 0x4), the mask is `1 << k`, the `0x0251` selector is k. Stock takes the
+lowest free channel; the kernel refuses a bind whose bit or mask collides.
+**Channel k's audio is on raw TDM word k XOR 1** -- 1 -> 0, 2 -> 3, 3 -> 2 --
+both directions, wideband too (one word). **Three concurrent voice
+channels**, narrowband or wideband. Internal calls in stock are two bearers
+on two channels **bridged on the host**; nothing is bridged in the chip.
+
+Implemented (`-a twocalls`, step 1-3 in the variant below): lane 0 untouched,
+extra lanes for side links on channels 2 and 3.
 
 ## Software plan
 

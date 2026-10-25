@@ -247,7 +247,36 @@ struct side_link {
 	uint8_t  handle;
 	int      adopted;	/* handset table index, -1 = nobody yet */
 	uint32_t rejected_seen;
+	int      lane;		/* -a twocalls: its xlane, -1 = none */
+	size_t   dial_len;	/* overlap receiving, as on the main link */
+	uint64_t dial_change_ms;
 	struct dect_link link;
+};
+
+/*
+ * A second (third) call's audio, on a side link: -a twocalls,
+ * docs/two-calls.md. Lane 0 -- the main link's call -- stays the code it
+ * always was; these lanes have only the production sources (the G.722 or
+ * raw test file, the loop-back, silence), each on its own audio channel
+ * and TDM word: channel 2 -> raw word 3, channel 3 -> raw word 2, in calls
+ * as in the loop-back (clean room A-0124; logical word k, raw k XOR 1).
+ * lane2= / lane3= override.
+ */
+#define XLANE_MAX	2u
+
+struct xlane {
+	int      used;		/* bound to a side link's call */
+	uint8_t  handle;
+	uint8_t  channel;	/* 0x0230 flags low nibble */
+	unsigned word;		/* TDM word of its audio, both directions */
+	int      wideband;	/* the coded G.722 lane */
+	int      connected;	/* 0x022D sent */
+	size_t   pos;		/* in the test file */
+	int      phase, locked;	/* the G.722 two-frame lock */
+	uint32_t rx_prev;
+	uint8_t  ring[LOOP_DELAY_MAX * 2u];
+	unsigned wr;
+	int      primed;
 };
 
 struct stubd {
@@ -272,6 +301,7 @@ struct stubd {
 	int verbose;
 	int show_params;	/* log parameter bytes (may hold identity data) */
 	const char *xmail[20];	/* extra mails to send once the session is up */
+	struct xlane xl[XLANE_MAX];
 	/* The registration window: open now, and until when (0 = no limit). */
 	int      reg_open;
 	uint64_t reg_open_until;
@@ -587,6 +617,8 @@ struct stubd {
 		 */
 		int      no_reg_open;
 		unsigned reg_window_s;	/* regopen=SECS: close after; 0 = never */
+		int      two_calls;	/* twocalls: speech on side links */
+		uint8_t  lane_ch[XLANE_MAX], lane_word[XLANE_MAX];
 		unsigned reg_signal_s;	/* regwindow=SECS for SIGUSR1, 120 */
 		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
 		int      no_chip_keys;	/* nochipkeys, multi-cell test M2 */
@@ -1518,6 +1550,80 @@ static int lane_word_live(uint32_t v)
 }
 
 /*
+ * The extra lanes' downlink for frame f (-a twocalls). The G.722 file
+ * phase-locked to the chip's two-frame words as lane 0's playsync does; a
+ * raw (linear) file two bytes a frame; the loop-back's delay ring; else
+ * silence. Their own positions, so two calls each hear the whole file.
+ */
+static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
+		     unsigned int f)
+{
+	unsigned i;
+
+	for (i = 0; i < XLANE_MAX; i++) {
+		struct xlane *x = &s->xl[i];
+		unsigned w = x->word;
+		const uint8_t *src;
+
+		if (!x->used || !x->connected || w >= s->slots ||
+		    w == (unsigned)s->tx_slot)
+			continue;
+		src = rx ? rx + (f * s->slots + w) * 2u : NULL;
+		fr[w * 2u] = s->tx_voice_idle;
+		fr[w * 2u + 1u] = s->tx_voice_idle;
+		if (s->audio.play && !s->audio.play_raw && x->wideband) {
+			int advance;
+
+			if (src) {
+				uint32_t v = (uint32_t)src[0] |
+					     ((uint32_t)src[1] << 8);
+
+				if (v != x->rx_prev && lane_word_live(v) &&
+				    lane_word_live(x->rx_prev) && !x->locked) {
+					x->locked = 1;
+					x->phase = 0;
+				}
+				x->rx_prev = v;
+			}
+			advance = !x->phase || !x->pos;
+			x->phase ^= 1;
+			if (advance) {
+				if (x->pos + 2u > s->audio.play_len)
+					x->pos = 0;
+				x->pos += 2u;
+			}
+			fr[w * 2u] = s->audio.play[x->pos - 2u];
+			fr[w * 2u + 1u] = s->audio.play[x->pos - 1u];
+		} else if (s->audio.play && s->audio.play_raw && !x->wideband) {
+			if (x->pos + 2u > s->audio.play_len)
+				x->pos = 0;
+			fr[w * 2u] = s->audio.play[x->pos];
+			fr[w * 2u + 1u] = s->audio.play[x->pos + 1u];
+			x->pos += 2u;
+		} else if (s->audio.loopback && src) {
+			unsigned d = s->audio.loop_delay;
+
+			if (d) {
+				unsigned rd = (x->wr + 1u) % d;
+
+				x->ring[x->wr * 2u] = src[0];
+				x->ring[x->wr * 2u + 1u] = src[1];
+				x->wr = rd;
+				if (!x->primed && rd == 0u)
+					x->primed = 1;
+				if (x->primed) {
+					fr[w * 2u] = x->ring[rd * 2u];
+					fr[w * 2u + 1u] = x->ring[rd * 2u + 1u];
+				}
+			} else {
+				fr[w * 2u] = src[0];
+				fr[w * 2u + 1u] = src[1];
+			}
+		}
+	}
+}
+
+/*
  * Transmit one DMA block: every frame carries the control slot (the next two
  * queued mail bytes, or idle when the queue is empty) and every other slot its
  * configured idle value. Called once per received block so the transmit side
@@ -1799,6 +1905,7 @@ lane_done:
 				}
 			}
 		}
+		xlane_tx(s, fr, rx, f);
 		tx_tone(s, fr);
 		if (ql >= 2u) {
 			fr[(unsigned int)s->tx_slot * 2u] = s->txq[qh];
@@ -4792,7 +4899,16 @@ static int side_start(struct stubd *s, uint8_t handle)
 	}
 	dect_cc_set_signal(&sl->link.cc, s->audio.signal_on,
 			   s->audio.signal_value);
-	dect_cc_set_busy(&sl->link.cc, 1);	/* no audio path here */
+	/* no audio path here, unless -a twocalls gives it a lane */
+	dect_cc_set_busy(&sl->link.cc, !s->audio.two_calls);
+	dect_cc_set_wideband(&sl->link.cc, !s->audio.narrowband);
+	dect_cc_set_overlap(&sl->link.cc, !s->audio.no_overlap);
+	dect_cc_set_call_status(&sl->link.cc, !s->audio.no_call_status,
+				s->audio.callinfo.has_call_id ?
+				s->audio.callinfo.call_id : 1u);
+	sl->lane = -1;
+	sl->dial_len = 0;
+	sl->dial_change_ms = 0;
 	sl->active = 1;
 	sl->handle = handle;
 	sl->adopted = -1;
@@ -4802,6 +4918,161 @@ static int side_start(struct stubd *s, uint8_t handle)
 	       "gets a side link (location registration and list access "
 	       "only)\n", handle, s->reg.handle);
 	return 0;
+}
+
+static void side_pump(struct stubd *s, struct side_link *sl);
+
+static int xlane_free(const struct stubd *s)
+{
+	unsigned i;
+
+	for (i = 0; i < XLANE_MAX; i++)
+		if (!s->xl[i].used)
+			return (int)i;
+	return -1;
+}
+
+static struct xlane *xlane_of(struct stubd *s, uint8_t handle)
+{
+	unsigned i;
+
+	for (i = 0; i < XLANE_MAX; i++)
+		if (s->xl[i].used && s->xl[i].handle == handle)
+			return &s->xl[i];
+	return NULL;
+}
+
+/*
+ * Give side link sl's speech call an audio path of its own, as stock binds
+ * its second call (clean room A-0124, two captures with two calls up):
+ * 0x0251 {h, k, gain}, 0x0230 {h, flags | bit, 1 << k, mode, codec} where
+ * channel k = 1, 2, 3 has the flags bit 0x1, 0x2, 0x4 and the mask bit k.
+ * 0x022D follows on the 0x0242, as for lane 0.
+ */
+static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
+{
+	struct xlane *x = &s->xl[i];
+	const struct audio_cfg *a = &s->audio;
+	struct dect_mail m;
+	uint16_t mask;
+
+	memset(x, 0, sizeof(*x));
+	x->used = 1;
+	x->handle = sl->handle;
+	x->channel = a->lane_ch[i];
+	x->word = a->lane_word[i];
+	x->wideband = !a->narrowband &&
+		dect_cc_codec(&sl->link.cc) == DECT_CC_CODEC_G722;
+	sl->lane = i;
+	mask = (uint16_t)(1u << x->channel);
+
+	if (!a->no_gain) {
+		memset(&m, 0, sizeof(m));
+		m.src = DECT_TASK_PCM;
+		m.dst = DECT_TASK_CONTACT_DST;
+		m.prim = 0x0251u;
+		m.param[0] = x->handle;
+		m.param[1] = x->channel;	/* selector */
+		m.param[2] = a->gain;
+		m.param_len = 3;
+		send_mail(s, (unsigned int)s->tx_slot, &m);
+		if (s->verbose)
+			log_mail(&m, "tx M", s->show_params);
+	}
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0230u;
+	m.param[0] = x->handle;
+	m.param[1] = (uint8_t)((a->flags & 0xB0u) |
+			       (1u << (x->channel - 1u)) |
+			       (x->wideband ? 0x40u : 0u));
+	m.param[2] = (uint8_t)(mask & 0xFFu);
+	m.param[3] = (uint8_t)(mask >> 8);
+	m.param[4] = a->mode;
+	m.param[5] = x->wideband ? 0u : a->codec;
+	m.param_len = 6;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	printf("side: second call on handle %u: lane %d, channel %u, TDM word "
+	       "%u, %s -- 0x0230 {%02x %04x %02x %02x}\n", x->handle, i,
+	       x->channel, x->word, x->wideband ? "wideband" : "narrowband",
+	       m.param[1], mask, m.param[4], m.param[5]);
+}
+
+static void xlane_connect(struct stubd *s, struct xlane *x)
+{
+	struct dect_mail m;
+
+	if (x->connected)
+		return;
+	x->connected = 1;
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x022Du;
+	m.param[0] = x->handle;
+	m.param[1] = 0x00u;
+	m.param_len = 2;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	printf("side: audio connect: 0x022D on handle %u (channel %u)\n",
+	       x->handle, x->channel);
+}
+
+static void xlane_release(struct stubd *s, struct side_link *sl)
+{
+	if (sl->lane < 0)
+		return;
+	if (s->xl[sl->lane].connected || s->xl[sl->lane].used)
+		send_audio_disconnect(s, sl->handle);
+	memset(&s->xl[sl->lane], 0, sizeof(s->xl[0]));
+	sl->lane = -1;
+}
+
+/*
+ * -a twocalls on a side link: take speech while a lane is free (else the
+ * busy refusal stays), accept a dialled call after dialwait as the main
+ * link does, bind once it is connected, release when it ends.
+ */
+static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
+{
+	struct dect_cc *cc = &sl->link.cc;
+
+	if (!s->audio.two_calls)
+		return;
+	dect_cc_set_busy(cc, !(sl->lane >= 0 || xlane_free(s) >= 0));
+	if (cc->state == DECT_CC_ST_OVERLAP) {
+		size_t len;
+
+		(void)dect_cc_keypad(cc, &len);
+		if (!sl->dial_change_ms || len != sl->dial_len) {
+			sl->dial_len = len;
+			sl->dial_change_ms = now;
+		} else if (len && now - sl->dial_change_ms >=
+			   s->audio.dial_wait_ms) {
+			printf("side: dialled on handle %u -- connecting\n",
+			       sl->handle);
+			if (dect_cc_accept(cc) == 0) {
+				dect_link_drain(&sl->link, now);
+				side_pump(s, sl);
+			}
+		}
+	} else {
+		sl->dial_len = 0;
+		sl->dial_change_ms = 0;
+	}
+	if (sl->lane < 0 && cc->state == DECT_CC_ST_ACTIVE &&
+	    (cc->incoming || dect_cc_peer_is_speech(cc))) {
+		int i = xlane_free(s);
+
+		if (i >= 0)
+			xlane_bind(s, sl, i);
+	}
+	if (sl->lane >= 0 && !dect_cc_busy(cc))
+		xlane_release(s, sl);
 }
 
 static void side_pump(struct stubd *s, struct side_link *sl)
@@ -4893,10 +5164,12 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 
 	gen_rand(s, rand_f, sizeof(rand_f));
 	gen_rand(s, rs, sizeof(rs));
+	side_call_tick(s, sl, now);	/* busy or not, before a SETUP lands */
 	if (dect_link_rx_segment(&sl->link, m, now, rand_f, rs, &ind) < 0) {
 		side_pump(s, sl);
 		return;
 	}
+	side_call_tick(s, sl, now);
 	a = sl->link.mm.adopted;
 	if (a >= 0 && (unsigned)a < s->n_hs)
 		s->hs[a].last_seen_ms = now;
@@ -5618,6 +5891,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		struct side_link *sl = m->param_len ? side_find(s, h) : NULL;
 
 		if (sl && !(s->reg.active && h == s->reg.handle)) {
+			xlane_release(s, sl);
 			sl->active = 0;
 			printf("side: connection released (handle %u)\n", h);
 			break;
@@ -5680,6 +5954,8 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			 */
 			if (chan >= 1u && chan <= 9u)
 				send_audio_connect(s, s->reg.handle, chan);
+		} else if (m->param_len >= 2 && xlane_of(s, m->param[0])) {
+			xlane_connect(s, xlane_of(s, m->param[0]));
 		}
 		break;
 	case 0xFFF1u:
@@ -6023,6 +6299,13 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		dial_tick(s, now);
 		connect_tick(s, now);
 		reg_window_tick(s, now);
+		{
+			unsigned k;
+
+			for (k = 0; k < SIDE_MAX; k++)
+				if (s->side[k].active)
+					side_call_tick(s, &s->side[k], now);
+		}
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
@@ -6224,6 +6507,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 8 && !memcmp(key, "timesync", 8)) &&
 			    !(klen == 8 && !memcmp(key, "pagemail", 8)) &&
 			    !(klen == 9 && !memcmp(key, "codeclist", 9)) &&
+			    !(klen == 5 && !memcmp(key, "lane2", 5)) &&
+			    !(klen == 5 && !memcmp(key, "lane3", 5)) &&
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
@@ -6251,6 +6536,19 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->no_reg_open = 0, a->reg_window_s = eq ? (unsigned)v : 0u;
 		else if (klen == 9 && !memcmp(key, "regwindow", 9))
 			a->reg_signal_s = (unsigned)v;
+		else if (!eq && klen == 8 && !memcmp(key, "twocalls", 8))
+			a->two_calls = 1;
+		else if (eq && klen == 5 && (!memcmp(key, "lane2", 5) ||
+					     !memcmp(key, "lane3", 5))) {
+			unsigned ch, w, k = key[4] == '2' ? 0u : 1u;
+
+			/* channel 1..3 (A-0124: three voice channels) */
+			if (sscanf(eq + 1, "%u:%u", &ch, &w) != 2 || !ch ||
+			    ch > 3 || w > 31)
+				return -1;
+			a->lane_ch[k] = (uint8_t)ch;
+			a->lane_word[k] = (uint8_t)w;
+		}
 		else if (!eq && klen == 10 && !memcmp(key, "nostockcfg", 10))
 			a->no_stock_cfg = 1;
 		else if (eq && klen == 7 && !memcmp(key, "subslot", 7)) {
@@ -6767,6 +7065,10 @@ static void usage(void)
 		"           earlybind    assign audio on the page response\n"
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
 		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
+		"           twocalls     a second (third) handset may call while one\n"
+		"           is in a call: side links get their own audio channel\n"
+		"           (2 -> TDM word 3, 3 -> word 2; lane2=CH:WORD to override)\n"
+		"           with the test file or loop-back, as the main call\n"
 		"           regopen      open registration while running (enrol a\n"
 		"           handset; default closed, subscribed handsets attach)\n"
 		"           noregopen    closed, the default\n"
@@ -6933,6 +7235,8 @@ int main(int argc, char **argv)
 	s.audio.dial_wait_ms = 3000u;
 	s.audio.no_reg_open = 1;	/* closed unless -a regopen */
 	s.audio.reg_signal_s = 120u;
+	s.audio.lane_ch[0] = 2; s.audio.lane_word[0] = 3;	/* Q-0063 */
+	s.audio.lane_ch[1] = 3; s.audio.lane_word[1] = 2;
 	s.audio.slot_mask = 0x09u;	/* [CR A-0114] stock's 0x017c 00 09 */
 	/*
 	 * -1, not 0: the struct is memset to zero above, and a zero here
