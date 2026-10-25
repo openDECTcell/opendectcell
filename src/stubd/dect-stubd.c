@@ -2345,6 +2345,21 @@ static void install_subscription(struct stubd *s, uint8_t slot,
  */
 static void pump_lapc(struct stubd *s);
 
+/* The controller's answer: hold the fetched record on the main link. */
+static void fetch_keep(struct stubd *s)
+{
+	struct handset *h;
+
+	if (s->fetch_idx < 0)
+		return;
+	h = &s->hs[s->fetch_idx];
+	h->fetched = 1;		/* the next link holds it from hs[] */
+	if (s->reg.active)
+		(void)dect_mm_hold(&s->reg.link.mm, h->port_id,
+				   h->port_id_len, (uint8_t)h->slot, NULL,
+				   s->fetch_idx);
+}
+
 static void fetch_tick(struct stubd *s, uint64_t now)
 {
 	const uint8_t *id;
@@ -2352,16 +2367,37 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 	unsigned i, delay;
 	int r, setup;
 
-	if (!s->audio.remote_path || !s->reg.active)
+	if (!s->audio.remote_path)
 		return;
 	/* a held LOCATE-REQUEST, or a held CC-SETUP from a roamer that did
 	 * not locate (same location area) */
-	if (dect_mm_locate_pending(&s->reg.link.mm, &id, &len))
+	if (s->reg.active &&
+	    dect_mm_locate_pending(&s->reg.link.mm, &id, &len))
 		setup = 0;
-	else if (dect_link_setup_pending(&s->reg.link, &id, &len))
+	else if (s->reg.active &&
+		 dect_link_setup_pending(&s->reg.link, &id, &len))
 		setup = 1;
-	else
+	else {
+		/*
+		 * The handset stopped waiting (a list access it closed after
+		 * 1.7 s, M4-15000-063617), or its link went down. The
+		 * controller's answer arrives anyway and is kept: dropping it
+		 * left the roamer unknown, and every later attempt was turned
+		 * away as a stranger. The fetch belongs to the handset, not
+		 * the link: a new link does not cancel it (M4-15000-063907).
+		 */
+		if (!s->fetch_req_ms || now < s->fetch_at)
+			return;
+		fetch_keep(s);
+		printf("fetch: record arrived at +%llu ms after the request; "
+		       "the handset had stopped waiting -- kept for its next "
+		       "attempt\n",
+		       (unsigned long long)(now - s->fetch_req_ms));
+		fflush(stdout);
+		s->fetch_req_ms = 0;
+		s->fetch_at = 0;
 		return;
+	}
 	if (!s->fetch_req_ms) {
 		s->fetch_req_ms = now;
 		s->fetch_idx = -1;
@@ -2394,13 +2430,7 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 	}
 	if (now < s->fetch_at)
 		return;
-	if (s->fetch_idx >= 0) {
-		struct handset *h = &s->hs[s->fetch_idx];
-
-		(void)dect_mm_hold(&s->reg.link.mm, h->port_id, h->port_id_len,
-				   (uint8_t)h->slot, NULL, s->fetch_idx);
-		h->fetched = 1;
-	}
+	fetch_keep(s);
 	r = setup ? dect_link_setup_resume(&s->reg.link, now)
 		  : dect_mm_locate_resume(&s->reg.link.mm);
 	printf("fetch: %s at +%llu ms after the request\n",
@@ -4262,9 +4292,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	 */
 	mcfg.defer_unknown = s->audio.remote_path != NULL;
 	mcfg.locate_validity = (uint8_t)s->audio.locate_validity;
-	s->fetch_at = 0;
-	s->fetch_req_ms = 0;
-	s->fetch_retrans_seen = 0;
+	s->fetch_retrans_seen = 0;	/* MM's counter restarts with the link */
 	mcfg.registration = s->audio.no_reg_open ? DECT_MM_REG_CLOSED :
 			    s->sub_port_id_len ? DECT_MM_REG_SAME :
 						 DECT_MM_REG_OPEN;
