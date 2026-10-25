@@ -164,3 +164,20 @@ cleared, no key installed), ring the A540, ~5 s.
 | ALERTING | paging and ringing need no chip key either: a cell can serve a roamer end to end from host records |
 | page sent, no page response | the chip pages only handsets in its table: a roamer must be installed before it can be called |
 | page response, SETUP refused | something in the call path wants the key; read the release reason |
+
+### M2' result: the keyless handset rang, but answered the page with a location registration `[vRINGA540-20261025-074255-1]`
+
+Fresh chip, `nochipkeys`: page `0c 11 01` at 21.5 s; the A540's link up at
+22.9 s; on it, **`{LOCATE-REQUEST}`** (accepted, TPUI acked) instead of
+`{LCE-PAGE-RESPONSE}`; the daemon's page-response deadline passed, our
+SETUP went out on that link at 23.5 s, **ALERTING** at 24.7 s. So a handset
+with no key in the chip can be called -- but the page did not come back the
+way it does in keyed runs.
+
+**Control** `[pre-commit]`: same conditions, keys installed (fresh chip,
+awake A540, ring 10 s after first contact).
+
+| shows | meaning |
+|---|---|
+| `{LCE-PAGE-RESPONSE}` after the page | the key matters for how a paged handset comes back; a roamer should be installed before it is paged, or the cell must accept a LOCATE as the answer |
+| `{LOCATE-REQUEST}` again | the fresh chip (the handset's location state), not the key; keyless paging behaves like keyed paging |
