@@ -219,6 +219,8 @@ struct handset {
 	size_t   cc_fixed_id_len;
 	int      cc_id_learned;
 	uint64_t last_seen_ms;	/* runtime only: last segment from it */
+	int      remote;	/* remote=: a roamer the cell must fetch */
+	int      fetched;	/* ... and has, this run */
 };
 
 /*
@@ -327,6 +329,10 @@ struct stubd {
 	unsigned    led_changes, led_blink_ticks;
 	uint64_t    state_next;		/* next state-file write */
 	int         holdback_done;
+	/* Test M4: the held LOCATE-REQUEST and the simulated fetch. */
+	uint64_t    fetch_req_ms, fetch_at;
+	int         fetch_idx;		/* matching remote store, -1 none */
+	uint32_t    fetch_retrans_seen;
 	/*
 	 * Ringing the handset. A page is a broadcast the handset may simply
 	 * miss, and the stock host guards each one with a 3 s timer, so page
@@ -565,6 +571,8 @@ struct stubd {
 		int      no_reg_open;	/* noregopen */
 		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
 		int      no_chip_keys;	/* nochipkeys, multi-cell test M2 */
+		const char *remote_path;	/* remote=PATH, test M4 */
+		unsigned fetch_delay_ms;	/* fetchdelay=MS, test M4 */
 		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
 		/*
@@ -2319,11 +2327,72 @@ static int held_back(const struct stubd *s, unsigned i)
 {
 	if (s->audio.no_chip_keys)	/* every slot cleared, no key at all */
 		return 1;
+	if (i < s->n_hs && s->hs[i].remote && !s->hs[i].fetched)
+		return 1;		/* a roamer: not in this cell's chip */
 	return s->audio.holdback_ms && !s->holdback_done && i != 0;
 }
 
 static void install_subscription(struct stubd *s, uint8_t slot,
 				 const uint8_t uak[DECT_MM_UAK_LEN]);
+
+/*
+ * Test M4 (docs/multicell-experiments.md): play the controller for a
+ * roamer. MM holds a {LOCATE-REQUEST} from an identity this link does not
+ * know; if it is the remote= store's, its record "arrives" fetchdelay ms
+ * after the request, and the request is answered. Times are from the
+ * request, so the handset's patience is measured, not ours.
+ */
+static void pump_lapc(struct stubd *s);
+
+static void fetch_tick(struct stubd *s, uint64_t now)
+{
+	const uint8_t *id;
+	size_t len;
+	unsigned i;
+	int r;
+
+	if (!s->audio.remote_path || !s->reg.active ||
+	    !dect_mm_locate_pending(&s->reg.link.mm, &id, &len))
+		return;
+	if (!s->fetch_req_ms) {
+		s->fetch_req_ms = now;
+		s->fetch_idx = -1;
+		for (i = 0; i < s->n_hs; i++)
+			if (s->hs[i].remote && s->hs[i].port_id_len == len &&
+			    !memcmp(s->hs[i].port_id, id, len))
+				s->fetch_idx = (int)i;
+		s->fetch_at = now + (s->fetch_idx >= 0 ? s->audio.fetch_delay_ms
+						       : 0u);
+		printf("fetch: LOCATE-REQUEST from a handset this cell does not "
+		       "hold -- %s (simulated, %u ms)\n",
+		       s->fetch_idx >= 0 ? "asking the controller"
+					 : "unknown to the controller too",
+		       s->fetch_idx >= 0 ? s->audio.fetch_delay_ms : 0u);
+	}
+	if (s->reg.link.mm.stats.locate_retrans != s->fetch_retrans_seen) {
+		s->fetch_retrans_seen = s->reg.link.mm.stats.locate_retrans;
+		printf("fetch: the handset repeated its LOCATE-REQUEST at +%llu "
+		       "ms\n", (unsigned long long)(now - s->fetch_req_ms));
+	}
+	if (now < s->fetch_at)
+		return;
+	if (s->fetch_idx >= 0) {
+		struct handset *h = &s->hs[s->fetch_idx];
+
+		(void)dect_mm_hold(&s->reg.link.mm, h->port_id, h->port_id_len,
+				   (uint8_t)h->slot, NULL, s->fetch_idx);
+		h->fetched = 1;
+	}
+	r = dect_mm_locate_resume(&s->reg.link.mm);
+	printf("fetch: %s at +%llu ms after the request\n",
+	       r > 0 ? "LOCATE-ACCEPT sent" : "LOCATE-REJECT sent",
+	       (unsigned long long)(now - s->fetch_req_ms));
+	fflush(stdout);
+	s->fetch_req_ms = 0;
+	s->fetch_at = 0;
+	dect_link_drain(&s->reg.link, now);
+	pump_lapc(s);
+}
 
 static void holdback_tick(struct stubd *s, uint64_t now)
 {
@@ -4171,6 +4240,10 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	 * first store and overwrite the ring target (review, 2026-10-25). A
 	 * new handset needs a store of its own as the first -s.
 	 */
+	mcfg.defer_unknown = s->audio.remote_path != NULL;
+	s->fetch_at = 0;
+	s->fetch_req_ms = 0;
+	s->fetch_retrans_seen = 0;
 	mcfg.registration = s->audio.no_reg_open ? DECT_MM_REG_CLOSED :
 			    s->sub_port_id_len ? DECT_MM_REG_SAME :
 						 DECT_MM_REG_OPEN;
@@ -4217,7 +4290,8 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	for (i = 0; i < s->n_hs; i++) {
 		const struct handset *h = &s->hs[i];
 
-		if (i == s->cur || !h->loaded || !h->port_id_len)
+		if (i == s->cur || !h->loaded || !h->port_id_len ||
+		    (h->remote && !h->fetched))
 			continue;
 		if (dect_mm_hold(&s->reg.link.mm, h->port_id, h->port_id_len,
 				 (uint8_t)h->slot, NULL, (int)i) < 0)
@@ -4367,7 +4441,8 @@ static int side_start(struct stubd *s, uint8_t handle)
 		const uint8_t *id = hs_port_id(s, i, &len);
 		char name[DECT_IWU_NAME_MAX];
 
-		if (!len || (i != s->cur && !s->hs[i].loaded))
+		if (!len || (i != s->cur && !s->hs[i].loaded) ||
+		    (s->hs[i].remote && !s->hs[i].fetched))
 			continue;
 		(void)dect_mm_hold(&sl->link.mm, id, len,
 				   (uint8_t)hs_slot(s, i), NULL, (int)i);
@@ -5508,6 +5583,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		state_write(s, now, s->do_register &&
 			    s->sess.state == DECT_SESS_UP, 0);
 		holdback_tick(s, now);
+		fetch_tick(s, now);
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
 			send_conn_status_req(s, now);
@@ -5701,6 +5777,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
 			    !(klen == 3 && !memcmp(key, "led", 3)) &&
 			    !(klen == 9 && !memcmp(key, "statefile", 9)) &&
+			    !(klen == 6 && !memcmp(key, "remote", 6)) &&
 			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
 			    !(klen == 7 && !memcmp(key, "memdump", 7)) &&
@@ -6003,6 +6080,17 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			memcpy(path, eq + 1, n);
 			path[n] = '\0';
 			a->state_path = path;
+		} else if (eq && klen == 6 && !memcmp(key, "remote", 6)) {
+			size_t n = (size_t)(spec - (eq + 1));
+			char *path = malloc(n + 1);
+
+			if (!path)
+				return -1;
+			memcpy(path, eq + 1, n);
+			path[n] = '\0';
+			a->remote_path = path;
+		} else if (klen == 10 && !memcmp(key, "fetchdelay", 10)) {
+			a->fetch_delay_ms = (unsigned)v;
 		} else if (!eq && klen == 10 && !memcmp(key, "nochipkeys", 10)) {
 			a->no_chip_keys = 1;
 		} else if (klen == 8 && !memcmp(key, "holdback", 8)) {
@@ -6582,6 +6670,19 @@ int main(int argc, char **argv)
 				       s.hs[i].slot, s.hs[j].path);
 				s.hs[i].loaded = 0;
 			}
+		}
+		/* remote=: one more store, marked as a roamer (test M4) */
+		if (s.audio.remote_path && s.n_hs < DECT_MM_MAX_SLOT) {
+			i = s.n_hs++;
+			s.hs[i].path = s.audio.remote_path;
+			s.cur = i;
+			hs_load(&s, i);
+			s.hs[i].loaded = sub_load(&s);
+			hs_stash(&s, i);
+			s.hs[i].remote = 1;
+			printf("sub: %s is a roamer: not held, not in the chip, "
+			       "fetched on demand after %u ms\n",
+			       s.audio.remote_path, s.audio.fetch_delay_ms);
 		}
 		/*
 		 * A first store that does not exist yet (an enrolment) has no

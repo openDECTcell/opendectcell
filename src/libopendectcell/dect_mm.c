@@ -77,6 +77,37 @@ int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
 	return 0;
 }
 
+int dect_mm_locate_pending(const struct dect_mm *mm, const uint8_t **id,
+			   size_t *id_len)
+{
+	if (!mm->locate_pending)
+		return 0;
+	if (id)
+		*id = mm->locate_id;
+	if (id_len)
+		*id_len = mm->locate_id_len;
+	return 1;
+}
+
+static void send_locate_accept(struct dect_mm *mm, const uint8_t *la,
+			       size_t la_len);
+static void send_locate_reject(struct dect_mm *mm, uint8_t reason);
+
+int dect_mm_locate_resume(struct dect_mm *mm)
+{
+	if (!mm->locate_pending)
+		return 0;
+	mm->locate_pending = 0;
+	mm->ti_value = mm->locate_ti;		/* answer its transaction */
+	if (dect_mm_adopt(mm, mm->locate_id, mm->locate_id_len)) {
+		send_locate_accept(mm, mm->locate_la_len ? mm->locate_la : NULL,
+				   mm->locate_la_len);
+		return 1;
+	}
+	send_locate_reject(mm, DECT_MM_REJECT_IPUI_UNKNOWN);
+	return -1;
+}
+
 int dect_mm_adopt(struct dect_mm *mm, const uint8_t *id, size_t id_len)
 {
 	unsigned i;
@@ -456,6 +487,26 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 	}
 	/* Only handsets we hold a subscription for; none held, none known. */
 	if (!dect_mm_adopt(mm, pid, pid_len)) {
+		if (mm->cfg.defer_unknown && pid_len <= sizeof(mm->locate_id)) {
+			if (mm->locate_pending && pid_len == mm->locate_id_len &&
+			    !memcmp(pid, mm->locate_id, pid_len)) {
+				mm->locate_ti = mm->ti_value;	/* its repeat */
+				mm->stats.locate_retrans++;
+				return;
+			}
+			la = dect_nwk_find_ie(ies, ies_len,
+					      DECT_IE_LOCATION_AREA, &la_len);
+			memcpy(mm->locate_id, pid, pid_len);
+			mm->locate_id_len = pid_len;
+			mm->locate_la_len = la && la_len <= sizeof(mm->locate_la)
+					    ? la_len : 0;
+			if (mm->locate_la_len)
+				memcpy(mm->locate_la, la, la_len);
+			mm->locate_ti = mm->ti_value;
+			mm->locate_pending = 1;
+			mm->stats.locate_deferred++;
+			return;
+		}
 		send_locate_reject(mm, DECT_MM_REJECT_IPUI_UNKNOWN);
 		return;
 	}

@@ -121,6 +121,13 @@ struct dect_mm_cfg {
 	uint8_t narrowband_only;
 	/* enum dect_mm_registration */
 	uint8_t registration;
+	/*
+	 * 1 = hold a {LOCATE-REQUEST} from an identity the link does not
+	 * know, instead of rejecting it, so the owner can fetch the record
+	 * (a roamer, from the controller) and then dect_mm_locate_resume().
+	 * The PT waits <MM_locate.1> = 20 s, retransmits once, then aborts.
+	 */
+	uint8_t defer_unknown;
 };
 
 struct dect_mm_stats {
@@ -137,6 +144,8 @@ struct dect_mm_stats {
 	uint32_t tpui_acked;	/* {TEMPORARY-IDENTITY-ASSIGN-ACK} received */
 	uint32_t tpui_timeouts;	/* <MM_ident.1> expiries */
 	uint32_t tpui_unsolicited; /* ACKs with no assignment made: ignored */
+	uint32_t locate_deferred;  /* unknown identities held for the owner */
+	uint32_t locate_retrans;   /* the PT repeated a held request */
 };
 
 /*
@@ -214,6 +223,14 @@ struct dect_mm {
 	uint8_t peer_codecs[16];
 	size_t  peer_codecs_len;
 
+	/* A held {LOCATE-REQUEST}, see cfg.defer_unknown. */
+	uint8_t locate_pending;
+	uint8_t locate_ti;
+	uint8_t locate_id[DECT_MM_PORTID_MAX];
+	size_t  locate_id_len;
+	uint8_t locate_la[8];
+	size_t  locate_la_len;
+
 	/*
 	 * Allocated long-term key (UAK). Key allocation derives it from the AC
 	 * (PIN); it is the 16-byte credential the chip stores for the handset via
@@ -265,6 +282,20 @@ int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
  * CC gate, so the two gates admit the same handsets.
  */
 int dect_mm_adopt(struct dect_mm *mm, const uint8_t *id, size_t id_len);
+
+/*
+ * A held {LOCATE-REQUEST}: returns 1 and its identity, or 0 if none is
+ * pending (cfg.defer_unknown).
+ */
+int dect_mm_locate_pending(const struct dect_mm *mm, const uint8_t **id,
+			   size_t *id_len);
+
+/*
+ * Answer the held request: {LOCATE-ACCEPT} if its identity is held now
+ * (dect_mm_hold() it first), otherwise {LOCATE-REJECT} "IPUI unknown".
+ * Returns 1 accepted, -1 rejected, 0 if nothing was pending.
+ */
+int dect_mm_locate_resume(struct dect_mm *mm);
 
 /* The configured subscription slot, with the default already applied. */
 uint8_t dect_mm_sub_slot(const struct dect_mm *mm);

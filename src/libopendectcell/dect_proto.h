@@ -196,8 +196,17 @@
  *    Refusals answer {ACCESS-RIGHTS-REJECT} "IPUI not accepted" 0x06. Set
  *    CLOSED on any link that cannot keep a subscription, or the handset
  *    shows "registered" with a key you never stored.
+ *
+ * 18: deferred location registration, for roaming (2026-10-25). Layout
+ *    changes: dect_mm_cfg gains defer_unknown; struct dect_mm gains the
+ *    held request (locate_pending, _ti, _id, _la); dect_mm_stats gains
+ *    locate_deferred and locate_retrans. New: dect_mm_locate_pending(),
+ *    dect_mm_locate_resume(). With defer_unknown set, a {LOCATE-REQUEST}
+ *    from an identity the link does not hold is held instead of rejected:
+ *    fetch the record, dect_mm_hold() it, then resume. The PT waits
+ *    <MM_locate.1> = 20 s and retransmits once.
  */
-#define OPENDECTCELL_API_VERSION 17
+#define OPENDECTCELL_API_VERSION 18
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

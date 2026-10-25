@@ -852,6 +852,71 @@ static void test_registration_policy(void)
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
 }
 
+/*
+ * A roamer: an unknown {LOCATE-REQUEST} is held while the cell fetches the
+ * record (multi-cell test M4). Its repeat is counted, not answered; once
+ * the record is held, resume() accepts on the handset's own transaction
+ * with that handset's TPUI; without it, resume() rejects.
+ */
+static size_t locate_ti(uint8_t *buf, size_t cap, uint8_t ti,
+			const uint8_t *id, size_t id_len)
+{
+	uint8_t la[1] = { 0x64 };
+	size_t n = dect_nwk_build_hdr(buf, cap, DECT_PD_MM, DECT_TI_ORIGINATOR,
+				      ti, DECT_MM_LOCATE_REQUEST);
+
+	n = dect_nwk_put_ie(buf, cap, n, DECT_IE_PORTABLE_IDENTITY, id, id_len);
+	return dect_nwk_put_ie(buf, cap, n, DECT_IE_LOCATION_AREA, la,
+			       sizeof(la));
+}
+
+static void test_deferred_locate_for_a_roamer(void)
+{
+	static const uint8_t roamer[] = { 0x80, 0xa8, 0x03, 0x77, 0x66, 0x55 };
+	static const uint8_t tpui4[] = { 0x05, 0x05, 0xa0, 0x94, 0x00, 0x11,
+					 0x04 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .rfpi = { 1, 2, 3, 4, 5 },
+				   .defer_unknown = 1 };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	const uint8_t *id;
+	size_t n, id_len;
+
+	dect_mm_init(&mm, &cfg);
+	n = locate_ti(buf, sizeof(buf), 3, roamer, sizeof(roamer));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);	/* held */
+	CHECK_EQ(mm.stats.locate_deferred, 1u);
+	CHECK_EQ(dect_mm_locate_pending(&mm, &id, &id_len), 1);
+	CHECK(id_len == sizeof(roamer) && !memcmp(id, roamer, id_len));
+
+	/* the PT repeats after 20 s: counted, still held */
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+	CHECK_EQ(mm.stats.locate_retrans, 1u);
+	CHECK_EQ(mm.stats.locate_deferred, 1u);
+
+	/* the controller's answer arrives */
+	CHECK_EQ(dect_mm_hold(&mm, roamer, sizeof(roamer), 4, NULL, 9), 0);
+	CHECK_EQ(dect_mm_locate_resume(&mm), 1);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+	CHECK_EQ(out[0], 0xB5u);		/* F=1, TV=3, PD MM */
+	CHECK(memcmp(&out[2], tpui4, sizeof(tpui4)) == 0);
+	CHECK_EQ(mm.adopted, 9);
+	CHECK_EQ(dect_mm_locate_pending(&mm, NULL, NULL), 0);
+	CHECK_EQ(dect_mm_locate_resume(&mm), 0);	/* nothing left */
+
+	/* no record: resume rejects */
+	dect_mm_init(&mm, &cfg);
+	n = locate_ti(buf, sizeof(buf), 1, roamer, sizeof(roamer));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	CHECK_EQ(dect_mm_locate_resume(&mm), -1);
+	dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_MM_LOCATE_REJECT);
+	CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_UNKNOWN);
+}
+
 int main(void)
 {
 	test_locate_request_from_a_stranger_is_rejected();
@@ -861,6 +926,7 @@ int main(void)
 	test_held_handsets_need_no_port_id();
 	test_hold_rejects_what_it_cannot_serve();
 	test_registration_policy();
+	test_deferred_locate_for_a_roamer();
 	test_locate_request_without_identity_is_rejected();
 	test_locate_request_with_no_subscription_is_rejected();
 	test_failed_registration_keeps_the_held_identity();
