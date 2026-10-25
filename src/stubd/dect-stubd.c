@@ -4400,6 +4400,66 @@ static void pump_lapc(struct stubd *s)
 
 static struct side_link *side_find(struct stubd *s, uint8_t handle);
 
+/*
+ * The main link's CC entity, fresh: what reg_start() installs per
+ * connection, and side_promote() when a side link becomes the main one.
+ */
+static void main_cc_setup(struct stubd *s)
+{
+	unsigned i;
+
+	dect_cc_init(&s->reg.link.cc);
+	s->cc_rejected_seen = 0;
+	/*
+	 * The lists a CAT-iq handset reads before it calls itself synchronised
+	 * (TS 102 527-3 7.4.10): one line, and the Internal Names List with
+	 * the handset this daemon serves -- terminal identity number = its
+	 * chip subscription slot, which is also the low octet of the TPUI we
+	 * assigned it, and the default name the standard suggests. Installed
+	 * per connection because dect_link_init() zeroes the responder.
+	 */
+	{
+		uint8_t tid = stubd_sub_slot(s) ? stubd_sub_slot(s) : 1u;
+		char hsname[DECT_IWU_NAME_MAX];
+
+		dect_iwu_set_line(&s->reg.link.cc.iwu, 1, "Line 1");
+		snprintf(hsname, sizeof(hsname), "DECT %u", (unsigned)tid);
+		dect_iwu_add_handset(&s->reg.link.cc.iwu, tid, hsname);
+		for (i = 0; i < s->n_hs; i++) {
+			if (i == s->cur || !s->hs[i].loaded)
+				continue;
+			snprintf(hsname, sizeof(hsname), "DECT %u",
+				 s->hs[i].slot);
+			dect_iwu_add_handset(&s->reg.link.cc.iwu,
+					     (uint8_t)s->hs[i].slot, hsname);
+		}
+		dect_iwu_set_own(&s->reg.link.cc.iwu, tid);
+	}
+	/*
+	 * No <<CODEC-LIST>> in FP-originated setups by default: basic speech
+	 * (`e0 80`) already means G.726, the codec our audio path carries.
+	 * TS 102 527-1 §7.3.3 lets a list in {CC-SETUP} only if it holds at
+	 * least G.722 and G.726; the G.726-only list we sent from 2026-10-22
+	 * ("give it something to reserve against", written when the A540's
+	 * refusal was misread as a resource problem -- it was the transaction
+	 * value) was non-conformant. Runs 31-33 (2026-10-25): all three
+	 * Gigasets ring without it. codeclist=HEX still sends one, e.g.
+	 * codeclist=90020084 for the old list.
+	 */
+	if (s->audio.codeclist_len && !s->audio.nocodeclist)
+		dect_cc_set_codec_list(&s->reg.link.cc, s->audio.codeclist,
+				       s->audio.codeclist_len);
+	else
+		dect_cc_set_codec_list(&s->reg.link.cc, NULL, 0);
+	dect_cc_set_signal(&s->reg.link.cc, s->audio.signal_on,
+			   s->audio.signal_value);
+	dect_cc_set_wideband(&s->reg.link.cc, !s->audio.narrowband);
+	dect_cc_set_overlap(&s->reg.link.cc, !s->audio.no_overlap);
+	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
+	/* the lowest free value, 0, unless -a ti= says otherwise */
+	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
+}
+
 static void reg_start(struct stubd *s, uint8_t handle)
 {
 	struct dect_mm_cfg mcfg;
@@ -4493,56 +4553,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		(void)dect_mm_hold(&s->reg.link.mm, s->sub_port_id,
 				   s->sub_port_id_len, stubd_sub_slot(s), NULL,
 				   (int)s->cur);
-	dect_cc_init(&s->reg.link.cc);
-	s->cc_rejected_seen = 0;
-	/*
-	 * The lists a CAT-iq handset reads before it calls itself synchronised
-	 * (TS 102 527-3 7.4.10): one line, and the Internal Names List with
-	 * the handset this daemon serves -- terminal identity number = its
-	 * chip subscription slot, which is also the low octet of the TPUI we
-	 * assigned it, and the default name the standard suggests. Installed
-	 * per connection because dect_link_init() zeroes the responder.
-	 */
-	{
-		uint8_t tid = stubd_sub_slot(s) ? stubd_sub_slot(s) : 1u;
-		char hsname[DECT_IWU_NAME_MAX];
-
-		dect_iwu_set_line(&s->reg.link.cc.iwu, 1, "Line 1");
-		snprintf(hsname, sizeof(hsname), "DECT %u", (unsigned)tid);
-		dect_iwu_add_handset(&s->reg.link.cc.iwu, tid, hsname);
-		for (i = 0; i < s->n_hs; i++) {
-			if (i == s->cur || !s->hs[i].loaded)
-				continue;
-			snprintf(hsname, sizeof(hsname), "DECT %u",
-				 s->hs[i].slot);
-			dect_iwu_add_handset(&s->reg.link.cc.iwu,
-					     (uint8_t)s->hs[i].slot, hsname);
-		}
-		dect_iwu_set_own(&s->reg.link.cc.iwu, tid);
-	}
-	/*
-	 * No <<CODEC-LIST>> in FP-originated setups by default: basic speech
-	 * (`e0 80`) already means G.726, the codec our audio path carries.
-	 * TS 102 527-1 §7.3.3 lets a list in {CC-SETUP} only if it holds at
-	 * least G.722 and G.726; the G.726-only list we sent from 2026-10-22
-	 * ("give it something to reserve against", written when the A540's
-	 * refusal was misread as a resource problem -- it was the transaction
-	 * value) was non-conformant. Runs 31-33 (2026-10-25): all three
-	 * Gigasets ring without it. codeclist=HEX still sends one, e.g.
-	 * codeclist=90020084 for the old list.
-	 */
-	if (s->audio.codeclist_len && !s->audio.nocodeclist)
-		dect_cc_set_codec_list(&s->reg.link.cc, s->audio.codeclist,
-				       s->audio.codeclist_len);
-	else
-		dect_cc_set_codec_list(&s->reg.link.cc, NULL, 0);
-	dect_cc_set_signal(&s->reg.link.cc, s->audio.signal_on,
-			   s->audio.signal_value);
-	dect_cc_set_wideband(&s->reg.link.cc, !s->audio.narrowband);
-	dect_cc_set_overlap(&s->reg.link.cc, !s->audio.no_overlap);
-	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
-	/* the lowest free value, 0, unless -a ti= says otherwise */
-	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
+	main_cc_setup(s);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
 }
 
@@ -4671,6 +4682,73 @@ static void side_pump(struct stubd *s, struct side_link *sl)
 	}
 }
 
+static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why);
+static void main_cc_setup(struct stubd *s);
+
+/*
+ * Swap side link sl with the main link: the ring target answered our page
+ * here while the main link carries another handset that is not in a call.
+ * Both are C-plane state only -- struct dect_link holds no pointer into
+ * itself but the tx-log hook, set again below -- so the swap is a copy.
+ * Returns 1 when promoted (the SETUP is then queued on the new main).
+ */
+static int side_promote(struct stubd *s, struct side_link *sl,
+			const struct dect_link_ind *ind, uint64_t now)
+{
+	struct dect_link tmp;
+	size_t tgt_len;
+	const uint8_t *tgt = ring_target_port_id(s, &tgt_len);
+	int old_main;
+	uint8_t h;
+
+	if (s->ring_state != RING_WAIT_PAGE_RESP || !s->reg.active ||
+	    !tgt_len || ind->page_id_len != tgt_len ||
+	    memcmp(ind->page_id, tgt, tgt_len) != 0 ||
+	    s->reg.call_bound || dect_cc_busy(&s->reg.link.cc) ||
+	    dect_cc_busy(&sl->link.cc))
+		return 0;
+	old_main = s->reg.link.mm.adopted >= 0 ? s->reg.link.mm.adopted
+					       : (int)s->cur;
+	tmp = s->reg.link;
+	s->reg.link = sl->link;
+	sl->link = tmp;
+	h = s->reg.handle;
+	s->reg.handle = sl->handle;
+	sl->handle = h;
+	sl->adopted = old_main;
+	dect_link_set_tx_log(&s->reg.link, log_nwk_out, s);
+	dect_link_set_tx_log(&sl->link, log_nwk_out_side, s);
+
+	/* the old main is a side link now: no enrolment, no speech */
+	sl->link.mm.cfg.registration = DECT_MM_REG_CLOSED;
+	dect_cc_set_busy(&sl->link.cc, 1);
+	sl->rejected_seen = sl->link.cc.stats.rejected_identity;
+
+	/* the new main serves the target, with the main link's policies */
+	if (s->reg.link.mm.adopted >= 0)
+		hs_switch(s, (unsigned)s->reg.link.mm.adopted,
+			  " (promoted side link)");
+	s->reg.link.mm.cfg.registration = s->audio.no_reg_open ?
+		DECT_MM_REG_CLOSED : s->sub_port_id_len ? DECT_MM_REG_SAME :
+		DECT_MM_REG_OPEN;
+	s->reg.link.mm.cfg.defer_unknown = s->audio.remote_path != NULL;
+	s->reg.link.mm.cfg.locate_validity =
+		(uint8_t)s->audio.locate_validity;
+	main_cc_setup(s);
+	s->reg.call_wideband = 0;
+	s->reg.connect_staged = 0;
+	s->reg.nonspeech_noted = 0;
+	printf("ring: page response on side link %u -- promoted to the main "
+	       "link; handle %u (%s) is a side link now\n", s->reg.handle,
+	       sl->handle, (unsigned)old_main < s->n_hs ?
+	       s->hs[old_main].path : "?");
+	ring_queue_setup(s, now, "page response received on a side link");
+	dect_link_drain(&s->reg.link, now);
+	pump_lapc(s);
+	side_pump(s, sl);
+	return 1;
+}
+
 static void side_segment(struct stubd *s, struct side_link *sl,
 			 const struct dect_mail *m, uint64_t now)
 {
@@ -4701,12 +4779,13 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 		       sl->handle);
 	}
 	/*
-	 * Known limit (review, 2026-10-25): if ringing has started and a
-	 * locating handset took the main link first, the target's answer
-	 * lands here, the main link never sees a page response, and the ring
-	 * times out -- the outcome from before side links existed. Promoting
-	 * this link to the main one would fix it; not done yet.
+	 * Ringing has started and a locating handset took the main link
+	 * first, so the target's page response lands here (12d, 2026-10-25:
+	 * the ring timed out). Promote this link to the main one and ring on
+	 * it; anything else that answers here is not ours to ring.
 	 */
+	if (ind.page_response && side_promote(s, sl, &ind, now))
+		return;
 	if (ind.page_response)
 		printf("side: page response on handle %u while the main link "
 		       "is busy -- not ours to ring here, ignored\n",
