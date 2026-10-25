@@ -248,6 +248,96 @@ static void test_unknown_setup_is_held_for_a_fetch(void)
 	}
 }
 
+static size_t roamer_setup(uint8_t *msg, size_t cap, const uint8_t *id,
+			   size_t id_len, uint8_t svc)
+{
+	size_t n = dect_nwk_build_hdr(msg, cap, DECT_PD_CC, DECT_TI_ORIGINATOR,
+				      0, DECT_CC_SETUP);
+
+	n = dect_nwk_put_ie(msg, cap, n, DECT_IE_PORTABLE_IDENTITY, id, id_len);
+	msg[n++] = DECT_IE_BASIC_SERVICE;
+	msg[n++] = svc;
+	return n;
+}
+
+/*
+ * A held SETUP is answered at once -- SETUP-ACK for a call whose digits
+ * CC will collect, CALL-PROC for list access -- and what the handset
+ * sends on the call meanwhile is held and replayed after it, with no
+ * second answer (bench test 7: "---" on the A540 while we were silent).
+ */
+static void test_held_setup_is_answered_and_its_digits_kept(void)
+{
+	static const uint8_t roamer[] = { 0x80, 0xa8, 0x02, 0x55, 0x66, 0x77, 0x88 };
+	struct dect_mm_cfg cfg;
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[64], out[64];
+	const uint8_t *k;
+	size_t n, klen;
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.defer_unknown = 1;
+	dect_link_init(&l, 1, &cfg);
+	dect_cc_set_overlap(&l.cc, 1);
+	tx_seen_len = 0;
+	dect_link_set_tx_log(&l, tx_seen, NULL);
+	n = roamer_setup(msg, sizeof(msg), roamer, sizeof(roamer), 0x88);
+	feed_nwk(&l, msg, n, &ind);
+	CHECK_EQ(dect_link_setup_pending(&l, NULL, NULL), 1);
+	CHECK_EQ(tx_seen_len, 2u);
+	CHECK_EQ(tx_seen_buf[0], 0x83u);	/* F=1, TV=0, PD CC */
+	CHECK_EQ(tx_seen_buf[1], DECT_CC_SETUP_ACK);
+
+	/* its digits arrive while the record is still on its way */
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+			       DECT_TI_ORIGINATOR, 0, DECT_CC_INFO);
+	n = dect_nwk_put_ie(msg, sizeof(msg), n, DECT_IE_MULTI_KEYPAD,
+			    (const uint8_t *)"123", 3);
+	feed_nwk(&l, msg, n, &ind);
+	CHECK_EQ(l.held_n, 1u);
+	CHECK_EQ(l.cc.stats.keypad, 0u);
+
+	CHECK_EQ(dect_mm_hold(&l.mm, roamer, sizeof(roamer), 4, NULL, 6), 0);
+	CHECK_EQ(dect_link_setup_resume(&l, 0), 1);
+	CHECK_EQ(l.cc.state, DECT_CC_ST_OVERLAP);
+	k = dect_cc_keypad(&l.cc, &klen);
+	CHECK(klen == 3 && k && !memcmp(k, "123", 3));
+	CHECK_EQ(dect_cc_poll(&l.cc, out, sizeof(out)), 0u);	/* no 2nd ACK */
+	CHECK_EQ(dect_cc_accept(&l.cc), 0);
+	n = dect_cc_poll(&l.cc, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_CC_CALL_PROC);
+	n = dect_cc_poll(&l.cc, out, sizeof(out));
+	CHECK_EQ(out[1], DECT_CC_CONNECT);
+
+	/* list access: CALL-PROC, and CC does not repeat it */
+	dect_link_init(&l, 1, &cfg);
+	dect_cc_set_overlap(&l.cc, 1);
+	tx_seen_len = 0;
+	dect_link_set_tx_log(&l, tx_seen, NULL);
+	n = roamer_setup(msg, sizeof(msg), roamer, sizeof(roamer), 0x28);
+	feed_nwk(&l, msg, n, &ind);
+	CHECK_EQ(tx_seen_buf[1], DECT_CC_CALL_PROC);
+	CHECK_EQ(dect_mm_hold(&l.mm, roamer, sizeof(roamer), 4, NULL, 6), 0);
+	CHECK_EQ(dect_link_setup_resume(&l, 0), 1);
+	CHECK_EQ(l.cc.state, DECT_CC_ST_PROCEEDING);
+	CHECK_EQ(dect_cc_poll(&l.cc, out, sizeof(out)), 0u);
+
+	/* the handset gives up while held: RELEASE-COM, and no call left */
+	dect_link_init(&l, 1, &cfg);
+	dect_cc_set_overlap(&l.cc, 1);
+	n = roamer_setup(msg, sizeof(msg), roamer, sizeof(roamer), 0x88);
+	feed_nwk(&l, msg, n, &ind);
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+			       DECT_TI_ORIGINATOR, 0, DECT_CC_RELEASE);
+	feed_nwk(&l, msg, n, &ind);
+	CHECK_EQ(dect_link_setup_pending(&l, NULL, NULL), 0);
+	CHECK_EQ(l.lce_len, 2u);
+	CHECK_EQ(l.lce[0], 0x83u);
+	CHECK_EQ(l.lce[1], DECT_CC_RELEASE_COM);
+	CHECK_EQ(dect_link_setup_resume(&l, 0), 0);
+}
+
 /* A fresh link owns its own state and has nothing to send. */
 static void test_init_is_quiet(void)
 {
@@ -463,6 +553,7 @@ int main(void)
 	test_cc_admits_only_the_handset_mm_holds();
 	test_page_reject_is_built_from_the_response();
 	test_unknown_setup_is_held_for_a_fetch();
+	test_held_setup_is_answered_and_its_digits_kept();
 	test_two_links_are_independent();
 	test_outbound_message_becomes_an_append_mail();
 	test_a_queued_message_needs_a_tick();

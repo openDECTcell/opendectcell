@@ -569,7 +569,8 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 	 * handset releases it.
 	 */
 	if ((cc->peer_basic_service >> 4) == 0x2u) {
-		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
+		if (cc->answered != DECT_CC_CALL_PROC)
+			queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
 		cc->state = DECT_CC_ST_PROCEEDING;
 		return;
 	}
@@ -580,7 +581,8 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 		return;
 	}
 	if (cc->overlap && !sending_complete) {
-		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_SETUP_ACK);
+		if (cc->answered != DECT_CC_SETUP_ACK)
+			queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_SETUP_ACK);
 		cc->state = DECT_CC_ST_OVERLAP;
 		cc->overlap_deadline_ms = 0;	/* armed by the tick */
 		return;
@@ -595,7 +597,9 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
  */
 static void accept_now(struct dect_cc *cc)
 {
-	queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
+	if (cc->answered != DECT_CC_CALL_PROC)
+		queue_msg(cc, DECT_TI_RESPONDER, DECT_CC_CALL_PROC);
+	cc->answered = 0;
 	queue_connect(cc);
 	cc->state = DECT_CC_ST_CONNECT_PENDING;
 	cc->overlap_deadline_ms = 0;
@@ -604,6 +608,11 @@ static void accept_now(struct dect_cc *cc)
 void dect_cc_set_overlap(struct dect_cc *cc, int on)
 {
 	cc->overlap = on ? 1u : 0u;
+}
+
+void dect_cc_note_answered(struct dect_cc *cc, uint8_t msg_type)
+{
+	cc->answered = msg_type;
 }
 
 int dect_cc_accept(struct dect_cc *cc)
@@ -763,8 +772,10 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 	switch (h.msg_type) {
 	case DECT_CC_SETUP:
 		if (cc->state == DECT_CC_ST_NULL) {
-			if (setup_from_stranger(cc, &h, ies, ies_len))
+			if (setup_from_stranger(cc, &h, ies, ies_len)) {
+				cc->answered = 0;
 				break;
+			}
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;
@@ -777,6 +788,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_keypad(cc, ies, ies_len);
 			on_setup(cc, dect_nwk_find_fixed_ie(ies, ies_len,
 				 DECT_IE_SENDING_COMPLETE) >= 0);
+			if (cc->state != DECT_CC_ST_OVERLAP)
+				cc->answered = 0;	/* consumed */
 		} else if (!our_transaction(cc, &h)) {
 			/*
 			 * A second call while one is in progress. The peer's

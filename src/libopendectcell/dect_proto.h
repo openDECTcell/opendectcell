@@ -237,8 +237,18 @@
  *    (returns 0). **Act on it:** switch statements over dect_cc_state
  *    need the new state; with overlap on you must call dect_cc_accept()
  *    when dialling is complete, or F<CC.01> releases the call at 20 s.
+ *
+ * 24: a held CC-SETUP is answered at once (2026-10-25). Layout change:
+ *    struct dect_link gains setup_ti, setup_answered, held[]/held_len[]/
+ *    held_n/held_dropped; struct dect_cc gains answered. New:
+ *    dect_cc_note_answered(). The link sends {CC-SETUP-ACK} (overlap,
+ *    speech) or {CC-CALL-PROC} when it holds a roamer's SETUP, holds what
+ *    the handset sends on that call (up to DECT_LINK_HELD), and replays it
+ *    on dect_link_setup_resume(); a release from the handset ends the hold
+ *    with {CC-RELEASE-COM}. Answering stops the PT's 20 s P<CC.03>, so the
+ *    fetch budget is no longer 20 s for a call (bench test 7: "---").
  */
-#define OPENDECTCELL_API_VERSION 23
+#define OPENDECTCELL_API_VERSION 24
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

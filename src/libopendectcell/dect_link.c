@@ -24,6 +24,62 @@ void dect_link_init(struct dect_link *l, uint8_t handle,
  * a second message queued before the first is acknowledged would be lost, and
  * MM carries the authentication and ciphering exchanges that CC depends on.
  */
+/*
+ * Answer a {CC-SETUP} we hold while its record is fetched, so the handset
+ * is not left waiting out its 20 s P<CC.03> with "---" on the display
+ * (bench test 7, 2026-10-25). {CC-SETUP-ACK} when CC will collect the
+ * digits (overlap receiving, a speech call without <<SENDING-COMPLETE>>),
+ * {CC-CALL-PROC} otherwise -- what CC itself would have sent first.
+ */
+static void answer_held_setup(struct dect_link *l, const uint8_t *ies,
+			      size_t ies_len)
+{
+	int svc = dect_nwk_find_fixed_ie(ies, ies_len, DECT_IE_BASIC_SERVICE);
+	int lia = svc >= 0 && ((unsigned)svc >> 4) == 0x2u;
+	int complete = dect_nwk_find_fixed_ie(ies, ies_len,
+					      DECT_IE_SENDING_COMPLETE) >= 0;
+	uint8_t type = (l->cc.overlap && !lia && !complete) ?
+		       DECT_CC_SETUP_ACK : DECT_CC_CALL_PROC;
+	size_t n;
+
+	l->setup_answered = 0;
+	if (l->lce_len)
+		return;		/* slot busy: CC answers on resume */
+	n = dect_nwk_build_hdr(l->lce, sizeof(l->lce), DECT_PD_CC,
+			       DECT_TI_RESPONDER, l->setup_ti, type);
+	if (!n)
+		return;
+	l->lce_len = n;
+	l->setup_answered = type;
+}
+
+static void hold_follow_up(struct dect_link *l, const struct dect_nwk_hdr *h,
+			   const uint8_t *msg, size_t len)
+{
+	if (h->msg_type == DECT_CC_RELEASE ||
+	    h->msg_type == DECT_CC_RELEASE_COM) {
+		/* the handset gave up: the call ends here, not in CC */
+		if (h->msg_type == DECT_CC_RELEASE && l->setup_answered &&
+		    !l->lce_len) {
+			size_t n = dect_nwk_build_hdr(l->lce, sizeof(l->lce),
+						      DECT_PD_CC,
+						      DECT_TI_RESPONDER,
+						      l->setup_ti,
+						      DECT_CC_RELEASE_COM);
+			l->lce_len = n;
+		}
+		l->setup_len = 0;
+		l->held_n = 0;
+		return;
+	}
+	if (l->held_n >= DECT_LINK_HELD || len > sizeof(l->held[0])) {
+		l->held_dropped++;
+		return;
+	}
+	memcpy(l->held[l->held_n], msg, len);
+	l->held_len[l->held_n++] = len;
+}
+
 static void drain_nwk(struct dect_link *l, uint64_t now)
 {
 	uint8_t msg[DECT_LAPC_MSG_MAX];
@@ -227,6 +283,16 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			 * handset placing a call on a fresh link has not
 			 * located on it, so adopt it here as LOCATE would.
 			 */
+			/*
+			 * The rest of a held call: keep it for the replay. A
+			 * release from the handset ends the hold instead.
+			 */
+			if (l->setup_len && h.msg_type != DECT_CC_SETUP &&
+			    h.ti_value == l->setup_ti &&
+			    h.ti_flag == DECT_TI_ORIGINATOR) {
+				hold_follow_up(l, &h, ind->nwk, ind->nwk_len);
+				goto drained;
+			}
 			if (h.msg_type == DECT_CC_SETUP) {
 				size_t pid_len;
 				const uint8_t *pid = dect_nwk_find_ie(
@@ -248,6 +314,9 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 					l->setup_len = ind->nwk_len;
 					memcpy(l->setup_id, pid, pid_len);
 					l->setup_id_len = pid_len;
+					l->setup_ti = h.ti_value;
+					l->held_n = 0;
+					answer_held_setup(l, ies, ies_len);
 					goto drained;
 				}
 				if (l->setup_len && pid &&
@@ -297,11 +366,20 @@ int dect_link_setup_resume(struct dect_link *l, uint64_t now)
 
 	if (!n)
 		return 0;
+	unsigned i;
+
 	memcpy(msg, l->setup, n);
 	l->setup_len = 0;
 	known = dect_mm_adopt(&l->mm, l->setup_id, l->setup_id_len);
 	dect_cc_set_gate(&l->cc, l->mm.port_id, l->mm.port_id_len);
+	if (l->setup_answered)
+		dect_cc_note_answered(&l->cc, l->setup_answered);
 	dect_cc_rx(&l->cc, msg, n);
+	/* then what the handset sent on the call while it was held */
+	for (i = 0; i < l->held_n; i++)
+		dect_cc_rx(&l->cc, l->held[i], l->held_len[i]);
+	l->held_n = 0;
+	l->setup_answered = 0;
 	drain_nwk(l, now);
 	return known ? 1 : -1;
 }

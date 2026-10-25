@@ -221,6 +221,7 @@ struct dect_cc {
 	 */
 	uint64_t setup_deadline_ms;
 	uint8_t  overlap;		/* dect_cc_set_overlap() */
+	uint8_t  answered;		/* dect_cc_note_answered() */
 	uint64_t overlap_deadline_ms;	/* F<CC.01> */
 
 	/*
@@ -337,6 +338,14 @@ void dect_cc_set_overlap(struct dect_cc *cc, int on);
 /* Dialling is complete: {CC-CALL-PROC} and {CC-CONNECT}. 0, or -1 when
  * the call is not waiting in DECT_CC_ST_OVERLAP. */
 int dect_cc_accept(struct dect_cc *cc);
+
+/*
+ * The next {CC-SETUP} was already answered with msg_type ({CC-SETUP-ACK}
+ * or {CC-CALL-PROC}) by whoever held it -- dect_link, for a roamer whose
+ * record was being fetched -- so CC must not send that answer again.
+ * Consumed by that SETUP.
+ */
+void dect_cc_note_answered(struct dect_cc *cc, uint8_t msg_type);
 
 /* Feed a decoded NWK message (the LAPC I-frame payload). Non-CC messages are
  * ignored. Any responses are queued; pull them with dect_cc_poll(). */

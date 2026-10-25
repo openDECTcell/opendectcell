@@ -67,11 +67,24 @@ struct dect_link {
 	 */
 	uint8_t  ciss[DECT_LAPC_MSG_MAX];
 	size_t   ciss_len;
-	/* A held {CC-SETUP} from an unknown IPUI, see dect_link_setup_resume(). */
+	/*
+	 * A held {CC-SETUP} from an unknown IPUI, see dect_link_setup_resume().
+	 * It is answered at once (setup_answered: {CC-SETUP-ACK} or
+	 * {CC-CALL-PROC}), which stops the handset's 20 s P<CC.03>; what the
+	 * handset sends on the call meanwhile -- its digits, a list-access
+	 * dialog -- is held too (up to DECT_LINK_HELD) and replayed after it.
+	 */
 	uint8_t  setup[DECT_LAPC_MSG_MAX];
 	size_t   setup_len;
 	uint8_t  setup_id[DECT_MM_PORTID_MAX];
 	size_t   setup_id_len;
+	uint8_t  setup_ti;
+	uint8_t  setup_answered;
+#define DECT_LINK_HELD	4u
+	uint8_t  held[DECT_LINK_HELD][DECT_LAPC_MSG_MAX];
+	size_t   held_len[DECT_LINK_HELD];
+	unsigned held_n;
+	uint32_t held_dropped;		/* follow-ups beyond DECT_LINK_HELD */
 	/* One pending LCE message: the {LCE-PAGE-REJECT}, sent first. */
 	uint8_t  lce[DECT_LAPC_MSG_MAX];
 	size_t   lce_len;
