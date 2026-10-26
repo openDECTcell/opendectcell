@@ -128,14 +128,29 @@ static void ssc_pinmux_mux(struct dect_ssc *s, unsigned int pin, bool alt0,
 static int ssc_step_clock(struct dect_ssc *s)
 {
 	void __iomem *pmu;
+	struct clk *clk;
 	u32 id;
 
-	/* Enable the SSC module clock gate (PMU module SPI). */
-	pmu = ioremap(DECT_PMU_BASE, 0x1000);
-	if (pmu) {
-		writel(readl(pmu + DECT_PMU_PWDCR) & ~DECT_PMU_SPI,
-		       pmu + DECT_PMU_PWDCR);
-		iounmap(pmu);
+	/*
+	 * Enable the SSC module clock. The kernel registers this gate through
+	 * clkdev as "1e100800.spi"; mainline adds it powered down
+	 * (clkdev_add_pmu(..., deactivate = 1)), so enabling it here is what
+	 * actually brings the block up. Where the lookup fails, fall back to
+	 * clearing the PMU SPI gate bit directly.
+	 */
+	clk = clk_get_sys("1e100800.spi", NULL);
+	if (!IS_ERR(clk)) {
+		if (clk_prepare_enable(clk))
+			pr_warn("openDECTcell: cannot enable the SSC clock\n");
+		else
+			s->clk = clk;
+	} else {
+		pmu = ioremap(DECT_PMU_BASE, 0x1000);
+		if (pmu) {
+			writel(readl(pmu + DECT_PMU_PWDCR) & ~DECT_PMU_SPI,
+			       pmu + DECT_PMU_PWDCR);
+			iounmap(pmu);
+		}
 	}
 
 	ssc_wr(s, SSC_CLC, 1 << SSC_CLC_RMC_S);
@@ -310,6 +325,11 @@ void dect_ssc_teardown(struct dect_ssc *p)
 void dect_ssc_exit(struct dect_ssc *p)
 {
 	dect_ssc_teardown(p);
+	if (p->clk) {
+		clk_disable_unprepare(p->clk);
+		clk_put(p->clk);
+		p->clk = NULL;
+	}
 	if (p->pinmux) {
 		iounmap(p->pinmux);
 		p->pinmux = NULL;

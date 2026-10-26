@@ -8,6 +8,7 @@
 #ifndef _OPENDECTCELL_SSC_H
 #define _OPENDECTCELL_SSC_H
 
+#include <linux/clk.h>
 #include <linux/hrtimer.h>
 #include <linux/io.h>
 #include <linux/mutex.h>
@@ -33,6 +34,7 @@ struct dect_ssc_board {
 struct dect_ssc {
 	const struct dect_ssc_board *board;
 	struct mutex *lock;		/* the device mutex, held by callers */
+	struct clk *clk;		/* the SSC module clock gate (clkdev) */
 	void __iomem *base;		/* SSC registers */
 	void __iomem *pinmux;		/* XWAY GPIO/pinmux block */
 
