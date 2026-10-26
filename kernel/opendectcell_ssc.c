@@ -318,8 +318,9 @@ static void dect_ssc_dump_regs(struct dect_ssc *s)
 	}
 	cgu = ioremap(0x1f103000, 0x1000);
 	if (cgu) {
-		pr_info("opendectcell: CGU SYS=%08x CLKFSR=%08x IF_CLK=%08x\n",
-			readl(cgu + 0x0c), readl(cgu + 0x10), readl(cgu + 0x24));
+		pr_info("opendectcell: CGU SYS=%08x CLKFSR=%08x IF_CLK=%08x PLL0=%08x PLL1=%08x PLL2=%08x\n",
+			readl(cgu + 0x0c), readl(cgu + 0x10), readl(cgu + 0x24),
+			readl(cgu + 0x04), readl(cgu + 0x08), readl(cgu + 0x60));
 		iounmap(cgu);
 	}
 	ebu = ioremap(0x1e105300, 0x100);
