@@ -12,6 +12,7 @@
  */
 #include <linux/delay.h>
 #include <linux/err.h>
+#include <linux/kfifo.h>
 #include <linux/hrtimer.h>
 #include <linux/kernel.h>
 #include <linux/moduleparam.h>
@@ -80,6 +81,7 @@
 #define DECT_SSC_DEF_FPB	32
 #define DECT_SSC_DEF_NDESC	4
 #define DECT_SSC_MAX_NDESC	16
+#define DECT_SSC_TX_QUEUE	32768
 
 static inline u32 ssc_rd(struct dect_ssc *s, u32 off)
 {
@@ -285,22 +287,31 @@ static void ssc_drain_frame(struct dect_ssc *s)
 	if (got < s->frame_words)
 		return;
 	s->frame_got = 0;
+	wake_up_interruptible(&s->tx_wq);
 	/* Refill the transmit FIFO with the current frame template while
 	 * there is room (the slave shifts it out as the peer clocks). */
-	if (s->tx_frame) {
+	if (s->tx_idle) {
+		u8 frame[32];
 		unsigned long flags;
 		unsigned int txl, room;
 
 		spin_lock_irqsave(&s->ring_lock, flags);
+		if (kfifo_len(&s->tx_q) >= s->slots * 2 &&
+		    kfifo_out(&s->tx_q, frame, s->slots * 2) == s->slots * 2) {
+			s->st.tx_frames++;
+		} else {
+			memcpy(frame, s->tx_idle, s->slots * 2);
+		}
+		spin_unlock_irqrestore(&s->ring_lock, flags);
+
 		txl = (ssc_rd(s, SSC_FSTAT) & SSC_FSTAT_TX_WORDS_M) >> 8;
 		room = 8 > txl ? 8 - txl : 0;
 		for (i = 0; i < s->frame_words && i < room; i++) {
-			u8 *p = s->tx_frame + i * 4;
+			u8 *p = frame + i * 4;
 
 			ssc_wr(s, SSC_TB,
 			       (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
 		}
-		spin_unlock_irqrestore(&s->ring_lock, flags);
 	}
 	if (++s->block_fill >= s->frames_per_block) {
 		s->block_fill = 0;
@@ -395,6 +406,7 @@ int dect_ssc_init(struct dect_ssc *p, const struct dect_ssc_board *board,
 	}
 	spin_lock_init(&p->ring_lock);
 	init_waitqueue_head(&p->wq);
+	init_waitqueue_head(&p->tx_wq);
 	dect_ssc_dump_regs(p);
 	return 0;
 }
@@ -457,18 +469,27 @@ static int ssc_config(struct dect_ssc *s, struct dect_pcm_config *c)
 
 	s->ring = kzalloc((size_t)s->n_desc * s->block_bytes, GFP_KERNEL);
 	s->block_buf = kzalloc(s->block_bytes, GFP_KERNEL);
-	s->tx_frame = kzalloc(s->slots * 2, GFP_KERNEL);
-	if (!s->ring || !s->block_buf) {
-		kfree(s->ring);
-		kfree(s->block_buf);
-		s->ring = NULL;
-		s->block_buf = NULL;
-		return -ENOMEM;
-	}
+	s->tx_idle = kmalloc(s->slots * 2, GFP_KERNEL);
+	if (s->tx_idle)
+		memset(s->tx_idle, 0xff, s->slots * 2);
+	if (!s->ring || !s->block_buf || !s->tx_idle)
+		goto err;
+	if (kfifo_alloc(&s->tx_q, DECT_SSC_TX_QUEUE, GFP_KERNEL))
+		goto err;
+	s->tx_q_ready = true;
+
 	c->slots = slots;
 	c->frames_per_block = fpb;
 	c->n_desc = ndesc;
 	return 0;
+err:
+	kfree(s->ring);
+	kfree(s->block_buf);
+	kfree(s->tx_idle);
+	s->ring = NULL;
+	s->block_buf = NULL;
+	s->tx_idle = NULL;
+	return -ENOMEM;
 }
 
 static int ssc_step(struct dect_ssc *s, unsigned int n)
@@ -618,22 +639,41 @@ ssize_t dect_ssc_write(struct dect_ssc *p, const char __user *buf,
 	unsigned int frame = p->slots * 2;
 	size_t done = 0;
 
-	if (p->step != DECT_PCM_STEP_DMA || !p->tx_frame)
+	if (p->step != DECT_PCM_STEP_DMA || !p->tx_q_ready) {
+		pr_info("opendectcell: write ENODATA step=%u txq=%d\n",
+			p->step, p->tx_q_ready);
 		return -ENODATA;
-	if (!count || count % frame)
+	}
+	if (!count || count % frame) {
+		pr_info("opendectcell: write EINVAL count=%zu frame=%u\n",
+			count, frame);
 		return -EINVAL;
+	}
 
-	/* The SSC repeats one frame; keep the most recent one. */
 	while (done < count) {
-		u8 tmp[32];
+		unsigned int avail;
+		size_t n;
+		u8 tmp[256];
 		unsigned long flags;
 
-		if (copy_from_user(tmp, buf + done, frame))
+		avail = kfifo_avail(&p->tx_q);
+		n = min_t(size_t, count - done, avail);
+		n = min_t(size_t, n, sizeof(tmp) / frame * frame);
+		n -= n % frame;
+		if (!n) {
+			if (nonblock)
+				return done ? done : -EAGAIN;
+			if (wait_event_interruptible(p->tx_wq,
+						     kfifo_avail(&p->tx_q) >= frame))
+				return done ? done : -ERESTARTSYS;
+			continue;
+		}
+		if (copy_from_user(tmp, buf + done, n))
 			return done ? done : -EFAULT;
 		spin_lock_irqsave(&p->ring_lock, flags);
-		memcpy(p->tx_frame, tmp, frame);
+		kfifo_in(&p->tx_q, tmp, n);
 		spin_unlock_irqrestore(&p->ring_lock, flags);
-		done += frame;
+		done += n;
 	}
 	return done;
 }
@@ -642,12 +682,12 @@ int dect_ssc_set_tx_frame(struct dect_ssc *p, const struct dect_pcm_tx_frame *f)
 {
 	unsigned long flags;
 
-	if (!p->tx_frame)
+	if (!p->tx_idle)
 		return -ENODATA;
 	if (f->len != p->slots * 2 || f->reserved)
 		return -EINVAL;
 	spin_lock_irqsave(&p->ring_lock, flags);
-	memcpy(p->tx_frame, f->frame, f->len);
+	memcpy(p->tx_idle, f->frame, f->len);
 	spin_unlock_irqrestore(&p->ring_lock, flags);
 	return 0;
 }

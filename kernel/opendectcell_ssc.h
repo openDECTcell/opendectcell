@@ -10,6 +10,7 @@
 
 #include <linux/clk.h>
 #include <linux/hrtimer.h>
+#include <linux/kfifo.h>
 #include <linux/io.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
@@ -63,7 +64,10 @@ struct dect_ssc {
 	unsigned int block_fill;
 	unsigned int frame_got;		/* words collected in the current frame */
 	u8 *block_buf;
-	u8 *tx_frame;		/* repeating transmit frame template */
+	u8 *tx_idle;		/* transmit idle frame template (slots*2) */
+	struct kfifo tx_q;	/* queued transmit frames, one per PCM frame */
+	bool tx_q_ready;
+	wait_queue_head_t tx_wq;
 	bool running;
 };
 
