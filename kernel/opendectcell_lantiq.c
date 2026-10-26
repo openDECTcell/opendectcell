@@ -106,10 +106,11 @@ static int dect_open(struct inode *inode, struct file *file)
 		dw->reset = NULL;
 		goto out;
 	}
-	/* Boot-mode strap ("rd", GPIO8), released (high) while idle. */
-	dw->strap = gpiod_get(dw->misc.this_device, "strap", GPIOD_OUT_HIGH);
-	if (IS_ERR(dw->strap))
-		dw->strap = NULL;	/* optional */
+	/*
+	 * The boot-mode strap ("rd", GPIO8) is claimed lazily, on the first
+	 * DECT_IOC_STRAP: claiming it changes the pin, which the 7412's chip
+	 * does not tolerate at reset, so an unused strap must stay untouched.
+	 */
 
 	dw->opened = true;
 	file->private_data = dw;
@@ -214,9 +215,17 @@ static long dect_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (copy_from_user(&value, (void __user *)arg, sizeof(value)))
 			return -EFAULT;
 		mutex_lock(&dw->lock);
-		if (dw->strap)
-			/* v = 1 is fwload's "strap low". */
-			gpiod_set_value(dw->strap, value ? 0 : 1);
+		if (!dw->strap) {
+			dw->strap = gpiod_get(dw->misc.this_device, "strap",
+					      GPIOD_OUT_HIGH);
+			if (IS_ERR(dw->strap)) {
+				dw->strap = NULL;
+				mutex_unlock(&dw->lock);
+				return -EOPNOTSUPP;
+			}
+		}
+		/* v = 1 is fwload's "strap low". */
+		gpiod_set_value(dw->strap, value ? 0 : 1);
 		mutex_unlock(&dw->lock);
 		return 0;
 	case DECT_IOC_CAPTURE:

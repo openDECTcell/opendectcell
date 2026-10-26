@@ -62,6 +62,7 @@ struct dect_ssc {
 	ktime_t period;
 	unsigned int block_fill;
 	u8 *block_buf;
+	u8 *tx_frame;		/* repeating transmit frame template */
 	bool running;
 };
 

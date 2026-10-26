@@ -28,6 +28,7 @@
 #define SSC_STATE	0x14
 #define SSC_WHBSTATE	0x18
 #define SSC_RB		0x24
+#define SSC_TB		0x20
 #define SSC_RXFCON	0x30
 #define SSC_TXFCON	0x34
 #define SSC_FSTAT	0x38
@@ -57,6 +58,7 @@
 #define SSC_XFCON_ITL_S		8
 
 #define SSC_FSTAT_RX_WORDS_M	0x3f
+#define SSC_FSTAT_TX_WORDS_M	0x3f00
 
 /* XWAY GPIO/pinmux: function index in ALT0/ALT1 bits, 0x30 per port. */
 #define PINMUX_PORT_OFF		0x30
@@ -272,6 +274,19 @@ static void ssc_drain_frame(struct dect_ssc *s)
 
 		p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
 	}
+	/* Refill the transmit FIFO with the current frame template while
+	 * there is room (the slave shifts it out as the peer clocks). */
+	if (s->tx_frame) {
+		unsigned int txl = (ssc_rd(s, SSC_FSTAT) & SSC_FSTAT_TX_WORDS_M) >> 8;
+		unsigned int room = 8 > txl ? 8 - txl : 0;
+
+		for (i = 0; i < s->frame_words && i < room; i++) {
+			u8 *p = s->tx_frame + i * 4;
+
+			ssc_wr(s, SSC_TB,
+			       (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
+		}
+	}
 	if (++s->block_fill >= s->frames_per_block) {
 		s->block_fill = 0;
 		ssc_enqueue_block(s);
@@ -427,6 +442,7 @@ static int ssc_config(struct dect_ssc *s, struct dect_pcm_config *c)
 
 	s->ring = kzalloc((size_t)s->n_desc * s->block_bytes, GFP_KERNEL);
 	s->block_buf = kzalloc(s->block_bytes, GFP_KERNEL);
+	s->tx_frame = kzalloc(s->slots * 2, GFP_KERNEL);
 	if (!s->ring || !s->block_buf) {
 		kfree(s->ring);
 		kfree(s->block_buf);
@@ -584,8 +600,21 @@ ssize_t dect_ssc_read(struct dect_ssc *p, char __user *buf, size_t count,
 ssize_t dect_ssc_write(struct dect_ssc *p, const char __user *buf,
 		       size_t count, bool nonblock)
 {
-	/* Transmit is not implemented yet (receive-only bring-up). */
-	return -ENODATA;
+	unsigned int frame = p->slots * 2;
+	size_t done = 0;
+
+	if (p->step != DECT_PCM_STEP_DMA || !p->tx_frame)
+		return -ENODATA;
+	if (!count || count % frame)
+		return -EINVAL;
+
+	/* The SSC repeats one frame; keep the most recent one. */
+	while (done < count) {
+		if (copy_from_user(p->tx_frame, buf + done, frame))
+			return done ? done : -EFAULT;
+		done += frame;
+	}
+	return done;
 }
 
 __poll_t dect_ssc_poll(struct dect_ssc *p, struct file *file, poll_table *wait)
