@@ -58,6 +58,7 @@
 
 /* XWAY GPIO/pinmux: function index in ALT0/ALT1 bits, 0x30 per port. */
 #define PINMUX_PORT_OFF		0x30
+#define PINMUX_OUT		0x00
 #define PINMUX_DIR		0x08
 #define PINMUX_ALT0		0x0c
 #define PINMUX_ALT1		0x10
@@ -169,16 +170,25 @@ static int ssc_step_iface(struct dect_ssc *s)
 
 	if (!s->pinmux)
 		return -ENODEV;
-	/* DI/DO/CLK are GPIO16/17/18 (SPI = ALT0); FSC is GPIO9 (SPI = ALT1). */
-	ssc_pinmux_mux(s, b->pin_di, true, false);
+	/*
+	 * Pin functions from the 7412's stock HW209 table: GPIO16 (do) is
+	 * alt1, GPIO17 (di) and GPIO18 (dcl) are alt2; GPIO9 (fsc) and
+	 * GPIO7 (clk_en) stay plain GPIOs.
+	 */
 	ssc_pinmux_mux(s, b->pin_do, true, false);
-	ssc_pinmux_mux(s, b->pin_dcl, true, false);
-	ssc_pinmux_mux(s, b->pin_fsc, false, true);
-	/* Slave mode: only the data-out pad is driven by the SSC. */
-	ssc_pinmux_bit(s, b->pin_di, PINMUX_DIR, false);
+	ssc_pinmux_mux(s, b->pin_di, false, true);
+	ssc_pinmux_mux(s, b->pin_dcl, false, true);
+	ssc_pinmux_mux(s, b->pin_fsc, false, false);
+
 	ssc_pinmux_bit(s, b->pin_do, PINMUX_DIR, true);
+	ssc_pinmux_bit(s, b->pin_di, PINMUX_DIR, false);
 	ssc_pinmux_bit(s, b->pin_dcl, PINMUX_DIR, false);
 	ssc_pinmux_bit(s, b->pin_fsc, PINMUX_DIR, false);
+
+	/* The DCL enable line is a plain output, driven high. */
+	ssc_pinmux_mux(s, b->pin_clk_en, false, false);
+	ssc_pinmux_bit(s, b->pin_clk_en, PINMUX_DIR, true);
+	ssc_pinmux_bit(s, b->pin_clk_en, PINMUX_OUT, true);
 	return 0;
 }
 
@@ -287,6 +297,39 @@ static void ssc_engine_stop(struct dect_ssc *s)
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                          */
 /* ------------------------------------------------------------------ */
+/* Temporary, read-only bring-up dump (2026-10-26 session). */
+static void dect_ssc_dump_regs(struct dect_ssc *s)
+{
+	void __iomem *pmu, *cgu, *ebu;
+
+	pr_info("opendectcell: SSC CLC=%08x ID=%08x CON=%08x STAT=%08x WHB=%08x RXFCON=%08x TXFCON=%08x FSTAT=%08x BR=%08x SFCON=%08x\n",
+		readl(s->base + 0x00), readl(s->base + 0x08),
+		readl(s->base + 0x10), readl(s->base + 0x14),
+		readl(s->base + 0x18), readl(s->base + 0x30),
+		readl(s->base + 0x34), readl(s->base + 0x38),
+		readl(s->base + 0x40), readl(s->base + 0x60));
+
+	pmu = ioremap(0x1f102000, 0x1000);
+	if (pmu) {
+		pr_info("opendectcell: PMU PWDCR=%08x PWDSR=%08x PWDCR1=%08x PWDSR1=%08x\n",
+			readl(pmu + 0x1c), readl(pmu + 0x20),
+			readl(pmu + 0x24), readl(pmu + 0x28));
+		iounmap(pmu);
+	}
+	cgu = ioremap(0x1f103000, 0x1000);
+	if (cgu) {
+		pr_info("opendectcell: CGU SYS=%08x CLKFSR=%08x IF_CLK=%08x\n",
+			readl(cgu + 0x0c), readl(cgu + 0x10), readl(cgu + 0x24));
+		iounmap(cgu);
+	}
+	ebu = ioremap(0x1e105300, 0x100);
+	if (ebu) {
+		pr_info("opendectcell: EBU BUSCON0=%08x BUSCON1=%08x\n",
+			readl(ebu + 0x60), readl(ebu + 0x64));
+		iounmap(ebu);
+	}
+}
+
 int dect_ssc_init(struct dect_ssc *p, const struct dect_ssc_board *board,
 		  struct mutex *lock)
 {
@@ -306,6 +349,7 @@ int dect_ssc_init(struct dect_ssc *p, const struct dect_ssc_board *board,
 	}
 	spin_lock_init(&p->ring_lock);
 	init_waitqueue_head(&p->wq);
+	dect_ssc_dump_regs(p);
 	return 0;
 }
 

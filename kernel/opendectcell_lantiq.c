@@ -37,10 +37,11 @@ static const struct dect_ssc_board fritz7412_ssc = {
 	.ssc_size = FRITZ7412_SSC_SSC_SIZE,
 	.pinmux_base = FRITZ7412_SSC_PINMUX_BASE,
 	.pinmux_size = FRITZ7412_SSC_PINMUX_SIZE,
-	.pin_fsc = 9,		/* frame sync / CS */
-	.pin_dcl = 18,		/* bit clock, shared with spi_clk */
-	.pin_di = 16,		/* chip -> SoC, shared with spi_di */
-	.pin_do = 17,		/* SoC -> chip, shared with spi_do */
+	.pin_fsc = 9,		/* frame sync / CS; a plain GPIO on this board */
+	.pin_dcl = 18,		/* bit clock */
+	.pin_di = 17,		/* chip -> SoC */
+	.pin_do = 16,		/* SoC -> chip */
+	.pin_clk_en = 7,	/* DCL enable line, GPIO output */
 };
 
 /* Reset GPIO 33, active high in the table; RESET(1) drives it low. */
