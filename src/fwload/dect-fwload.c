@@ -430,9 +430,15 @@ int main(int argc, char **argv)
 			     .set_baud = dev_set_baud, .reset = dev_reset,
 			     .strap = no_strap ? dev_strap_none : dev_strap,
 			     .sleep_ms = dev_sleep, .log = dev_log };
-	/* Bit 8 set: the stock order, "slow" (strap low) attempts first. */
-	struct fwl_params p = { .mode_word = (mode & 0xFFu) | 0x100u,
+	/*
+	 * Keep the full mode word from the board/profile. For compatibility
+	 * with low-byte-only values, force bit 8 when no boot-order bit is set.
+	 */
+	struct fwl_params p = { .mode_word = mode,
 				.stage2_baud = fwl_stage2_baud(first_path) };
+
+	if ((p.mode_word & 0x300u) == 0)
+		p.mode_word |= 0x100u;
 	struct fwl_result res;
 
 	int r = fwl_upload(&io, &p, &first, &second, &res);

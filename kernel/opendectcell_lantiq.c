@@ -232,17 +232,27 @@ static long dect_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (copy_from_user(&value, (void __user *)arg, sizeof(value)))
 			return -EFAULT;
 		mutex_lock(&dw->lock);
-		if (!dw->strap) {
-			dw->strap = gpiod_get(dw->misc.this_device, "strap",
-					      GPIOD_OUT_HIGH);
-			if (IS_ERR(dw->strap)) {
-				dw->strap = NULL;
-				mutex_unlock(&dw->lock);
-				return -EOPNOTSUPP;
+		if (value) {
+			/* fwload's "strap low": claim and drive low. */
+			if (!dw->strap) {
+				dw->strap = gpiod_get(dw->misc.this_device, "strap",
+						      GPIOD_OUT_LOW);
+				if (IS_ERR(dw->strap)) {
+					dw->strap = NULL;
+					mutex_unlock(&dw->lock);
+					return -EOPNOTSUPP;
+				}
+			} else {
+				gpiod_set_value(dw->strap, 0);
 			}
+		} else if (dw->strap) {
+			/*
+			 * fwload's "strap release": release GPIO ownership so pinmux
+			 * returns this line to UART RX.
+			 */
+			gpiod_put(dw->strap);
+			dw->strap = NULL;
 		}
-		/* v = 1 is fwload's "strap low". */
-		gpiod_set_value(dw->strap, value ? 0 : 1);
 		mutex_unlock(&dw->lock);
 		return 0;
 	case DECT_IOC_PCM_TX_FRAME: {
