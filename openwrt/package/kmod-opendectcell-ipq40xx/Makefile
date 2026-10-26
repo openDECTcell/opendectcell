@@ -22,9 +22,12 @@ define KernelPackage/opendectcell-ipq40xx
   # Deliberately no AUTOLOAD: only manual insmod is permitted.
 endef
 
+# Only the ipq40xx (ADSS TDM) transport sources are copied into the build.
 define Build/Prepare
 	$(INSTALL_DIR) $(PKG_BUILD_DIR)/include/uapi
-	$(CP) $(OPENDECTCELL_KERNEL_SRC)/*.c $(OPENDECTCELL_KERNEL_SRC)/*.h \
+	$(CP) $(OPENDECTCELL_KERNEL_SRC)/opendectcell_ipq40xx.c \
+		$(OPENDECTCELL_KERNEL_SRC)/opendectcell_pcm.c \
+		$(OPENDECTCELL_KERNEL_SRC)/opendectcell_pcm.h \
 		$(OPENDECTCELL_KERNEL_SRC)/Makefile $(PKG_BUILD_DIR)/
 	$(CP) $(OPENDECTCELL_KERNEL_SRC)/include/uapi/opendectcell.h \
 		$(PKG_BUILD_DIR)/include/uapi/
