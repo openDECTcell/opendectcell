@@ -18,6 +18,13 @@ static uint16_t sum16(const uint8_t *p, size_t n)
 	return (uint16_t)s;
 }
 
+static int mail_swap;	/* transport byte order: swap the primitive field */
+
+void dect_mail_set_swap(int on)
+{
+	mail_swap = !!on;
+}
+
 int dect_mail_encode(const struct dect_mail *m, uint16_t seq,
 		     uint8_t *out, size_t out_cap)
 {
@@ -32,12 +39,22 @@ int dect_mail_encode(const struct dect_mail *m, uint16_t seq,
 		return -1;
 
 	L = (uint16_t)(2u + m->param_len);	/* bytes after the task bytes */
-	mail[0] = (uint8_t)L;
-	mail[1] = (uint8_t)(L >> 8);
+	if (mail_swap) {
+		mail[0] = (uint8_t)(L >> 8);
+		mail[1] = (uint8_t)L;
+	} else {
+		mail[0] = (uint8_t)L;
+		mail[1] = (uint8_t)(L >> 8);
+	}
 	mail[2] = m->src;
 	mail[3] = m->dst;
-	mail[4] = (uint8_t)m->prim;
-	mail[5] = (uint8_t)(m->prim >> 8);
+	if (mail_swap) {
+		mail[4] = (uint8_t)(m->prim >> 8);
+		mail[5] = (uint8_t)m->prim;
+	} else {
+		mail[4] = (uint8_t)m->prim;
+		mail[5] = (uint8_t)(m->prim >> 8);
+	}
 	memcpy(mail + 6, m->param, m->param_len);
 	sum = sum16(mail, n);
 
@@ -112,7 +129,10 @@ int dect_rx_pull(struct dect_rx *rx, struct dect_mail *out)
 		if (rx->len < 10u)	/* smallest possible mail (doc) */
 			return 0;
 
-		L = rx->buf[2] | (unsigned int)rx->buf[3] << 8;
+		if (mail_swap)
+			L = (unsigned int)rx->buf[2] << 8 | rx->buf[3];
+		else
+			L = rx->buf[2] | (unsigned int)rx->buf[3] << 8;
 		total = 4u + L + 2u + 2u;	/* AA seq len body sum */
 		/*
 		 * L counts prim plus parameters, so below 2 there is no room
@@ -144,7 +164,12 @@ int dect_rx_pull(struct dect_rx *rx, struct dect_mail *out)
 		/* Valid mail. Body: src, dst, prim(LE), parameters. */
 		out->src = rx->buf[4];
 		out->dst = rx->buf[5];
-		out->prim = (uint16_t)(rx->buf[6] | (unsigned int)rx->buf[7] << 8);
+		if (mail_swap)
+			out->prim = (uint16_t)((unsigned int)rx->buf[6] << 8 |
+					       rx->buf[7]);
+		else
+			out->prim = (uint16_t)(rx->buf[6] |
+					       (unsigned int)rx->buf[7] << 8);
 		out->param_len = (uint16_t)(L - 2u);
 		memcpy(out->param, rx->buf + 8, out->param_len);
 

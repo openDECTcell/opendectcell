@@ -7677,6 +7677,8 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
+	if (getenv("OPENDECTCELL_SWAP"))
+		dect_mail_set_swap(1);
 	struct stubd s;
 	struct dect_pcm_config cfg;
 	struct dect_sess_cfg scfg = {

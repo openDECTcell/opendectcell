@@ -52,6 +52,10 @@ struct dect_mail {
 int dect_mail_encode(const struct dect_mail *m, uint16_t seq,
 		     uint8_t *out, size_t out_cap);
 
+/* Transport byte order: some builds put the primitive field on the wire
+ * big-endian (the 7412 STUB); the default is little-endian (7520). */
+void dect_mail_set_swap(int on);
+
 /*
  * STUB -> host stream parser. Control-slot bytes (two per frame, DMA-buffer
  * order) are pushed in; complete mails are pulled out. The parser hunts for
