@@ -15,8 +15,10 @@ define Package/opendectcell
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=Telephony
-  TITLE:=DECT base station for the FRITZ!Box 7520/7530
-  DEPENDS:=@TARGET_ipq40xx +kmod-opendectcell-ipq40xx
+  TITLE:=DECT base station for the FRITZ!Box 7520/7530 and 7412
+  DEPENDS:=@(TARGET_ipq40xx||TARGET_lantiq) \
+	+TARGET_ipq40xx:kmod-opendectcell-ipq40xx \
+	+TARGET_lantiq:kmod-opendectcell-lantiq
 endef
 
 define Package/opendectcell/description
@@ -58,6 +60,9 @@ define Package/opendectcell/install
 	$(INSTALL_DATA) ./files/opendectcell.keep $(1)/lib/upgrade/keep.d/opendectcell
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/opendectcell.uci-defaults $(1)/etc/uci-defaults/90-opendectcell
+	$(INSTALL_DIR) $(1)/usr/share/opendectcell/boards
+	$(INSTALL_DATA) $(OPENDECTCELL_SRC)/boards/avm,fritzbox-7530 \
+		$(OPENDECTCELL_SRC)/boards/avm,fritz7412 $(1)/usr/share/opendectcell/boards/
 endef
 
 $(eval $(call BuildPackage,opendectcell))

@@ -18,6 +18,29 @@ PARK="-M 0x22:0x02:0x022c:01 -M 0x22:0x02:0x015b:00 -t 6"
 
 log() { logger -t opendectcell "$*"; echo "opendectcell: $*" >&2; }
 
+# Model-specific values live in a board profile, one file per
+# /tmp/sysinfo/board_name (docs/hardware-abstraction.md); UCI overrides them.
+# These are the 7520/7530 defaults, used if no profile is found.
+: "${uart:=/dev/ttyMSM0}"
+: "${dect_mode:=0x105}"
+: "${fw_firstlevel:=dectfw_firstlevel_441_slow.hex}"
+: "${fw_secondlevel:=dectfw_secondlevel_441-07.56.hex}"
+: "${factory_mtd:=/dev/mtd5}"
+: "${factory_offset:=0x3d000}"
+: "${led_path:=/sys/class/leds/green:fon/brightness}"
+
+dect_load_profile() {
+	local b
+	b=$(cat /tmp/sysinfo/board_name 2>/dev/null)
+	if [ -n "$b" ] && [ -r "/usr/share/opendectcell/boards/$b" ]; then
+		. "/usr/share/opendectcell/boards/$b"
+	else
+		log "no board profile for '${b:-unknown}'; using the 7520 defaults"
+	fi
+	[ -n "${led_path:-}" ] || led_path=/sys/class/leds/green:fon/brightness
+}
+dect_load_profile
+
 # A random 4-digit registration PIN, saved in the config (also made by the
 # package's uci-defaults script at install).
 pin_make() {
@@ -63,12 +86,12 @@ console_claim() {
 load_chip() {
 	local dir first second uart mtd off mode unverified f
 	config_get dir main firmware_dir /etc/opendectcell/firmware
-	config_get first main first
-	config_get second main second
-	config_get uart main uart /dev/ttyMSM0
-	config_get mtd main factory_mtd /dev/mtd5
-	config_get off main factory_offset 0x3d000
-	config_get mode main mode 0x105
+	config_get first main first "$fw_firstlevel"
+	config_get second main second "$fw_secondlevel"
+	config_get uart main uart "$uart"
+	config_get mtd main factory_mtd "$factory_mtd"
+	config_get off main factory_offset "$factory_offset"
+	config_get mode main mode "$dect_mode"
 
 	[ -r "$dir/$first" ] && [ -r "$dir/$second" ] || {
 		log "chip firmware missing in $dir ($first, $second); not starting"
@@ -133,6 +156,15 @@ start_service() {
 	[ "$ci" = 1 ] || nocipher="-C"
 	config_get rw main regwindow 120
 	options="${options:+$options,}regwindow=$rw"
+	# The DECT LED path is a board-profile detail (e.g. green:fon on the
+	# 7520, green:dect on the 7412). The user can turn the LED off with
+	# 'noled' or point it elsewhere with 'led=PATH' in options.
+	if [ -n "${led_path:-}" ]; then
+		case ",$options," in
+		*,led=*|*,noled,*) ;;
+		*) options="${options:+$options,}led=$led_path" ;;
+		esac
+	fi
 	for f in $stores; do
 		[ -s "$f" ] && args="$args -s $f"
 	done
