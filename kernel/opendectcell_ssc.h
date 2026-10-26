@@ -61,6 +61,7 @@ struct dect_ssc {
 	struct hrtimer timer;
 	ktime_t period;
 	unsigned int block_fill;
+	unsigned int frame_got;		/* words collected in the current frame */
 	u8 *block_buf;
 	u8 *tx_frame;		/* repeating transmit frame template */
 	bool running;

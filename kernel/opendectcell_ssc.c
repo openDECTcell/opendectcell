@@ -59,6 +59,8 @@
 
 #define SSC_FSTAT_RX_WORDS_M	0x3f
 #define SSC_FSTAT_TX_WORDS_M	0x3f00
+#define SSC_STATE_RX_EOM		0x80000000
+#define SSC_STATE_TX_EOM		0x08000000
 
 /* XWAY GPIO/pinmux: function index in ALT0/ALT1 bits, 0x30 per port. */
 #define PINMUX_PORT_OFF		0x30
@@ -263,17 +265,26 @@ static void ssc_enqueue_block(struct dect_ssc *s)
 static void ssc_drain_frame(struct dect_ssc *s)
 {
 	unsigned int words = ssc_rd(s, SSC_FSTAT) & SSC_FSTAT_RX_WORDS_M;
-	unsigned int i;
+	unsigned int i, got = s->frame_got;
 
-	if (words > s->frame_words)
-		words = s->frame_words;
-	for (i = 0; i < words; i++) {
+	if (words > s->frame_words * 2)
+		words = s->frame_words * 2;
+	/* Read words until the controller marks end-of-frame (RX_EOM); the
+	 * chip's FSC delimits frames, so this keeps the slots aligned. */
+	for (i = 0; i < words && got < s->frame_words; i++) {
 		u32 v = ssc_rd(s, SSC_RB);
 		u8 *p = s->block_buf +
-			(size_t)s->block_fill * s->frame_bytes + i * 4;
+			(size_t)s->block_fill * s->frame_bytes + got * 4;
 
 		p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
+		got++;
+		if (ssc_rd(s, SSC_STATE) & SSC_STATE_RX_EOM)
+			break;
 	}
+	s->frame_got = got;
+	if (got < s->frame_words)
+		return;
+	s->frame_got = 0;
 	/* Refill the transmit FIFO with the current frame template while
 	 * there is room (the slave shifts it out as the peer clocks). */
 	if (s->tx_frame) {
