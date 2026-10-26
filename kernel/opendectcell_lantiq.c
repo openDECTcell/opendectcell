@@ -45,13 +45,16 @@ static const struct dect_ssc_board fritz7412_ssc = {
 	.pin_clk_en = 7,	/* DCL enable line, GPIO output */
 };
 
-/* Reset GPIO 33 and the boot-mode strap ("rd") GPIO 8, both active high in
- * the table; the module drives them low to assert. */
+/* Reset GPIO 33, the boot-mode strap ("rd") GPIO 8 and the PCM clock enable
+ * GPIO 7 ("the PCM clock-enable line"), all active high in the table; the module
+ * drives reset/strap low to assert. GPIO7 must be high before the chip's
+ * reset: the chip only starts its PCM bit clock (DCL) if it sees it. */
 static struct gpiod_lookup_table fritz7412_gpio_lookup = {
 	.dev_id = "dect0",
 	.table = {
 		GPIO_LOOKUP("gpio-xway", 33, "reset", GPIO_ACTIVE_HIGH),
 		GPIO_LOOKUP("gpio-xway", 8, "strap", GPIO_ACTIVE_HIGH),
+		GPIO_LOOKUP("gpio-xway", 7, "clk-en", GPIO_ACTIVE_HIGH),
 		{},
 	},
 };
@@ -80,6 +83,7 @@ struct opendectcell {
 	bool opened;
 	struct dect_ssc ssc;
 	struct gpio_desc *strap;
+	struct gpio_desc *clk_en;
 };
 
 static struct opendectcell dect;
@@ -107,6 +111,14 @@ static int dect_open(struct inode *inode, struct file *file)
 		goto out;
 	}
 	/*
+	 * PCM clock enable (GPIO7, "the PCM clock-enable line"): drive it high now,
+	 * before the chip is reset, or the chip never starts its PCM bit
+	 * clock and the link stays silent.
+	 */
+	dw->clk_en = gpiod_get(dw->misc.this_device, "clk-en", GPIOD_OUT_HIGH);
+	if (IS_ERR(dw->clk_en))
+		dw->clk_en = NULL;	/* optional */
+	/*
 	 * The boot-mode strap ("rd", GPIO8) is claimed lazily, on the first
 	 * DECT_IOC_STRAP: claiming it changes the pin, which the 7412's chip
 	 * does not tolerate at reset, so an unused strap must stay untouched.
@@ -123,6 +135,11 @@ out:
 static void dect_close_locked(struct opendectcell *dw)
 {
 	dect_ssc_teardown(&dw->ssc);
+	if (dw->clk_en) {
+		gpiod_set_value(dw->clk_en, 0);
+		gpiod_put(dw->clk_en);
+		dw->clk_en = NULL;
+	}
 	if (dw->strap) {
 		gpiod_set_value(dw->strap, 0);
 		gpiod_put(dw->strap);
