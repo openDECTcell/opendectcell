@@ -45,11 +45,13 @@ static const struct dect_ssc_board fritz7412_ssc = {
 	.pin_clk_en = 7,	/* DCL enable line, GPIO output */
 };
 
-/* Reset GPIO 33, active high in the table; RESET(1) drives it low. */
+/* Reset GPIO 33 and the boot-mode strap ("rd") GPIO 8, both active high in
+ * the table; the module drives them low to assert. */
 static struct gpiod_lookup_table fritz7412_gpio_lookup = {
 	.dev_id = "dect0",
 	.table = {
 		GPIO_LOOKUP("gpio-xway", 33, "reset", GPIO_ACTIVE_HIGH),
+		GPIO_LOOKUP("gpio-xway", 8, "strap", GPIO_ACTIVE_HIGH),
 		{},
 	},
 };
@@ -77,6 +79,7 @@ struct opendectcell {
 	struct gpio_desc *reset;
 	bool opened;
 	struct dect_ssc ssc;
+	struct gpio_desc *strap;
 };
 
 static struct opendectcell dect;
@@ -103,6 +106,10 @@ static int dect_open(struct inode *inode, struct file *file)
 		dw->reset = NULL;
 		goto out;
 	}
+	/* Boot-mode strap ("rd", GPIO8), released (high) while idle. */
+	dw->strap = gpiod_get(dw->misc.this_device, "strap", GPIOD_OUT_HIGH);
+	if (IS_ERR(dw->strap))
+		dw->strap = NULL;	/* optional */
 
 	dw->opened = true;
 	file->private_data = dw;
@@ -115,6 +122,11 @@ out:
 static void dect_close_locked(struct opendectcell *dw)
 {
 	dect_ssc_teardown(&dw->ssc);
+	if (dw->strap) {
+		gpiod_set_value(dw->strap, 0);
+		gpiod_put(dw->strap);
+		dw->strap = NULL;
+	}
 	if (dw->reset) {
 		/* Raw high releases this active-low reset before release. */
 		gpiod_set_value(dw->reset, 1);
@@ -198,11 +210,19 @@ static long dect_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		mutex_unlock(&dw->lock);
 		return 0;
 	case DECT_IOC_STRAP:
+		/* The chip samples its "rd" line (GPIO8) during reset. */
+		if (copy_from_user(&value, (void __user *)arg, sizeof(value)))
+			return -EFAULT;
+		mutex_lock(&dw->lock);
+		if (dw->strap)
+			/* v = 1 is fwload's "strap low". */
+			gpiod_set_value(dw->strap, value ? 0 : 1);
+		mutex_unlock(&dw->lock);
+		return 0;
 	case DECT_IOC_CAPTURE:
 	case DECT_IOC_PCM_TX_FRAME:
-		/* The 7412 has no boot strap pin; its PCM pins belong to the
-		 * SSC peripheral (no GPIO polling capture); transmit is not
-		 * implemented yet. */
+		/* The PCM pins belong to the SSC peripheral (no GPIO polling
+		 * capture); transmit is not implemented yet. */
 		return -EOPNOTSUPP;
 	default:
 		return -ENOTTY;

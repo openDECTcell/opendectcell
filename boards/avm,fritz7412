@@ -20,8 +20,9 @@ dect_mode=0x119
 uart=/dev/ttyLTQ0
 uart_is_console=1
 
-# No boot-mode strap on this board (the 7520 samples its UART RX; the
-# 7412 does not), so the uploader must not touch one.
+# The stock DTB names a "rd" line on GPIO8 (the DECT reset line, module PIGLET),
+# but driving it (either polarity) makes the chip fail to boot, so it is not
+# used as a strap: the uploader must not touch it.
 strap=0
 
 # The DECT LED (OpenWrt 7412 device tree: green:dect on GPIO15).
