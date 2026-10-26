@@ -245,10 +245,19 @@ static long dect_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		gpiod_set_value(dw->strap, value ? 0 : 1);
 		mutex_unlock(&dw->lock);
 		return 0;
+	case DECT_IOC_PCM_TX_FRAME: {
+		struct dect_pcm_tx_frame f;
+
+		if (copy_from_user(&f, (void __user *)arg, sizeof(f)))
+			return -EFAULT;
+		mutex_lock(&dw->lock);
+		ret = dect_ssc_set_tx_frame(&dw->ssc, &f);
+		mutex_unlock(&dw->lock);
+		return ret;
+	}
 	case DECT_IOC_CAPTURE:
-	case DECT_IOC_PCM_TX_FRAME:
 		/* The PCM pins belong to the SSC peripheral (no GPIO polling
-		 * capture); transmit is not implemented yet. */
+		 * capture). */
 		return -EOPNOTSUPP;
 	default:
 		return -ENOTTY;

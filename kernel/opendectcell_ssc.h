@@ -73,6 +73,7 @@ void dect_ssc_exit(struct dect_ssc *p);
 /* Called with *p->lock held. */
 void dect_ssc_teardown(struct dect_ssc *p);
 long dect_ssc_ioctl(struct dect_ssc *p, unsigned int cmd, void __user *argp);
+int dect_ssc_set_tx_frame(struct dect_ssc *p, const struct dect_pcm_tx_frame *f);
 
 /* Take *p->lock themselves. */
 ssize_t dect_ssc_read(struct dect_ssc *p, char __user *buf, size_t count,

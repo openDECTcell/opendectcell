@@ -277,15 +277,19 @@ static void ssc_drain_frame(struct dect_ssc *s)
 	/* Refill the transmit FIFO with the current frame template while
 	 * there is room (the slave shifts it out as the peer clocks). */
 	if (s->tx_frame) {
-		unsigned int txl = (ssc_rd(s, SSC_FSTAT) & SSC_FSTAT_TX_WORDS_M) >> 8;
-		unsigned int room = 8 > txl ? 8 - txl : 0;
+		unsigned long flags;
+		unsigned int txl, room;
 
+		spin_lock_irqsave(&s->ring_lock, flags);
+		txl = (ssc_rd(s, SSC_FSTAT) & SSC_FSTAT_TX_WORDS_M) >> 8;
+		room = 8 > txl ? 8 - txl : 0;
 		for (i = 0; i < s->frame_words && i < room; i++) {
 			u8 *p = s->tx_frame + i * 4;
 
 			ssc_wr(s, SSC_TB,
 			       (p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
 		}
+		spin_unlock_irqrestore(&s->ring_lock, flags);
 	}
 	if (++s->block_fill >= s->frames_per_block) {
 		s->block_fill = 0;
@@ -610,11 +614,31 @@ ssize_t dect_ssc_write(struct dect_ssc *p, const char __user *buf,
 
 	/* The SSC repeats one frame; keep the most recent one. */
 	while (done < count) {
-		if (copy_from_user(p->tx_frame, buf + done, frame))
+		u8 tmp[32];
+		unsigned long flags;
+
+		if (copy_from_user(tmp, buf + done, frame))
 			return done ? done : -EFAULT;
+		spin_lock_irqsave(&p->ring_lock, flags);
+		memcpy(p->tx_frame, tmp, frame);
+		spin_unlock_irqrestore(&p->ring_lock, flags);
 		done += frame;
 	}
 	return done;
+}
+
+int dect_ssc_set_tx_frame(struct dect_ssc *p, const struct dect_pcm_tx_frame *f)
+{
+	unsigned long flags;
+
+	if (!p->tx_frame)
+		return -ENODATA;
+	if (f->len != p->slots * 2 || f->reserved)
+		return -EINVAL;
+	spin_lock_irqsave(&p->ring_lock, flags);
+	memcpy(p->tx_frame, f->frame, f->len);
+	spin_unlock_irqrestore(&p->ring_lock, flags);
+	return 0;
 }
 
 __poll_t dect_ssc_poll(struct dect_ssc *p, struct file *file, poll_table *wait)
