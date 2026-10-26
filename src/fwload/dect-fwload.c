@@ -197,6 +197,18 @@ static int dev_strap(void *ctx, int low)
 	return ioctl(d->dect_fd, DECT_IOC_STRAP, &v) < 0 ? -errno : 0;
 }
 
+/*
+ * Boards without a boot-mode strap (the 7412): the strap step exists only
+ * so the "slow" reset order can drive a pin. Substitute a no-op so the
+ * order stays the same but no pin is touched.
+ */
+static int dev_strap_none(void *ctx, int low)
+{
+	(void)ctx;
+	(void)low;
+	return 0;
+}
+
 static void dev_sleep(void *ctx, unsigned ms)
 {
 	(void)ctx;
@@ -281,7 +293,7 @@ static void usage(void)
 	fprintf(stderr,
 		"usage: dect-fwload --uart DEV {--dect-dev /dev/dect0 | --dect-fd N} "
 		"--first FILE.hex --second FILE.hex [--factory-mtd DEV --factory-offset N]\n"
-		"                   [--mode 0x105] [--listen SECONDS] [-v]\n"
+		"                   [--mode 0x105] [--listen SECONDS] [--no-strap] [-v]\n"
 		"       dect-fwload --probe DEV [BAUD]\n");
 }
 
@@ -324,6 +336,7 @@ int main(int argc, char **argv)
 	const char *factory_mtd = NULL, *dect_dev = NULL;
 	int dect_fd_arg = -1;	/* inherited, e.g. from dect-pcmcap -e */
 	off_t factory_off = 0;
+	int no_strap = 0;
 	uint8_t factory[FWI_FACTORY_MAX];
 	size_t factory_len = 0;
 	struct dev d = { .uart = -1, .dect_fd = -1 };
@@ -347,6 +360,8 @@ int main(int argc, char **argv)
 			factory_off = (off_t)strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "--listen") && i + 1 < argc)
 			listen_s = (unsigned)strtoul(argv[++i], NULL, 0);
+		else if (!strcmp(argv[i], "--no-strap"))
+			no_strap = 1;
 		else if (!strcmp(argv[i], "-v"))
 			d.verbose = 1;
 		else {
@@ -413,8 +428,8 @@ int main(int argc, char **argv)
 	struct fwl_io io = { .ctx = &d, .read_byte = dev_read_byte,
 			     .poll_byte = dev_poll_byte, .write = dev_write,
 			     .set_baud = dev_set_baud, .reset = dev_reset,
-			     .strap = dev_strap, .sleep_ms = dev_sleep,
-			     .log = dev_log };
+			     .strap = no_strap ? dev_strap_none : dev_strap,
+			     .sleep_ms = dev_sleep, .log = dev_log };
 	/* Bit 8 set: the stock order, "slow" (strap low) attempts first. */
 	struct fwl_params p = { .mode_word = (mode & 0xFFu) | 0x100u,
 				.stage2_baud = fwl_stage2_baud(first_path) };

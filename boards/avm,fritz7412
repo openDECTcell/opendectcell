@@ -20,11 +20,16 @@ dect_mode=0x119
 uart=/dev/ttyLTQ0
 uart_is_console=1
 
+# No boot-mode strap on this board (the 7520 samples its UART RX; the
+# 7412 does not), so the uploader must not touch one.
+strap=0
+
 # The DECT LED (OpenWrt 7412 device tree: green:dect on GPIO15).
 led_path=/sys/class/leds/green:dect/brightness
 
 # Factory DECT config block and RFPI fallback: still open (M1).
 factory_cfg=
+factory_mtd=
 rfpi_fallback=maca
 
 max_calls=3

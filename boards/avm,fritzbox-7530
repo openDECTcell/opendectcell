@@ -12,6 +12,9 @@ fw_secondlevel=dectfw_secondlevel_441-07.56.hex
 
 dect_mode=0x105
 
+# The chip samples its UART RX pin at reset release (boot-mode strap).
+strap=1
+
 # Firmware-load UART (shared with the serial console).
 uart=/dev/ttyMSM0
 uart_is_console=1

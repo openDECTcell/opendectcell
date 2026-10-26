@@ -27,6 +27,7 @@ log() { logger -t opendectcell "$*"; echo "opendectcell: $*" >&2; }
 : "${fw_secondlevel:=dectfw_secondlevel_441-07.56.hex}"
 : "${factory_mtd:=/dev/mtd5}"
 : "${factory_offset:=0x3d000}"
+: "${strap:=1}"
 : "${led_path:=/sys/class/leds/green:fon/brightness}"
 
 dect_load_profile() {
@@ -84,7 +85,7 @@ console_claim() {
 }
 
 load_chip() {
-	local dir first second uart mtd off mode unverified f
+	local dir first second uart mtd off mode unverified f extra
 	config_get dir main firmware_dir /etc/opendectcell/firmware
 	config_get first main first "$fw_firstlevel"
 	config_get second main second "$fw_secondlevel"
@@ -92,6 +93,7 @@ load_chip() {
 	config_get mtd main factory_mtd "$factory_mtd"
 	config_get off main factory_offset "$factory_offset"
 	config_get mode main mode "$dect_mode"
+	config_get strapv main strap "$strap"
 
 	[ -r "$dir/$first" ] && [ -r "$dir/$second" ] || {
 		log "chip firmware missing in $dir ($first, $second); not starting"
@@ -114,9 +116,13 @@ load_chip() {
 	# Already booted since the last module load: keep it.
 	[ -s /tmp/dect-stub.second ] && return 0
 	console_claim "$uart"
+	extra=""
+	[ -n "$mtd" ] && extra="$extra --factory-mtd $mtd --factory-offset $off"
+	[ "$strapv" = 0 ] && extra="$extra --no-strap"
+	# shellcheck disable=SC2086
 	/usr/sbin/dect-fwload --uart "$uart" --dect-dev /dev/dect0 \
 		--first "$dir/$first" --second "$dir/$second" --mode "$mode" \
-		--factory-mtd "$mtd" --factory-offset "$off" \
+		$extra \
 		>/tmp/dect-fwload.log 2>&1 || {
 		log "chip firmware upload failed, see /tmp/dect-fwload.log"
 		rm -f /tmp/dect-stub.second
