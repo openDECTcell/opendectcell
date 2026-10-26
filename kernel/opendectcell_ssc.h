@@ -26,6 +26,7 @@ struct dect_ssc_board {
 	phys_addr_t pinmux_base;	/* XWAY GPIO/pinmux block */
 	size_t pinmux_size;
 	unsigned int pin_fsc;		/* frame sync / CS: stays a GPIO (GPIO9) */
+	unsigned int pin_cs;		/* SSC chip select / frame sync (GPIO10) */
 	unsigned int pin_dcl;		/* bit clock (GPIO18) */
 	unsigned int pin_di;		/* data chip -> SoC (GPIO17) */
 	unsigned int pin_do;		/* data SoC -> chip (GPIO16) */

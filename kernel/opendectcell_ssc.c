@@ -14,6 +14,7 @@
 #include <linux/err.h>
 #include <linux/hrtimer.h>
 #include <linux/kernel.h>
+#include <linux/moduleparam.h>
 #include <linux/ktime.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -48,6 +49,7 @@
 #define SSC_WHBSTATE_DISABLE	BIT(0)
 #define SSC_WHBSTATE_ENABLE	BIT(1)
 #define SSC_WHBSTATE_SLAVE_MODE	BIT(2)
+#define SSC_WHBSTATE_MASTER_MODE 0x00000008
 #define SSC_WHBSTATE_CLR_ALL_ERR 0x00000f50
 
 #define SSC_XFCON_ENABLE	BIT(0)
@@ -77,12 +79,12 @@
 
 static inline u32 ssc_rd(struct dect_ssc *s, u32 off)
 {
-	return readl(s->base + off);
+	return __raw_readl(s->base + off);
 }
 
 static inline void ssc_wr(struct dect_ssc *s, u32 off, u32 val)
 {
-	writel(val, s->base + off);
+	__raw_writel(val, s->base + off);
 }
 
 static int ssc_set_run(struct dect_ssc *s, bool run, unsigned int timeout_us)
@@ -109,10 +111,10 @@ static void ssc_pinmux_bit(struct dect_ssc *s, unsigned int pin,
 	void __iomem *reg = s->pinmux +
 		(pin / 16) * PINMUX_PORT_OFF + reg_off;
 	u32 bit = BIT(pin % 16);
-	u32 v = readl(reg);
+	u32 v = __raw_readl(reg);
 
 	v = set ? (v | bit) : (v & ~bit);
-	writel(v, reg);
+	__raw_writel(v, reg);
 }
 
 /* SPI function is index 1 (ALT0) on GPIO16/17/18, index 2 (ALT1) on GPIO9. */
@@ -148,7 +150,7 @@ static int ssc_step_clock(struct dect_ssc *s)
 	} else {
 		pmu = ioremap(DECT_PMU_BASE, 0x1000);
 		if (pmu) {
-			writel(readl(pmu + DECT_PMU_PWDCR) & ~DECT_PMU_SPI,
+			__raw_writel(__raw_readl(pmu + DECT_PMU_PWDCR) & ~DECT_PMU_SPI,
 			       pmu + DECT_PMU_PWDCR);
 			iounmap(pmu);
 		}
@@ -171,18 +173,25 @@ static int ssc_step_iface(struct dect_ssc *s)
 	if (!s->pinmux)
 		return -ENODEV;
 	/*
-	 * Pin functions from the 7412's stock HW209 table: GPIO16 (do) is
-	 * alt1, GPIO17 (di) and GPIO18 (dcl) are alt2; GPIO9 (fsc) and
-	 * GPIO7 (clk_en) stay plain GPIOs.
+	 * Put the SSC pins into the SPI function: GPIO16 (spi_di), GPIO17
+	 * (spi_do), GPIO18 (spi_clk) and GPIO10 (spi_cs4) are all SPI = f1
+	 * (ALT0), as mainline's spi_pins/spi_cs4_pins groups do. GPIO9 (fsc)
+	 * and GPIO7 (clk_en) stay plain GPIOs.
 	 */
 	ssc_pinmux_mux(s, b->pin_do, true, false);
-	ssc_pinmux_mux(s, b->pin_di, false, true);
-	ssc_pinmux_mux(s, b->pin_dcl, false, true);
-	ssc_pinmux_mux(s, b->pin_fsc, false, false);
+	ssc_pinmux_mux(s, b->pin_di, true, false);
+	ssc_pinmux_mux(s, b->pin_dcl, true, false);
+	ssc_pinmux_mux(s, b->pin_cs, true, false);
 
+	/* Pad directions as in HW209: data-out and the CS/frame-sync line are
+	 * driven; the clock and data-in pads must be inputs. */
 	ssc_pinmux_bit(s, b->pin_do, PINMUX_DIR, true);
 	ssc_pinmux_bit(s, b->pin_di, PINMUX_DIR, false);
 	ssc_pinmux_bit(s, b->pin_dcl, PINMUX_DIR, false);
+	ssc_pinmux_bit(s, b->pin_cs, PINMUX_DIR, true);
+
+	/* GPIO9 (the frame-sync monitor) stays a plain input. */
+	ssc_pinmux_mux(s, b->pin_fsc, false, false);
 	ssc_pinmux_bit(s, b->pin_fsc, PINMUX_DIR, false);
 
 	/* The DCL enable line is a plain output, driven high. */
@@ -192,6 +201,10 @@ static int ssc_step_iface(struct dect_ssc *s)
 	return 0;
 }
 
+static int ssc_master;
+module_param_named(master, ssc_master, int, 0644);
+MODULE_PARM_DESC(master, "run the SSC as the PCM bit-clock master");
+
 static int ssc_step_tdm(struct dect_ssc *s)
 {
 	u32 itl = s->frame_words ?: DECT_SSC_DEF_SLOTS / 2;
@@ -199,9 +212,11 @@ static int ssc_step_tdm(struct dect_ssc *s)
 	if (ssc_set_run(s, false, 100000))
 		pr_warn("openDECTcell: SSC did not enter configuration mode\n");
 
-	ssc_wr(s, SSC_WHBSTATE,
-	       SSC_WHBSTATE_SLAVE_MODE | SSC_WHBSTATE_CLR_ALL_ERR);
-	ssc_wr(s, SSC_BR, 1);
+	ssc_wr(s, SSC_WHBSTATE, (ssc_master ? SSC_WHBSTATE_MASTER_MODE :
+				 SSC_WHBSTATE_SLAVE_MODE) |
+	       SSC_WHBSTATE_CLR_ALL_ERR);
+	/* Slave ignores the baud reload; master uses it for the bit clock. */
+	ssc_wr(s, SSC_BR, ssc_master ? 48 : 1);
 	if (itl > 63)
 		itl = 63;
 	ssc_wr(s, SSC_RXFCON,
@@ -303,30 +318,30 @@ static void dect_ssc_dump_regs(struct dect_ssc *s)
 	void __iomem *pmu, *cgu, *ebu;
 
 	pr_info("opendectcell: SSC CLC=%08x ID=%08x CON=%08x STAT=%08x WHB=%08x RXFCON=%08x TXFCON=%08x FSTAT=%08x BR=%08x SFCON=%08x\n",
-		readl(s->base + 0x00), readl(s->base + 0x08),
-		readl(s->base + 0x10), readl(s->base + 0x14),
-		readl(s->base + 0x18), readl(s->base + 0x30),
-		readl(s->base + 0x34), readl(s->base + 0x38),
-		readl(s->base + 0x40), readl(s->base + 0x60));
+		__raw_readl(s->base + 0x00), __raw_readl(s->base + 0x08),
+		__raw_readl(s->base + 0x10), __raw_readl(s->base + 0x14),
+		__raw_readl(s->base + 0x18), __raw_readl(s->base + 0x30),
+		__raw_readl(s->base + 0x34), __raw_readl(s->base + 0x38),
+		__raw_readl(s->base + 0x40), __raw_readl(s->base + 0x60));
 
 	pmu = ioremap(0x1f102000, 0x1000);
 	if (pmu) {
 		pr_info("opendectcell: PMU PWDCR=%08x PWDSR=%08x PWDCR1=%08x PWDSR1=%08x\n",
-			readl(pmu + 0x1c), readl(pmu + 0x20),
-			readl(pmu + 0x24), readl(pmu + 0x28));
+			__raw_readl(pmu + 0x1c), __raw_readl(pmu + 0x20),
+			__raw_readl(pmu + 0x24), __raw_readl(pmu + 0x28));
 		iounmap(pmu);
 	}
 	cgu = ioremap(0x1f103000, 0x1000);
 	if (cgu) {
 		pr_info("opendectcell: CGU SYS=%08x CLKFSR=%08x IF_CLK=%08x PLL0=%08x PLL1=%08x PLL2=%08x\n",
-			readl(cgu + 0x0c), readl(cgu + 0x10), readl(cgu + 0x24),
-			readl(cgu + 0x04), readl(cgu + 0x08), readl(cgu + 0x60));
+			__raw_readl(cgu + 0x0c), __raw_readl(cgu + 0x10), __raw_readl(cgu + 0x24),
+			__raw_readl(cgu + 0x04), __raw_readl(cgu + 0x08), __raw_readl(cgu + 0x60));
 		iounmap(cgu);
 	}
 	ebu = ioremap(0x1e105300, 0x100);
 	if (ebu) {
 		pr_info("opendectcell: EBU BUSCON0=%08x BUSCON1=%08x\n",
-			readl(ebu + 0x60), readl(ebu + 0x64));
+			__raw_readl(ebu + 0x60), __raw_readl(ebu + 0x64));
 		iounmap(ebu);
 	}
 }
