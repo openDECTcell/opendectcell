@@ -374,11 +374,12 @@ in slots 1-3 the log shows `sub: locked-in handset mask 0x017c 00 07`.
 ### 18. A handset profile takes effect (5 minutes)
 
 Since round 2 (R2) the daemon applies a handset's profile. Copy the example
-files of `docs/handset-profiles.md` §8 to the box and pick the C430A's model:
+files from the repo's `profiles/` to the box (the package installs them too)
+and pick the C430A's model:
 
 ```
 ssh root@192.168.1.1 'mkdir -p /etc/opendectcell/profiles'
-scp gigaset.profile gigaset-c430a.profile root@192.168.1.1:/etc/opendectcell/profiles/
+scp -O profiles/*.profile root@192.168.1.1:/etc/opendectcell/profiles/
 ssh root@192.168.1.1 'echo gigaset-c430a > /etc/opendectcell-sub.c430a.profile; /tmp/dect-stubd --check-profile /etc/opendectcell/profiles/gigaset-c430a.profile'
 EXTRA=clip=0301234567,cnip=Wednesday HOLD=1 ./ringone.sh c430a
 ```

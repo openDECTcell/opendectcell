@@ -63,6 +63,8 @@ define Package/opendectcell/install
 	$(INSTALL_DIR) $(1)/usr/share/opendectcell/boards
 	$(INSTALL_DATA) $(OPENDECTCELL_SRC)/boards/avm,fritzbox-7530 \
 		$(OPENDECTCELL_SRC)/boards/avm,fritz7412 $(1)/usr/share/opendectcell/boards/
+	$(INSTALL_DIR) $(1)/etc/opendectcell/profiles
+	$(INSTALL_DATA) $(OPENDECTCELL_SRC)/profiles/*.profile $(1)/etc/opendectcell/profiles/
 endef
 
 $(eval $(call BuildPackage,opendectcell))

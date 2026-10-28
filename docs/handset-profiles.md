@@ -174,6 +174,10 @@ A switch for a module that is not built yet is accepted and has no effect.
 
 ## 8. Examples (from the 2026-10-28 bench)
 
+These are in the repo as `profiles/*.profile` and installed to
+`/etc/opendectcell/profiles/` by the package; `dect-stubd --check-profile`
+accepts each.
+
 `gigaset.profile`, the manufacturer layer:
 
 ```
