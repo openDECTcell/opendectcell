@@ -367,6 +367,7 @@ struct stubd {
 		unsigned pages;
 		uint64_t page_at;
 		int      warned;	/* codec mismatch reported */
+		int      name_info;	/* the caller's name follows in {CC-INFO} */
 	} ic;
 	/*
 	 * Deregistering a handset (maintainer, 2026-10-28; stock's order from
@@ -6494,11 +6495,23 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 			ci.call_status = DECT_CS_CALL_SETUP;
 		}
 		dect_cc_set_callinfo(&l->cc, &ci);
-		r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
-				     target_svc(s, s->ic.target,
+		/*
+		 * A Part 3 target gets the number in the SETUP and the name in a
+		 * {CC-INFO} once it rings, as stock does [CR A-0130 §1]: the A540
+		 * took a name in the SETUP for "via Intern DECT" (bench test 11).
+		 */
+		s->ic.name_info = slot && ci.has_call_status && ic_clip.name[0];
+		{
+			struct dect_clip num_only = ic_clip;
+
+			if (s->ic.name_info)
+				num_only.name[0] = '\0';
+			r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
+					     target_svc(s, s->ic.target,
 						s->audio.narrowband ? 0x90u
 								    : IC_BASIC_SVC),
-				     slot ? &ic_clip : NULL);
+					     slot ? &num_only : NULL);
+		}
 		dect_cc_set_callinfo(&l->cc, &prev);
 		if (r) {
 			dect_cc_set_signal(&l->cc, s->audio.signal_on,
@@ -7090,6 +7103,45 @@ static void ctl_tick(struct stubd *s, uint64_t now)
 	}
 }
 
+/*
+ * The internal caller's identity for a Part 3 target, after the SETUP:
+ * {CC-INFO} with <<CALLING-PARTY-NUMBER>>, <<CALLING-PARTY-NAME>> in UTF-8
+ * (stock's octet 3 is 05H) and <<CALL-INFORMATION>> with the call id only,
+ * as stock sends the A540 [CR A-0130 §1].
+ */
+static void ic_name_info(struct stubd *s, struct dect_cc *t, uint64_t now)
+{
+	struct dect_clip id = ic_clip;
+	struct dect_callinfo ci;
+	uint8_t ies[96];
+	size_t off = 0, next;
+
+	s->ic.name_info = 0;
+	if (dect_clip_set_name(&id, ic_clip.name, DECT_CLIP_ALPHABET_UTF8,
+			       DECT_CLIP_PRES_ALLOWED,
+			       DECT_CLIP_SCR_USER_PASSED))
+		id = ic_clip;			/* keep the DECT alphabet */
+	next = dect_clip_put_number(ies, sizeof(ies), off, &id);
+	if (next)
+		off = next;
+	next = dect_clip_put_name(ies, sizeof(ies), off, &id, 0);
+	if (next)
+		off = next;
+	dect_callinfo_init(&ci);
+	ci.has_call_id = 1;
+	ci.call_id = t->status_call_id;
+	next = dect_callinfo_put(ies, sizeof(ies), off, &ci);
+	if (next)
+		off = next;
+	if (!off || dect_cc_info(t, ies, off)) {
+		printf("intern: could not queue the caller's name\n");
+		return;
+	}
+	ic_drain(s, s->ic.tside, now);
+	printf("intern: caller's name \"%s\" sent in CC-INFO (Part 3, "
+	       "A-0130)\n", ic_clip.name);
+}
+
 static void ic_tick(struct stubd *s, uint64_t now)
 {
 	struct dect_cc *c, *t;
@@ -7152,6 +7204,8 @@ static void ic_tick(struct stubd *s, uint64_t now)
 		(void)dect_cc_alert(c);
 		s->ic.st = IC_RINGING;
 		printf("intern: the target rings -- ringback to the caller\n");
+		if (s->ic.name_info)
+			ic_name_info(s, t, now);
 	}
 	if (s->ic.st != IC_UP && t->state == DECT_CC_ST_ACTIVE) {
 		(void)dect_cc_connect(c);

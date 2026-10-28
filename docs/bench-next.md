@@ -522,3 +522,16 @@ Answer the A540; during its call dial 123 on the C430A, listen, hang up both.
 | both calls clear; `side: cipher: authenticating the handset on handle 2`, `call key to the chip (0x0208, link 2 ...)`, `side: cipher: the chip reports link 2 ciphered (0x0209)` | the side link ciphers |
 | the C430A's sound turns to noise ("wind") after a second | the chip's key for link 2 is wrong, or 0x0208 is per main link only: the agent reads the log; `-C` is the way back |
 | `side: cipher: authentication FAILED` | the side link used the wrong UAK: the agent reads the log |
+
+### 24. The internal caller on the A540 (3 minutes)
+
+Card 11 showed "via Intern DECT" on the A540. Stock sends the internal
+caller's number in the SETUP and the name afterwards in a {CC-INFO}
+(`6c 03 39 81 3x`, `6d LL 05 <name>`, `7e 03 01 00 81`) [CR A-0130 §1]; since
+the commit after `57aaf33` we do the same for a Part 3 target. Any run with
+all three stores; on the **C430A** INT, 1.
+
+| the A540 shows | meaning |
+|---|---|
+| "DECT 2" (or the C430A's name) while it rings; the log shows `intern: caller's name "DECT 2" sent in CC-INFO` | fixed |
+| "via Intern DECT" still | the agent compares our CC-INFO with A-0130's; stock sends it about 520 ms after the SETUP, after authentication, we send it on ALERTING |
