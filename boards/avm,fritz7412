@@ -28,9 +28,11 @@ strap=0
 # The DECT LED (OpenWrt 7412 device tree: green:dect on GPIO15).
 led_path=/sys/class/leds/green:dect/brightness
 
-# Factory DECT config block and RFPI fallback: still open (M1).
+# Factory DECT config block: urlader partition, same 02 01 header and TLV
+# layout as the 7520's (observed on a 7412, 2026-10-28).
 factory_cfg=
-factory_mtd=
+factory_mtd=/dev/mtd0
+factory_offset=0x1e800
 rfpi_fallback=maca
 
 max_calls=3
