@@ -221,3 +221,39 @@ Answer the **A540** when it rings; while that call runs, dial **123** on the
 |---|---|
 | both calls work as before | fine; the log should show call id 1 for the A540 and 2 for the C430A's call (no call status goes to the C430A, so only its log line shows it) |
 | the second call fails | the agent reads the log |
+
+### 11. Internal call shows the caller (3 minutes)
+
+Since `f69b9cf` an internal call carries the caller's handset number and name.
+
+```
+ssh root@192.168.1.1 '/tmp/dect-stubd -g -P 0000 -s /etc/opendectcell-sub.a540 -s /etc/opendectcell-sub.c430a -s /etc/opendectcell-sub.as690h -p -t 150 -a mask=0x0002,codec=3,status=8000,twocalls > /tmp/vINT11-$(date +%H%M%S).log 2>&1'
+```
+
+On the **A540**: INT, DECT 2. Look at the **C430A** while it rings: does it show
+"DECT 1" (or "1")? Then the other way round: on the **C430A** INT, type 1; does
+the **A540** show "DECT 2"?
+
+| you see | meaning |
+|---|---|
+| the caller's name or number | internal CLIP/CNIP work |
+| nothing, as before | the log shows what went out (`intern: caller shown as ...`); the agent reads it |
+
+### 12. "Busy" when the base is full (3 minutes)
+
+Since `9f3e5df` the A540 (Part 3) hears a busy tone when the base cannot take
+its call, instead of an immediate refusal. Run **without** two calls, so the
+second call cannot get a channel:
+
+```
+MAXSECS=150 HOLD=120 ATTACH=600000 EXTRA=playpcm=/tmp/wb16k.pcm ./ringone.sh c430a
+```
+
+On the **C430A** dial 123 and stay in the call. While it runs, dial **123** on
+the **A540**.
+
+| you hear on the A540 | meaning |
+|---|---|
+| a busy tone (maybe "busy" on the display), then the call ends by itself after ~5 s | the busy notification works |
+| the call ends at once, no tone | the old refusal: the A540's call came on a link that has no call status, the agent reads the log |
+| the A540 hangs or shows an error | the agent reads the log |
