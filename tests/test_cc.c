@@ -996,8 +996,8 @@ static void test_ignores_non_cc(void)
  */
 static void test_outgoing_call_to_handset(void)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
-	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 	struct dect_cc cc;
 	uint8_t out[64], msg[8];
 	size_t n;
@@ -1064,8 +1064,8 @@ static void test_alerting_ignored_when_responder(void)
  */
 static void test_foreign_transaction_does_not_touch_our_call(void)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
-	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 	struct dect_cc cc;
 	uint8_t buf[16], out[64];
 	size_t n;
@@ -1117,8 +1117,8 @@ static void test_foreign_transaction_does_not_touch_our_call(void)
  */
 static void test_unhandled_message_on_our_call_is_ignored(void)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
-	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 	static const uint8_t types[] = {
 		DECT_CC_CALL_PROC, DECT_CC_SETUP_ACK, DECT_CC_NOTIFY,
 		DECT_CC_FACILITY,
@@ -1167,8 +1167,8 @@ static void test_unhandled_message_on_our_call_is_ignored(void)
  */
 static void test_learns_identities_from_setup(void)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0xde, 0xad, 0x00, 0x02 };
-	static const uint8_t fixed_id[] = { 0xa0, 0xa5, 0xde, 0xad, 0x00, 0x00, 0xb8 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34, 0x56, 0x78 };
+	static const uint8_t fixed_id[] = { 0xa0, 0xa5, 0x11, 0x22, 0x33, 0x44, 0x55 };
 	struct dect_cc cc;
 	uint8_t msg[64];
 	size_t off;
@@ -1313,8 +1313,8 @@ static void test_transaction_value_rotates(void)
  */
 static void test_setup_carries_line_identifier(void)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
-	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 	static const uint8_t ie[] = { 0x7E, 0x06, 0x00, 0x00, 0x80,
 				      0x00, 0x05, 0x81 };
 	const size_t plain = 2u + 2u + sizeof(port_id) + 2u + sizeof(fixed_id)
@@ -1823,8 +1823,8 @@ static void test_setup_ie_order_is_ascending(void)
  */
 static size_t fp_setup(struct dect_cc *cc, uint8_t *out, size_t cap)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
-	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 
 	dect_cc_init(cc);
 	CHECK_EQ(dect_cc_setup(cc, port_id, sizeof(port_id),
@@ -1960,8 +1960,8 @@ static void test_setup_timer_does_not_run_for_a_pp_originated_call(void)
  */
 static void test_setup_collision_releases_the_handsets_call(void)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
-	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 	struct dect_cc cc;
 	uint8_t buf[64], out[64];
 	size_t n;
@@ -2000,8 +2000,8 @@ static void test_setup_collision_releases_the_handsets_call(void)
  */
 static void test_insufficient_resources_represents_the_setup(void)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
-	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 	struct dect_cc cc;
 	uint8_t first[64], out[64], rel[8];
 	size_t n, first_len, off;
@@ -2046,8 +2046,8 @@ static void test_insufficient_resources_represents_the_setup(void)
 /* Any other release reason, or a release on another transaction, is final. */
 static void test_other_release_reasons_are_not_represented(void)
 {
-	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x58, 0xf4 };
-	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x03, 0x69 };
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 	struct dect_cc cc;
 	uint8_t out[64], rel[8];
 	size_t off;

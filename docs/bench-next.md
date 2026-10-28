@@ -613,8 +613,7 @@ registering becomes the new handset's profile.
 
 Status > DECT now lists each handset's IPEI (EN 300 175-6 annex C:
 "EEEEE PPPPPPP C"), computed from the identity the handset gave at
-registration: A540 11117 0000000 4, C430A 13148 0000000 0, AS690H 14881
-0000000 0. Compare with the label under the battery or the handset's
+registration. Compare it with the label under the battery or the handset's
 service display.
 
 | you see | meaning |

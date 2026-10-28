@@ -1646,14 +1646,14 @@ static void test_locate_validity_adds_a_duration(void)
 static void test_ipei_text(void)
 {
 	static const uint8_t example[] = { 0x80, 0xa8, 0x00, 0x00, 0xc0, 0x00, 0x89 };
-	static const uint8_t a540[] = { 0x80, 0xa8, 0x02, 0xde, 0xad, 0x00, 0x01 };
+	static const uint8_t handset[] = { 0x80, 0xa8, 0x02, 0x12, 0x34, 0x56, 0x78 };
 	static const uint8_t put_o[] = { 0x80, 0xa8, 0x10, 0x00, 0xc0, 0x00, 0x89 };
 	char t[DECT_IPEI_TEXT_LEN];
 
 	CHECK(dect_ipei_text(example, sizeof(example), t, sizeof(t)) == 0);
 	CHECK(strcmp(t, "00012 0000137 9") == 0);
-	CHECK(dect_ipei_text(a540, sizeof(a540), t, sizeof(t)) == 0);
-	CHECK(strcmp(t, "11117 0000000 4") == 0);
+	CHECK(dect_ipei_text(handset, sizeof(handset), t, sizeof(t)) == 0);
+	CHECK(strcmp(t, "08483 0284280 0") == 0);
 	CHECK(dect_ipei_text(put_o, sizeof(put_o), t, sizeof(t)) == -1);
 	CHECK(dect_ipei_text(example, 6, t, sizeof(t)) == -1);
 	CHECK(dect_ipei_text(example, sizeof(example), t, 8) == -1);

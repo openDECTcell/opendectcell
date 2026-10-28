@@ -129,13 +129,11 @@ sub: UAK read-back slot 1 at 0x09518: MATCHES (16 bytes, flag 00)
 The UAK is key material: we compare it and print the verdict, never the bytes,
 not even under `-p`.
 
-### A sharp edge we were already guarded against, by luck
+### The slot range is clamped
 
-`[CR A-0085]`: `0x020A` writes per-slot config; we clamp the slot to the valid range
-`0x957E+`, which begins the per-handset config. We clamp to 1..6
-(`DECT_MM_MAX_SLOT`), added earlier for a different reason entirely
-(`A-SubscriberCapacity-7`). Two independent reasons for the same guard is a
-good place to be; it being luck is worth writing down.
+We clamp the handset slot to 1..6 (`DECT_MM_MAX_SLOT`) before it reaches the
+chip, so an out-of-range slot can never be written. The clamp was added for
+capacity reasons and also guards the chip write.
 
 ### What the run summary is for, now
 
