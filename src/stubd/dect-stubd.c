@@ -294,6 +294,7 @@ struct side_link {
 	int      ic_tried;	/* this call was checked for internal */
 	size_t   dial_len;	/* overlap receiving, as on the main link */
 	uint64_t dial_change_ms;
+	int      cipher_done;	/* DCK to the chip, or the failure logged */
 	struct dect_link link;
 };
 
@@ -4976,20 +4977,21 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
  * guessed selector and RES/RAND_F in bytes 9..20, and was inert
  * (2026-10-19).
  */
-static void send_chip_cipher(struct stubd *s)
+static void send_chip_cipher_link(struct stubd *s, const struct dect_mm *mm,
+				  uint8_t handle)
 {
 	struct dect_mail m;
 	uint8_t dck[DECT_MM_DCK_LEN];
 	size_t n = 0, i;
 
-	if (!dect_mm_cipher_dck(&s->reg.link.mm, dck))
+	if (!dect_mm_cipher_dck(mm, dck))
 		return;
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0208u;		/* call key [CR A-0126] */
-	m.param[n++] = s->reg.handle;
+	m.param[n++] = handle;
 	for (i = 0; i < DECT_MM_DCK_LEN; i++)
 		m.param[n + i] = s->chip_cipher.reversed
 			? dck[DECT_MM_DCK_LEN - 1u - i] : dck[i];
@@ -5005,8 +5007,13 @@ static void send_chip_cipher(struct stubd *s)
 	memset(&m, 0, sizeof(m));	/* the mail held the key */
 	/* Never log this mail's parameters: they carry the cipher key. */
 	printf("call: cipher: call key to the chip (0x0208, link %u, %u bytes, "
-	       "%s order)\n", (unsigned int)s->reg.handle, (unsigned int)n,
+	       "%s order)\n", (unsigned int)handle, (unsigned int)n,
 	       s->chip_cipher.reversed ? "reversed" : "plain");
+}
+
+static void send_chip_cipher(struct stubd *s)
+{
+	send_chip_cipher_link(s, &s->reg.link.mm, s->reg.handle);
 }
 
 /* Flush any LAPC frames the FSM wants to transmit. */
@@ -6034,6 +6041,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 	sl->active = 1;
 	sl->handle = handle;
 	sl->adopted = -1;
+	sl->cipher_done = 0;
 	sl->rejected_seen = 0;
 	s->side_started++;
 	printf("side: connection up (handle %u) -- handle %u is busy, so it "
@@ -6993,8 +7001,13 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->reg.enrol_switched = 0;
 	/* what reg_start() resets for a new connection (review, finding 8) */
 	s->reg.persisted = 0;
-	s->reg.cipher_started = 0;
-	s->reg.cipher_done = 0;
+	/* a side link's cipher (side_cipher_tick) came along with it */
+	s->reg.cipher_started =
+		s->reg.link.mm.cipher_state != DECT_MM_CIPHER_NONE;
+	s->reg.cipher_done =
+		s->reg.link.mm.cipher_state == DECT_MM_CIPHER_READY ||
+		s->reg.link.mm.cipher_state == DECT_MM_CIPHER_FAILED;
+	sl->cipher_done = 1;	/* the old main's was the main link's to do */
 	s->reg.cipher_reject_seen = 0;
 	s->reg.cipher_timeout_seen = 0;
 	s->reg.audio_connected = 0;
@@ -7008,6 +7021,67 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	pump_lapc(s);
 	side_pump(s, sl);
 	return 1;
+}
+
+/*
+ * Cipher a side link's call as the main link's (start_call_cipher()): a
+ * speech call once connected, a list-access call at once (TS 102 527-3
+ * C.7.2). The second handset's call in bench test 10 ran in the clear,
+ * and a list session here could not take the PIN. The UAK is the one of
+ * the handset the link adopted; a link that adopted no one stays clear.
+ */
+static void side_cipher_tick(struct stubd *s, struct side_link *sl,
+			     uint64_t now)
+{
+	struct dect_link *l = &sl->link;
+	const struct dect_cc *cc = &l->cc;
+	int a = l->mm.adopted;
+
+	if (l->mm.cipher_state == DECT_MM_CIPHER_NONE && !s->no_cipher &&
+	    dect_cc_busy(cc) && a >= 0 && (unsigned)a < s->n_hs &&
+	    (((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
+	     cc->state == DECT_CC_ST_CONNECT_PENDING ||
+	     cc->state == DECT_CC_ST_ACTIVE)) {
+		const uint8_t *uak = (unsigned)a == s->cur
+			? (s->uak_valid ? s->uak : NULL)
+			: (s->hs[a].uak_valid ? s->hs[a].uak : NULL);
+		uint8_t crand[8], crs[16];
+
+		if (!uak)
+			return;
+		gen_rand(s, crand, sizeof(crand));
+		gen_rand(s, crs, sizeof(crs));
+		dect_mm_start_cipher(&l->mm, uak, crand, crs);
+		sl->cipher_done = 0;
+		printf("side: cipher: authenticating the handset on handle %u\n",
+		       sl->handle);
+		dect_link_drain(l, now);
+		side_pump(s, sl);
+		return;
+	}
+	if (sl->cipher_done)
+		return;
+	if (l->mm.cipher_state == DECT_MM_CIPHER_READY) {
+		sl->cipher_done = 1;
+		if (!s->chip_cipher.disabled)
+			send_chip_cipher_link(s, &l->mm, sl->handle);
+		printf("side: cipher: DCK derived, CIPHER-REQUEST sent on "
+		       "handle %u\n", sl->handle);
+	} else if (l->mm.cipher_state == DECT_MM_CIPHER_FAILED) {
+		sl->cipher_done = 1;
+		printf("side: cipher: authentication FAILED on handle %u (%s)\n",
+		       sl->handle, l->mm.stats.auth_timeouts ? "no reply in 10 s"
+		       : l->mm.stats.auth_mismatch ? "WRONG RES"
+		       : "the handset refused");
+		/* EN 300 444 8.23.2.3, as on the main link */
+		if (l->mm.stats.auth_mismatch && dect_cc_busy(cc)) {
+			(void)dect_cc_release_reason(&l->cc, 0x09u);
+			printf("side: released -- the handset failed "
+			       "authentication (EN 300 444 8.23.2.3)\n");
+			dect_link_drain(l, now);
+			side_pump(s, sl);
+		}
+	}
 }
 
 static void side_segment(struct stubd *s, struct side_link *sl,
@@ -7762,6 +7836,22 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 				       "ciphered (0x0209)\n",
 				       (unsigned)m->param[0]);
 		}
+		{
+			unsigned k;
+
+			for (k = 0; m->param_len >= 1 && k < SIDE_MAX; k++) {
+				struct side_link *sl = &s->side[k];
+
+				if (!sl->active || sl->handle != m->param[0] ||
+				    sl->link.mm.cipher_on)
+					continue;
+				dect_mm_cipher_on(&sl->link.mm);
+				if (sl->link.mm.cipher_on)
+					printf("side: cipher: the chip reports "
+					       "link %u ciphered (0x0209)\n",
+					       (unsigned)m->param[0]);
+			}
+		}
 		break;
 	case DECT_PRIM_CONTACT_ACK1:	/* 0xF601 carries the base RFPI */
 		if (!s->have_rfpi && m->param_len >= DECT_MM_RFPI_LEN) {
@@ -8407,6 +8497,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				dect_link_tick(&s->side[k].link, now);
 				lapc_failed_note(&s->side[k].link, "side");
 				cap_tick(s, &s->side[k].link);
+				side_cipher_tick(s, &s->side[k], now);
 				side_pump(s, &s->side[k]);
 			}
 		}

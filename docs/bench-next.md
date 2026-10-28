@@ -504,3 +504,21 @@ the base pages it (30 s), **press a key on the C430A** so it connects.
 |---|---|
 | the C430A behaves normally; the log shows no `05 48` on its link, 10 pages, then `not reachable (paged 10 times): deleted WITHOUT its confirmation` | fixed |
 | `05 48` goes out on the C430A's link | not fixed: the agent reads the log |
+
+### 23. The second call ciphered (5 minutes)
+
+Card 10's second call (the C430A on a side link) ran in the clear: side
+links never started ciphering. Since the commit after `a776cf7` they do, for
+a speech call once connected and a list-access call at once. Card 10 again:
+
+```
+CIPHER=1 MAXSECS=300 HOLD=120 EXTRA=playpcm=/tmp/wb16k-voice.pcm,twocalls ./ringone.sh a540
+```
+
+Answer the A540; during its call dial 123 on the C430A, listen, hang up both.
+
+| you hear / the log shows | meaning |
+|---|---|
+| both calls clear; `side: cipher: authenticating the handset on handle 2`, `call key to the chip (0x0208, link 2 ...)`, `side: cipher: the chip reports link 2 ciphered (0x0209)` | the side link ciphers |
+| the C430A's sound turns to noise ("wind") after a second | the chip's key for link 2 is wrong, or 0x0208 is per main link only: the agent reads the log; `-C` is the way back |
+| `side: cipher: authentication FAILED` | the side link used the wrong UAK: the agent reads the log |
