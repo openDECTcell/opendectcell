@@ -1,6 +1,7 @@
 # Builds the OpenWrt packages with the official SDK (tools/release/build.sh).
 # A tag v<version> also makes a draft release with the packages and their
-# checksums; it is published by hand on GitHub after a look at it.
+# checksums; it is published by hand on GitHub after a look at it. Its text
+# is tools/release/notes-<version>.md if that exists, else notes.md.
 name: Packages
 
 on:
@@ -81,8 +82,10 @@ jobs:
         run: |
           cd out
           sha256sum *.apk > SHA256SUMS
+          notes=../tools/release/notes-${TAG#v}.md
+          [ -f "$notes" ] || notes=../tools/release/notes.md
           sed -e "s/{VERSION}/${TAG#v}/g" -e "s/{OPENWRT}/$OPENWRT/g" \
-            ../tools/release/notes.md > ../notes.md
+            "$notes" > ../notes.md
           gh release create "$TAG" --draft --verify-tag \
             --title "openDECTcell ${TAG#v}" --notes-file ../notes.md \
             *.apk SHA256SUMS ../openwrt/opendectcell-signing-key.pem
