@@ -478,8 +478,17 @@
  *    The daemon's internal-call refusals now carry a reason, and "no audio
  *    channel" / "one at a time" are the busy system of TS 102 527-3
  *    §7.4.8.3 for a Part 3 handset.
+ *
+ * 61: parallel-call control codes (2026-10-28, spec sweep D2, D3, C7).
+ *    Layout change: the stats gain control_codes and negative_acks.
+ *    **Behaviour change:** a {CC-INFO} with "1CH xx" (TS 102 527-3 table
+ *    17), or "17H" on a connected call, is a control code, never digits;
+ *    a Part 3 handset gets the negative acknowledgement (§7.4.3.4): the
+ *    call's status again, "control code not supported" (or CS idle and
+ *    "control code failed" for a call id not ours), tone 09H. 1C15H on a
+ *    list-access call and 17H before the call connects are unchanged.
  */
-#define OPENDECTCELL_API_VERSION 60
+#define OPENDECTCELL_API_VERSION 61
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

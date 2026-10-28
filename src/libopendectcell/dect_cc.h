@@ -119,6 +119,8 @@ struct dect_cc_stats {
 	uint32_t release_timeouts;	/* <CC.02> expired, we completed it */
 	uint32_t release_collisions;	/* both sides released (§9.5.3) */
 	uint32_t service_refused;	/* SETUPs of a call class not served */
+	uint32_t control_codes;	/* parallel-call codes in {CC-INFO} (1CH, 17H) */
+	uint32_t negative_acks;	/* answered with the negative ack (§7.4.3.4) */
 	/* handset-placed calls refused by dect_cc_set_busy() */
 	uint32_t rejected_busy;
 };

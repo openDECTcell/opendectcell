@@ -399,6 +399,107 @@ static void test_release_with_a_reason_and_busy_system(void)
 	}
 }
 
+/* The {CC-INFO} a handset sends with a control code, and optionally a call id. */
+static size_t pp_control(uint8_t *buf, size_t cap, const uint8_t *code,
+			 size_t code_len, int call_id)
+{
+	size_t n = dect_nwk_build_hdr(buf, cap, DECT_PD_CC, DECT_TI_ORIGINATOR,
+				      0, DECT_CC_INFO);
+
+	n = dect_nwk_put_ie(buf, cap, n, DECT_IE_MULTI_KEYPAD, code, code_len);
+	if (call_id >= 0) {
+		uint8_t ci[3] = { 0x01, 0x00, (uint8_t)(0x80u | call_id) };
+
+		n = dect_nwk_put_ie(buf, cap, n, DECT_IE_CALL_INFORMATION,
+				    ci, sizeof(ci));
+	}
+	return n;
+}
+
+/* Read the negative ack: SIGNAL 09H, then call id, status and reason. */
+static int read_negative_ack(const uint8_t *out, size_t n,
+			     struct dect_callinfo *ci)
+{
+	struct dect_nwk_hdr h;
+	const uint8_t *ies, *v;
+	size_t ies_len, vn;
+
+	if (dect_nwk_parse(out, n, &h, &ies, &ies_len) < 0 ||
+	    h.msg_type != DECT_CC_INFO ||
+	    dect_nwk_find_fixed_ie(ies, ies_len, DECT_IE_SIGNAL) !=
+	    (int)DECT_SIGNAL_NEGATIVE_ACK_TONE)
+		return -1;
+	v = dect_nwk_find_ie(ies, ies_len, DECT_IE_CALL_INFORMATION, &vn);
+	return v ? dect_callinfo_parse(v, vn, ci) : -1;
+}
+
+/*
+ * TS 102 527-3 §7.4.3.4: a parallel-call control code we cannot serve gets
+ * the negative acknowledgement -- the call's status again, "control code
+ * not supported", tone 09H -- and is never taken for digits. A call id not
+ * ours: CS idle, "control code failed". Not to a Part 1 handset.
+ */
+static void test_control_codes_get_a_negative_ack(void)
+{
+	static const uint8_t toggle[] = { 0x1C, 0x31 };
+	static const uint8_t conf[] = { 0x1C, 0x32 };
+	static const uint8_t parallel_int[] = { 0x17, '2' };
+	struct dect_callinfo ci;
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n, klen;
+	int part3;
+
+	for (part3 = 0; part3 < 2; part3++) {
+		dect_cc_init(&cc);
+		if (part3)
+			dect_cc_set_call_status(&cc, 1, 3);
+		n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+		buf[n++] = DECT_IE_SENDING_COMPLETE;
+		dect_cc_rx(&cc, buf, n);
+		while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+			;			/* CALL-PROC, CONNECT */
+		CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+
+		n = pp_control(buf, sizeof(buf), toggle, sizeof(toggle), 3);
+		dect_cc_rx(&cc, buf, n);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		if (!part3) {
+			CHECK_EQ(n, 0u);		/* no call status */
+		} else {
+			CHECK_EQ(read_negative_ack(out, n, &ci), 0);
+			CHECK_EQ(ci.call_id, 3u);
+			CHECK_EQ(ci.call_status, DECT_CS_CALL_CONNECT);
+			CHECK_EQ(ci.has_status_reason, 1u);
+			CHECK_EQ(ci.status_reason, DECT_CSR_CODE_NOT_SUPPORTED);
+		}
+		CHECK(dect_cc_keypad(&cc, &klen) == NULL);	/* no digits */
+
+		n = pp_control(buf, sizeof(buf), conf, sizeof(conf), 9);
+		dect_cc_rx(&cc, buf, n);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		if (part3) {
+			CHECK_EQ(read_negative_ack(out, n, &ci), 0);
+			CHECK_EQ(ci.call_id, 9u);	/* no such call */
+			CHECK_EQ(ci.call_status, DECT_CS_IDLE);
+			CHECK_EQ(ci.status_reason, DECT_CSR_CODE_FAILED);
+		}
+
+		n = pp_control(buf, sizeof(buf), parallel_int,
+			       sizeof(parallel_int), -1);
+		dect_cc_rx(&cc, buf, n);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		if (part3) {
+			CHECK_EQ(read_negative_ack(out, n, &ci), 0);
+			CHECK_EQ(ci.call_id, 3u);
+		}
+		CHECK_EQ(cc.peer_basic_service, 0x88u);	/* not re-classed */
+		CHECK_EQ(cc.stats.control_codes, 3u);
+		CHECK_EQ(cc.stats.negative_acks, part3 ? 3u : 0u);
+		CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);	/* the call stands */
+	}
+}
+
 /* A SETUP with TI flag 1 is ignored, idle or in a call (§17.3.2.1). */
 static void test_setup_with_flag_one_is_ignored(void)
 {
@@ -2618,6 +2719,7 @@ int main(void)
 	test_info_on_the_call();
 	test_setup_without_basic_service_is_refused();
 	test_setup_with_flag_one_is_ignored();
+	test_control_codes_get_a_negative_ack();
 	test_release_with_a_reason_and_busy_system();
 	test_unserved_call_class_is_refused();
 	test_none_gets_the_selected_line();

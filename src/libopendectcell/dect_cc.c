@@ -741,9 +741,14 @@ uint8_t dect_cc_codec(const struct dect_cc *cc)
 static void accept_now(struct dect_cc *cc);
 static void proceed(struct dect_cc *cc);
 
-/* {CC-INFO}: <<SIGNAL>>, then <<CALL-INFORMATION>> {call id, status, reason} */
-static void queue_busy_info(struct dect_cc *cc, uint8_t signal, uint8_t status,
-			    int with_reason)
+/*
+ * {CC-INFO}: <<SIGNAL>>, then <<CALL-INFORMATION>> {call id, status, and a
+ * call status reason unless DECT_CC_NO_REASON}.
+ */
+#define DECT_CC_NO_REASON	0xFFu
+
+static void queue_status_info(struct dect_cc *cc, uint8_t signal,
+			      uint8_t call_id, uint8_t status, uint8_t reason)
 {
 	struct dect_callinfo ci;
 	unsigned idx;
@@ -758,15 +763,94 @@ static void queue_busy_info(struct dect_cc *cc, uint8_t signal, uint8_t status,
 				    DECT_IE_SIGNAL, signal);
 	dect_callinfo_init(&ci);
 	ci.has_call_id = 1;
-	ci.call_id = cc->status_call_id;
+	ci.call_id = call_id;
 	ci.has_call_status = 1;
 	ci.call_status = status;
-	ci.has_status_reason = (uint8_t)(with_reason != 0);
-	ci.status_reason = DECT_CSR_SYSTEM_BUSY;
+	ci.has_status_reason = (uint8_t)(reason != DECT_CC_NO_REASON);
+	ci.status_reason = reason;
 	next = dect_callinfo_put(b, DECT_LAPC_MSG_MAX, off, &ci);
 	if (!off || !next)
 		return;
 	txq_commit(cc, idx, next);
+}
+
+/* The call status the handset was last given for our call (§7.4.6.4). */
+static uint8_t current_call_status(const struct dect_cc *cc)
+{
+	switch (cc->state) {
+	case DECT_CC_ST_ACTIVE:
+	case DECT_CC_ST_CONNECT_PENDING:
+		return DECT_CS_CALL_CONNECT;
+	case DECT_CC_ST_OVERLAP:
+		return DECT_CS_CALL_SETUP_ACK;
+	case DECT_CC_ST_PROCEEDING:
+		return cc->alerted ? DECT_CS_CALL_ALERTING : DECT_CS_CALL_PROC;
+	case DECT_CC_ST_CALL_PRESENT:
+	case DECT_CC_ST_RINGING:
+		return DECT_CS_CALL_SETUP;
+	default:
+		return DECT_CS_IDLE;
+	}
+}
+
+/*
+ * The parallel-call control codes of TS 102 527-3 table 17, from the
+ * handset's {CC-INFO}: "1CH xx" (toggle 31H, release 33H, transfer 34H,
+ * accept 35H, reject 36H, release with replacement 38H, hold 41H, resume
+ * 42H, conference 32H, a parallel external call 15H + number), or "17H +
+ * number", a parallel internal call, during a connected call. They are not
+ * digits: they used to be collected as dialled ones.
+ *
+ * We hold one call per link, so none of these can be served yet
+ * (lines-and-calls.md steps 5-6). §7.4.3.4 then wants the negative
+ * acknowledgement, even for a feature the FP lacks: the targeted call's
+ * current status again, the reason "control code not supported", and the
+ * negative acknowledgement tone (09H) in the same {CC-INFO}. A call id that
+ * is not ours names no live call: CS idle, "control code failed" (table
+ * 17a, note). Only to a Part 3 handset (call status, §7.4.6.4.1); for any
+ * other the code is dropped. 1C15H on a list-access call is the number
+ * picked from a list (learn_int_key()), and 17H before the call connects
+ * the internal-call key: both are left to the keypad.
+ *
+ * Returns 1 if the {CC-INFO} carried a control code (consumed), else 0.
+ */
+static int control_code(struct dect_cc *cc, const uint8_t *ies,
+			size_t ies_len)
+{
+	size_t n, cn;
+	const uint8_t *p = dect_nwk_find_ie(ies, ies_len,
+					    DECT_IE_MULTI_KEYPAD, &n);
+	const uint8_t *ci_ie;
+	struct dect_callinfo ci;
+	uint8_t id = cc->status_call_id, status, reason;
+
+	if (!p || !n)
+		return 0;
+	if (p[0] == 0x1Cu && n >= 2u) {
+		if (p[1] == 0x15u && (cc->peer_basic_service >> 4) == 0x2u &&
+		    !cc->incoming)
+			return 0;		/* a number from a list */
+	} else if (p[0] == 0x17u) {
+		if (cc->state != DECT_CC_ST_ACTIVE)
+			return 0;		/* the internal-call key */
+	} else {
+		return 0;
+	}
+	cc->stats.control_codes++;
+	if (!cc->call_status)
+		return 1;
+	status = current_call_status(cc);
+	reason = DECT_CSR_CODE_NOT_SUPPORTED;
+	ci_ie = dect_nwk_find_ie(ies, ies_len, DECT_IE_CALL_INFORMATION, &cn);
+	if (ci_ie && dect_callinfo_parse(ci_ie, cn, &ci) == 0 &&
+	    ci.has_call_id && ci.call_id != cc->status_call_id) {
+		id = ci.call_id;
+		status = DECT_CS_IDLE;
+		reason = DECT_CSR_CODE_FAILED;
+	}
+	queue_status_info(cc, DECT_SIGNAL_NEGATIVE_ACK_TONE, id, status, reason);
+	cc->stats.negative_acks++;
+	return 1;
 }
 
 /*
@@ -782,7 +866,8 @@ static void queue_busy_info(struct dect_cc *cc, uint8_t signal, uint8_t status,
 static void busy_notify(struct dect_cc *cc)
 {
 	proceed(cc);
-	queue_busy_info(cc, DECT_SIGNAL_BUSY_TONE, DECT_CS_CALL_DISCONNECTING, 1);
+	queue_status_info(cc, DECT_SIGNAL_BUSY_TONE, cc->status_call_id,
+			  DECT_CS_CALL_DISCONNECTING, DECT_CSR_SYSTEM_BUSY);
 	cc->busy_notified = 1;
 	cc->busy_deadline_ms = 0;		/* armed by the tick */
 }
@@ -977,7 +1062,9 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 			cc->busy_deadline_ms = now_ms + CC_BUSY_TONE_MS;
 		} else if (now_ms >= cc->busy_deadline_ms) {
 			/* tones off, CS idle, then the release (§7.4.8.3) */
-			queue_busy_info(cc, DECT_SIGNAL_TONES_OFF, DECT_CS_IDLE, 0);
+			queue_status_info(cc, DECT_SIGNAL_TONES_OFF,
+					  cc->status_call_id, DECT_CS_IDLE,
+					  DECT_CC_NO_REASON);
 			cc->busy_notified = 0;
 			cc->busy_deadline_ms = 0;
 			(void)dect_cc_release(cc);
@@ -1386,6 +1473,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		     cc->state == DECT_CC_ST_PROCEEDING)) {
 			size_t before = cc->keypad_len;
 
+			if (control_code(cc, ies, ies_len))
+				break;
 			learn_keypad(cc, ies, ies_len);
 			learn_int_key(cc);
 			learn_peer_line(cc, ies, ies_len);
