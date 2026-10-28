@@ -261,14 +261,17 @@ void dect_mm_cipher_on(struct dect_mm *mm)
  */
 static void send_auth_request_fp(struct dect_mm *mm, uint8_t octet5);
 
+#define PT_AUTH_TERMINATE	1u	/* before its own deregistration */
+#define PT_AUTH_LOCATE		2u	/* before its location registration */
+
 static void terminate_answer(struct dect_mm *mm, int accept, uint8_t why)
 {
 	unsigned idx;
 	uint8_t *b = txq_slot(mm, &idx);
 	size_t off;
 
-	mm->term_auth = 0;
-	mm->term_auth_deadline_ms = 0;
+	mm->pt_auth = 0;
+	mm->pt_auth_deadline_ms = 0;
 	if (!b)
 		return;
 	off = hdr(mm, b, DECT_TI_RESPONDER, accept
@@ -296,7 +299,7 @@ static void on_terminate_request(struct dect_mm *mm, const uint8_t *ies,
 	size_t pid_len;
 
 	mm->ti_value = 0;
-	if (mm->term_auth)
+	if (mm->pt_auth)
 		return;			/* a repeat while we authenticate */
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
 			       &pid_len);
@@ -313,13 +316,39 @@ static void on_terminate_request(struct dect_mm *mm, const uint8_t *ies,
 	memcpy(mm->cipher_uak, mm->uak, DECT_MM_UAK_LEN);
 	memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
 	memcpy(mm->rs, rs, sizeof(mm->rs));
-	mm->term_auth = 1;
-	mm->term_auth_deadline_ms = 0;
+	mm->pt_auth = PT_AUTH_TERMINATE;
+	mm->pt_auth_deadline_ms = 0;
 	send_auth_request_fp(mm, 0x08u);
 }
 
-/* The handset's AUTHENTICATION-REPLY to the challenge before termination. */
-static void on_auth_reply_terminate(struct dect_mm *mm, const uint8_t *ies,
+/* The end of our authentication of the PT, for whichever procedure. */
+static void pt_auth_result(struct dect_mm *mm, int ok)
+{
+	if (mm->pt_auth == PT_AUTH_LOCATE) {
+		mm->pt_auth = 0;
+		mm->pt_auth_deadline_ms = 0;
+		if (ok) {
+			mm->stats.locate_auth_ok++;
+			send_locate_accept(mm, mm->locate_la_len ? mm->locate_la
+						     : NULL, mm->locate_la_len);
+		} else {
+			mm->stats.locate_auth_failed++;
+			send_locate_reject(mm, DECT_MM_REJECT_AUTH_FAILED);
+		}
+		return;
+	}
+	terminate_answer(mm, ok, DECT_MM_REJECT_AUTH_FAILED);
+}
+
+void dect_mm_set_uak_lookup(struct dect_mm *mm, dect_mm_uak_lookup fn,
+			    void *ctx)
+{
+	mm->uak_lookup = fn;
+	mm->uak_lookup_ctx = ctx;
+}
+
+/* The handset's AUTHENTICATION-REPLY to our challenge (pt_auth). */
+static void on_auth_reply_pt(struct dect_mm *mm, const uint8_t *ies,
 				    size_t ies_len)
 {
 	const uint8_t *res;
@@ -329,8 +358,7 @@ static void on_auth_reply_terminate(struct dect_mm *mm, const uint8_t *ies,
 	res = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res_len);
 	dect_dsaa_a11(mm->cipher_uak, mm->rs, ks);
 	dect_dsaa_a12(ks, mm->rand_f, dck, xres);
-	terminate_answer(mm, res && res_len == 4u && !memcmp(res, xres, 4),
-			 DECT_MM_REJECT_AUTH_FAILED);
+	pt_auth_result(mm, res && res_len == 4u && !memcmp(res, xres, 4));
 }
 
 void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN])
@@ -733,7 +761,8 @@ static void learn_self_description(struct dect_mm *mm, const uint8_t *ies,
 }
 
 static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
-			      size_t ies_len)
+			      size_t ies_len, const uint8_t rand_f[8],
+			      const uint8_t rs[16])
 {
 	const uint8_t *la, *pid;
 	size_t la_len, pid_len;
@@ -782,6 +811,28 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 	learn_self_description(mm, ies, ies_len);
 
 	la = dect_nwk_find_ie(ies, ies_len, DECT_IE_LOCATION_AREA, &la_len);
+	if (mm->cfg.auth_locate && mm->uak_lookup && rand_f && rs) {
+		uint8_t uak[DECT_MM_UAK_LEN];
+
+		if (mm->pt_auth == PT_AUTH_LOCATE)
+			return;			/* its repeat: still waiting */
+		if (!mm->pt_auth &&
+		    !mm->uak_lookup(mm->uak_lookup_ctx, pid, pid_len, uak)) {
+			/* annex H.2, example 2: AUTHENTICATION-REQUEST nested
+			 * in the location registration, then the answer */
+			mm->locate_la_len = la && la_len <= sizeof(mm->locate_la)
+					    ? la_len : 0;
+			if (mm->locate_la_len)
+				memcpy(mm->locate_la, la, la_len);
+			memcpy(mm->cipher_uak, uak, DECT_MM_UAK_LEN);
+			memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
+			memcpy(mm->rs, rs, sizeof(mm->rs));
+			mm->pt_auth = PT_AUTH_LOCATE;
+			mm->pt_auth_deadline_ms = 0;
+			send_auth_request_fp(mm, 0x08u);
+			return;
+		}
+	}
 	send_locate_accept(mm, la, la_len);
 }
 
@@ -1075,8 +1126,8 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		    h.ti_flag == DECT_TI_RESPONDER)
 			key_allocation_failed(mm);
 		/* ... or our authentication of it before a termination */
-		else if (mm->term_auth && h.ti_flag == DECT_TI_RESPONDER)
-			terminate_answer(mm, 0, DECT_MM_REJECT_AUTH_FAILED);
+		else if (mm->pt_auth && h.ti_flag == DECT_TI_RESPONDER)
+			pt_auth_result(mm, 0);
 		/* ... or our authentication of it, before ciphering (§8.24) */
 		else if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY &&
 			 h.ti_flag == DECT_TI_RESPONDER)
@@ -1096,8 +1147,8 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		}
 		break;
 	case DECT_MM_AUTHENTICATION_REPLY:
-		if (mm->term_auth && h.ti_flag == DECT_TI_RESPONDER) {
-			on_auth_reply_terminate(mm, ies, ies_len);
+		if (mm->pt_auth && h.ti_flag == DECT_TI_RESPONDER) {
+			on_auth_reply_pt(mm, ies, ies_len);
 			break;
 		}
 		if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY)
@@ -1105,7 +1156,7 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		break;
 	case DECT_MM_LOCATE_REQUEST:
 		mm->ti_value = h.ti_value;	/* new PP-initiated transaction */
-		on_locate_request(mm, ies, ies_len);
+		on_locate_request(mm, ies, ies_len, rand_f, rs);
 		break;
 	case DECT_MM_TEMP_IDENTITY_ASSIGN_ACK:
 		/*
@@ -1177,11 +1228,11 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 		mm->key_deadline_ms = 0;
 	}
 	/* <MM_auth.1> on the challenge before a termination: refuse it */
-	if (mm->term_auth) {
-		if (!mm->term_auth_deadline_ms)
-			mm->term_auth_deadline_ms = now_ms + MM_AUTH1_MS;
-		else if (now_ms >= mm->term_auth_deadline_ms)
-			terminate_answer(mm, 0, DECT_MM_REJECT_AUTH_FAILED);
+	if (mm->pt_auth) {
+		if (!mm->pt_auth_deadline_ms)
+			mm->pt_auth_deadline_ms = now_ms + MM_AUTH1_MS;
+		else if (now_ms >= mm->pt_auth_deadline_ms)
+			pt_auth_result(mm, 0);
 	}
 	/*
 	 * <MM_cipher.1> (EN 300 444 §8.33.1.1): from our {CIPHER-REQUEST} to
@@ -1270,9 +1321,9 @@ uint64_t dect_mm_next_deadline(const struct dect_mm *mm)
 	if (mm->term_state == DECT_MM_TERM_PENDING && mm->term_deadline_ms &&
 	    mm->term_deadline_ms < t)
 		t = mm->term_deadline_ms;
-	if (mm->term_auth && mm->term_auth_deadline_ms &&
-	    mm->term_auth_deadline_ms < t)
-		t = mm->term_auth_deadline_ms;
+	if (mm->pt_auth && mm->pt_auth_deadline_ms &&
+	    mm->pt_auth_deadline_ms < t)
+		t = mm->pt_auth_deadline_ms;
 	if (mm->cipher_state == DECT_MM_CIPHER_READY && !mm->cipher_on &&
 	    !mm->cipher_rejected && mm->cipher_deadline_ms &&
 	    mm->cipher_deadline_ms < t)

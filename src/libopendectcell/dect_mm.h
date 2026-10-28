@@ -74,6 +74,10 @@ enum dect_mm_state {
 	DECT_MM_FAILED,
 };
 
+/* See dect_mm_set_uak_lookup(). */
+typedef int (*dect_mm_uak_lookup)(void *ctx, const uint8_t *id, size_t len,
+				  uint8_t uak[DECT_MM_UAK_LEN]);
+
 enum dect_mm_term_state {
 	DECT_MM_TERM_NONE,
 	DECT_MM_TERM_PENDING,		/* REQUEST sent, <MM_access.2> runs */
@@ -142,6 +146,15 @@ struct dect_mm_cfg {
 	 */
 	uint8_t defer_unknown;
 	/*
+	 * 1 = authenticate a known handset before accepting its location
+	 * registration (EN 300 175-5 annex H.2, example 2; GAP leaves it
+	 * optional), with the UAK the owner's uak_lookup returns. A wrong
+	 * RES, the PT's refusal or <MM_auth.1>: {LOCATE-REJECT}
+	 * "authentication failed". Without a lookup or a UAK, accepted as
+	 * before. Off by default until each handset was seen to answer it.
+	 */
+	uint8_t auth_locate;
+	/*
 	 * Validity of a location registration, in units of 2^8 multiframes
 	 * (40.96 s): {LOCATE-ACCEPT} carries <<DURATION>> "defined time
 	 * limit 1" (EN 300 175-5 §7.7.13), after which the PT locates again
@@ -173,6 +186,8 @@ struct dect_mm_stats {
 	uint32_t auth_mismatch;	   /* our challenge answered with a wrong RES */
 	uint32_t term_by_pt;	   /* handsets that deregistered themselves */
 	uint32_t term_refused;	   /* ... refused: no UAK, or it failed */
+	uint32_t locate_auth_ok;   /* location registrations authenticated */
+	uint32_t locate_auth_failed; /* ... and refused for it */
 	uint32_t ft_auth;	   /* the PT authenticated us: replies sent */
 	uint32_t ft_auth_refused;  /* ... refused: no UAK, or not DSAA/UAK */
 	uint32_t locate_deferred;  /* unknown identities held for the owner */
@@ -319,8 +334,10 @@ struct dect_mm {
 	 * the subscription and clears this */
 	uint8_t  term_by_pt;
 	/* its request waits for our authentication of it (§13.5.2) */
-	uint8_t  term_auth;
-	uint64_t term_auth_deadline_ms;		/* <MM_auth.1>, 0 = armed */
+	uint8_t  pt_auth;			/* 0, PT_AUTH_TERMINATE/_LOCATE */
+	uint64_t pt_auth_deadline_ms;		/* <MM_auth.1>, 0 = armed */
+	dect_mm_uak_lookup uak_lookup;
+	void    *uak_lookup_ctx;
 
 	/*
 	 * Call-time ciphering: the FP authenticates the PP with the stored UAK to
@@ -440,6 +457,13 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
  * dect_mm_rx()'s rs. Set again after each dect_mm_init().
  */
 void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN]);
+
+/*
+ * For cfg.auth_locate: the owner's lookup of the UAK stored for an
+ * identity, 0 and uak filled if it holds one. Set after dect_mm_init().
+ */
+void dect_mm_set_uak_lookup(struct dect_mm *mm, dect_mm_uak_lookup fn,
+			    void *ctx);
 
 /*
  * Terminate the access rights of the handset on this link (EN 300 444

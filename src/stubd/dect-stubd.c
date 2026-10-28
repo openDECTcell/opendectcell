@@ -697,6 +697,7 @@ struct stubd {
 		int      no_reg_open;
 		unsigned reg_window_s;	/* regopen=SECS: close after; 0 = never */
 		int      two_calls;	/* twocalls: speech on side links */
+		int      locauth;	/* locauth: authenticate on locating */
 		uint8_t  lane_ch[XLANE_MAX], lane_word[XLANE_MAX];
 		unsigned reg_signal_s;	/* regwindow=SECS for SIGUSR1, 120 */
 		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
@@ -2877,6 +2878,29 @@ static uint8_t call_id_for(void *ctx, const struct dect_link *l)
  * the default stays and the A540's call timer (test 15) cannot be lost to
  * a missing location registration.
  */
+/*
+ * -a locauth: the UAK stored for an identity, for MM's authentication of a
+ * handset inside its location registration (dect_mm_set_uak_lookup()).
+ */
+static int uak_lookup(void *ctx, const uint8_t *id, size_t len,
+		      uint8_t uak[DECT_MM_UAK_LEN])
+{
+	const struct stubd *s = ctx;
+	int i = hs_by_ipui(s, id, len);
+
+	if (i < 0)
+		return -1;
+	if ((unsigned)i == s->cur && s->uak_valid) {
+		memcpy(uak, s->uak, DECT_MM_UAK_LEN);
+		return 0;
+	}
+	if ((unsigned)i != s->cur && s->hs[i].uak_valid) {
+		memcpy(uak, s->hs[i].uak, DECT_MM_UAK_LEN);
+		return 0;
+	}
+	return -1;
+}
+
 static int call_status_for(void *ctx, const uint8_t *ipui, size_t len)
 {
 	const struct stubd *s = ctx;
@@ -5370,6 +5394,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	 * new handset needs a store of its own as the first -s.
 	 */
 	mcfg.defer_unknown = s->audio.remote_path != NULL;
+	mcfg.auth_locate = (uint8_t)s->audio.locauth;
 	mcfg.locate_validity = (uint8_t)s->audio.locate_validity;
 	s->fetch_retrans_seen = 0;	/* MM's counter restarts with the link */
 	mcfg.registration = reg_policy(s);
@@ -5388,6 +5413,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.cipher_timeout_seen = 0;
 	s->reg.handle = handle;
 	dect_link_init(&s->reg.link, handle, &mcfg);
+	dect_mm_set_uak_lookup(&s->reg.link.mm, uak_lookup, s);
 	/*
 	 * Re-arm after every init: dect_link_init() zeroes the whole struct,
 	 * so the hook has to be set per connection, not once at startup.
@@ -5910,9 +5936,11 @@ static int side_start(struct stubd *s, uint8_t handle)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
 	mcfg.narrowband_only = (uint8_t)s->audio.nbcodec;
+	mcfg.auth_locate = (uint8_t)s->audio.locauth;
 	if (s->have_rfpi)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
 	dect_link_init(&sl->link, handle, &mcfg);
+	dect_mm_set_uak_lookup(&sl->link.mm, uak_lookup, s);
 	dect_link_set_tx_log(&sl->link, log_nwk_out_side, s);
 
 	/* every handset we hold; strangers meet the gates as usual */
@@ -8362,6 +8390,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->reg_signal_s = (unsigned)v;
 		else if (!eq && klen == 8 && !memcmp(key, "twocalls", 8))
 			a->two_calls = 1;
+		else if (!eq && klen == 7 && !memcmp(key, "locauth", 7))
+			a->locauth = 1;
 		else if (eq && klen == 5 && (!memcmp(key, "lane2", 5) ||
 					     !memcmp(key, "lane3", 5))) {
 			unsigned ch, w, k = key[4] == '2' ? 0u : 1u;
@@ -8910,6 +8940,8 @@ static void usage(void)
 		"           earlybind    assign audio on the page response\n"
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
 		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
+		"           locauth      authenticate a handset with its UAK inside its\n"
+		"                        location registration (off by default)\n"
 		"           twocalls     a second (third) handset may call while one\n"
 		"           is in a call: side links get their own audio channel\n"
 		"           (2 -> TDM word 3, 3 -> word 2; lane2=CH:WORD to override)\n"

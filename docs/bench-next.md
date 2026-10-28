@@ -399,3 +399,20 @@ order: the PIN check (`c3 0a` on list 07, our `c3 0b`), the delete
 (`c3 0c`, our `c3 0d`), then `dereg: DECT 3, asked by DECT 1's handset list
 (PIN given)` and the deregistration as in 17. Without ciphering (`-C`) the
 PIN is refused ("procedure not allowed"), as the standard wants.
+
+### 19. Authentication on location registration (5 minutes, task 36)
+
+Since R4, `-a locauth` makes the base challenge each subscribed handset with
+its key inside its location registration (EN 300 175-5 annex H.2). Off by
+default until this test. Switch each handset off and on (that makes it
+locate) with:
+
+```
+EXTRA=locauth HOLD=1 ./ringone.sh a540
+```
+
+| you see, per handset | meaning |
+|---|---|
+| it comes back to "registered" as usual; the log shows `nwk out --> 05 40` then `nwk in <-- 85 41` then the LOCATE-ACCEPT | it answers the challenge: locauth can become the default |
+| it shows "not registered" or searches; the log has a LOCATE-REJECT with `10` | its RES did not match (wrong stored key, or it answers differently): the agent reads the log |
+| it takes clearly longer to attach | note how long; a few hundred ms is the expected cost |

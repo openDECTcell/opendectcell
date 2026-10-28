@@ -601,8 +601,17 @@
  *    the base PIN, on a ciphered link only (7.4.11.1); "delete entry" on
  *    the Internal Names List, with the PIN entered and the handset not in
  *    a call, is confirmed and sets delete_request (a deregistration).
+ *
+ * 77: authenticated location registration (2026-10-28, task 36). Layout
+ *    change: struct dect_mm gains uak_lookup and uak_lookup_ctx, cfg
+ *    auth_locate, the stats locate_auth_ok and locate_auth_failed; term_auth
+ *    is renamed pt_auth (also for this); new dect_mm_set_uak_lookup(),
+ *    dect_mm_uak_lookup. **Behaviour change, only with cfg.auth_locate:** a
+ *    known handset's {LOCATE-REQUEST} is answered after our
+ *    {AUTHENTICATION-REQUEST}: LOCATE-ACCEPT on the right RES, else
+ *    LOCATE-REJECT "authentication failed".
  */
-#define OPENDECTCELL_API_VERSION 76
+#define OPENDECTCELL_API_VERSION 77
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

@@ -380,7 +380,7 @@ static void test_handset_deregisters_itself(void)
 			CHECK_EQ(mm.term_by_pt, 0u);
 			CHECK_EQ(mm.stats.term_refused, 1u);
 		}
-		CHECK_EQ(mm.term_auth, 0u);
+		CHECK_EQ(mm.pt_auth, 0u);
 		CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
 	}
 }
@@ -1308,6 +1308,84 @@ static size_t locate_from(uint8_t *buf, size_t cap, const uint8_t *id,
 			       sizeof(la));
 }
 
+static const uint8_t lookup_uak[16] = { 0x16, 0x18, 0x03, 0x39 };
+
+static int lookup(void *ctx, const uint8_t *id, size_t len,
+		  uint8_t uak[DECT_MM_UAK_LEN])
+{
+	(void)ctx;
+	if (len < 1u || id[len - 1u] != 0x33u)	/* only "ours" has a key */
+		return -1;
+	memcpy(uak, lookup_uak, DECT_MM_UAK_LEN);
+	return 0;
+}
+
+/*
+ * cfg.auth_locate (annex H.2 example 2): a known handset's LOCATE-REQUEST
+ * gets our AUTHENTICATION-REQUEST first; the right RES gives LOCATE-ACCEPT,
+ * a wrong one or <MM_auth.1> LOCATE-REJECT "authentication failed"; its
+ * repeat meanwhile is not answered twice. Without a UAK for it, or with
+ * the option off, the accept comes at once, as before.
+ */
+static void test_location_registration_authenticated(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	uint8_t rand_f[8] = { 7, 7, 7, 7, 1, 2, 3, 4 };
+	uint8_t rs[16] = { 0x42, 0x24 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .rfpi = { 1, 2, 3, 4, 5 },
+				   .sub_slot = 1, .auth_locate = 1 };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64], ks[16], dck[8], res[4];
+	size_t n;
+	int k;
+
+	dect_dsaa_a11(lookup_uak, rs, ks);
+	dect_dsaa_a12(ks, rand_f, dck, res);
+	for (k = 0; k < 4; k++) {	/* right, wrong, timeout, option off */
+		cfg.auth_locate = k == 3 ? 0 : 1;
+		dect_mm_init(&mm, &cfg);
+		memcpy(mm.port_id, ours, sizeof(ours));
+		mm.port_id_len = sizeof(ours);
+		dect_mm_set_uak_lookup(&mm, lookup, NULL);
+		n = locate_from(buf, sizeof(buf), ours, sizeof(ours));
+		dect_mm_rx(&mm, buf, n, rand_f, rs);
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		if (k == 3) {
+			CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+			continue;
+		}
+		CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REQUEST);
+		n = locate_from(buf, sizeof(buf), ours, sizeof(ours));
+		dect_mm_rx(&mm, buf, n, rand_f, rs);		/* its repeat */
+		CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+		if (k == 2) {
+			dect_mm_tick(&mm, 1000);
+			dect_mm_tick(&mm, 11000);
+		} else {
+			uint8_t r[4];
+
+			memcpy(r, res, 4);
+			if (k == 1)
+				r[1] ^= 0x10u;
+			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+					       DECT_TI_RESPONDER, 0,
+					       DECT_MM_AUTHENTICATION_REPLY);
+			n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RES,
+					    r, 4);
+			dect_mm_rx(&mm, buf, n, rand_f, rs);
+		}
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		if (!k) {
+			CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+			CHECK_EQ(mm.stats.locate_auth_ok, 1u);
+		} else {
+			CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_REJECT);
+			CHECK_EQ(mm.stats.locate_auth_failed, 1u);
+		}
+		CHECK_EQ(mm.pt_auth, 0u);
+	}
+}
+
 static void test_a_held_handset_is_accepted_and_adopted(void)
 {
 	static const uint8_t ours[]  = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
@@ -1572,6 +1650,7 @@ int main(void)
 	test_ft_authentication();
 	test_terminate_access_rights();
 	test_handset_deregisters_itself();
+	test_location_registration_authenticated();
 	test_key_allocation_fails_on_timeout_or_refusal();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
