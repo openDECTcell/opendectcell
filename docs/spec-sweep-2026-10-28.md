@@ -170,3 +170,24 @@ call). If it rings as before, the handset ignores the signal value; nothing to f
 **S5, a second call on one link (after `ec2c96a`):** call 123 from the A540, hang
 up, and redial at once, before the link drops. Before the fix the redial was
 ignored or refused; it should now connect.
+
+## Bench card for S1-S5 (commands)
+
+Box at `599af45` or later (API 31; `md5sum /tmp/dect-stubd` against
+`build/dect-stubd.arm`), radio parked. `ringone.sh` runs from `work/7520/lab`
+and always passes `-C`, so the cipher runs start the daemon directly. Wait for
+each run to end and park before the next. Every log name is unique.
+
+| test | command | handset | what to do |
+|---|---|---|---|
+| S1a | `ssh root@192.168.1.1 '/tmp/dect-stubd -g -P 0000 -s /etc/opendectcell-sub.a540 -s /etc/opendectcell-sub.c430a -s /etc/opendectcell-sub.as690h -p -t 120 -a mask=0x0002,codec=3,status=8000 > /tmp/vS1a-$(date +%H%M%S).log 2>&1'` | A540 | dial 123, hold 20 s; look for `cipher: call key to the chip` and `rx ... prim 0209` |
+| S1b | the same with `-k plain`, log `vS1b-...` | A540 | as S1a |
+| S2a | `EXTRA=clip=0301234567,lineid=1 HOLD=1 ./ringone.sh a540` | A540 | do not answer: aloud or silent? |
+| S2b | `EXTRA=clip=0301234567,lineid=1,linetype=1,callid=1,callstatus=1 HOLD=1 ./ringone.sh a540` | A540 | as S2a |
+| S3a | `EXTRA=clip=0301234567,cnip=Wednesday,cnipalpha=0,infoie=28095765646e6573646179 HOLD=1 ./ringone.sh c430a` | C430A | do not answer: is "Wednesday" shown? |
+| S3b | `EXTRA=clip=0301234567,cnip=Wednesday,cnipalpha=0,infoie=2811020a1a910202095765646e65736461790d HOLD=1 ./ringone.sh c430a` | C430A | as S3a (stock's framing, A-0125 §5) |
+| S4 | `ssh root@192.168.1.1 '/tmp/dect-stubd -g -P 0000 -s /etc/opendectcell-sub.a540 -s /etc/opendectcell-sub.c430a -s /etc/opendectcell-sub.as690h -p -C -t 180 -a mask=0x0002,codec=3,status=8000,twocalls > /tmp/vS4-$(date +%H%M%S).log 2>&1'` | A540 → C430A | INT, DECT 2: does the C430A ring with its internal pattern? |
+| S5 | the S4 command, log `vS5-...` | A540 | dial 123, hang up, redial at once: does the second call connect? |
+
+S3 repeats on the AS690H if the C430A shows the name. The `infoie` bytes are
+`28 <len>` plus the text, or stock's framing around it; computed, not typed.
