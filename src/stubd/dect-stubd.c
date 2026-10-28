@@ -433,16 +433,14 @@ struct stubd {
 	 */
 	unsigned sub_slot;
 	/*
-	 * Experimental chip cipher-enable (0x0208). Its field layout is only
-	 * statically derived and the key offsets are unproven [CR A-0027 Q1], so
-	 * it is never sent unless -k asks for a specific selector and layout.
+	 * The call key for the chip (0x0208, stock's call layout [CR A-0126]),
+	 * sent whenever a call is ciphered; -k off withholds it, -k plain
+	 * sends the key bytes unreversed. The byte order is the one open
+	 * variable (docs/stub-api.md §2.1).
 	 */
 	struct chip_cipher {
-		int     enabled;
-		uint8_t selector;
-		int     use_rs;		/* 1 = RS in the input field, else RAND_F */
-		int     no_reverse;	/* 1 = send DCK/RES unreversed */
-		int     long_form;	/* 1 = 33-byte mail variant */
+		int     disabled;	/* -k off */
+		int     no_reverse;	/* -k plain */
 	} chip_cipher;
 	/* Voice-slot probe: which TDM slot carries a call's audio (mapping open). */
 	uint16_t vs_last[8];
@@ -4322,34 +4320,21 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 }
 
 /*
- * Hand the call's security material to the chip (0x0208), so the STUB can
- * switch the radio to DSC. Layout traced to its producer in [CR A-0028 §1],
- * which corrects A-0027: offsets below are into the complete mail, so they are
- * two higher than the parameter indices used here.
+ * Load the call's key into the chip (0x0208) before our over-air
+ * {CIPHER-REQUEST}, as stock does [CR A-0126]; docs/stub-api.md §2.1:
  *
- *   mail[2]      selector (see below)
- *   mail[3..10]  the authentication worker's 8-byte computed result, BYTE-
- *                REVERSED as a group before the event that feeds this mail
- *   mail[11..14] its 4-byte computed result, likewise byte-reversed
- *   mail[15..22] the last 8 bytes of a 16-byte authentication *input*, copied
- *                intact -- an input, not a derived value
- *   mail[23..25] zeroed, mail[26..27] FF FF
- *   mail[28..29] EEPROM 0x51/0x52, whose defaults are 00 00
- *   mail[30..32] only in the 33-byte form: 0x40 and two per-terminal bytes
+ *   param[0]      the link (connection handle)
+ *   param[1..8]   the 8-byte call key: our DCK, byte-reversed as a group
+ *                 ([CR A-0028]'s reading; -k plain keeps the order)
+ *   param[9..23]  00
+ *   param[24..25] FF FF
+ *   param[26..27] 00 00
  *
- * Mapping those onto DSAA1: the two computed results are the 64-bit DCK and
- * the 32-bit RES, and the 16-byte input is the pair of 8-byte randoms, so its
- * last half is RAND_F (",rs" swaps in RS, in case the halves are the other way
- * round). A-0028 is explicit that the DCK identification is a candidate, not a
- * proven fact, so ",norev" keeps the unreversed order available too.
- *
- * Selector: A-0028 §2 found two producer branches. The live-call one takes a
- * context identifier from the authentication event's routing nibble -- which is
- * NOT proven equal to our MAC handle -- while the subscription-oriented branch
- * uses terminal index + 7, i.e. 7..12. It also withdraws A-0027's implication
- * that low selectors are safe: neither family is certified harmless without a
- * consumer audit, though the state lives in RAM-loaded firmware. So -k still
- * has to name the selector; the daemon never picks one.
+ * Without it the chip's MAC switches to ciphering on the handset's signal
+ * with no key and drops the link ~200 ms later (bench test 17). The chip
+ * answers with a one-byte 0x0209 <link>. Our earlier layout carried a
+ * guessed selector and RES/RAND_F in bytes 9..20, and was inert
+ * (2026-10-19).
  */
 static void send_chip_cipher(struct stubd *s)
 {
@@ -4363,48 +4348,25 @@ static void send_chip_cipher(struct stubd *s)
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0208u;		/* chip security/cipher material */
-	m.param[n++] = s->chip_cipher.selector;
-
-	/* mail[3..10]: computed 8-byte result (DCK candidate), reversed. */
+	m.prim = 0x0208u;		/* call key [CR A-0126] */
+	m.param[n++] = s->reg.handle;
 	for (i = 0; i < DECT_MM_DCK_LEN; i++)
 		m.param[n + i] = s->chip_cipher.no_reverse
 			? dck[i] : dck[DECT_MM_DCK_LEN - 1u - i];
 	n += DECT_MM_DCK_LEN;
-
-	/* mail[11..14]: computed 4-byte result (RES), reversed. */
-	for (i = 0; i < 4u; i++)
-		m.param[n + i] = s->chip_cipher.no_reverse
-			? s->reg.link.mm.cipher_res[i] : s->reg.link.mm.cipher_res[3u - i];
-	n += 4u;
-
-	/* mail[15..22]: second half of the 16-byte input, copied intact. */
-	memcpy(&m.param[n], s->chip_cipher.use_rs ? s->reg.link.mm.rs
-						  : s->reg.link.mm.rand_f, 8);
-	n += 8u;
-
-	m.param[n++] = 0x00u;		/* zeroed by the producer */
-	m.param[n++] = 0x00u;
-	m.param[n++] = 0x00u;
-	m.param[n++] = 0xFFu;		/* FF FF initialised by the producer */
+	n += 15u;			/* param[9..23]: 00 (memset) */
 	m.param[n++] = 0xFFu;
-	m.param[n++] = 0x00u;		/* EEPROM 0x51, default 00 [CR A-0028] */
-	m.param[n++] = 0x00u;		/* EEPROM 0x52, default 00 */
-	if (s->chip_cipher.long_form) {
-		m.param[n++] = 0x40u;	/* fixed in the 33-byte form */
-		m.param[n++] = 0x00u;	/* per-terminal status/config */
-		m.param[n++] = 0x00u;
-	}
-	m.param_len = (uint16_t)n;
+	m.param[n++] = 0xFFu;
+	m.param[n++] = 0x00u;
+	m.param[n++] = 0x00u;
+	m.param_len = (uint16_t)n;	/* 28 */
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	memset(dck, 0, sizeof(dck));
-	memset(&m, 0, sizeof(m));	/* the mail held the DCK */
+	memset(&m, 0, sizeof(m));	/* the mail held the key */
 	/* Never log this mail's parameters: they carry the cipher key. */
-	printf("call: cipher: chip command 0x0208 sent (selector %u, %u bytes, "
-	       "%s order, input %s)\n",
-	       s->chip_cipher.selector, (unsigned int)(n + 2),
-	       s->chip_cipher.no_reverse ? "plain" : "reversed",
-	       s->chip_cipher.use_rs ? "RS" : "RAND_F");
+	printf("call: cipher: call key to the chip (0x0208, link %u, %u bytes, "
+	       "%s order)\n", (unsigned int)s->reg.handle, (unsigned int)n,
+	       s->chip_cipher.no_reverse ? "plain" : "reversed");
 }
 
 /* Flush any LAPC frames the FSM wants to transmit. */
@@ -6227,7 +6189,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * that order. The CIPHER-REQUEST is only queued here; it still has
 		 * to travel through LAPC, so the mail below wins the race.
 		 */
-		if (s->chip_cipher.enabled)
+		if (!s->chip_cipher.disabled)
 			send_chip_cipher(s);
 		printf("call: cipher: DCK derived, CIPHER-REQUEST sent\n");
 	} else if (s->reg.link.mm.cipher_state == DECT_MM_CIPHER_FAILED &&
@@ -7440,34 +7402,16 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 	return 0;
 }
 
-/* Parse -k SEL[,rs][,33]. Returns 0 on success, -1 on a malformed spec. */
+/* Parse -k off | plain. Returns 0 on success, -1 on a malformed spec. */
 static int parse_chip_cipher(struct chip_cipher *cc, const char *spec)
 {
-	char *end;
-	unsigned long sel;
-
-	sel = strtoul(spec, &end, 0);
-	if (end == spec || sel > 0xFFu)
+	if (!strcmp(spec, "off"))
+		cc->disabled = 1;
+	else if (!strcmp(spec, "plain"))
+		cc->no_reverse = 1;
+	else
 		return -1;
-	cc->enabled = 1;
-	cc->selector = (uint8_t)sel;
-	while (*end == ',') {
-		const char *opt = ++end;
-
-		while (*end && *end != ',')
-			end++;
-		size_t len = (size_t)(end - opt);
-
-		if (len == 2 && memcmp(opt, "rs", 2) == 0)
-			cc->use_rs = 1;
-		else if (len == 2 && memcmp(opt, "33", 2) == 0)
-			cc->long_form = 1;
-		else if (len == 5 && memcmp(opt, "norev", 5) == 0)
-			cc->no_reverse = 1;
-		else
-			return -1;
-	}
-	return *end ? -1 : 0;
+	return 0;
 }
 
 
@@ -7498,13 +7442,9 @@ static void usage(void)
 		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off).\n"
 		"           Repeat for every handset the base holds: all are served\n"
 		"           and installed in their chip slots; the first is rung\n"
-		"  -k SPEC  EXPERIMENTAL: hand the call's cipher material to the chip\n"
-		"           (0x0208) once the DCK is derived. SPEC is\n"
-		"           SEL[,rs][,norev][,33]: SEL = selector (7..12 is the\n"
-		"           subscription-oriented branch), rs = put RS rather than\n"
-		"           RAND_F in the input field, norev = do not byte-reverse the\n"
-		"           DCK/RES, 33 = long mail variant. Layout per [CR A-0028];\n"
-		"           the DCK identification is a candidate only. Off by default\n"
+		"  -k SPEC  the call key for the chip (0x0208, stock's layout,\n"
+		"           [CR A-0126]) goes out before every CIPHER-REQUEST; SPEC\n"
+		"           off withholds it, plain sends the key bytes unreversed\n"
 		"  -w FILE  capture the call's voice slot to FILE (raw, 2 bytes per\n"
 		"           frame, while a call is bound) -- holds call audio, keep\n"
 		"           it local\n"
