@@ -184,16 +184,36 @@ function sipSafe(sid, v) {
 	return /[;"<>\s]/.test(v) ? _('baresip cannot take ; " < > or spaces here') : true;
 }
 
-/* A heading inside a pop-up tab (LuCI forms have no nested tabs). */
-function heading(ss, t, id, text, dep) {
-	var o = ss.taboption(t, form.DummyValue, id);
+/*
+ * Sub-tabs inside a pop-up tab. LuCI forms have no nested tabs, so each
+ * option is noted with its sub-tab here and the rendered pop-up is
+ * regrouped (subTabs); LuCI's own tab code then draws and switches them,
+ * and hides a sub-tab whose options are all hidden.
+ */
+var SUBTAB = {}, SUBTABS = {};
 
-	o.modalonly = true;
-	if (dep)
-		o.depends(dep, '1');
-	o.render = function() {
-		return E('h4', { 'style': 'margin-top:1em' }, text);
-	};
+function subTabs(els) {
+	Array.prototype.forEach.call(els.childNodes, function(pane) {
+		var list = pane.getAttribute && SUBTABS[pane.getAttribute('data-tab')], panes = {}, box;
+
+		if (!list)
+			return;
+		box = E('div', { 'class': 'cbi-section-node-tabbed' });
+		/* the first is active from the start: LuCI's tab code fails on a
+		 * group whose panes are all empty, as when the line is off */
+		list.forEach(function(t, i) {
+			panes[t[0]] = E('div', { 'data-tab': t[0], 'data-tab-title': t[1],
+						 'data-tab-active': i == 0 ? 'true' : 'false' });
+			box.appendChild(panes[t[0]]);
+		});
+		Array.prototype.slice.call(pane.children).forEach(function(n) {
+			var t = SUBTAB[n.getAttribute('data-name')];
+			if (t)
+				panes[t].appendChild(n);
+		});
+		pane.appendChild(box);
+	});
+	return els;
 }
 
 /*
@@ -201,11 +221,18 @@ function heading(ss, t, id, text, dep) {
  * baresip account line takes, grouped as the provider's documents group it.
  */
 function addLineOptions(ss, t, p, optional, n) {
-	var on = p + 'enabled', o;
+	var on = p + 'enabled', sub, o;
+
+	SUBTABS[t] = [];
+	function group(id, title) {
+		sub = p + id;
+		SUBTABS[t].push([ sub, title ]);
+	}
 
 	function opt(type, name, title, descr) {
 		var x = ss.taboption(t, type, p + name, title, descr);
 
+		SUBTAB[p + name] = sub;
 		x.modalonly = true;
 		x.depends(on, '1');
 		return x;
@@ -216,7 +243,7 @@ function addLineOptions(ss, t, p, optional, n) {
 			   _('The handset\'s SIP account: its calls go out on it and calls to it ring this handset.'));
 	o.modalonly = true;
 
-	heading(ss, t, '_h_' + p + 'acct', _('Account'), on);
+	group('acct', _('Account'));
 	o = opt(form.Value, 'name', _('Line name'),
 		_('What CAT-iq handsets show for this line, at most 15 characters.'));
 	o.placeholder = _('Line %d').format(n);
@@ -246,7 +273,7 @@ function addLineOptions(ss, t, p, optional, n) {
 	o.placeholder = '3600';
 	o.depends({ [on]: '1', [p + 'register']: '1' });
 
-	heading(ss, t, '_h_' + p + 'net', _('Server and NAT'), on);
+	group('net', _('Server and NAT'));
 	o = opt(form.ListValue, 'transport', _('Transport'));
 	o.value('udp', 'UDP');
 	o.value('tcp', 'TCP');
@@ -282,7 +309,7 @@ function addLineOptions(ss, t, p, optional, n) {
 	o.value('dyna', _('dynamic'));
 	o.value('rtcp', 'RTCP');
 
-	heading(ss, t, '_h_' + p + 'media', _('Media'), on);
+	group('media', _('Media'));
 	o = opt(form.MultiValue, 'codec', _('Codecs'),
 		_('Offered in the order shown. G.722 keeps the handset\'s wideband (HD) audio end to end.'));
 	o.value('g722', 'G.722 (HD)');
@@ -306,7 +333,7 @@ function addLineOptions(ss, t, p, optional, n) {
 	o = opt(form.Flag, 'transfer', _('Allow call transfer'));
 	o.default = '1';
 
-	heading(ss, t, '_h_' + p + 'enc', _('Encryption'), on);
+	group('enc', _('Encryption'));
 	o = opt(form.ListValue, 'mediaenc', _('Media encryption'),
 		_('Encrypts the speech on the internet side. Use TLS as transport too, or the keys travel in the clear.'));
 	o.value('', _('none'));
@@ -316,7 +343,7 @@ function addLineOptions(ss, t, p, optional, n) {
 	o.value('dtls_srtp', 'DTLS-SRTP');
 	o.value('zrtp', 'ZRTP');
 
-	heading(ss, t, '_h_' + p + 'adv', _('Advanced'), on);
+	group('adv', _('Advanced'));
 	o = opt(form.Value, 'extra', _('Further account parameters'),
 		_('Appended to the account as is, baresip syntax: ;key=value;key=value.'));
 	o.optional = true;
@@ -457,6 +484,12 @@ return view.extend({
 		ss.tab('general', _('General'));
 		ss.tab('line1', _('Line 1'));
 		ss.tab('line2', _('Line 2'));
+		ss.addModalOptions = function(ms) {
+			var render = ms.renderTabContainers;
+			ms.renderTabContainers = function(sid, nodes) {
+				return subTabs(render.call(this, sid, nodes));
+			};
+		};
 
 		ss.renderRowActions = function(sid) {
 			var td = form.GridSection.prototype.renderRowActions.apply(this, [ sid, _('Edit') ]);
