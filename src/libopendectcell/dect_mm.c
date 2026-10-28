@@ -686,6 +686,8 @@ void dect_mm_start_cipher(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN]
 	memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
 	memcpy(mm->rs, rs, sizeof(mm->rs));
 	mm->cipher_state = DECT_MM_CIPHER_WAIT_REPLY;
+	mm->auth_deadline_ms = 0;		/* <MM_auth.1> starts on the tick */
+	mm->cipher_rejected = 0;
 	send_auth_request_fp(mm);
 }
 
@@ -858,6 +860,23 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		if (mm->state == DECT_MM_WAIT_AUTH &&
 		    h.ti_flag == DECT_TI_RESPONDER)
 			key_allocation_failed(mm);
+		/* ... or our authentication of it, before ciphering (§8.24) */
+		else if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY &&
+			 h.ti_flag == DECT_TI_RESPONDER)
+			mm->cipher_state = DECT_MM_CIPHER_FAILED;
+		break;
+	case DECT_MM_CIPHER_REJECT:
+		/*
+		 * The PT cannot cipher as asked (EN 300 444 §8.33.2.1). The
+		 * call is kept: we do not claim "encryption of all calls"
+		 * (N.35), and otherwise the FT "should not release" it. Made
+		 * visible; it was ignored (spec sweep, M12).
+		 */
+		if (mm->cipher_state == DECT_MM_CIPHER_READY &&
+		    h.ti_flag == DECT_TI_RESPONDER) {
+			mm->cipher_rejected = 1;
+			mm->stats.cipher_rejected++;
+		}
 		break;
 	case DECT_MM_AUTHENTICATION_REPLY:
 		if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY)
@@ -913,6 +932,8 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 #define MM_IDENT1_MS	10000u
 /* <MM_key.1>: FT value 10 seconds (EN 300 175-5 A.5). */
 #define MM_KEY1_MS	10000u
+/* <MM_auth.1>: FT value 10 seconds (EN 300 175-5 A.5). */
+#define MM_AUTH1_MS	10000u
 
 void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 {
@@ -929,6 +950,20 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 	} else if (now_ms >= mm->key_deadline_ms) {
 		key_allocation_failed(mm);
 		mm->key_deadline_ms = 0;
+	}
+	/*
+	 * <MM_auth.1> (EN 300 444 §8.24, A.5): our {AUTHENTICATION-REQUEST}
+	 * before ciphering, unanswered for 10 s, has failed. It waited for
+	 * ever and the cipher never started or failed visibly (M11).
+	 */
+	if (mm->cipher_state != DECT_MM_CIPHER_WAIT_REPLY) {
+		mm->auth_deadline_ms = 0;
+	} else if (!mm->auth_deadline_ms) {
+		mm->auth_deadline_ms = now_ms + MM_AUTH1_MS;
+	} else if (now_ms >= mm->auth_deadline_ms) {
+		mm->cipher_state = DECT_MM_CIPHER_FAILED;
+		mm->auth_deadline_ms = 0;
+		mm->stats.auth_timeouts++;
 	}
 
 	if (!mm->ident_pending) {
@@ -965,6 +1000,9 @@ uint64_t dect_mm_next_deadline(const struct dect_mm *mm)
 	if (mm->state == DECT_MM_WAIT_AUTH && mm->key_deadline_ms &&
 	    mm->key_deadline_ms < t)
 		t = mm->key_deadline_ms;
+	if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY &&
+	    mm->auth_deadline_ms && mm->auth_deadline_ms < t)
+		t = mm->auth_deadline_ms;
 	return t;
 }
 

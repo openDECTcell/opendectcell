@@ -456,8 +456,17 @@
  *    {ACCESS-RIGHTS-REJECT} "authentication failed" and DECT_MM_FAILED
  *    (EN 300 444 §8.32.2.1, §8.32.2.3). dect_mm_next_deadline() includes
  *    the timer.
+ *
+ * 58: <MM_auth.1> and CIPHER-REJECT (2026-10-28, spec sweep M11, M12).
+ *    Layout change: struct dect_mm gains auth_deadline_ms and
+ *    cipher_rejected, the stats auth_timeouts and cipher_rejected; new
+ *    DECT_MM_CIPHER_REJECT. **Behaviour change:** our authentication before
+ *    ciphering fails after 10 s unanswered, or at once on the PT's
+ *    {AUTHENTICATION-REJECT}; a {CIPHER-REJECT} is recorded and the call
+ *    kept (EN 300 444 §8.33.2.1). <MM_cipher.1> is not built: its stop
+ *    condition is DL_ENC_KEY-ind, a chip event we cannot see yet.
  */
-#define OPENDECTCELL_API_VERSION 57
+#define OPENDECTCELL_API_VERSION 58
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

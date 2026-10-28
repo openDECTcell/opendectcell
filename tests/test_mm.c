@@ -601,6 +601,58 @@ static void test_cipher(void)
 
 
 /*
+ * Before ciphering: <MM_auth.1> fails an unanswered AUTHENTICATION-REQUEST
+ * after 10 s, and the PT's AUTHENTICATION-REJECT fails it at once. After
+ * the CIPHER-REQUEST, a CIPHER-REJECT is recorded and the call kept.
+ */
+static void test_cipher_timer_and_rejects(void)
+{
+	struct dect_mm_cfg cfg = { .authenticate = 1 };
+	struct dect_mm mm;
+	uint8_t uak[16] = { 0x10 }, rand_f[8] = { 0xaa }, rs[16] = { 0 };
+	uint8_t buf[64], out[64], ks[16], dck[8], res[4];
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_start_cipher(&mm, uak, rand_f, rs);
+	(void)dect_mm_poll(&mm, out, sizeof(out));
+	dect_mm_tick(&mm, 500);
+	CHECK_EQ(dect_mm_next_deadline(&mm), 10500u);
+	dect_mm_tick(&mm, 10499);
+	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_WAIT_REPLY);
+	dect_mm_tick(&mm, 10500);
+	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_FAILED);
+	CHECK_EQ(mm.stats.auth_timeouts, 1u);
+	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_start_cipher(&mm, uak, rand_f, rs);
+	(void)dect_mm_poll(&mm, out, sizeof(out));
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_RESPONDER,
+			       0, DECT_MM_AUTHENTICATION_REJECT);
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_FAILED);
+	CHECK_EQ(mm.stats.auth_timeouts, 0u);
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_start_cipher(&mm, uak, rand_f, rs);
+	(void)dect_mm_poll(&mm, out, sizeof(out));
+	dect_dsaa_a11(uak, rs, ks);
+	dect_dsaa_a12(ks, rand_f, dck, res);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_RESPONDER,
+			       0, DECT_MM_AUTHENTICATION_REPLY);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RES, res, 4);
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_READY);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_RESPONDER,
+			       0, DECT_MM_CIPHER_REJECT);
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	CHECK_EQ(mm.cipher_rejected, 1u);
+	CHECK_EQ(mm.stats.cipher_rejected, 1u);
+	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_READY);	/* call kept */
+}
+
+/*
  * A GAP FP serves subscribed handsets. Measured 2026-10-23: with one
  * handset's subscription loaded, a different handset had its location
  * registration accepted thirty times in ninety seconds, because the chip
@@ -1267,6 +1319,7 @@ int main(void)
 	test_register_without_a_usable_pin();
 	test_locate();
 	test_cipher();
+	test_cipher_timer_and_rejects();
 	test_term_cap();
 	test_locate_accept_names_our_area();
 	test_tpui_assignment_is_confirmed_by_the_ack();

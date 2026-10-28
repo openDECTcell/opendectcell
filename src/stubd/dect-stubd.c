@@ -1205,6 +1205,7 @@ struct stubd {
 		int sweep_done;
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
+		int cipher_reject_seen;	/* CIPHER-REJECT already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
 		int enrol_routed;	/* this enrolment's store is chosen */
 		int enrol_switched;	/* ... and it moved off store 0 */
@@ -5171,6 +5172,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.enrol_switched = 0;
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
+	s->reg.cipher_reject_seen = 0;
 	s->reg.handle = handle;
 	dect_link_init(&s->reg.link, handle, &mcfg);
 	/*
@@ -5987,6 +5989,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->reg.persisted = 0;
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
+	s->reg.cipher_reject_seen = 0;
 	s->reg.audio_connected = 0;
 	s->reg.time_sent_for = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
@@ -6623,7 +6626,14 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	} else if (s->reg.link.mm.cipher_state == DECT_MM_CIPHER_FAILED &&
 		   !s->reg.cipher_done) {
 		s->reg.cipher_done = 1;
-		printf("call: cipher: authentication FAILED (RES mismatch)\n");
+		printf("call: cipher: authentication FAILED (%s)\n",
+		       s->reg.link.mm.stats.auth_timeouts ? "no reply in 10 s"
+		       : "wrong RES, or the handset refused");
+	}
+	if (s->reg.link.mm.cipher_rejected && !s->reg.cipher_reject_seen) {
+		s->reg.cipher_reject_seen = 1;
+		printf("call: cipher: the handset sent CIPHER-REJECT -- the call "
+		       "stays in the clear\n");
 	}
 
 	pump_lapc(s);
