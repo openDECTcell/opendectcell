@@ -179,74 +179,142 @@ function addKeyOptions(ss, keys) {
 	});
 }
 
-/* A SIP account on tab t, its options prefixed p ('l1_', 'l2_'). */
-function addLineOptions(ss, t, p, optional) {
-	var o;
+/* A heading inside a pop-up tab (LuCI forms have no nested tabs). */
+function heading(ss, t, id, text, dep) {
+	var o = ss.taboption(t, form.DummyValue, id);
 
-	o = ss.taboption(t, form.Flag, p + 'enabled', _('Use this line'),
+	o.modalonly = true;
+	if (dep)
+		o.depends(dep, '1');
+	o.render = function() {
+		return E('h4', { 'style': 'margin-top:1em' }, text);
+	};
+}
+
+/*
+ * A SIP account on tab t, its options prefixed p ('l1_', 'l2_'): what a
+ * baresip account line takes, grouped as the provider's documents group it.
+ */
+function addLineOptions(ss, t, p, optional, n) {
+	var on = p + 'enabled', o;
+
+	function opt(type, name, title, descr) {
+		var x = ss.taboption(t, type, p + name, title, descr);
+
+		x.modalonly = true;
+		x.depends(on, '1');
+		return x;
+	}
+
+	o = ss.taboption(t, form.Flag, on, _('Use this line'),
 		optional ? _('An optional second SIP account for this handset.') :
 			   _('The handset\'s SIP account: its calls go out on it and calls to it ring this handset.'));
 	o.modalonly = true;
 
-	o = ss.taboption(t, form.Value, p + 'display', _('Display name'),
-		_('The name the called party sees.'));
-	o.modalonly = true;
-	o.depends(p + 'enabled', '1');
-
-	o = ss.taboption(t, form.Value, p + 'user', _('User name'),
-		_('The SIP user, often the phone number.'));
-	o.modalonly = true;
-	o.depends(p + 'enabled', '1');
+	heading(ss, t, '_h_' + p + 'acct', _('Account'), on);
+	o = opt(form.Value, 'name', _('Line name'),
+		_('What CAT-iq handsets show for this line, at most 15 characters.'));
+	o.placeholder = _('Line %d').format(n);
+	o.validate = function(sid, v) {
+		return octets(v) <= 15 ? true : _('At most 15 characters');
+	};
+	opt(form.Value, 'display', _('Display name'), _('The name the called party sees.'));
+	o = opt(form.Value, 'user', _('User name'), _('The SIP user, often the phone number.'));
 	o.rmempty = false;
-
-	o = ss.taboption(t, form.Value, p + 'authuser', _('Login name'),
+	o = opt(form.Value, 'authuser', _('Login name'),
 		_('When the provider wants a login other than the user name.'));
-	o.modalonly = true;
-	o.depends(p + 'enabled', '1');
 	o.optional = true;
-
-	o = ss.taboption(t, form.Value, p + 'password', _('Password'));
-	o.modalonly = true;
+	o = opt(form.Value, 'password', _('Password'));
 	o.password = true;
-	o.depends(p + 'enabled', '1');
-
-	o = ss.taboption(t, form.Value, p + 'domain', _('Registrar'),
+	o = opt(form.Value, 'domain', _('Registrar'),
 		_('The provider\'s SIP server, host or host:port (e.g. sip.example.net, or 192.168.178.1 for a FRITZ!Box).'));
-	o.modalonly = true;
-	o.depends(p + 'enabled', '1');
 	o.datatype = 'or(hostport,host)';
 	o.rmempty = false;
-
-	o = ss.taboption(t, form.Value, p + 'outbound', _('Outbound proxy'),
-		_('Only when the provider names one.'));
-	o.modalonly = true;
-	o.depends(p + 'enabled', '1');
-	o.datatype = 'or(hostport,host)';
-	o.optional = true;
-
-	o = ss.taboption(t, form.ListValue, p + 'transport', _('Transport'));
-	o.modalonly = true;
-	o.depends(p + 'enabled', '1');
-	o.value('udp', 'UDP');
-	o.value('tcp', 'TCP');
-	o.value('tls', 'TLS');
-	o.default = 'udp';
-
-	o = ss.taboption(t, form.Value, p + 'regint', _('Registration interval'),
-		_('Seconds between registrations.'));
-	o.modalonly = true;
-	o.depends(p + 'enabled', '1');
+	o = opt(form.Flag, 'register', _('Register'),
+		_('Register with the server. Off for a peer that calls this handset directly by address.'));
+	o.default = '1';
+	o = opt(form.Value, 'regint', _('Registration interval'), _('Seconds between registrations.'));
 	o.datatype = 'range(60,86400)';
 	o.placeholder = '3600';
+	o.depends({ [on]: '1', [p + 'register']: '1' });
 
-	o = ss.taboption(t, form.MultiValue, p + 'codec', _('Codecs'),
+	heading(ss, t, '_h_' + p + 'net', _('Server and NAT'), on);
+	o = opt(form.ListValue, 'transport', _('Transport'));
+	o.value('udp', 'UDP');
+	o.value('tcp', 'TCP');
+	o.value('tls', _('TLS (encrypted signalling)'));
+	o.default = 'udp';
+	o = opt(form.Value, 'outbound', _('Outbound proxy'), _('Only when the provider names one.'));
+	o.datatype = 'or(hostport,host)';
+	o.optional = true;
+	o = opt(form.Value, 'outbound2', _('Second outbound proxy'));
+	o.datatype = 'or(hostport,host)';
+	o.optional = true;
+	o = opt(form.Flag, 'sipnat', _('SIP outbound (RFC 5626)'),
+		_('Keep the connection to the server open through NAT, when the provider supports it.'));
+	o = opt(form.ListValue, 'medianat', _('NAT traversal for media'));
+	o.value('', _('none'));
+	o.value('stun', 'STUN');
+	o.value('turn', 'TURN');
+	o.value('ice', 'ICE');
+	o = opt(form.Value, 'stunserver', _('STUN/TURN server'), _('host or host:port.'));
+	o.datatype = 'or(hostport,host)';
+	o.depends({ [on]: '1', [p + 'medianat']: /./ });
+	o = opt(form.Value, 'stunuser', _('TURN user'));
+	o.depends({ [on]: '1', [p + 'medianat']: 'turn' });
+	o = opt(form.Value, 'stunpass', _('TURN password'));
+	o.password = true;
+	o.depends({ [on]: '1', [p + 'medianat']: 'turn' });
+	o = opt(form.ListValue, 'rtpkeep', _('Keep media open'),
+		_('Packets that keep a NAT binding open while one side is silent.'));
+	o.value('', _('off'));
+	o.value('zero', _('empty RTP packets'));
+	o.value('stun', 'STUN');
+	o.value('dyna', _('dynamic'));
+	o.value('rtcp', 'RTCP');
+
+	heading(ss, t, '_h_' + p + 'media', _('Media'), on);
+	o = opt(form.MultiValue, 'codec', _('Codecs'),
 		_('In order of preference. G.722 keeps the handset\'s wideband (HD) audio end to end.'));
-	o.modalonly = true;
-	o.depends(p + 'enabled', '1');
 	o.value('g722', 'G.722 (HD)');
 	o.value('pcma', 'G.711 A-law');
 	o.value('pcmu', 'G.711 µ-law');
 	o.default = 'g722 pcma pcmu';
+	o = opt(form.ListValue, 'ptime', _('Packet time'), _('Milliseconds of audio per RTP packet.'));
+	[ '20', '10', '30', '40' ].forEach(function(v) { o.value(v, v + ' ms'); });
+	o.default = '20';
+	o = opt(form.ListValue, 'dtmf', _('Key tones (DTMF)'));
+	o.value('rtpevent', _('RTP events (RFC 4733)'));
+	o.value('info', _('SIP INFO'));
+	o.value('auto', _('automatic'));
+	o.default = 'rtpevent';
+	o = opt(form.ListValue, 'rel100', _('Reliable provisional responses (100rel)'));
+	o.value('yes', _('when the other side supports it'));
+	o.value('no', _('never'));
+	o.value('required', _('required'));
+	o.default = 'yes';
+	o = opt(form.Flag, 'mwi', _('Voicemail notification (MWI)'));
+	o = opt(form.Flag, 'transfer', _('Allow call transfer'));
+	o.default = '1';
+
+	heading(ss, t, '_h_' + p + 'enc', _('Encryption'), on);
+	o = opt(form.ListValue, 'mediaenc', _('Media encryption'),
+		_('Encrypts the speech on the internet side. Use TLS as transport too, or the keys travel in the clear.'));
+	o.value('', _('none'));
+	o.value('srtp', _('SRTP when offered'));
+	o.value('srtp-mand', _('SRTP required'));
+	o.value('srtp-mandf', _('SRTP required (in the offer)'));
+	o.value('dtls_srtp', 'DTLS-SRTP');
+	o.value('zrtp', 'ZRTP');
+
+	heading(ss, t, '_h_' + p + 'adv', _('Advanced'), on);
+	o = opt(form.Value, 'extra', _('Further account parameters'),
+		_('Appended to the account as is, baresip syntax: ;key=value;key=value.'));
+	o.optional = true;
+	o.validate = function(sid, v) {
+		return v === '' || /^(;[a-z0-9_]+=[^;\s"<>]+)+$/.test(v) ? true :
+			_(';key=value pairs, no spaces');
+	};
 }
 
 function lineSummary(sid, p) {
@@ -311,6 +379,7 @@ return view.extend({
 		s.addremove = false;
 		s.tab('general', _('General'));
 		s.tab('handsets', _('Handsets'));
+		s.tab('voip', _('VoIP'));
 		s.tab('advanced', _('Advanced'));
 
 		/* General */
@@ -332,15 +401,6 @@ return view.extend({
 
 		o = s.taboption('general', form.Flag, 'registration', _('Keep registration open'),
 			_('Registration stays open while the base runs. Not recommended: anyone nearby who knows the PIN can register a handset.'));
-
-		o = s.taboption('general', form.Value, 'line_name', _('Line name'),
-			_('The line\'s name on CAT-iq handsets, at most 15 characters.'));
-		o.placeholder = 'Line 1';
-		o.validate = function(id, v) {
-			if (v.indexOf(',') >= 0)
-				return _('No commas');
-			return octets(v) <= 15 ? true : _('At most 15 characters');
-		};
 
 		o = s.taboption('general', form.Flag, 'cipher', _('Encrypt calls'),
 			_('DECT standard encryption on every call and list session. Switch off only to debug audio.'));
@@ -393,9 +453,11 @@ return view.extend({
 			var td = form.GridSection.prototype.renderRowActions.apply(this, [ sid, _('Edit') ]);
 			var h = hs(sid), box = td.querySelector('.cbi-section-actions') || td;
 
-			if (h && running)
+			if (h)
 				box.appendChild(E('button', {
 					'class': 'btn cbi-button-negative',
+					'disabled': running ? null : '',
+					'title': running ? null : _('Needs the DECT service running'),
 					'click': function(ev) { ev.preventDefault(); deregisterDialog(h); }
 				}, _('Deregister')));
 			return td;
@@ -406,7 +468,10 @@ return view.extend({
 		o.modalonly = false;
 		o = ss.option(form.DummyValue, '_name', _('Name'));
 		o.modalonly = false;
-		o.cfgvalue = function(sid) { var h = hs(sid); return h ? h.name : _('not registered'); };
+		o.cfgvalue = function(sid) {
+			var h = hs(sid);
+			return h ? h.name : st ? _('not registered') : _('unknown: the service is off');
+		};
 		o = ss.option(form.DummyValue, '_type', _('Type'));
 		o.modalonly = false;
 		o.cfgvalue = function(sid) {
@@ -423,13 +488,16 @@ return view.extend({
 		o.modalonly = false;
 		o.cfgvalue = function(sid) {
 			var h = hs(sid);
-			return !h ? '-' : h.link ? _('connected now') : ago(h.seen_ms_ago);
+			return !h ? '-' : !running ? _('base off') :
+				h.link ? _('connected now') : ago(h.seen_ms_ago);
 		};
 
 		/* General: name and profile where the base keeps them */
 		o = ss.taboption('general', form.Value, '_rename', _('Name'),
-			_('What every handset shows for this one, at most 15 characters. Empty restores "DECT n". Needs the base running.'));
+			running ? _('What every handset shows for this one, at most 15 characters. Empty restores "DECT n".') :
+				  _('Can only be changed while the DECT service is running.'));
 		o.modalonly = true;
+		o.readonly = !running;
 		o.cfgvalue = function(sid) { var h = hs(sid); return h ? h.name : ''; };
 		o.validate = function(sid, v) {
 			return octets(v) <= 15 ? true : REASONS['bad-name'];
@@ -460,12 +528,14 @@ return view.extend({
 		o.remove = function(sid) { return this.write(sid, ''); };
 
 		addKeyOptions(ss, keys);
-		addLineOptions(ss, 'line1', 'l1_', false);
-		addLineOptions(ss, 'line2', 'l2_', true);
+		addLineOptions(ss, 'line1', 'l1_', false, 1);
+		addLineOptions(ss, 'line2', 'l2_', true, 2);
 
 		/* Handsets: the register button under the grid */
 		o = s.taboption('handsets', form.Button, '_register', _('New handset'),
-			_('Opens registration for the registration window; start the registration on the handset then and enter the PIN.'));
+			running ? _('Opens registration for the registration window; start the registration on the handset then and enter the PIN.') :
+				  _('Needs the DECT service running.'));
+		o.readonly = !running;
 		o.inputtitle = _('Register a handset');
 		o.inputstyle = 'action';
 		o.onclick = function() {
@@ -477,6 +547,53 @@ return view.extend({
 					REASONS['not-running']), r.code == 0 ? 'info' : 'warning');
 			});
 		};
+
+		/* VoIP: what every handset's lines share (baresip's config) */
+		o = s.taboption('voip', form.Value, 'sip_port', _('SIP port'),
+			_('The local port for SIP signalling (UDP and TCP; TLS on the next port).'));
+		o.datatype = 'port';
+		o.placeholder = '5060';
+		o = s.taboption('voip', form.Value, 'rtp_ports', _('RTP port range'),
+			_('Local ports for the speech, first-last.'));
+		o.placeholder = '10000-20000';
+		o.validate = function(id, v) {
+			var m = /^(\d+)-(\d+)$/.exec(v);
+			return v === '' || (m && +m[1] >= 1024 && +m[1] < +m[2] && +m[2] <= 65535) ? true :
+				_('first-last, 1024 to 65535');
+		};
+		o = s.taboption('voip', form.Value, 'net_interface', _('Network interface'),
+			_('Where SIP and speech go out, e.g. wan or br-lan. Empty: the default route.'));
+		o.placeholder = _('automatic');
+		o = s.taboption('voip', form.Value, 'dns_server', _('DNS server'),
+			_('For the SIP servers\' names. Empty: the system\'s.'));
+		o.datatype = 'or(ipaddr,hostport)';
+		o.optional = true;
+		o = s.taboption('voip', form.ListValue, 'rtp_dscp', _('Speech priority (DSCP)'),
+			_('Marks the speech packets so routers can prefer them.'));
+		o.value('46', _('EF (46), the usual for voice'));
+		o.value('34', 'AF41 (34)');
+		o.value('0', _('none (0)'));
+		o.default = '46';
+		o = s.taboption('voip', form.ListValue, 'sip_dscp', _('Signalling priority (DSCP)'));
+		o.value('24', 'CS3 (24)');
+		o.value('26', 'AF31 (26)');
+		o.value('0', _('none (0)'));
+		o.default = '24';
+		o = s.taboption('voip', form.Value, 'jitter', _('Jitter buffer'),
+			_('Milliseconds of speech held back to smooth out the network, min-max.'));
+		o.placeholder = '20-160';
+		o.validate = function(id, v) {
+			var m = /^(\d+)-(\d+)$/.exec(v);
+			return v === '' || (m && +m[1] <= +m[2] && +m[2] <= 1000) ? true : _('min-max, up to 1000');
+		};
+		o = s.taboption('voip', form.Flag, 'tls_verify', _('Check the server\'s certificate'),
+			_('For lines with TLS transport. Off accepts any certificate, which defeats the encryption.'));
+		o.default = '1';
+		o.rmempty = false;
+		o = s.taboption('voip', form.Value, 'tls_cafile', _('Certificate authorities'),
+			_('A PEM file of the CAs to trust; empty: the system\'s (ca-bundle).'));
+		o.placeholder = '/etc/ssl/certs/ca-certificates.crt';
+		o.depends('tls_verify', '1');
 
 		/* Advanced */
 		o = s.taboption('advanced', form.Value, 'firmware_dir', _('Chip firmware directory'),

@@ -268,6 +268,9 @@ struct handset {
 	 * §7.4.10.5.8), kept in <path>.name; empty = the default "DECT n".
 	 */
 	char     name[DECT_IWU_NAME_MAX];
+	/* its lines' names, Line 2 only when its account is on (lines_load) */
+	char     line_name[2][DECT_IWU_NAME_MAX];
+	int      line2;
 	/*
 	 * Its handset profile (docs/handset-profiles.md): the model the user
 	 * picked, in <path>.profile (the id, and optionally the firmware
@@ -2588,6 +2591,8 @@ static void hs_load(struct stubd *s, unsigned i)
 }
 
 /* Make handset i the current one; a no-op if it already is. */
+static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot);
+
 static void hs_switch(struct stubd *s, unsigned i, const char *why)
 {
 	if (i == s->cur || i >= s->n_hs)
@@ -5531,6 +5536,7 @@ static void enrol_route(struct stubd *s)
 	snprintf(name, sizeof(name), "DECT %u", (unsigned)stubd_sub_slot(s));
 	dect_iwu_add_handset(&s->reg.link.cc.iwu, stubd_sub_slot(s), name);
 	dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
+	iwu_lines(s, &s->reg.link.cc.iwu, stubd_sub_slot(s));
 	printf("reg: enrolment routed to %s (slot %u)\n", s->sub_path,
 	       (unsigned)stubd_sub_slot(s));
 }
@@ -5574,6 +5580,7 @@ static void main_cc_setup(struct stubd *s)
 					     (uint8_t)s->hs[i].slot, hsname);
 		}
 		dect_iwu_set_own(&s->reg.link.cc.iwu, tid);
+		iwu_lines(s, &s->reg.link.cc.iwu, tid);
 	}
 	/*
 	 * No <<CODEC-LIST>> in FP-originated setups by default: basic speech
@@ -5738,6 +5745,63 @@ static void hs_name(const struct stubd *s, unsigned i, char *buf, size_t cap)
 static void name_path(const struct stubd *s, unsigned i, char *buf, size_t cap)
 {
 	snprintf(buf, cap, "%s.name", s->hs[i].path);
+}
+
+/*
+ * A handset's lines (Network > DECT, Handsets, Line 1 / Line 2): written by
+ * the init script as /etc/opendectcell/handset<N>.lines, one "<line> <name>" per
+ * line, Line 2 only when its account is on. Its Line Settings List shows
+ * these; without the file, Line 1 under the base's default name.
+ */
+static void lines_load(struct stubd *s, unsigned i)
+{
+	char path[256], buf[64];
+	FILE *f;
+
+	s->hs[i].line_name[0][0] = s->hs[i].line_name[1][0] = '\0';
+	s->hs[i].line2 = 0;
+	snprintf(path, sizeof(path), "/etc/opendectcell/handset%u.lines",
+		 hs_slot(s, i));
+	f = fopen(path, "r");
+	if (!f)
+		return;
+	while (fgets(buf, sizeof(buf), f)) {
+		char *nm = buf + 2;
+
+		buf[strcspn(buf, "\r\n")] = '\0';
+		if ((buf[0] != '1' && buf[0] != '2') || buf[1] != ' ')
+			continue;
+		snprintf(s->hs[i].line_name[buf[0] - '1'],
+			 sizeof(s->hs[i].line_name[0]), "%.15s", nm);
+		if (buf[0] == '2')
+			s->hs[i].line2 = 1;
+	}
+	fclose(f);
+	printf("sub: DECT %u's lines: 1 \"%s\"%s%s%s\n", hs_slot(s, i),
+	       s->hs[i].line_name[0], s->hs[i].line2 ? ", 2 \"" : "",
+	       s->hs[i].line2 ? s->hs[i].line_name[1] : "",
+	       s->hs[i].line2 ? "\"" : "");
+}
+
+/* The lines a link's Line Settings List offers: those of its handset. */
+static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
+{
+	const char *def = s->audio.line_name ? s->audio.line_name : "Line 1";
+	uint32_t att = slot >= 1u && slot <= 32u ? 1u << (slot - 1u) : 0u;
+	unsigned i;
+
+	for (i = 0; i < s->n_hs; i++)
+		if (hs_slot(s, i) == slot)
+			break;
+	if (!slot || i == s->n_hs)
+		return;
+	dect_iwu_clear_lines(iwu);
+	(void)dect_iwu_add_line(iwu, STUBD_LINE_ID, s->hs[i].line_name[0][0]
+				? s->hs[i].line_name[0] : def, att);
+	if (s->hs[i].line2)
+		(void)dect_iwu_add_line(iwu, STUBD_LINE_ID + 1u,
+					s->hs[i].line_name[1][0]
+					? s->hs[i].line_name[1] : "Line 2", att);
 }
 
 static void name_load(struct stubd *s, unsigned i)
@@ -5928,8 +5992,10 @@ static void profiles_resolve_all(struct stubd *s, const char *why)
 	unsigned i;
 
 	printf("profile: resolving the handsets' profiles (%s)\n", why);
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->n_hs; i++) {
 		profile_resolve(s, i);
+		lines_load(s, i);	/* their line names travel with it */
+	}
 	fflush(stdout);
 }
 
@@ -6893,6 +6959,7 @@ static int dereg_page_response(struct stubd *s, struct side_link *sl,
 	} else if ((unsigned)i != s->cur) {
 		hs_switch(s, (unsigned)i, " (deregistration)");
 		dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
+		iwu_lines(s, &s->reg.link.cc.iwu, stubd_sub_slot(s));
 	}
 	printf("dereg: DECT %u answered the page with its own identity\n",
 	       hs_slot(s, (unsigned)i));
@@ -8095,6 +8162,7 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 		sl->adopted = a;
 		dect_iwu_set_own(&sl->link.cc.iwu,
 				 (uint8_t)hs_slot(s, (unsigned)a));
+		iwu_lines(s, &sl->link.cc.iwu, (uint8_t)hs_slot(s, (unsigned)a));
 		printf("side: handle %u serves %s (slot %u)\n", sl->handle,
 		       s->hs[a].path, hs_slot(s, (unsigned)a));
 	}
@@ -8213,6 +8281,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	    (unsigned)s->reg.link.mm.adopted != s->cur) {
 		hs_switch(s, (unsigned)s->reg.link.mm.adopted, "");
 		dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
+		iwu_lines(s, &s->reg.link.cc.iwu, stubd_sub_slot(s));
 	}
 
 	if (!s->first_contact_ms) {

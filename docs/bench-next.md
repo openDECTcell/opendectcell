@@ -555,3 +555,15 @@ ssh root@192.168.1.1 '/tmp/dect-stubd --bridge-echo'
 | ring-back, then after 1.5 s the call connects and your voice comes back half a second late, clear | signalling and both audio directions through the sockets work: the SIP side only has to fill them |
 | it connects but stays silent | the log's `audio:` lines and the echo's `audio connected` say which half is missing; the agent reads them |
 | your voice comes back garbled or choppy | the G.722 coding or the frame timing: the `audio: socket closed` line counts underruns and drops |
+
+### 26. A handset's own line names (2 minutes, any run)
+
+Since round 7 each handset's Line 1 and Line 2 have their own names (Network >
+DECT, Handsets, Edit, Line 1/Line 2, "Line name"). Set Line 1 of DECT 1 to
+"Festnetz" and switch on Line 2 named "Büro", Save & Apply, start the base,
+then on the A540 open the base menu, Verbindungen.
+
+| you see | meaning |
+|---|---|
+| "Festnetz" and "Büro" | the per-handset Line Settings List works |
+| only "Line 1" | the agent reads the log's `sub: DECT 1's lines:` and the list session |
