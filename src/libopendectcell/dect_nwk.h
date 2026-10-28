@@ -163,7 +163,9 @@ struct dect_nwk_hdr {
 
 /*
  * Parse the 2-octet header. On success returns 0, fills h, and points *ies /
- * *ies_len at the IE block (may be empty). Returns -1 if len < 2.
+ * *ies_len at the IE block (may be empty). Returns -1 if len < 2, and for the
+ * TV extension value 7, which we do not support: such a message is ignored
+ * (EN 300 175-5 §17.3.1).
  */
 int dect_nwk_parse(const uint8_t *msg, size_t len, struct dect_nwk_hdr *h,
 		   const uint8_t **ies, size_t *ies_len);

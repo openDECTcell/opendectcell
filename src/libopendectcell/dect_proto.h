@@ -394,8 +394,13 @@
  * 47: SETUP flag (2026-10-28, spec sweep C8). No layout change.
  *    **Behaviour change:** a {CC-SETUP} with TI flag 1 is ignored (EN 300
  *    175-5 §17.3.2.1); before, it opened a call or counted as a collision.
+ *
+ * 48: extended TV (2026-10-28, spec sweep E3). No layout change.
+ *    **Behaviour change:** dect_nwk_parse() fails for TV 7, so CC, MM and
+ *    LCE ignore such a message (EN 300 175-5 §17.3.1); before, octet 1a
+ *    was read as the message type.
  */
-#define OPENDECTCELL_API_VERSION 47
+#define OPENDECTCELL_API_VERSION 48
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

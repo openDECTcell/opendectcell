@@ -42,6 +42,24 @@ static void test_header_short(void)
 }
 
 /* Build a message with several IEs, then find each one. */
+/* TV 7 is the extension value we do not support: ignored (§17.3.1). */
+static void test_extended_tv_is_ignored(void)
+{
+	static const uint8_t m[] = { 0x73, 0x00, 0x7B };  /* TV 7, TVX 0, INFO */
+	struct dect_nwk_hdr h;
+	const uint8_t *ies;
+	size_t ies_len;
+	uint8_t v;
+
+	CHECK_EQ(dect_nwk_parse(m, sizeof(m), &h, &ies, &ies_len), -1);
+	for (v = 0; v < 7; v++) {		/* every other value parses */
+		uint8_t n[2] = { (uint8_t)(0x03u | (v << 4)), 0x7B };
+
+		CHECK_EQ(dect_nwk_parse(n, 2, &h, &ies, &ies_len), 0);
+		CHECK_EQ(h.ti_value, v);
+	}
+}
+
 static void test_put_find_ie(void)
 {
 	uint8_t msg[64];
@@ -131,6 +149,7 @@ int main(void)
 {
 	test_header();
 	test_header_short();
+	test_extended_tv_is_ignored();
 	test_put_find_ie();
 	test_skip_fixed_ie();
 	test_skip_double_octet_ie();
