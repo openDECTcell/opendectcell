@@ -1,22 +1,21 @@
 {
 	"luci-app-opendectcell": {
-		"description": "Read the DECT base's state and config, open registration",
+		"description": "Read the DECT base's state, change its settings and manage its handsets",
 		"read": {
 			"file": {
-				"/tmp/opendectcell-state.json": [
-					"read"
-				]
+				"/tmp/opendectcell-state.json": [ "read" ],
+				"/etc/opendectcell/profiles": [ "list" ],
+				"/etc/opendectcell-sub.*.profile": [ "read" ]
 			},
-			"uci": [
-				"opendectcell"
-			]
+			"uci": [ "opendectcell" ]
 		},
 		"write": {
 			"file": {
-				"/etc/init.d/opendectcell register": [
-					"exec"
-				]
-			}
+				"/etc/init.d/opendectcell register": [ "exec" ],
+				"/usr/sbin/dect-stubd --ctl *": [ "exec" ],
+				"/etc/opendectcell-sub.*.profile": [ "write" ]
+			},
+			"uci": [ "opendectcell" ]
 		}
 	}
 }

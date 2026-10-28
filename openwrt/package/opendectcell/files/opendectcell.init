@@ -134,6 +134,7 @@ load_chip() {
 
 start_service() {
 	local enabled pin stores options reg wb ov dw ci nocipher="" rw n spare f args=""
+	local la tc ln
 	config_load opendectcell
 	config_get_bool enabled main enabled 0
 	[ "$enabled" = 1 ] || return 0
@@ -163,6 +164,15 @@ start_service() {
 	[ "$ci" = 1 ] || nocipher="-C"
 	config_get rw main regwindow 120
 	options="${options:+$options,}regwindow=$rw"
+	# authentication on location registration: the daemon's default
+	config_get_bool la main locauth 1
+	[ "$la" = 1 ] || options="${options:+$options,}nolocauth"
+	config_get_bool tc main twocalls 0
+	[ "$tc" = 1 ] && options="${options:+$options,}twocalls"
+	# the line's name on CAT-iq handsets; a comma would split the options
+	config_get ln main line_name ''
+	ln=$(printf '%s' "$ln" | tr -d ',' | cut -c1-15)
+	[ -n "$ln" ] && options="${options:+$options,}linename=$ln"
 	# The DECT LED path is a board-profile detail (e.g. green:fon on the
 	# 7520, green:dect on the 7412). The user can turn the LED off with
 	# 'noled' or point it elsewhere with 'led=PATH' in options.
@@ -195,6 +205,12 @@ start_service() {
 	# a crash restarts it; five quick failures in a row give up
 	procd_set_param respawn 3600 5 5
 	procd_close_instance
+}
+
+# Save & Apply in LuCI (Network > DECT) restarts the base with the new
+# settings; a call in progress ends.
+service_triggers() {
+	procd_add_reload_trigger "opendectcell"
 }
 
 # Open the registration window on the running daemon: 'regwindow' seconds,
