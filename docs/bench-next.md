@@ -359,3 +359,14 @@ handset's key and ours differ: the agent reads the log.
 
 Undo at any point: stop the daemon, `mv /etc/opendectcell-sub.as690h.deregistered
 /etc/opendectcell-sub.as690h` (or copy back the one in `/root/`), and re-register.
+
+### Watch in every run from now: the handset mask
+
+Since `9504236` the base sends `0x017c 00 <mask>` computed from the slots it
+holds ([CR A-0129]) instead of a fixed `09`. With the A540, C430A and AS690H
+in slots 1-3 the log shows `sub: locked-in handset mask 0x017c 00 07`.
+
+| you see | meaning |
+|---|---|
+| all three ring and attach as before | as expected: they rang with `09` too, so the mask does not gate our paging |
+| a handset that rang before no longer rings, or no longer attaches | the mask matters after all: re-run with `EXTRA=slotmask=0x09` to confirm, and the agent reads both logs |
