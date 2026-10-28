@@ -782,7 +782,7 @@ static void queue_busy_info(struct dect_cc *cc, uint8_t signal, uint8_t status,
 static void busy_notify(struct dect_cc *cc)
 {
 	proceed(cc);
-	queue_busy_info(cc, 0x04u, DECT_CS_CALL_DISCONNECTING, 1);
+	queue_busy_info(cc, DECT_SIGNAL_BUSY_TONE, DECT_CS_CALL_DISCONNECTING, 1);
 	cc->busy_notified = 1;
 	cc->busy_deadline_ms = 0;		/* armed by the tick */
 }
@@ -977,7 +977,7 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 			cc->busy_deadline_ms = now_ms + CC_BUSY_TONE_MS;
 		} else if (now_ms >= cc->busy_deadline_ms) {
 			/* tones off, CS idle, then the release (§7.4.8.3) */
-			queue_busy_info(cc, 0x3Fu, DECT_CS_IDLE, 0);
+			queue_busy_info(cc, DECT_SIGNAL_TONES_OFF, DECT_CS_IDLE, 0);
 			cc->busy_notified = 0;
 			cc->busy_deadline_ms = 0;
 			(void)dect_cc_release(cc);

@@ -155,6 +155,19 @@
 #define DECT_SIGNAL_ALERT_PATTERN0	0x40u	/* GAP table 23: internal call */
 #define DECT_SIGNAL_ALERT_PATTERN1	0x41u	/* GAP table 23: external call */
 #define DECT_SIGNAL_ALERT_OFF		0x4Fu
+/*
+ * The tones (§7.6.8). TS 102 527-3 §7.4.15.2.1 makes ring-back, busy, call
+ * waiting, intercept, negative acknowledgement and tones off mandatory for
+ * the FP towards a Part 3 handset; the handset generates the tone itself.
+ */
+#define DECT_SIGNAL_DIAL_TONE		0x00u
+#define DECT_SIGNAL_RINGBACK_TONE	0x01u
+#define DECT_SIGNAL_INTERCEPT_TONE	0x02u
+#define DECT_SIGNAL_CONGESTION_TONE	0x03u
+#define DECT_SIGNAL_BUSY_TONE		0x04u
+#define DECT_SIGNAL_CALL_WAITING_TONE	0x07u
+#define DECT_SIGNAL_NEGATIVE_ACK_TONE	0x09u
+#define DECT_SIGNAL_TONES_OFF		0x3Fu
 
 struct dect_nwk_hdr {
 	uint8_t pd;		/* protocol discriminator */
