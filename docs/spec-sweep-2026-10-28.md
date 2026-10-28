@@ -42,6 +42,15 @@ list-access content beyond what the CAT-iq review read.
 | ✔ F-10 | EN 300 444 table 23 | an internal call's SETUP carried <<SIGNAL>> 41H (external); now 40H. Stock does the same (A-StockTrace-1). Untested on air | `5c25e3d` |
 | ✔ | EN 300 444 §8.19; TS 102 527-3 §7.4.10.6.2 | the internal-call key 0x17 (the A540's way) | `6135cef` (API 28), bench test 19 |
 | ✔ | TS 102 527-3 §7.4.11 | `lineid=` must name the line list's line | `c1e2a9c` |
+| ✔ finding 7 | TS 102 527-3 table 17, §7.4.10.6.2 | a number dialled from a list (`1C 15` + number on the list-access call) hung in PROCEEDING; now an external call, routed at once | `a6959c2` (API 32) |
+| ✔ finding 12 | EN 300 175-4 §9.2.3.6, A.3.1 | LAPC retransmitted for ever; now DISC after N250 = 3, logged loudly (no saved run counts retransmissions, so a false release must show) | `2636eae`, `bdb38a3` (API 33) |
+| ✔ finding 2 | TS 102 527-3 §7.4.9.1, §7.4.6.4.1 | <<TERMINAL-CAPABILITY>> parsed and kept; call status only to NG-DECT Part 3 handsets, decided per IPUI before CC answers the SETUP. The bench logs decode as A540 Part 3 (PI_7 `0x16`), C430A and AS690H Part 1 (`0x12`), which is exactly whom stock sends call status (A-0125) | `6f8e112` (API 34), `44714e8` (API 35), `b9f8f8d` |
+| ✔ | A-0126 | the call key to the chip (`0x0208`) before CIPHER-REQUEST, stock's layout | `0628a67` |
+| ✔ | EN 300 444 §8.41/8.42 | `dect_cc_info()`, a {CC-INFO} with given IEs (API 31); `-a infoie=` for S3 | `b0b3a82`, `599af45` |
+
+**Decided, not changed:**
+- **Finding 11 (re-present on any 32H) stays.** EN 300 175-5 §9.5.2.3's FT rule is "If the FT receives a {CC-RELEASE-COM} releasing the incoming call, the FT may re-present", and the PT rule applies from CALL INITIATED, before its own SETUP is on the air: the handset can refuse our call for a call we never see, and then waits P<CC.06> for the re-presentation. Gating on a crossing SETUP we saw would break that case. Bounded at two re-presentations.
+- **Finding 1 (call ids) waits for the parallel-call work.** Call ids must be unique system-wide (TS 102 527-3 §7.4.6.1) and the first one goes out in the early SETUP-ACK, before CC has the SETUP, so the allocator belongs with dect_link's SETUP hook (the one added for finding 2), the daemon's link table and the internal-call legs together. Today each handset sees one call, so a shared id 1 is a spec deviation without a visible effect until call waiting exists.
 
 ## The answer to "all three channels busy"
 
@@ -188,6 +197,19 @@ each run to end and park before the next. Every log name is unique.
 | S3b | `EXTRA=clip=0301234567,cnip=Wednesday,cnipalpha=0,infoie=2811020a1a910202095765646e65736461790d HOLD=1 ./ringone.sh c430a` | C430A | as S3a (stock's framing, A-0125 §5) |
 | S4 | `ssh root@192.168.1.1 '/tmp/dect-stubd -g -P 0000 -s /etc/opendectcell-sub.a540 -s /etc/opendectcell-sub.c430a -s /etc/opendectcell-sub.as690h -p -C -t 180 -a mask=0x0002,codec=3,status=8000,twocalls > /tmp/vS4-$(date +%H%M%S).log 2>&1'` | A540 → C430A | INT, DECT 2: does the C430A ring with its internal pattern? |
 | S5 | the S4 command, log `vS5-...` | A540 | dial 123, hang up, redial at once: does the second call connect? |
+
+| S6 | `MAXSECS=90 HOLD=20 ATTACH=600000 EXTRA=playpcm=/tmp/wb16k.pcm ./ringone.sh c430a`, then the same for `a540` | C430A, A540 | dial 123: does each still show its call timer? |
+
+**S6 outcomes (call status only to Part 3, `b9f8f8d`):** the log should show
+`cap: /etc/opendectcell-sub.c430a reports NG-DECT Part 1 -- no call status to it` and
+a CONNECT `83 07 7c 04 90 03 00 81` with no `7e`; for the A540 `NG-DECT Part 3`
+and the CONNECT with `7e 06 01 00 81 02 01 85` as in test 15.
+
+| shows | meaning |
+|---|---|
+| both timers as in test 15 | the C430A's timer is its own (as A-0125 suggests); the gate costs nothing |
+| no timer on the C430A any more | it did key on our call status: keep the standard, and note it for the Gigaset profile (stock draws the timer as display text instead) |
+| the A540 lost its timer | the gate misfired for a Part 3 handset: read the `cap:` line and the CONNECT bytes |
 
 S3 repeats on the AS690H if the C430A shows the name. The `infoie` bytes are
 `28 <len>` plus the text, or stock's framing around it; computed, not typed.
