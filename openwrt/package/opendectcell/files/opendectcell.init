@@ -158,8 +158,8 @@ start_service() {
 	else
 		options="${options:+$options,}nooverlap"
 	fi
-	# Off unless asked for: ciphered calls drop on 07.56 (bench test 17)
-	config_get_bool ci main cipher 0
+	# On unless turned off: ciphered calls work since 2026-10-28
+	config_get_bool ci main cipher 1
 	[ "$ci" = 1 ] || nocipher="-C"
 	config_get rw main regwindow 120
 	options="${options:+$options,}regwindow=$rw"
