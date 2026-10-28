@@ -48,6 +48,17 @@ the CPU FIFO path loses 1–3 % of frames, each loss moving the control slot
 by a word. (c) is the generic transport's DMA work (`kmod-lantiq-ssc-pcm`,
 clean-room Q-0006). The mail stack itself needs no change.
 
+**Update, same night (observed on hardware):** `kmod-lantiq-ssc-pcm`'s DMA
+engine carries the 18-word frame with no lost word (125,599 frames). Started
+before the chip boots, with the contact sent at TX bit shift = measured lane
+offset, it drew the first-contact sequence **`0xFFF2`** (`28→22`, L 28),
+**`0xF601`** (L 7), **`0xF602`** (L 25), `0xFFF1`, then the periodic reports
+every 5 s — all in one fixed receive slot (that session: lane offset 6 bits,
+TX slot 29, RX slot 9 of 36, low byte of each slot first). Slot numbers
+depend on the session's alignment and must be probed, as on the 7520. The
+path for openDECTcell: use `/dev/ssc-pcm0` (36 slots) for the 7412 instead of its
+own SSC engine, start it before `dect-fwload`, align by the measured offset.
+
 ## 2. STUB firmware patching (the first-stage loader, `the loader routine`)
 
 - **First-level loader:** loaded from Intel HEX at chip address 0x10080. If the file name contains `_slow`, a slow boot variant is used.
