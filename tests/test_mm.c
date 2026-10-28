@@ -803,6 +803,30 @@ static void test_tpui_assignment_times_out_at_ten_seconds(void)
 	CHECK_EQ(mm.stats.tpui_timeouts, 1u);
 }
 
+/* The PT refuses the TPUI: the assignment ends at once, as a failure. */
+static void test_tpui_reject_ends_the_assignment(void)
+{
+	static const uint8_t rej[] = { 0x05, 0x5F };
+	static const uint8_t ack[] = { 0x05, 0x5D };
+	struct dect_mm mm;
+	uint8_t out[128];
+
+	mm_setup_located(&mm, out, sizeof(out));
+	dect_mm_tick(&mm, 1000);
+	dect_mm_rx(&mm, rej, sizeof(rej), NULL, NULL);
+	CHECK_EQ(mm.stats.tpui_rejected, 1u);
+	CHECK_EQ(mm.tpui_rejected, 1u);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
+	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+	dect_mm_tick(&mm, 11000);
+	CHECK_EQ(mm.stats.tpui_timeouts, 0u);	/* stopped, not expired */
+	dect_mm_rx(&mm, ack, sizeof(ack), NULL, NULL);
+	CHECK_EQ(mm.stats.tpui_unsolicited, 1u);
+	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
+	dect_mm_rx(&mm, rej, sizeof(rej), NULL, NULL);	/* nothing pending */
+	CHECK_EQ(mm.stats.tpui_rejected, 1u);
+}
+
 /* An ack arriving late, after the timeout, does not resurrect the assignment
  * silently -- it is counted, and the caller can still see it timed out. */
 static void test_a_late_ack_is_visible_as_late(void)
@@ -1202,6 +1226,7 @@ int main(void)
 	test_tpui_assignment_is_confirmed_by_the_ack();
 	test_tpui_assignment_times_out_at_ten_seconds();
 	test_a_late_ack_is_visible_as_late();
+	test_tpui_reject_ends_the_assignment();
 	test_no_assignment_means_no_timer();
 	test_an_unsolicited_ack_confirms_nothing();
 	return CHECK_DONE();

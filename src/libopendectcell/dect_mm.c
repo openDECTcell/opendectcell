@@ -453,6 +453,7 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	 */
 	mm->tpui_confirmed = 0;
 	mm->tpui_timed_out = 0;
+	mm->tpui_rejected = 0;
 	mm->ident_pending = 1;
 }
 
@@ -864,12 +865,27 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		mm->tpui_confirmed = 1;
 		mm->stats.tpui_acked++;
 		break;
+	case DECT_MM_TEMP_IDENTITY_ASSIGN_REJ:
+		/*
+		 * The PT cannot store the TPUI or found an error in the
+		 * {LOCATE-ACCEPT} (EN 300 444 §8.28.2.3): the assignment has
+		 * failed, as on <MM_ident.1> expiry, so stop the timer
+		 * (§13.2.2). It fell into "ignore" and ran the timer out
+		 * (spec sweep, M9). Final: a later ACK counts as unsolicited.
+		 */
+		if (!mm->ident_pending)
+			break;
+		mm->ident_pending = 0;
+		mm->ident_deadline_ms = 0;
+		mm->tpui_rejected = 1;
+		mm->stats.tpui_rejected++;
+		break;
 	default:
 		break;
 	}
 }
 
-/* <MM_ident.1>: FT value 10 seconds (EN 300 175-5 §A.2). */
+/* <MM_ident.1>: FT value 10 seconds (EN 300 175-5 A.5). */
 #define MM_IDENT1_MS	10000u
 
 void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)

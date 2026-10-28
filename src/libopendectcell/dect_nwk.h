@@ -65,6 +65,7 @@
  * probable rather than certain, and say so if it ever misbehaves.
  */
 #define DECT_MM_TEMP_IDENTITY_ASSIGN_ACK	0x5Du
+#define DECT_MM_TEMP_IDENTITY_ASSIGN_REJ	0x5Fu
 
 /* CC (Call Control) message types (§7.4.1; octet 2). */
 #define DECT_CC_ALERTING		0x01u

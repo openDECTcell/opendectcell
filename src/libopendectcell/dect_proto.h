@@ -442,8 +442,14 @@
  *    without <<PORTABLE-IDENTITY>> (or one too long to hold) gets
  *    {ACCESS-RIGHTS-REJECT} "information element error" (§17.6.4) instead
  *    of key allocation and an accept naming nobody.
+ *
+ * 56: TPUI assignment refused (2026-10-28, spec sweep M9). Layout change:
+ *    struct dect_mm gains tpui_rejected, the stats tpui_rejected; new
+ *    DECT_MM_TEMP_IDENTITY_ASSIGN_REJ. **Behaviour change:** a
+ *    {TEMPORARY-IDENTITY-ASSIGN-REJ} ends a pending assignment as failed
+ *    and stops <MM_ident.1> (EN 300 444 §8.28.2.3, EN 300 175-5 §13.2.2).
  */
-#define OPENDECTCELL_API_VERSION 55
+#define OPENDECTCELL_API_VERSION 56
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
