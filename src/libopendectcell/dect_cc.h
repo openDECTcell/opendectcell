@@ -508,6 +508,15 @@ void dect_cc_set_callinfo(struct dect_cc *cc, const struct dect_callinfo *ci);
 int dect_cc_busy(const struct dect_cc *cc);
 
 /*
+ * Queue a {CC-INFO} on the call in progress carrying `ies` as its
+ * information elements, already encoded (EN 300 175-5 §6.3.2.4). For
+ * information the FT adds after the SETUP -- caller ID that did not fit
+ * (EN 300 444 §8.41/8.42), <<MULTI-DISPLAY>> text. 0 on success, -1 with
+ * no call or no room.
+ */
+int dect_cc_info(struct dect_cc *cc, const uint8_t *ies, size_t len);
+
+/*
  * Choose the transaction value the next FP-originated SETUP will use. Values
  * 0..6 are valid for the originating side (7 is the extended-TI escape).
  * dect_cc_init() leaves it at 0, and callers should normally leave it there.

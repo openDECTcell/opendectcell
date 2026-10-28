@@ -1166,6 +1166,26 @@ void dect_cc_set_codec_list(struct dect_cc *cc, const uint8_t *list, size_t len)
 	cc->codec_list_len = len;
 }
 
+int dect_cc_info(struct dect_cc *cc, const uint8_t *ies, size_t len)
+{
+	unsigned idx;
+	uint8_t *b;
+	size_t off;
+
+	if (!dect_cc_busy(cc) || cc->state == DECT_CC_ST_RELEASED)
+		return -1;
+	b = txq_slot(cc, &idx);
+	if (!b)
+		return -1;
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 cc->ti_flag, cc->ti_value, DECT_CC_INFO);
+	if (!off || len > DECT_LAPC_MSG_MAX - off)
+		return -1;
+	memcpy(b + off, ies, len);
+	txq_commit(cc, idx, off + len);
+	return 0;
+}
+
 int dect_cc_release(struct dect_cc *cc)
 {
 	if (cc->state == DECT_CC_ST_NULL || cc->state == DECT_CC_ST_RELEASED)

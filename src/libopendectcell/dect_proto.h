@@ -290,8 +290,12 @@
  *    F<CC.01> expiry sends {CC-RELEASE} "timer expiry" and enters
  *    DECT_CC_ST_RELEASED (release pending), the normal release of GAP
  *    §8.3.2.3, instead of {CC-RELEASE-COM} and NULL.
+ *
+ * 31: dect_cc_info() (2026-10-28). No layout change. New: a {CC-INFO} with
+ *    caller-supplied IEs on the call in progress, for information the FT
+ *    adds after the SETUP (EN 300 444 §8.41/8.42, <<MULTI-DISPLAY>>).
  */
-#define OPENDECTCELL_API_VERSION 30
+#define OPENDECTCELL_API_VERSION 31
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

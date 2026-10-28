@@ -154,6 +154,28 @@ static void test_second_call_on_the_same_link(void)
 	CHECK_EQ(cc.ti_value, 1);
 }
 
+/* {CC-INFO} with given IEs on the call in progress, and only then. */
+static void test_info_on_the_call(void)
+{
+	static const uint8_t md[] = { 0x28, 0x03, 'A', 'b', 'c' };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_info(&cc, md, sizeof(md)), -1);	/* no call */
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	CHECK_EQ(dect_cc_info(&cc, md, sizeof(md)), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_INFO);
+	CHECK_EQ(n, 2u + sizeof(md));
+	CHECK(memcmp(out + 2, md, sizeof(md)) == 0);
+	CHECK_EQ(out[0] & 0x80u, 0x80u);	/* responder: the PP's call */
+}
+
 /* We initiate the hang-up on an active call. */
 static void test_release_from_fp(void)
 {
@@ -2115,6 +2137,7 @@ int main(void)
 	test_internal_call_waits_for_the_owner();
 	test_int_key_makes_an_internal_call();
 	test_second_call_on_the_same_link();
+	test_info_on_the_call();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();
