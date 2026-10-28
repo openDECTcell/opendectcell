@@ -163,6 +163,39 @@ static void test_no_room(void)
 	CHECK_EQ(dect_callinfo_put(buf, sizeof(buf), OFF0, &ci), 0);
 }
 
+/*
+ * The call status reason (EN 300 175-5 §7.7.56) follows the call status:
+ * "busy system", as TS 102 527-3 §7.4.8.3 sends it with CS call
+ * disconnecting; it needs a call status, and only defined values pass.
+ */
+static void test_status_reason(void)
+{
+	static const uint8_t want[] = { 0x7e, 0x09, 0x01, 0x00, 0x82,
+					0x02, 0x01, 0x86, 0x02, 0x02, 0x80 };
+	struct dect_callinfo ci, back;
+	uint8_t b[32];
+	size_t n;
+
+	dect_callinfo_init(&ci);
+	ci.has_call_id = 1;
+	ci.call_id = 2;
+	ci.has_call_status = 1;
+	ci.call_status = DECT_CS_CALL_DISCONNECTING;
+	ci.has_status_reason = 1;
+	ci.status_reason = DECT_CSR_SYSTEM_BUSY;
+	n = dect_callinfo_put(b, sizeof(b), 0, &ci);
+	CHECK_EQ(n, sizeof(want));
+	CHECK(memcmp(b, want, sizeof(want)) == 0);
+	CHECK_EQ(dect_callinfo_parse(b + 2, n - 2u, &back), 0);
+	CHECK_EQ(back.has_status_reason, 1);
+	CHECK_EQ(back.status_reason, DECT_CSR_SYSTEM_BUSY);
+	ci.status_reason = 0x05;			/* reserved */
+	CHECK_EQ(dect_callinfo_valid(&ci), 0);
+	ci.status_reason = DECT_CSR_USER_BUSY;
+	ci.has_call_status = 0;				/* reason alone */
+	CHECK_EQ(dect_callinfo_valid(&ci), 0);
+}
+
 /* What the A540 sends with its dialled digits: line 'None', call id 1. */
 static void test_parse_a540_none(void)
 {
@@ -190,6 +223,7 @@ static void test_parse_a540_none(void)
 
 int main(void)
 {
+	test_status_reason();
 	test_parse_a540_none();
 	test_standard_examples();
 	test_line_and_type();

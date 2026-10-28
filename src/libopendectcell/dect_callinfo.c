@@ -35,6 +35,12 @@ int dect_callinfo_valid(const struct dect_callinfo *ci)
 		return 0;
 	if (ci->has_call_status && !status_defined(ci->call_status))
 		return 0;
+	if (ci->has_status_reason &&
+	    (!ci->has_call_status ||
+	     (ci->status_reason > DECT_CSR_CODE_FAILED &&
+	      ci->status_reason != DECT_CSR_USER_BUSY &&
+	      ci->status_reason != DECT_CSR_NUMBER_NOT_AVAILABLE)))
+		return 0;
 	return 1;
 }
 
@@ -81,6 +87,10 @@ int dect_callinfo_parse(const uint8_t *v, size_t n, struct dect_callinfo *ci)
 			   sub == DECT_CALLINFO_SUB_CALL_STATUS) {
 			ci->has_call_status = 1;
 			ci->call_status = val;
+		} else if (type == DECT_CALLINFO_TYPE_STATUS &&
+			   sub == DECT_CALLINFO_SUB_STATUS_REASON) {
+			ci->has_status_reason = 1;
+			ci->status_reason = val;
 		}
 		i = j + 1u;
 	}
@@ -90,7 +100,7 @@ int dect_callinfo_parse(const uint8_t *v, size_t n, struct dect_callinfo *ci)
 size_t dect_callinfo_put(uint8_t *out, size_t cap, size_t off,
 			 const struct dect_callinfo *ci)
 {
-	uint8_t body[4 * 3];
+	uint8_t body[5 * 3];
 	size_t n = 0;
 
 	if (!dect_callinfo_valid(ci))
@@ -107,6 +117,9 @@ size_t dect_callinfo_put(uint8_t *out, size_t cap, size_t off,
 	if (ci->has_call_status)
 		n = put_sub(body, n, DECT_CALLINFO_TYPE_STATUS,
 			    DECT_CALLINFO_SUB_CALL_STATUS, ci->call_status);
+	if (ci->has_status_reason)
+		n = put_sub(body, n, DECT_CALLINFO_TYPE_STATUS,
+			    DECT_CALLINFO_SUB_STATUS_REASON, ci->status_reason);
 	if (n == 0)
 		return off;
 	return dect_nwk_put_ie(out, cap, off, DECT_IE_CALL_INFORMATION,

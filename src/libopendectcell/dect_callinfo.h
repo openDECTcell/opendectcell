@@ -36,6 +36,17 @@
 #define DECT_CALLINFO_SUB_LINE_TYPE	0x05u
 #define DECT_CALLINFO_SUB_CALL_ID	0x00u
 #define DECT_CALLINFO_SUB_CALL_STATUS	0x01u
+#define DECT_CALLINFO_SUB_STATUS_REASON	0x02u	/* EN 300 175-5 §7.7.56 */
+
+/* Call status reason values (EN 300 175-5 §7.7.56). */
+enum dect_callinfo_reason {
+	DECT_CSR_SYSTEM_BUSY		= 0x00,
+	DECT_CSR_LINE_IN_USE		= 0x01,
+	DECT_CSR_CODE_NOT_SUPPORTED	= 0x02,
+	DECT_CSR_CODE_FAILED		= 0x03,
+	DECT_CSR_USER_BUSY		= 0x10,
+	DECT_CSR_NUMBER_NOT_AVAILABLE	= 0x11,
+};
 
 /*
  * Line id 127 is "None": the line is not yet known. A PP sends it to ask for
@@ -76,6 +87,8 @@ struct dect_callinfo {
 	uint8_t call_id;	/* 0..127, FP-assigned, system-wide */
 	uint8_t has_call_status;
 	uint8_t call_status;	/* enum dect_callinfo_status */
+	uint8_t has_status_reason;	/* needs has_call_status */
+	uint8_t status_reason;	/* enum dect_callinfo_reason */
 };
 
 /* Clear to "nothing to send". */

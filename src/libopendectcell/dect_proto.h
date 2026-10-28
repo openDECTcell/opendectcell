@@ -355,8 +355,15 @@
  *    change: struct dect_link gains call_id_for, an optional owner hook
  *    asked for the call id of a handset's new call at its {CC-SETUP},
  *    before CC answers (TS 102 527-3 §7.4.6.1: unique system-wide).
+ *
+ * 42: call status reason (2026-10-28). Layout change: struct dect_callinfo
+ *    (and so struct dect_cc) gains has_status_reason and status_reason.
+ *    New: enum dect_callinfo_reason, DECT_CALLINFO_SUB_STATUS_REASON;
+ *    encoded after the call status, parsed, and valid only with one
+ *    (EN 300 175-5 §7.7.56), for "system busy" (TS 102 527-3 §7.4.8.3) and
+ *    the negative acknowledgements of call waiting (§7.4.3.4).
  */
-#define OPENDECTCELL_API_VERSION 41
+#define OPENDECTCELL_API_VERSION 42
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
