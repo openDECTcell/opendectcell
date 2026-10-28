@@ -318,8 +318,13 @@
  *    gains call_status_for and call_status_ctx, an optional owner hook
  *    asked when a handset's {CC-SETUP} arrives, before CC answers it: 1
  *    call status, 0 none, -1 keep (TS 102 527-3 §7.4.6.4.1).
+ *
+ * 36: a failed key allocation (2026-10-28). No layout change. New:
+ *    DECT_MM_AUTHENTICATION_REJECT. **Behaviour change:** a wrong RES1 is
+ *    answered with {AUTHENTICATION-REJECT} (EN 300 175-5 §13.6, EN 300 444
+ *    §8.32.2.4), then {ACCESS-RIGHTS-REJECT} as before.
  */
-#define OPENDECTCELL_API_VERSION 35
+#define OPENDECTCELL_API_VERSION 36
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

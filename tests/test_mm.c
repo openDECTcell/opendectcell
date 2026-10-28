@@ -231,6 +231,9 @@ static void test_register_bad_pin(void)
 	/* PP computes RES1 from the wrong PIN "9999". */
 	n = pp_auth_request(buf, sizeof(buf), 1, "9999", rand_f, rs, rand_p, 0);
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));	/* §13.6 / GAP 8.32.2.4 */
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REJECT);
+	CHECK_EQ(out[0] & 0x80u, 0x00u);		/* our transaction, F=0 */
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
 	CHECK_EQ(out[2], DECT_IE_REJECT_REASON);
@@ -568,6 +571,8 @@ static void test_failed_registration_keeps_the_held_identity(void)
 		;					/* KEY-ALLOCATE */
 	n = pp_auth_request(buf, sizeof(buf), 0, "0000", rand_f, rs, rand_p, 0);
 	dect_mm_rx(&mm, buf, n, rand_f, rs);		/* wrong PIN */
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REJECT);
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
 	CHECK_EQ(mm.port_id_len, sizeof(ours));

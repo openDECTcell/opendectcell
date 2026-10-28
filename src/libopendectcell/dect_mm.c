@@ -342,6 +342,27 @@ static void send_access_reject(struct dect_mm *mm)
 }
 
 /*
+ * FP -> PP AUTHENTICATION-REJECT in the key allocation, which is our
+ * transaction (F=0, as our AUTHENTICATION-REPLY): "If the authentication
+ * of the PT has failed, the FT shall respond by sending an
+ * {AUTHENTICATION-REJECT}" (EN 300 175-5 §13.6, EN 300 444 §8.32.2.4).
+ */
+static void send_auth_reject(struct dect_mm *mm)
+{
+	uint8_t reason[1] = { DECT_MM_REJECT_AUTH_FAILED };
+	unsigned idx;
+	uint8_t *b = txq_slot(mm, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = hdr(mm, b, DECT_TI_ORIGINATOR, DECT_MM_AUTHENTICATION_REJECT);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_REJECT_REASON,
+			      reason, sizeof(reason));
+	txq_commit(mm, idx, off);
+}
+
+/*
  * FP -> PP LOCATE-ACCEPT: confirm location registration. After ACCESS-RIGHTS-
  * ACCEPT the C4 immediately runs location registration (sends LOCATE-REQUEST)
  * and will not report success until it is accepted. LOCATE-ACCEPT must carry a
@@ -721,6 +742,13 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 	dect_dsaa_a12(ks, mm->rand_f, dck, xres1);	/* expected RES1 */
 	if (memcmp(res1, xres1, 4) != 0) {
 		mm->stats.auth_fail++;
+		/*
+		 * The key allocation failed: AUTHENTICATION-REJECT, as the
+		 * standard requires, then close the access-rights request
+		 * the handset still has open (EN 300 444 §8.30.2.1). We sent
+		 * only the second, which bench test 9 accepted.
+		 */
+		send_auth_reject(mm);
 		send_access_reject(mm);
 		return;
 	}
