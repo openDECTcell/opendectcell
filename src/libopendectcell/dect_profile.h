@@ -134,6 +134,23 @@ size_t dect_profile_describe(const struct dect_hs_profile *hp, char *out,
 size_t dect_profile_display(const struct dect_hs_profile *hp, const char *text,
 			    uint8_t *out, size_t cap);
 
+/*
+ * The key table for a settings page, as a JSON array of
+ * {"key","group","label","type":"words"|"int"|"hex", "values" (words),
+ * "min"/"max" (int), "default"}. Returns the length, 0 if cap is short.
+ */
+size_t dect_profile_keys_json(char *out, size_t cap);
+
+/*
+ * Apply a handset's own choices on top of its resolved profile: lines of
+ * "key = value", the behaviour keys of §5 only (no header, no sections),
+ * checked as a profile's are. 0, or -1 with the reason reported (line
+ * numbers are the text's own); hp is then untouched.
+ */
+int dect_profile_override(const char *text, size_t len,
+			  struct dect_hs_profile *hp,
+			  dect_profile_report report, void *ctx);
+
 /* Dotted version compare, field by field as integers: <0, 0, >0. */
 int dect_profile_version_cmp(const char *a, const char *b);
 

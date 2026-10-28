@@ -132,6 +132,35 @@ load_chip() {
 	echo "$second" > /tmp/dect-stub.second
 }
 
+# A handset's own settings (Network > DECT, Handsets, General): each
+# 'list override key=value' of its 'config handset' section becomes a line
+# of /etc/opendectcell/handset<slot>.override, which dect-stubd lays over the
+# handset's profile. Written afresh at every start.
+OVERRIDE_DIR=/etc/opendectcell
+
+override_line() {
+	local kv="$1" slot="$2" k v
+	k=${kv%%=*}
+	v=${kv#*=}
+	# a key and a value as the profile format has them, nothing else
+	case "$k" in *[!a-z0-9._]*|"") return ;; esac
+	case "$v" in *[!A-Za-z0-9x:{}_\ -]*|"") return ;; esac
+	printf '%s = %s\n' "$k" "$v" >> "$OVERRIDE_DIR/handset$slot.override"
+}
+
+override_write() {
+	local slot
+	config_get slot "$1" slot
+	case "$slot" in [1-6]) ;; *) return ;; esac
+	config_list_foreach "$1" override override_line "$slot"
+}
+
+overrides_write() {
+	mkdir -p "$OVERRIDE_DIR"
+	rm -f "$OVERRIDE_DIR"/handset*.override
+	config_foreach override_write handset
+}
+
 start_service() {
 	local enabled pin stores options reg wb ov dw ci nocipher="" rw n spare f args=""
 	local la tc ln
@@ -140,6 +169,7 @@ start_service() {
 	[ "$enabled" = 1 ] || return 0
 
 	load_chip || return 1
+	overrides_write
 	config_get pin main pin ''
 	if [ -z "$pin" ]; then
 		pin=$(pin_make)

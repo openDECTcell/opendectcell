@@ -227,6 +227,50 @@ static void test_version_compare(void)
 	CHECK(dect_profile_version_cmp("1.2.3", "1.3") < 0);
 }
 
+
+/* The settings page's key table and a handset's own choices. */
+static void test_keys_and_override(void)
+{
+	static char js[8192];
+	struct dect_hs_profile hp, def;
+	const char *ok = "cc.call_status = on\n"
+			 "cc.signal.external = 0x44   # louder\n"
+			 "lce.release_after_call = no\n";
+
+	CHECK(dect_profile_keys_json(js, sizeof(js)) > 0);
+	CHECK(js[0] == '[');
+	CHECK(strstr(js, "{\"key\":\"cc.call_status\",\"group\":\"call\"") != NULL);
+	CHECK(strstr(js, "\"values\":[\"auto\",\"on\",\"off\"],\"default\":\"auto\"") != NULL);
+	CHECK(strstr(js, "\"key\":\"cc.signal.external\"") != NULL);
+	CHECK(strstr(js, "\"type\":\"int\",\"min\":64,\"max\":72,\"default\":\"0x41\"") != NULL);
+	CHECK(strstr(js, "\"key\":\"lce.release_after_call\"") != NULL);
+	CHECK(strstr(js, "\"values\":[\"no\",\"yes\"],\"default\":\"yes\"") != NULL);
+	CHECK(strstr(js, "\\\"Call connected\\\"") != NULL);	/* escaped */
+	CHECK_EQ(dect_profile_keys_json(js, 16), 0);		/* too short */
+
+	dect_profile_defaults(&hp);
+	def = hp;
+	CHECK_EQ(dect_profile_override(ok, strlen(ok), &hp, report, NULL), 0);
+	CHECK_EQ(hp.cc_call_status, DECT_PROF_ON);
+	CHECK_EQ(hp.cc_signal_external, 0x44);
+	CHECK_EQ(hp.lce_release_after_call, 0);
+	CHECK_EQ(hp.cc_name_method, def.cc_name_method);	/* untouched */
+
+	/* a bad value: refused with the text's own line, hp unchanged */
+	n_reports = 0;
+	hp = def;
+	CHECK_EQ(dect_profile_override("cc.call_status = on\nformat = 2\n",
+				       31, &hp, report, NULL), -1);
+	CHECK(n_reports > 0);
+	CHECK_EQ(last_line, 2);
+	CHECK(!memcmp(&hp, &def, sizeof(hp)));
+	CHECK_EQ(dect_profile_override("[firmware 1 .. 2]\nnotify = on\n", 30,
+				       &hp, report, NULL), -1);
+	CHECK(!memcmp(&hp, &def, sizeof(hp)));
+	CHECK_EQ(dect_profile_override("", 0, &hp, report, NULL), 0);
+	CHECK(!memcmp(&hp, &def, sizeof(hp)));
+}
+
 int main(void)
 {
 	test_parse_and_layers();
@@ -234,5 +278,6 @@ int main(void)
 	test_display_expansion();
 	test_errors();
 	test_version_compare();
+	test_keys_and_override();
 	return CHECK_DONE();
 }

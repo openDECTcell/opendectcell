@@ -5802,7 +5802,7 @@ static int profile_load(const char *path, struct dect_profile *p);
  * this build accepts but does not act on yet. Anything missing or broken:
  * the defaults, said so.
  */
-static void profile_resolve(struct stubd *s, unsigned i)
+static void profile_resolve_choice(struct stubd *s, unsigned i)
 {
 	static struct dect_profile dev, mfr;
 	const char *dir = s->audio.profile_dir ? s->audio.profile_dir
@@ -5878,6 +5878,47 @@ static void profile_resolve(struct stubd *s, unsigned i)
 		printf("profile: DECT %u: some of its keys are not acted on "
 		       "in this build (see docs/handset-profiles.md, "
 		       "'today')\n", hs_slot(s, i));
+}
+
+/*
+ * A handset's own settings, from the DECT settings page (Network > DECT,
+ * Handsets, General): "key = value" lines in /etc/opendectcell/handset<N>.override,
+ * written by the init script from /etc/config/opendectcell, on top of the
+ * chosen profile.
+ */
+#define OVERRIDE_DIR	"/etc/opendectcell"
+
+static void ovr_say(void *ctx, unsigned line, const char *msg)
+{
+	printf("profile: %s, line %u: %s\n", (const char *)ctx, line, msg);
+}
+
+static void profile_resolve(struct stubd *s, unsigned i)
+{
+	char path[320], text[4096], desc[1024];
+	size_t n;
+	FILE *f;
+
+	profile_resolve_choice(s, i);
+	snprintf(path, sizeof(path), "%s/handset%u.override", OVERRIDE_DIR,
+		 hs_slot(s, i));
+	f = fopen(path, "r");
+	if (!f)
+		return;
+	n = fread(text, 1, sizeof(text), f);
+	fclose(f);
+	if (n == sizeof(text)) {
+		printf("profile: %s is too long -- not applied\n", path);
+		return;
+	}
+	if (dect_profile_override(text, n, &s->hs[i].prof, ovr_say, path)) {
+		printf("profile: DECT %u's own settings (%s) not applied\n",
+		       hs_slot(s, i), path);
+		return;
+	}
+	if (dect_profile_describe(&s->hs[i].prof, desc, sizeof(desc)))
+		printf("profile: DECT %u with its own settings: %s\n",
+		       hs_slot(s, i), desc);
 }
 
 static void ctl_hs(struct stubd *s, unsigned i, const char *state);
@@ -10629,6 +10670,14 @@ int main(int argc, char **argv)
 {
 	if (argc >= 2 && !strcmp(argv[1], "--ctl"))
 		return ctl_client(argc - 2, argv + 2);
+	if (argc >= 2 && !strcmp(argv[1], "--profile-keys")) {
+		static char js[8192];
+
+		if (!dect_profile_keys_json(js, sizeof(js)))
+			return 1;
+		puts(js);
+		return 0;
+	}
 	if (argc >= 2 && !strcmp(argv[1], "--bridge-echo"))
 		return bridge_echo(argc - 2, argv + 2);
 	if (argc >= 3 && !strcmp(argv[1], "--check-profile"))

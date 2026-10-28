@@ -621,8 +621,12 @@
  *   79: dect_ctl, the control socket's line format (parse, build;
  *       docs/bridge-interface.md §2): control characters refused on input
  *       and replaced on output, so a handset name cannot split a line.
+ *
+ *   80: dect_profile_keys_json() (the key table, with labels and groups, for
+ *       a settings page) and dect_profile_override() (a handset's own
+ *       settings on top of its profile).
  */
-#define OPENDECTCELL_API_VERSION 79
+#define OPENDECTCELL_API_VERSION 80
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

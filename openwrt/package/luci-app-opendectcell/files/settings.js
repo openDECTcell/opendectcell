@@ -6,11 +6,17 @@
 'require uci';
 
 /*
- * Network > DECT: the base's settings (/etc/config/opendectcell) and its
- * handsets. Save & Apply restarts the service (procd reload trigger), so a
- * call in progress ends. The handset actions go to the running daemon over
- * its control socket (dect-stubd --ctl, docs/bridge-interface.md §2) and
- * take effect at once; they need the service running.
+ * Network > DECT: the base's settings and its handsets (/etc/config/opendectcell).
+ * Save & Apply restarts the service (procd reload trigger), so a call in
+ * progress ends.
+ *
+ * Handsets: one 'config handset dect<N>' section per registered handset,
+ * edited in a pop-up as the Wireless page edits an SSID: General (its name
+ * and profile, kept where the base keeps them, and its own settings, a
+ * 'list override key=value' laid over the profile; the keys come from
+ * dect-stubd --profile-keys), Line 1 and Line 2 (its SIP accounts, for the
+ * bridge). Renaming and deregistering need the base running; they go to the
+ * daemon over its control socket (docs/bridge-interface.md §2).
  */
 var STATE = '/tmp/opendectcell-state.json';
 var CTL = '/usr/sbin/dect-stubd';
@@ -20,6 +26,12 @@ function readState() {
 	return fs.read(STATE).then(function(text) {
 		try { return JSON.parse(text); } catch (e) { return null; }
 	}).catch(function() { return null; });
+}
+
+function readKeys() {
+	return fs.exec(CTL, [ '--profile-keys' ]).then(function(r) {
+		try { return JSON.parse(r.stdout || '[]'); } catch (e) { return []; }
+	}).catch(function() { return []; });
 }
 
 /* A value for the control socket's line format: quoted, \ and " escaped. */
@@ -34,8 +46,7 @@ function octets(v) {
 
 /*
  * One command to the daemon. Resolves to { ok, reason }: the reply line
- * for this verb ("ok verb=..." or "error verb=... reason=..."), or
- * reason 'not-running' when nothing answered.
+ * for this verb, or reason 'not-running' when nothing answered.
  */
 function ctl(line) {
 	var verb = line.split(' ')[0];
@@ -77,40 +88,6 @@ function ago(ms) {
 	return _('%d h ago').format(Math.round(s / 3600));
 }
 
-/* The handset's choice file next to its subscription store. */
-function choicePath(h) {
-	return h.store + '.profile';
-}
-
-function renameDialog(h) {
-	var input = E('input', {
-		'class': 'cbi-input-text', 'type': 'text', 'value': h.name,
-		'maxlength': 15
-	});
-
-	ui.showModal(_('Rename DECT %d').format(h.slot), [
-		E('p', {}, _('The name every handset shows for this one, at most 15 characters. Empty restores "DECT %d".').format(h.slot)),
-		input,
-		E('div', { 'class': 'right' }, [
-			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
-			E('button', {
-				'class': 'btn cbi-button-action',
-				'click': function() {
-					var v = input.value.trim();
-
-					if (octets(v) > 15) {
-						ui.addNotification(null, E('p', REASONS['bad-name']), 'warning');
-						return;
-					}
-					ui.hideModal();
-					return ctl('rename hs=' + h.slot + ' name=' + quote(v))
-						.then(function(r) { report(r, _('DECT %d renamed.').format(h.slot)); });
-				}
-			}, _('Rename'))
-		])
-	]);
-}
-
 function deregisterDialog(h) {
 	ui.showModal(_('Deregister DECT %d (%s)?').format(h.slot, h.name), [
 		E('p', {}, _('The base erases this handset\'s registration. The handset is told if it is in range; to use it again it has to be registered anew. A handset that is lost or switched off is erased after about 30 seconds without its confirmation.')),
@@ -128,81 +105,156 @@ function deregisterDialog(h) {
 	]);
 }
 
-function profileSelect(h, profiles, current) {
-	var sel = E('select', { 'class': 'cbi-input-select' }, [
-		E('option', { 'value': '' }, _('automatic (standard)'))
-	].concat(profiles.map(function(p) {
-		return E('option', { 'value': p, 'selected': p == current ? '' : null }, p);
-	})));
+/* The override list of a section, as { key: value }. */
+function overrides(sid) {
+	var o = {};
 
-	sel.addEventListener('change', function() {
-		var v = sel.value, w = v ? fs.write(choicePath(h), v + '\n')
-					 : fs.remove(choicePath(h)).catch(function() {});
-
-		return w.then(function() { return ctl('reload-profiles'); })
-			.then(function(r) {
-				report(r, v ? _('DECT %d now uses the profile %s.').format(h.slot, v)
-					    : _('DECT %d uses the standard settings again.').format(h.slot));
-			}).catch(function(e) {
-				ui.addNotification(null, E('p', _('Could not save the profile choice: %s').format(e)), 'warning');
-			});
+	L.toArray(uci.get('opendectcell', sid, 'override')).forEach(function(kv) {
+		var i = kv.indexOf('=');
+		if (i > 0)
+			o[kv.substr(0, i)] = kv.substr(i + 1);
 	});
-	return sel;
+	return o;
 }
 
-function handsetsTable(st, profiles, choices) {
-	if (!st || st.radio !== 'up')
-		return E('p', {}, _('The DECT service is not running. Enable it on the General tab and save, then come back here to manage handsets.'));
-
-	var t = E('table', { 'class': 'table' }, [
-		E('tr', { 'class': 'tr table-titles' }, [
-			E('th', { 'class': 'th' }, _('No.')),
-			E('th', { 'class': 'th' }, _('Name')),
-			E('th', { 'class': 'th' }, _('Type')),
-			E('th', { 'class': 'th' }, _('Profile')),
-			E('th', { 'class': 'th' }, _('Last contact')),
-			E('th', { 'class': 'th cbi-section-actions' }, '')
-		])
-	]);
-
-	(st.handsets || []).forEach(function(h, i) {
-		t.appendChild(E('tr', { 'class': 'tr' }, [
-			E('td', { 'class': 'td' }, String(h.slot)),
-			E('td', { 'class': 'td' }, h.name),
-			E('td', { 'class': 'td' }, h.part3 == null ? _('not yet known') :
-				h.part3 ? _('CAT-iq') : _('GAP')),
-			E('td', { 'class': 'td' }, profileSelect(h, profiles, choices[i])),
-			E('td', { 'class': 'td' }, h.link ? _('connected now') : ago(h.seen_ms_ago)),
-			E('td', { 'class': 'td cbi-section-actions' }, [
-				E('button', { 'class': 'btn cbi-button-edit',
-					'click': function() { renameDialog(h); } }, _('Rename')), ' ',
-				E('button', { 'class': 'btn cbi-button-negative',
-					'click': function() { deregisterDialog(h); } }, _('Deregister'))
-			])
-		]));
+function setOverride(sid, key, value) {
+	var list = L.toArray(uci.get('opendectcell', sid, 'override')).filter(function(kv) {
+		return kv.indexOf(key + '=') != 0;
 	});
-	if (!(st.handsets || []).length)
-		t.appendChild(E('tr', { 'class': 'tr placeholder' }, [
-			E('td', { 'class': 'td' }, _('No handset is registered yet.'))
-		]));
 
-	return E('div', {}, [
-		t,
-		E('div', { 'class': 'cbi-page-actions' }, [
-			E('button', {
-				'class': 'btn cbi-button-action',
-				'click': ui.createHandlerFn(this, function() {
-					return fs.exec('/etc/init.d/opendectcell', [ 'register' ]).then(function(r) {
-						ui.addNotification(null, E('p', r.code == 0 ?
-							_('Registration is open for %s s. Start the registration on the handset now and enter the PIN %s.')
-								.format(uci.get('opendectcell', 'main', 'regwindow') || '120',
-									uci.get('opendectcell', 'main', 'pin') || '-') :
-							REASONS['not-running']), r.code == 0 ? 'info' : 'warning');
-					});
-				})
-			}, _('Register a handset'))
-		])
-	]);
+	if (value != null && value !== '')
+		list.push(key + '=' + value);
+	uci.set('opendectcell', sid, 'override', list.length ? list : null);
+}
+
+var GROUPS = {
+	call: _('Calls'), link: _('Radio link, registration and lists'),
+	report: _('What the handset reports'), feature: _('Features')
+};
+
+/* The handset's settings, one field per key of the profile format. */
+function addKeyOptions(ss, keys) {
+	var seen = {};
+
+	keys.forEach(function(k) {
+		var o, name = '_k_' + k.key.replace(/[^a-z0-9]/g, '_');
+
+		if (!seen[k.group]) {
+			seen[k.group] = true;
+			o = ss.taboption('general', form.DummyValue, '_g_' + k.group);
+			o.modalonly = true;
+			o.render = function() {
+				return E('h4', { 'style': 'margin-top:1em' }, GROUPS[k.group] || k.group);
+			};
+		}
+
+		if (k.type == 'words') {
+			o = ss.taboption('general', form.ListValue, name, k.label);
+			o.value('', _('as the profile says (%s)').format(
+				k['default'] == '-' ? _('from the handset') : k['default']));
+			k.values.forEach(function(v) {
+				if (v != '-')
+					o.value(v, v);
+			});
+		} else {
+			o = ss.taboption('general', form.Value, name, k.label);
+			o.placeholder = k.type == 'int' ? k['default'] : _('as the profile says');
+			o.validate = function(sid, v) {
+				if (v === '')
+					return true;
+				if (k.type == 'int') {
+					var n = /^0x[0-9a-f]+$/i.test(v) ? parseInt(v, 16) :
+						/^[0-9]+$/.test(v) ? parseInt(v, 10) : NaN;
+					return n >= k.min && n <= k.max ? true :
+						_('%d to %d (or 0x..)').format(k.min, k.max);
+				}
+				return /^hex:[0-9a-fA-F {}a-z]+$/.test(v) ? true : _('hex:... with {text} or {len}');
+			};
+		}
+		o.modalonly = true;
+		o.optional = true;
+		o.cfgvalue = function(sid) { return overrides(sid)[k.key] || ''; };
+		o.write = function(sid, v) { setOverride(sid, k.key, v); };
+		o.remove = function(sid) { setOverride(sid, k.key, null); };
+	});
+}
+
+/* A SIP account on tab t, its options prefixed p ('l1_', 'l2_'). */
+function addLineOptions(ss, t, p, optional) {
+	var o;
+
+	o = ss.taboption(t, form.Flag, p + 'enabled', _('Use this line'),
+		optional ? _('An optional second SIP account for this handset.') :
+			   _('The handset\'s SIP account: its calls go out on it and calls to it ring this handset.'));
+	o.modalonly = true;
+
+	o = ss.taboption(t, form.Value, p + 'display', _('Display name'),
+		_('The name the called party sees.'));
+	o.modalonly = true;
+	o.depends(p + 'enabled', '1');
+
+	o = ss.taboption(t, form.Value, p + 'user', _('User name'),
+		_('The SIP user, often the phone number.'));
+	o.modalonly = true;
+	o.depends(p + 'enabled', '1');
+	o.rmempty = false;
+
+	o = ss.taboption(t, form.Value, p + 'authuser', _('Login name'),
+		_('When the provider wants a login other than the user name.'));
+	o.modalonly = true;
+	o.depends(p + 'enabled', '1');
+	o.optional = true;
+
+	o = ss.taboption(t, form.Value, p + 'password', _('Password'));
+	o.modalonly = true;
+	o.password = true;
+	o.depends(p + 'enabled', '1');
+
+	o = ss.taboption(t, form.Value, p + 'domain', _('Registrar'),
+		_('The provider\'s SIP server, host or host:port (e.g. sip.example.net, or 192.168.178.1 for a FRITZ!Box).'));
+	o.modalonly = true;
+	o.depends(p + 'enabled', '1');
+	o.datatype = 'or(hostport,host)';
+	o.rmempty = false;
+
+	o = ss.taboption(t, form.Value, p + 'outbound', _('Outbound proxy'),
+		_('Only when the provider names one.'));
+	o.modalonly = true;
+	o.depends(p + 'enabled', '1');
+	o.datatype = 'or(hostport,host)';
+	o.optional = true;
+
+	o = ss.taboption(t, form.ListValue, p + 'transport', _('Transport'));
+	o.modalonly = true;
+	o.depends(p + 'enabled', '1');
+	o.value('udp', 'UDP');
+	o.value('tcp', 'TCP');
+	o.value('tls', 'TLS');
+	o.default = 'udp';
+
+	o = ss.taboption(t, form.Value, p + 'regint', _('Registration interval'),
+		_('Seconds between registrations.'));
+	o.modalonly = true;
+	o.depends(p + 'enabled', '1');
+	o.datatype = 'range(60,86400)';
+	o.placeholder = '3600';
+
+	o = ss.taboption(t, form.MultiValue, p + 'codec', _('Codecs'),
+		_('In order of preference. G.722 keeps the handset\'s wideband (HD) audio end to end.'));
+	o.modalonly = true;
+	o.depends(p + 'enabled', '1');
+	o.value('g722', 'G.722 (HD)');
+	o.value('pcma', 'G.711 A-law');
+	o.value('pcmu', 'G.711 µ-law');
+	o.default = 'g722 pcma pcmu';
+}
+
+function lineSummary(sid, p) {
+	var u = uci.get('opendectcell', sid, p + 'user'), d = uci.get('opendectcell', sid, p + 'domain');
+
+	if (uci.get('opendectcell', sid, p + 'enabled') != '1')
+		return '-';
+	return (u || '?') + '@' + (d || '?');
 }
 
 return view.extend({
@@ -210,26 +262,47 @@ return view.extend({
 		return Promise.all([
 			uci.load('opendectcell'),
 			readState(),
-			L.resolveDefault(fs.list(PROFILES), [])
+			L.resolveDefault(fs.list(PROFILES), []),
+			readKeys()
 		]).then(function(r) {
 			var st = r[1];
 			var profiles = r[2].filter(function(f) {
 				return f.type == 'file' && /\.profile$/.test(f.name);
 			}).map(function(f) { return f.name.replace(/\.profile$/, ''); }).sort();
 
+			/* a section for every registered handset that has none yet */
+			((st && st.handsets) || []).forEach(function(h) {
+				var sid = 'dect' + h.slot;
+
+				if (!uci.get('opendectcell', sid)) {
+					uci.add('opendectcell', 'handset', sid);
+					uci.set('opendectcell', sid, 'slot', String(h.slot));
+				}
+			});
+
 			return Promise.all(((st && st.handsets) || []).map(function(h) {
-				return L.resolveDefault(fs.read(choicePath(h)), '').then(function(t) {
+				return L.resolveDefault(fs.read(h.store + '.profile'), '').then(function(t) {
 					return (t || '').trim();
 				});
 			})).then(function(choices) {
-				return [ st, profiles, choices ];
+				return [ st, profiles, choices, r[3] ];
 			});
 		});
 	},
 
 	render: function(data) {
-		var st = data[0], profiles = data[1], choices = data[2];
-		var m, s, o;
+		var st = data[0], profiles = data[1], choices = data[2], keys = data[3];
+		var running = st && st.radio === 'up';
+		var bySlot = {}, choiceBySlot = {};
+		var m, s, o, ss;
+
+		((st && st.handsets) || []).forEach(function(h, i) {
+			bySlot[h.slot] = h;
+			choiceBySlot[h.slot] = choices[i];
+		});
+		function hs(sid) {
+			return bySlot[+uci.get('opendectcell', sid, 'slot')];
+		}
 
 		m = new form.Map('opendectcell', _('DECT'),
 			_('The base station for DECT handsets. Saving restarts it with the new settings; a call in progress ends. Live figures are on Status > DECT.'));
@@ -299,10 +372,110 @@ return view.extend({
 		o.placeholder = '3000';
 		o.depends('overlap', '1');
 
-		/* Handsets: live, from the running daemon */
-		o = s.taboption('handsets', form.DummyValue, '_handsets');
-		o.render = function() {
-			return E('div', { 'class': 'cbi-value' }, handsetsTable(st, profiles, choices));
+		/* Handsets: one row each, edited in a pop-up */
+		o = s.taboption('handsets', form.SectionValue, '_handsets', form.GridSection, 'handset',
+			null, running ? null :
+			_('The DECT service is not running: renaming and deregistering need it, and handsets registered later appear here once it runs.'));
+		ss = o.subsection;
+		ss.anonymous = true;
+		ss.addremove = false;
+		ss.nodescriptions = true;
+		ss.modaltitle = function(sid) {
+			var h = hs(sid);
+			return _('Handset DECT %s').format(uci.get('opendectcell', sid, 'slot')) +
+				(h && h.name != 'DECT ' + h.slot ? ' (' + h.name + ')' : '');
+		};
+		ss.tab('general', _('General'));
+		ss.tab('line1', _('Line 1'));
+		ss.tab('line2', _('Line 2'));
+
+		ss.renderRowActions = function(sid) {
+			var td = form.GridSection.prototype.renderRowActions.apply(this, [ sid, _('Edit') ]);
+			var h = hs(sid), box = td.querySelector('.cbi-section-actions') || td;
+
+			if (h && running)
+				box.appendChild(E('button', {
+					'class': 'btn cbi-button-negative',
+					'click': function(ev) { ev.preventDefault(); deregisterDialog(h); }
+				}, _('Deregister')));
+			return td;
+		};
+
+		/* the grid's columns */
+		o = ss.option(form.DummyValue, 'slot', _('No.'));
+		o.modalonly = false;
+		o = ss.option(form.DummyValue, '_name', _('Name'));
+		o.modalonly = false;
+		o.cfgvalue = function(sid) { var h = hs(sid); return h ? h.name : _('not registered'); };
+		o = ss.option(form.DummyValue, '_type', _('Type'));
+		o.modalonly = false;
+		o.cfgvalue = function(sid) {
+			var h = hs(sid);
+			return !h || h.part3 == null ? '-' : h.part3 ? _('CAT-iq') : _('GAP');
+		};
+		o = ss.option(form.DummyValue, '_l1', _('Line 1'));
+		o.modalonly = false;
+		o.cfgvalue = function(sid) { return lineSummary(sid, 'l1_'); };
+		o = ss.option(form.DummyValue, '_l2', _('Line 2'));
+		o.modalonly = false;
+		o.cfgvalue = function(sid) { return lineSummary(sid, 'l2_'); };
+		o = ss.option(form.DummyValue, '_seen', _('Last contact'));
+		o.modalonly = false;
+		o.cfgvalue = function(sid) {
+			var h = hs(sid);
+			return !h ? '-' : h.link ? _('connected now') : ago(h.seen_ms_ago);
+		};
+
+		/* General: name and profile where the base keeps them */
+		o = ss.taboption('general', form.Value, '_rename', _('Name'),
+			_('What every handset shows for this one, at most 15 characters. Empty restores "DECT n". Needs the base running.'));
+		o.modalonly = true;
+		o.cfgvalue = function(sid) { var h = hs(sid); return h ? h.name : ''; };
+		o.validate = function(sid, v) {
+			return octets(v) <= 15 ? true : REASONS['bad-name'];
+		};
+		o.write = function(sid, v) {
+			var h = hs(sid);
+			if (!h || v == h.name)
+				return;
+			return ctl('rename hs=' + h.slot + ' name=' + quote(v))
+				.then(function(r) { report(r, _('DECT %d renamed.').format(h.slot)); });
+		};
+		o.remove = function(sid) { return this.write(sid, ''); };
+
+		o = ss.taboption('general', form.ListValue, '_profile', _('Profile'),
+			_('Known quirks of this handset model; its own settings below override it.'));
+		o.modalonly = true;
+		o.value('', _('automatic (standard)'));
+		profiles.forEach(function(p) { o.value(p, p); });
+		o.cfgvalue = function(sid) { return choiceBySlot[+uci.get('opendectcell', sid, 'slot')] || ''; };
+		o.write = function(sid, v) {
+			var h = hs(sid);
+			if (!h || v == (choiceBySlot[h.slot] || ''))
+				return;
+			var w = v ? fs.write(h.store + '.profile', v + '\n')
+				  : fs.remove(h.store + '.profile').catch(function() {});
+			return w.then(function() { return ctl('reload-profiles'); });
+		};
+		o.remove = function(sid) { return this.write(sid, ''); };
+
+		addKeyOptions(ss, keys);
+		addLineOptions(ss, 'line1', 'l1_', false);
+		addLineOptions(ss, 'line2', 'l2_', true);
+
+		/* Handsets: the register button under the grid */
+		o = s.taboption('handsets', form.Button, '_register', _('New handset'),
+			_('Opens registration for the registration window; start the registration on the handset then and enter the PIN.'));
+		o.inputtitle = _('Register a handset');
+		o.inputstyle = 'action';
+		o.onclick = function() {
+			return fs.exec('/etc/init.d/opendectcell', [ 'register' ]).then(function(r) {
+				ui.addNotification(null, E('p', r.code == 0 ?
+					_('Registration is open for %s s. Start the registration on the handset now and enter the PIN %s.')
+						.format(uci.get('opendectcell', 'main', 'regwindow') || '120',
+							uci.get('opendectcell', 'main', 'pin') || '-') :
+					REASONS['not-running']), r.code == 0 ? 'info' : 'warning');
+			});
 		};
 
 		/* Advanced */
