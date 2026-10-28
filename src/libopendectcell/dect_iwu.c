@@ -12,6 +12,7 @@
 static const uint8_t supported_lists[] = {
 	DECT_LIA_LIST_SUPPORTED,
 	DECT_LIA_LIST_INTERNAL_NAMES,
+	DECT_LIA_LIST_SYSTEM_SETTINGS,
 	DECT_LIA_LIST_LINE_SETTINGS,
 };
 
@@ -21,11 +22,15 @@ static const uint8_t fields_internal[] = { 0x01, 0x02, 0x03 };	/* 7.4.10.5.8 */
 /* 7.4.11.4; table 9 makes 08H and 0BH-0DH mandatory for the FP too */
 static const uint8_t fields_line[] = { 0x01, 0x02, 0x03, 0x08,
 				       0x0B, 0x0C, 0x0D };
+/* 7.4.11.3: the fields table 9 makes mandatory for the FP */
+static const uint8_t fields_system[] = { 0x01, 0x02, 0x03, 0x09, 0x0A,
+					 0x0D };
 
 void dect_iwu_init(struct dect_iwu *iwu)
 {
 	memset(iwu, 0, sizeof(*iwu));
 	dect_iwu_set_line(iwu, 1, "Line 1");
+	strcpy(iwu->fw_version, "openDECTcell");
 }
 
 static void line_name(struct dect_iwu_line *l, const char *name)
@@ -264,6 +269,7 @@ static unsigned entry_count(const struct dect_iwu *iwu, uint8_t list)
 	case DECT_LIA_LIST_SUPPORTED:		return 1;
 	case DECT_LIA_LIST_INTERNAL_NAMES:	return iwu->n_handsets;
 	case DECT_LIA_LIST_LINE_SETTINGS:	return iwu->n_lines;
+	case DECT_LIA_LIST_SYSTEM_SETTINGS:	return 1;	/* singular */
 	default:				return 0;
 	}
 }
@@ -277,6 +283,8 @@ static const uint8_t *list_fields(uint8_t list, size_t *n)
 		*n = sizeof(fields_internal); return fields_internal;
 	case DECT_LIA_LIST_LINE_SETTINGS:
 		*n = sizeof(fields_line); return fields_line;
+	case DECT_LIA_LIST_SYSTEM_SETTINGS:
+		*n = sizeof(fields_system); return fields_system;
 	default:
 		*n = 0; return NULL;
 	}
@@ -452,6 +460,53 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 			put_field(b, field, 0x00, off, sizeof(off));
 			break;
 		}
+		default:
+			break;
+		}
+		break;
+	}
+
+	case DECT_LIA_LIST_SYSTEM_SETTINGS: {
+		/*
+		 * The DECT System Settings List, one entry (7.4.11.3), read
+		 * only for now: nothing is marked editable, so an edit or save
+		 * is 'procedure not allowed'. Missing before (spec sweep, H21).
+		 */
+		static const uint8_t hidden_pin[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+		static const uint8_t fp = 0x30, yes = 0x31;
+
+		if (idx != 1u)
+			break;
+		switch (field) {
+		case 0x01:
+			/* 7.4.11.3.1: "always ... 'FF'H 'FF'H 'FF'H 'FF'H" */
+			put_field(b, field, 0x00, hidden_pin, sizeof(hidden_pin));
+			break;
+		case 0x02:
+			/* 7.4.11.3.2 'Clock master': 30H, the FP sets the time */
+			put_field(b, field, 0x00, &fp, 1);
+			break;
+		case 0x03:
+			/* 7.4.11.3.3 'Base reset': 31H while nothing was changed
+			 * from its default, which is all a PP can see here */
+			put_field(b, field, 0x00, &yes, 1);
+			break;
+		case 0x09: {
+			/* 7.4.11.3.9: IA5, 1..20 characters, never empty */
+			size_t len = strlen(iwu->fw_version);
+
+			put_field(b, field, 0x00, iwu->fw_version,
+				  len > 20u ? 20u : len);
+			break;
+		}
+		case 0x0A:
+			/* 7.4.11.3.10: may be empty when there is no EEPROM */
+			put_field(b, field, 0x00, NULL, 0);
+			break;
+		case 0x0D:
+			/* 7.4.11.3.13: PIN protected always; hidden like 01H */
+			put_field(b, field, 0x01, hidden_pin, sizeof(hidden_pin));
+			break;
 		default:
 			break;
 		}

@@ -160,6 +160,8 @@ struct dect_iwu {
 	/* The line pool, sorted by line id (the list's sort field). */
 	struct dect_iwu_line lines[DECT_IWU_LINES];
 	unsigned n_lines;
+	/* 'FP version / Firmware version' (7.4.11.3.9): IA5, 1..20 chars */
+	char     fw_version[21];
 
 	/* Open sessions; session identifier = index + 1. */
 	struct {

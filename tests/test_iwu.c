@@ -88,11 +88,12 @@ static void test_read_supported_lists_delivers_the_entry(void)
 	static const uint8_t read[] = { 0xC3, 0x06, 0x81, 0x81, 0x01, 0x00, 0x01 };
 	/* table 49: session 1, start index 1, one entry delivered */
 	static const uint8_t cfm[] = { 0xC3, 0x07, 0x81, 0x81, 0x01 };
-	/* table 62: entry id 1, entry length 6, field 01 length 4,
-	 * properties, lists 00 06 08 */
+	/* table 62: entry id 1, entry length 7, field 01 length 5,
+	 * properties, lists 00 06 07 08 */
 	static const uint8_t data[] = { 0xC3, 0x14, 0x81,
-					0x81, 0x86,
-					0x01, 0x84, 0x80, 0x00, 0x06, 0x08 };
+					0x81, 0x87,
+					0x01, 0x85, 0x80, 0x00, 0x06, 0x07,
+					0x08 };
 	struct dect_iwu iwu;
 
 	base_with_two_handsets(&iwu);
@@ -206,6 +207,41 @@ static void test_line_settings_mode_and_forwarding(void)
 	handle(&iwu, q, sizeof(q));			/* none editable */
 	CHECK_EQ(out.len[0], sizeof(q_want));
 	CHECK_EQ(memcmp(out.msg[0], q_want, sizeof(q_want)), 0);
+}
+
+/*
+ * The DECT System Settings List (7.4.11.3): one entry; both PINs read as
+ * FF FF FF FF, the new one PIN protected; clock master FP, base reset yes,
+ * the firmware version, an empty EEPROM version. Nothing editable.
+ */
+static void test_read_system_settings(void)
+{
+	static const uint8_t start[] = { 0xC3, 0x00, 0x07, 0x00 };
+	static const uint8_t read[] = { 0xC3, 0x06, 0x81, 0x81, 0x01, 0x00,
+					0x01, 0x02, 0x03, 0x09, 0x0A, 0x0D };
+	static const uint8_t data[] = {
+		0xC3, 0x14, 0x81,
+		0x81, 0xA8,				/* 7+4+4+15+3+7 octets */
+		  0x01, 0x85, 0x80, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0x02, 0x82, 0x80, 0x30,
+		  0x03, 0x82, 0x80, 0x31,
+		  0x09, 0x8D, 0x80, 'o', 'p', 'e', 'n', 'D', 'E', 'C', 'T', 'c', 'e', 'l', 'l',
+		  0x0A, 0x81, 0x80,
+		  0x0D, 0x85, 0x81, 0xFF, 0xFF, 0xFF, 0xFF,
+	};
+	static const uint8_t edit[] = { 0xC3, 0x08, 0x81, 0x81, 0x02 };
+	struct dect_iwu iwu;
+
+	base_with_two_handsets(&iwu);
+	handle(&iwu, start, sizeof(start));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_START_SESSION_CFM);
+	handle(&iwu, read, sizeof(read));
+	CHECK_EQ(out.count, 2u);
+	CHECK_EQ(out.len[1], sizeof(data));
+	CHECK_EQ(memcmp(out.msg[1], data, sizeof(data)), 0);
+	handle(&iwu, edit, sizeof(edit));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
 }
 
 /* The bitmap only grows with the highest terminal: terminals 1 and 8. */
@@ -505,6 +541,7 @@ int main(void)
 	test_read_internal_names();
 	test_read_line_settings();
 	test_line_settings_mode_and_forwarding();
+	test_read_system_settings();
 	test_attached_handsets_bitmap_spans_two_octets();
 	test_line_pool();
 	test_two_sessions_and_end_session();

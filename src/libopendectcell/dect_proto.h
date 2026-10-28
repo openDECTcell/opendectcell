@@ -506,8 +506,16 @@
  *    08H 'Multiple calls mode' (30H, single call) and 0BH-0DH call
  *    forwarding (off, no codes, no number), read-only, and names them in
  *    the field query (TS 102 527-3 §7.4.11.4.8-13, table 9).
+ *
+ * 65: DECT System Settings List (2026-10-28, spec sweep H21, H14). Layout
+ *    change: struct dect_iwu gains fw_version (default "openDECTcell").
+ *    **Behaviour change:** list 07H is served, read-only, and named in the
+ *    List of Supported Lists: current and new PIN as FF FF FF FF, clock
+ *    master FP, base reset yes, the firmware version, an empty EEPROM
+ *    version (TS 102 527-3 §7.4.11.3). Handsets that read list 00H now see
+ *    one more list.
  */
-#define OPENDECTCELL_API_VERSION 64
+#define OPENDECTCELL_API_VERSION 65
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
