@@ -214,11 +214,13 @@ Unless a row says otherwise, current host command encoders use source `0x22`, de
 | 26..27 | `00 00` |
 
 - Sent on the connecting link **after** {AUTHENTICATION-REPLY} and **before** the over-air {CIPHER-REQUEST} (0.2 to 760 ms before it); one per link per authentication. Also sent on unencrypted calls: it loads the authentication result, it does not switch ciphering on.
-- The chip answers with **`0x0209`, one byte: the link**, 100-180 ms after {CIPHER-REQUEST}. An acknowledgement, no key in it.
+- The chip answers with **`0x0209`, one byte: the link**, 100-180 ms after {CIPHER-REQUEST}. No key in it. **It is the cipher-on indication** `[CR A-0128]`: present per link in the encrypted call, absent from the whole unencrypted one (where `0x0208` still fires), and nothing else follows before the audio bind; stock takes it as the end of the cipher procedure. dect-stubd feeds it to `dect_mm_cipher_on()`, which stops <MM_cipher.1>.
 - There is **no separate cipher-enable mail**: the over-air {CIPHER-REQUEST}, which the host builds, is the trigger; the chip's MAC switches by itself. With no key loaded it drops the link, which is bench test 17's 212 ms drop.
 - The 31-byte form (`40`, a varying byte, a selector `00..03` appended) is for registration and location registration only.
 - An internal call between registered handsets sends no `0x0208` at all (the key is reused).
 - `0x1082` is not ciphering: it is in unencrypted calls and registrations too, routed to host task `0x14`, and carries an <<ESCAPE-TO-PROPRIETARY>> broadcast element `[CR A-0126]`, confirming `[CR A-0072]`.
+
+**Capability bits a24, a29, a34** `[CR A-0128]` (observed): the chip reports its Q-channel messages to the host in **`0xF602`** (len 29); the host shapes them with `0x0153`/`0x0169`/`0x0157` at bring-up, never as literal bytes. The "extended FP capabilities part 2" (Qh 12) body is `c8 01 85 11 34`, **identical in ours and stock's**: a24 (NG-DECT wideband voice) = 1, a29 (extended wideband voice) = 1, a31 (third-party conference) = 1, **a34 (multiple lines) = 0** (body byte 3 bit 5). `0x0157` only changes byte 4 (a42/a43). Stock leaves a34 at 0 although its box offers two lines (A-0125 saw line ids 1 and 2): it assigns lines in its own configuration, not by TS 102 527-3 §7.4.7.
 
 ### 2.2 Connection-status payload (`0xF625`)
 
@@ -298,6 +300,8 @@ These are mail sequences, not replacements for the host's MM/CC/LAPC state machi
 2. **Answered/inferred:** for each owned slot 1..6, send `0x0247 {s,01,flag}`, then `0x020A {s,UAK[16],config}`. Current bare defaults for flag/config are zero; do not silently substitute stock examples as universal requirements. [S `install_subscription()` and zero-initialised configuration; `[CR A-0026]`, `[CR A-0113]`]
 3. **Answered/inferred:** current code sends global `0x017C {00,09}` after installing subscriptions, unless disabled. Its presence is not proof that it solved the historical ringing failure. [S `send_subscription_tail()`; G runs 7–8, 14–19; `[CR A-0114]`]
 4. **Answered/inferred:** when the build/address is established, read the UAK record with `0xFFF1/07`, compare `0xFFF1/08` data without logging the key, and report an unverifiable result for an unsupported build. Current code sends the UAK verification read before the global tail. [S `send_subscription()`, `uak_verify_send()`, `uak_verify_reply()`; `[CR A-0085]`, `[CR A-0086]`]
+
+**Clearing a slot on deregistration, stock** `[CR A-0128]` (observed, 07.56, log 06, three handsets deleted from the web UI, the same sequence each): page the handset (`0x0300 08 11 <slot>`), bearer up, over air {ACCESS-RIGHTS-TERMINATE-REQUEST} (MM 48H, the IPUI), the handset's {ACCESS-RIGHTS-TERMINATE-ACCEPT} (MM 49H; **no authentication either way**), then `0x0247 {s,00,00}`, **`0x020A {s, 17 zero octets}`** (the A-0026 record overwritten with zeros, no separate delete prim), `0x017C {00,mask}` with the slot's bit cleared (bit n = slot n+1), and `0x0202`/`0x0201` releasing the link. The record is zeroed only **after** the ACCEPT; the whole tail follows within ~40 ms. A handset deregistering itself is not in the captures.
 
 Do not probe slot 7: the current code cites an unchecked writer into adjacent storage and rejects `0x020A` indices outside 1..6. The older capacity document's “try a seventh slot” proposal is superseded. **Answered**, `[CR A-SubscriberCapacity-7]`; **inferred** host check. [S `install_subscription()`; C empirical-test section]
 

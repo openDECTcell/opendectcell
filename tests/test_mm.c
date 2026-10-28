@@ -775,6 +775,36 @@ static void test_cipher_timer_and_rejects(void)
 	CHECK_EQ(mm.cipher_rejected, 1u);
 	CHECK_EQ(mm.stats.cipher_rejected, 1u);
 	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_READY);	/* call kept */
+	dect_mm_tick(&mm, 1000);
+	dect_mm_tick(&mm, 20000);
+	CHECK_EQ(mm.stats.cipher_timeouts, 0u);		/* stopped by REJECT */
+
+	/* <MM_cipher.1>: 0x0209 in time stops it; without it, one timeout */
+	{
+		int k;
+
+		for (k = 0; k < 2; k++) {
+			dect_mm_init(&mm, &cfg);
+			dect_mm_start_cipher(&mm, uak, rand_f, rs);
+			(void)dect_mm_poll(&mm, out, sizeof(out));
+			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+					       DECT_TI_RESPONDER, 0,
+					       DECT_MM_AUTHENTICATION_REPLY);
+			n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RES,
+					    res, 4);
+			dect_mm_rx(&mm, buf, n, rand_f, rs);
+			dect_mm_tick(&mm, 1000);		/* armed */
+			CHECK_EQ(dect_mm_next_deadline(&mm), 11000u);
+			if (!k)
+				dect_mm_cipher_on(&mm);
+			dect_mm_tick(&mm, 11000);
+			dect_mm_tick(&mm, 30000);
+			CHECK_EQ(mm.cipher_on, k ? 0u : 1u);
+			CHECK_EQ(mm.stats.cipher_timeouts, k ? 1u : 0u);
+			CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_READY);
+			CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+		}
+	}
 }
 
 /*

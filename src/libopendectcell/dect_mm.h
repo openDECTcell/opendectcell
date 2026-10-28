@@ -169,6 +169,7 @@ struct dect_mm_stats {
 	uint32_t key_failed;	   /* key allocations unanswered or refused */
 	uint32_t auth_timeouts;	   /* <MM_auth.1>: our AUTH-REQUEST unanswered */
 	uint32_t cipher_rejected;  /* {CIPHER-REJECT} received */
+	uint32_t cipher_timeouts;  /* <MM_cipher.1>: never ciphered */
 	uint32_t ft_auth;	   /* the PT authenticated us: replies sent */
 	uint32_t ft_auth_refused;  /* ... refused: no UAK, or not DSAA/UAK */
 	uint32_t locate_deferred;  /* unknown identities held for the owner */
@@ -238,6 +239,8 @@ struct dect_mm {
 	uint64_t key_deadline_ms;		/* <MM_key.1>, 0 = not running */
 	uint64_t auth_deadline_ms;		/* <MM_auth.1>, 0 = not running */
 	uint8_t  cipher_rejected;		/* the PT sent {CIPHER-REJECT} */
+	uint8_t  cipher_on;			/* dect_mm_cipher_on(): ciphered */
+	uint64_t cipher_deadline_ms;		/* <MM_cipher.1>, 0 = armed */
 	unsigned tpui_confirmed : 1;		/* the PT acked the assignment */
 	unsigned tpui_timed_out : 1;		/* <MM_ident.1> expired */
 	unsigned tpui_rejected : 1;		/* the PT refused the TPUI */
@@ -438,6 +441,12 @@ void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN]);
  * one is pending.
  */
 int dect_mm_terminate(struct dect_mm *mm);
+
+/*
+ * The DLC reports the link ciphered -- on this chip the 0x0209 <link> mail
+ * [CR A-0128] -- which stops <MM_cipher.1> (EN 300 444 §8.33, A.5).
+ */
+void dect_mm_cipher_on(struct dect_mm *mm);
 
 void dect_mm_start_cipher(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN],
 			  const uint8_t rand_f[8], const uint8_t rs[16]);

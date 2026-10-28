@@ -561,8 +561,15 @@
  *    _describe(), _display(), _version_cmp(); struct dect_profile and
  *    struct dect_hs_profile. No behaviour change: nothing reads the
  *    resolved values yet.
+ *
+ * 72: <MM_cipher.1> (2026-10-28, [CR A-0128]). Layout change: struct
+ *    dect_mm gains cipher_on and cipher_deadline_ms, the stats
+ *    cipher_timeouts; new dect_mm_cipher_on(). **Behaviour change:** 10 s
+ *    after our {CIPHER-REQUEST} without the cipher-on indication (the
+ *    chip's 0x0209) or a {CIPHER-REJECT}, the procedure is counted as
+ *    failed and the call kept (EN 300 444 §8.33.2.2).
  */
-#define OPENDECTCELL_API_VERSION 71
+#define OPENDECTCELL_API_VERSION 72
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

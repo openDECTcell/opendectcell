@@ -247,6 +247,12 @@ static void send_terminate_request(struct dect_mm *mm)
 	txq_commit(mm, idx, off);
 }
 
+void dect_mm_cipher_on(struct dect_mm *mm)
+{
+	if (mm->cipher_state == DECT_MM_CIPHER_READY)
+		mm->cipher_on = 1;
+}
+
 void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN])
 {
 	memcpy(mm->uak, uak, DECT_MM_UAK_LEN);
@@ -775,6 +781,8 @@ static void on_auth_reply_cipher(struct dect_mm *mm, const uint8_t *ies,
 	memcpy(mm->cipher_res, xres, sizeof(mm->cipher_res));
 	mm->cipher_state = DECT_MM_CIPHER_READY;
 	send_cipher_request(mm);
+	mm->cipher_on = 0;
+	mm->cipher_deadline_ms = 0;		/* <MM_cipher.1> on the tick */
 }
 
 void dect_mm_start_cipher(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN],
@@ -1054,6 +1062,8 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 #define MM_AUTH1_MS	10000u
 /* <MM_access.2>: FT value 10 seconds (EN 300 175-5 A.5). */
 #define MM_ACCESS2_MS	10000u
+/* <MM_cipher.1>: FT value 10 seconds (EN 300 175-5 A.5). */
+#define MM_CIPHER1_MS	10000u
 
 void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 {
@@ -1070,6 +1080,21 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 	} else if (now_ms >= mm->key_deadline_ms) {
 		key_allocation_failed(mm);
 		mm->key_deadline_ms = 0;
+	}
+	/*
+	 * <MM_cipher.1> (EN 300 444 §8.33.1.1): from our {CIPHER-REQUEST} to
+	 * the cipher-on indication or a {CIPHER-REJECT}. On expiry the FT
+	 * "should not release the call" (§8.33.2.2): counted, the call kept.
+	 */
+	if (mm->cipher_state == DECT_MM_CIPHER_READY && !mm->cipher_on &&
+	    !mm->cipher_rejected) {
+		if (!mm->cipher_deadline_ms) {
+			mm->cipher_deadline_ms = now_ms + MM_CIPHER1_MS;
+		} else if (now_ms >= mm->cipher_deadline_ms &&
+			   mm->cipher_deadline_ms != UINT64_MAX) {
+			mm->stats.cipher_timeouts++;
+			mm->cipher_deadline_ms = UINT64_MAX;	/* once */
+		}
 	}
 	/*
 	 * <MM_access.2> (§13.5.2): "at the first expiry ... the FT should
@@ -1143,6 +1168,10 @@ uint64_t dect_mm_next_deadline(const struct dect_mm *mm)
 	if (mm->term_state == DECT_MM_TERM_PENDING && mm->term_deadline_ms &&
 	    mm->term_deadline_ms < t)
 		t = mm->term_deadline_ms;
+	if (mm->cipher_state == DECT_MM_CIPHER_READY && !mm->cipher_on &&
+	    !mm->cipher_rejected && mm->cipher_deadline_ms &&
+	    mm->cipher_deadline_ms < t)
+		t = mm->cipher_deadline_ms;
 	return t;
 }
 

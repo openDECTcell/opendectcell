@@ -1213,6 +1213,7 @@ struct stubd {
 		int cipher_started;	/* call-time authentication kicked off */
 		int cipher_done;	/* cipher outcome already reported */
 		int cipher_reject_seen;	/* CIPHER-REJECT already reported */
+		int cipher_timeout_seen;	/* <MM_cipher.1> already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
 		int enrol_routed;	/* this enrolment's store is chosen */
 		int enrol_switched;	/* ... and it moved off store 0 */
@@ -5252,6 +5253,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
 	s->reg.cipher_reject_seen = 0;
+	s->reg.cipher_timeout_seen = 0;
 	s->reg.handle = handle;
 	dect_link_init(&s->reg.link, handle, &mcfg);
 	/*
@@ -6296,6 +6298,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
 	s->reg.cipher_reject_seen = 0;
+	s->reg.cipher_timeout_seen = 0;
 	s->reg.audio_connected = 0;
 	s->reg.time_sent_for = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
@@ -6955,6 +6958,11 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		       s->reg.link.mm.stats.auth_timeouts ? "no reply in 10 s"
 		       : "wrong RES, or the handset refused");
 	}
+	if (s->reg.link.mm.stats.cipher_timeouts && !s->reg.cipher_timeout_seen) {
+		s->reg.cipher_timeout_seen = 1;
+		printf("call: cipher: no cipher-on (0x0209) 10 s after "
+		       "CIPHER-REQUEST -- <MM_cipher.1>, the call is kept\n");
+	}
 	if (s->reg.link.mm.cipher_rejected && !s->reg.cipher_reject_seen) {
 		s->reg.cipher_reject_seen = 1;
 		printf("call: cipher: the handset sent CIPHER-REJECT -- the call "
@@ -6968,6 +6976,22 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t now)
 {
 	switch (m->prim) {
+	case 0x0209:
+		/*
+		 * {link}: the chip has switched the link to ciphered -- the
+		 * cipher-on indication, absent from every unciphered call
+		 * [CR A-0128] -- which ends <MM_cipher.1>.
+		 */
+		if (m->param_len >= 1 && s->reg.active &&
+		    m->param[0] == s->reg.handle &&
+		    !s->reg.link.mm.cipher_on) {
+			dect_mm_cipher_on(&s->reg.link.mm);
+			if (s->reg.link.mm.cipher_on)
+				printf("call: cipher: the chip reports link %u "
+				       "ciphered (0x0209)\n",
+				       (unsigned)m->param[0]);
+		}
+		break;
 	case DECT_PRIM_CONTACT_ACK1:	/* 0xF601 carries the base RFPI */
 		if (!s->have_rfpi && m->param_len >= DECT_MM_RFPI_LEN) {
 			memcpy(s->rfpi, m->param, DECT_MM_RFPI_LEN);

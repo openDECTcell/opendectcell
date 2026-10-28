@@ -77,8 +77,12 @@ the bridge exists means an internal call from another handset.
 
 ## Open questions
 
-- Does the chip broadcast the multiple-lines capability bit a34 (§7.4.7.1.0)?
-  Only the room can say which mail sets it (A2 M1.11).
+- **Answered** `[CR A-0128]`: a34 (multiple lines) is 0 in our broadcast and
+  in stock's, which offers two lines all the same; no host mail sets it
+  directly (the chip reports the block in `0xF602`, stub-api.md §2.1).
+  §7.4.7.1.0 makes a34 mandatory once the FP offers multiple lines (N.14):
+  keep it at 0, as stock, while the daemon serves one line, and find the
+  mail that changes byte 3 before the pool offers two.
 - Which second-call behaviour the Part 1 Gigasets show in practice when a call
   arrives during a call: nothing (our plan: busy toward SIP), or an in-band
   tone on the active U-plane (A2 K6, a stock capture would tell).
