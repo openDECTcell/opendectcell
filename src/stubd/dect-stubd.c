@@ -1209,6 +1209,7 @@ struct stubd {
 		int enrol_switched;	/* ... and it moved off store 0 */
 		int ic_tried;		/* this call was checked for internal */
 		int info_sent;		/* infoie= went out on this call */
+		int cs_connect_sent;	/* "CS call connect" after CONNECT (Part 3) */
 		int cc_was_busy;	/* nlr: the last tick had a call */
 		int nlr_armed;		/* nlr: a call ended, release pending */
 		int nlr_lia;		/* ... and it was list access: DISC first */
@@ -4065,6 +4066,89 @@ static void send_page(struct stubd *s)
  * as the retransmission arrived. The SETUP therefore waits for the handset to
  * answer the page, which is also the order the paging procedure prescribes.
  */
+/*
+ * The ring target is a Part 3 handset whose call information we choose:
+ * no lab option set any <<CALL-INFORMATION>> field.
+ */
+static int ring_target_part3(const struct stubd *s)
+{
+	const struct dect_callinfo *o = &s->audio.callinfo;
+
+	return !o->has_line && !o->has_call_id && !o->has_call_status &&
+	       s->n_hs && s->hs[0].cap_known && s->hs[0].cap_part3;
+}
+
+/*
+ * on = 1: the call information of an external incoming call, for the next
+ * SETUP only. A Part 3 handset gets stock's block: our line, line type
+ * "significant delay" (VoIP), call id, CS call setup [CR A-0125]; TS 102
+ * 527-3 §7.4.6.4.3 makes CS call setup mandatory in that SETUP. Bench
+ * 2026-10-28: with it the A540 rings aloud and shows "via Line 1
+ * <number>"; with a bare line id it rings silently. Part 1 handsets get
+ * none (stock sends them none; §7.4.6.4.1). on = 0 restores the link's
+ * setting, so later answers keep their bytes.
+ */
+static void ring_callinfo(struct stubd *s, int on)
+{
+	struct dect_callinfo ci;
+
+	if (!on || !ring_target_part3(s)) {
+		dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
+		if (on && s->n_hs && !s->hs[0].cap_known)
+			printf("ring: the target's terminal capability is not "
+			       "known yet -- no call information (an A540 "
+			       "then rings silently)\n");
+		return;
+	}
+	dect_callinfo_init(&ci);
+	ci.has_line = 1;
+	ci.line_id = STUBD_LINE_ID;
+	ci.has_line_type = 1;
+	ci.line_type = DECT_CALLINFO_NDT_DELAY;
+	ci.has_call_id = 1;
+	ci.call_id = 1;
+	ci.has_call_status = 1;
+	ci.call_status = DECT_CS_CALL_SETUP;
+	dect_cc_set_callinfo(&s->reg.link.cc, &ci);
+	printf("ring: full call information for a Part 3 handset "
+	       "(line %u, VoIP, call id 1, CS call setup)\n", STUBD_LINE_ID);
+}
+
+/*
+ * Stock's next step for a Part 3 handset [CR A-0125]: once our call is
+ * answered, a {CC-INFO} with the call id and "CS call connect".
+ */
+static void cs_connect_tick(struct stubd *s, uint64_t now)
+{
+	struct dect_cc *cc = &s->reg.link.cc;
+	struct dect_callinfo ci;
+	uint8_t ie[16];
+	size_t n;
+
+	if (!s->reg.active || !dect_cc_busy(cc)) {
+		s->reg.cs_connect_sent = 0;
+		return;
+	}
+	if (s->reg.cs_connect_sent || !cc->incoming ||
+	    cc->state != DECT_CC_ST_ACTIVE || !ring_target_part3(s) ||
+	    s->audio.no_call_status)
+		return;
+	s->reg.cs_connect_sent = 1;
+	dect_callinfo_init(&ci);
+	ci.has_call_id = 1;
+	ci.call_id = 1;
+	ci.has_call_status = 1;
+	ci.call_status = DECT_CS_CALL_CONNECT;
+	n = dect_callinfo_put(ie, sizeof(ie), 0, &ci);
+	if (!n || dect_cc_info(cc, ie, n)) {
+		printf("call: could not queue the CS call connect\n");
+		return;
+	}
+	printf("call: CS call connect sent in CC-INFO (Part 3)\n");
+	dect_link_drain(&s->reg.link, now);
+	pump_lapc(s);
+}
+
 static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 {
 	/*
@@ -4108,9 +4192,11 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 */
 	s->next_ti = s->audio.ti_fixed >= 0 ? (uint8_t)s->audio.ti_fixed : 0u;
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
+	ring_callinfo(s, 1);
 	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
 			      s->cc_fixed_id, s->cc_fixed_id_len,
 			      s->audio.basic_svc, &s->clip)) {
+		ring_callinfo(s, 0);
 		s->ring_state = RING_DONE;
 		printf("ring: CC-SETUP queued (%s) -- the handset should ring\n",
 		       why);
@@ -6960,6 +7046,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		fetch_tick(s, now);
 		dial_tick(s, now);
 		info_tick(s, now);
+		cs_connect_tick(s, now);
 		nlr_tick(s, now);
 		connect_tick(s, now);
 		reg_window_tick(s, now);
