@@ -953,8 +953,25 @@ static void on_release(struct dect_cc *cc)
 /* EN 300 175-5 A.1: F<CC.01>, overlap sending, 20 s. */
 #define CC_OVERLAP_TIMER_MS	20000u
 
+#define CC_RELEASE_TIMER_MS	36000u	/* <CC.02>, EN 300 175-5 A.1 */
+
 void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 {
+	if (cc->release_armed && cc->state == DECT_CC_ST_RELEASED) {
+		if (!cc->release_deadline_ms) {
+			cc->release_deadline_ms = now_ms + CC_RELEASE_TIMER_MS;
+		} else if (now_ms >= cc->release_deadline_ms) {
+			/* §9.5.1: no RELEASE-COM came; send it and go to NULL */
+			queue_release_com(cc, RELEASE_REASON_TIMER_EXPIRY);
+			cc->state = DECT_CC_ST_NULL;
+			cc->release_armed = 0;
+			cc->release_deadline_ms = 0;
+			cc->stats.release_timeouts++;
+		}
+	} else {
+		cc->release_armed = 0;		/* answered, or a new call */
+		cc->release_deadline_ms = 0;
+	}
 	if (cc->busy_notified && cc->state == DECT_CC_ST_PROCEEDING) {
 		if (!cc->busy_deadline_ms) {
 			cc->busy_deadline_ms = now_ms + CC_BUSY_TONE_MS;
@@ -987,6 +1004,8 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 			cc->state = DECT_CC_ST_RELEASED;
 			cc->stats.released++;
 			cc->stats.overlap_timeouts++;
+			cc->release_armed = 1;		/* <CC.02> */
+			cc->release_deadline_ms = 0;
 		}
 	}
 	/*
@@ -1023,10 +1042,14 @@ uint64_t dect_cc_next_deadline(const struct dect_cc *cc)
 	uint64_t b = cc->overlap_deadline_ms ? cc->overlap_deadline_ms
 					     : UINT64_MAX;
 	uint64_t c = cc->busy_deadline_ms ? cc->busy_deadline_ms : UINT64_MAX;
+	uint64_t d = cc->release_deadline_ms ? cc->release_deadline_ms
+					     : UINT64_MAX;
 
 	if (b < a)
 		a = b;
-	return c < a ? c : a;
+	if (c < a)
+		a = c;
+	return d < a ? d : a;
 }
 
 void dect_cc_set_busy(struct dect_cc *cc, int busy)
@@ -1138,6 +1161,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			cc->peer_line = DECT_CC_LINE_UNSET;
 			cc->line_confirmed = 0;
 			cc->line_refused = 0;
+			cc->release_armed = 0;
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;
@@ -1325,6 +1349,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			}
 		}
 		cc->state = DECT_CC_ST_RELEASED;
+		cc->release_armed = 0;		/* <CC.02> stopped */
 		dect_iwu_reset_sessions(&cc->iwu);
 		break;
 	default:
@@ -1383,6 +1408,8 @@ int dect_cc_release(struct dect_cc *cc)
 	queue_msg(cc, cc->ti_flag, DECT_CC_RELEASE);
 	cc->state = DECT_CC_ST_RELEASED;
 	cc->stats.released++;
+	cc->release_armed = 1;			/* <CC.02> */
+	cc->release_deadline_ms = 0;
 	return 0;
 }
 

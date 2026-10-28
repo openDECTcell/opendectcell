@@ -113,6 +113,7 @@ struct dect_cc_stats {
 	uint32_t codec_unmatched;
 	uint32_t ie_missing;	/* SETUPs refused: mandatory IE missing */
 	uint32_t line_refused;	/* calls on a line the handset may not use */
+	uint32_t release_timeouts;	/* <CC.02> expired, we completed it */
 	/* handset-placed calls refused by dect_cc_set_busy() */
 	uint32_t rejected_busy;
 };
@@ -215,6 +216,12 @@ struct dect_cc {
 	 */
 	uint8_t  busy_notified;
 	uint64_t busy_deadline_ms;
+	/*
+	 * <CC.02> (EN 300 175-5 §9.5.1, A.1: 36 s): our {CC-RELEASE} awaits
+	 * the handset's {CC-RELEASE-COM}; on expiry we send it ourselves.
+	 */
+	uint8_t  release_armed;
+	uint64_t release_deadline_ms;
 	/* dect_cc_set_default_line(): the FP-managed line, 0 = none set */
 	uint8_t  default_line_set;
 	uint8_t  default_line;

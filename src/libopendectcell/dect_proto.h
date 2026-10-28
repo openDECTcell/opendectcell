@@ -378,8 +378,14 @@
  *    handset-placed call on a line the handset is not attached to gets
  *    {CC-RELEASE-COM} "incompatible service" (TS 102 527-3 §7.4.5.2.1;
  *    the reason is ours, the clause names none).
+ *
+ * 45: <CC.02> (2026-10-28). Layout change: struct dect_cc gains
+ *    release_armed and release_deadline_ms, the stats release_timeouts.
+ *    **Behaviour change:** our {CC-RELEASE} unanswered for 36 s is
+ *    completed by our own {CC-RELEASE-COM} "timer expiry" and NULL
+ *    (EN 300 175-5 §9.5.1, A.1).
  */
-#define OPENDECTCELL_API_VERSION 44
+#define OPENDECTCELL_API_VERSION 45
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

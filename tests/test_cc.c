@@ -301,6 +301,50 @@ static void test_unattached_line_is_refused(void)
 	}
 }
 
+/*
+ * <CC.02> (EN 300 175-5 §9.5.1): our {CC-RELEASE} unanswered for 36 s ->
+ * we send {CC-RELEASE-COM} ourselves and go to NULL; answered in time ->
+ * nothing more.
+ */
+static void test_release_timer(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+	int k;
+
+	for (k = 0; k < 2; k++) {
+		dect_cc_init(&cc);
+		n = pp_setup(buf, sizeof(buf), 0);
+		dect_cc_rx(&cc, buf, n);
+		while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+			;
+		CHECK_EQ(dect_cc_release(&cc), 0);
+		(void)dect_cc_poll(&cc, out, sizeof(out));	/* RELEASE */
+		dect_cc_tick(&cc, 1000);			/* armed: 37000 */
+		CHECK_EQ(dect_cc_next_deadline(&cc), 37000u);
+		if (k) {			/* the handset answers */
+			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC,
+					       DECT_TI_ORIGINATOR, 0,
+					       DECT_CC_RELEASE_COM);
+			dect_cc_rx(&cc, buf, n);
+		}
+		dect_cc_tick(&cc, 36999);
+		CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+		dect_cc_tick(&cc, 37000);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		if (!k) {
+			CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+			CHECK(n >= 4u && out[n - 1] == 0x0Du);	/* timer expiry */
+			CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+			CHECK_EQ(cc.stats.release_timeouts, 1u);
+		} else {
+			CHECK_EQ(n, 0u);
+			CHECK_EQ(cc.stats.release_timeouts, 0u);
+		}
+	}
+}
+
 /* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
 static void test_setup_without_basic_service_is_refused(void)
 {
@@ -2329,6 +2373,7 @@ int main(void)
 	test_none_gets_the_selected_line();
 	test_busy_system_for_a_part3_handset();
 	test_unattached_line_is_refused();
+	test_release_timer();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();
