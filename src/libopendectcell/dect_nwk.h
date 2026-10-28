@@ -105,6 +105,7 @@
 #define DECT_IE_RES			0x0Du
 #define DECT_IE_RS			0x0Eu
 #define DECT_IE_REJECT_REASON		0x60u
+#define DECT_IE_TERMINAL_CAPABILITY	0x63u	/* EN 300 175-5 §7.7.41 */
 #define DECT_IE_DURATION		0x72u
 #define DECT_IE_IWU_TO_IWU		0x77u
 #define DECT_IE_CODEC_LIST		0x7Cu	/* [CR EN 300 175-5 7.7.54] */

@@ -345,6 +345,44 @@ static void test_locate(void)
 }
 
 /*
+ * <<TERMINAL-CAPABILITY>> as the three bench handsets send it in
+ * {LOCATE-REQUEST} (bench logs 2026-10-28): the A540 is NG-DECT Part 3,
+ * the C430A and AS690H Part 1 only.
+ */
+static void test_term_cap(void)
+{
+	static const uint8_t a540[] = { 0x25, 0x35, 0x0a, 0x00, 0x0c, 0x01,
+		0x8e, 0x02, 0x00, 0x00, 0x00, 0x00, 0x40, 0x96, 0x82 };
+	static const uint8_t c430a[] = { 0x25, 0x15, 0x0a, 0x00, 0x30, 0x03,
+		0x90, 0x02, 0x00, 0x00, 0x00, 0x00, 0x40, 0x92, 0x82 };
+	static const uint8_t as690h[] = { 0x25, 0x15, 0x0a, 0x00, 0x0c, 0x01,
+		0x8e, 0x02, 0x00, 0x00, 0x00, 0x00, 0x40, 0x92, 0x82 };
+	static const uint8_t open3[] = { 0x25, 0x35, 0x0a };	/* never ends */
+	struct dect_term_cap tc;
+
+	CHECK_EQ(dect_term_cap_parse(a540, sizeof(a540), &tc), 0);
+	CHECK_EQ(tc.n_profile, 7u);
+	CHECK_EQ(tc.profile[0] & 0x02u, 0x02u);		/* GAP */
+	CHECK_EQ(tc.profile[6], 0x16u);
+	CHECK_EQ(tc.ng_part1, 1);
+	CHECK_EQ(tc.ng_part3, 1);
+	CHECK_EQ(tc.display, 5u);
+	CHECK_EQ(tc.tone, 2u);
+
+	CHECK_EQ(dect_term_cap_parse(c430a, sizeof(c430a), &tc), 0);
+	CHECK_EQ(tc.ng_part1, 1);
+	CHECK_EQ(tc.ng_part3, 0);
+	CHECK_EQ(dect_term_cap_parse(as690h, sizeof(as690h), &tc), 0);
+	CHECK_EQ(tc.ng_part3, 0);
+
+	CHECK_EQ(dect_term_cap_parse(open3, sizeof(open3), &tc), -1);
+	CHECK_EQ(tc.present, 0);
+	CHECK_EQ(dect_term_cap_parse(a540, 7, &tc), 0);	/* no PI group */
+	CHECK_EQ(tc.n_profile, 0u);
+	CHECK_EQ(tc.ng_part3, 0);
+}
+
+/*
  * Call-time ciphering: the FP challenges the PP with the UAK, derives the DCK
  * from the PP's reply, and asks it to start DSC.
  */
@@ -1048,6 +1086,7 @@ int main(void)
 	test_register_without_a_usable_pin();
 	test_locate();
 	test_cipher();
+	test_term_cap();
 	test_tpui_assignment_is_confirmed_by_the_ack();
 	test_tpui_assignment_times_out_at_ten_seconds();
 	test_a_late_ack_is_visible_as_late();

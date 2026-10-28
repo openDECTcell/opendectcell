@@ -459,12 +459,44 @@ static void send_locate_reject(struct dect_mm *mm, uint8_t reason)
  * A GAP FP serves subscribed handsets. If the <<PORTABLE-IDENTITY>> does not
  * match the one we hold, reject it.
  */
+int dect_term_cap_parse(const uint8_t *v, size_t n, struct dect_term_cap *tc)
+{
+	size_t i = 0;
+
+	memset(tc, 0, sizeof(*tc));
+	if (!v || !n)
+		return -1;
+	tc->tone = (uint8_t)((v[0] >> 4) & 0x07u);
+	tc->display = (uint8_t)(v[0] & 0x0Fu);
+	while (i < n && !(v[i] & 0x80u))	/* group 3: octets 3..3h */
+		i++;
+	if (i >= n)
+		return -1;			/* group 3 never ended */
+	for (i++; i < n; i++) {			/* group 4: profile indicators */
+		if (tc->n_profile < DECT_TERM_CAP_PROFILES)
+			tc->profile[tc->n_profile++] = (uint8_t)(v[i] & 0x7Fu);
+		if (v[i] & 0x80u)
+			break;
+	}
+	if (tc->n_profile >= 7u) {
+		tc->ng_part1 = (uint8_t)((tc->profile[6] >> 1) & 1u);
+		tc->ng_part3 = (uint8_t)((tc->profile[6] >> 2) & 1u);
+	}
+	tc->present = 1;
+	return 0;
+}
+
 /* Keep what the handset declares about itself, for diagnostics. */
 static void learn_self_description(struct dect_mm *mm, const uint8_t *ies,
 				   size_t ies_len)
 {
 	size_t n;
 	const uint8_t *p;
+	struct dect_term_cap tc;
+
+	p = dect_nwk_find_ie(ies, ies_len, DECT_IE_TERMINAL_CAPABILITY, &n);
+	if (p && !dect_term_cap_parse(p, n, &tc))
+		mm->peer_cap = tc;
 
 	p = dect_nwk_find_ie(ies, ies_len, DECT_IE_MODEL_IDENTIFIER, &n);
 	if (p && n <= sizeof(mm->peer_model)) {

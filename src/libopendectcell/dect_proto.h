@@ -307,8 +307,14 @@
  *    **Behaviour change:** after three unanswered retransmissions LAPC
  *    sends DISC and sets failed (EN 300 175-4 §9.2.3.6) instead of
  *    retransmitting for ever.
+ *
+ * 34: terminal capability (2026-10-28). Layout change: struct dect_mm
+ *    gains peer_cap. New: struct dect_term_cap, dect_term_cap_parse(),
+ *    DECT_IE_TERMINAL_CAPABILITY; the MM entity keeps the handset's
+ *    <<TERMINAL-CAPABILITY>> from {LOCATE-REQUEST} and
+ *    {ACCESS-RIGHTS-REQUEST}, with the NG-DECT Part 1 / Part 3 bits.
  */
-#define OPENDECTCELL_API_VERSION 33
+#define OPENDECTCELL_API_VERSION 34
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

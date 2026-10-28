@@ -175,6 +175,30 @@ struct dect_mm_held {
 
 #define DECT_MM_HELD_MAX	DECT_MM_MAX_SLOT
 
+/*
+ * <<TERMINAL-CAPABILITY>> (EN 300 175-5 §7.7.41, figure 85): what the
+ * handset says it can do. Octet groups 3 and 4 end at the octet with bit 8
+ * set. TS 102 527-3 table 35: profile indicator_7 bit 2 = NG-DECT Part 1
+ * (wideband), bit 3 = Part 3 (extended services). "A Part 3 FP shall not
+ * send any call status to GAP or NG Part 1 devices" (527-3 §7.4.6.4.1).
+ * Measured 2026-10-28: the A540 sends PI_7 0x16 (Part 1 and 3), the C430A
+ * and AS690H 0x12 (Part 1 only).
+ */
+#define DECT_TERM_CAP_PROFILES	11u
+
+struct dect_term_cap {
+	uint8_t present;
+	uint8_t display;		/* octet 3 bits 4..1 */
+	uint8_t tone;			/* octet 3 bits 7..5 */
+	uint8_t profile[DECT_TERM_CAP_PROFILES];	/* bit 8 cleared */
+	uint8_t n_profile;
+	uint8_t ng_part1;		/* PI_7 bit 2 */
+	uint8_t ng_part3;		/* PI_7 bit 3 */
+};
+
+/* 0 and *tc filled on a well-formed value, -1 otherwise (tc cleared). */
+int dect_term_cap_parse(const uint8_t *v, size_t n, struct dect_term_cap *tc);
+
 struct dect_mm {
 	struct dect_mm_cfg cfg;
 	enum dect_mm_state state;
@@ -235,6 +259,7 @@ struct dect_mm {
 	size_t  peer_model_len;
 	uint8_t peer_codecs[16];
 	size_t  peer_codecs_len;
+	struct dect_term_cap peer_cap;	/* the last one it sent */
 
 	/* A held {LOCATE-REQUEST}, see cfg.defer_unknown. */
 	uint8_t locate_pending;
