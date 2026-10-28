@@ -100,6 +100,8 @@
 #define DECT_LIA_NACK_INVALID_START	0x05u
 #define DECT_LIA_NACK_NOT_SUPPORTED	0x06u
 #define DECT_LIA_NACK_NOT_ALLOWED	0x07u
+#define DECT_LIA_NACK_INCORRECT_PIN	0x0Au
+#define DECT_LIA_NACK_PIN_REQUIRED	0x0Bu
 
 /*
  * One <<IWU-TO-IWU>> content: EN 300 175-4 caps a LAPC UI frame at 63
@@ -127,6 +129,7 @@ struct dect_iwu_out {
 struct dect_iwu_handset {
 	uint8_t terminal_id;			/* 1..127, the Internal Names "Number" */
 	char    name[DECT_IWU_NAME_MAX];
+	uint8_t in_call;	/* the owner keeps it: no deletion meanwhile */
 };
 
 struct dect_iwu_stats {
@@ -184,6 +187,21 @@ struct dect_iwu {
 	 * An empty name asks for the owner's default (a field reset, table 52a).
 	 */
 	uint32_t names_changed;
+	/*
+	 * The base PIN as 'Current PIN code' compares it (7.4.11.3.1: BCD,
+	 * F-padded, 4 octets; dect_dsaa_pin_to_ac() gives exactly that), set
+	 * by the owner; pin_ok once a handset entered it on this link, until
+	 * the call ends; ciphered as the owner reports the link (a PIN only
+	 * travels ciphered, 7.4.11.1).
+	 */
+	uint8_t  pin[4];
+	uint8_t  pin_known;
+	uint8_t  pin_ok;
+	uint8_t  ciphered;
+	/* "delete entry" on the Internal Names List: the terminal whose
+	 * deregistration a handset asked for (7.4.10.4.6.1); the owner runs it
+	 * and clears this */
+	uint8_t  delete_request;
 
 	struct dect_iwu_stats stats;
 };
@@ -224,6 +242,9 @@ int dect_iwu_add_handset(struct dect_iwu *iwu, uint8_t terminal_id,
 
 /* Which handset is on the other end of this transaction (its 'Own' bit). */
 void dect_iwu_set_own(struct dect_iwu *iwu, uint8_t terminal_id);
+
+/* The base PIN for 'Current PIN code' checks (pin_known set). */
+void dect_iwu_set_pin(struct dect_iwu *iwu, const uint8_t pin[4]);
 
 /* Take a deregistered handset out of the list; 0, or -1 if not there. */
 int dect_iwu_remove_handset(struct dect_iwu *iwu, uint8_t terminal_id);

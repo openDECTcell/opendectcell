@@ -122,12 +122,12 @@ static void test_read_internal_names(void)
 		0xC3, 0x14, 0x81,
 		/* entry 1 (17 octets): "1" own+internal, "DECT 1", interception allowed */
 		0x81, 0x91,
-		  0x01, 0x82, 0xB0, '1',
+		  0x01, 0x82, 0xB1, '1',	/* + PIN protected */
 		  0x02, 0x87, 0xC0, 'D', 'E', 'C', 'T', ' ', '1',
 		  0x03, 0x82, 0x80, 0x31,
 		/* entry 2 (17 octets): "2" internal only */
 		0x82, 0x91,
-		  0x01, 0x82, 0xA0, '2',
+		  0x01, 0x82, 0xA1, '2',
 		  0x02, 0x87, 0xC0, 'D', 'E', 'C', 'T', ' ', '2',
 		  0x03, 0x82, 0x80, 0x31,
 	};
@@ -222,7 +222,7 @@ static void test_read_system_settings(void)
 	static const uint8_t data[] = {
 		0xC3, 0x14, 0x81,
 		0x81, 0xA8,				/* 7+4+4+15+3+7 octets */
-		  0x01, 0x85, 0x80, 0xFF, 0xFF, 0xFF, 0xFF,
+		  0x01, 0x85, 0xC0, 0xFF, 0xFF, 0xFF, 0xFF,	/* editable */
 		  0x02, 0x82, 0x80, 0x30,
 		  0x03, 0x82, 0x80, 0x31,
 		  0x09, 0x8D, 0x80, 'o', 'p', 'e', 'n', 'D', 'E', 'C', 'T', 'c', 'e', 'l', 'l',
@@ -426,11 +426,12 @@ static void test_unsupported_commands_are_refused(void)
 
 	base_with_two_handsets(&iwu);
 	handle(&iwu, s6, sizeof(s6));
-	/* delete entry (the A540's, vREGA540075823): not built yet */
+	/* delete entry (the A540's, vREGA540075823) without the PIN */
 	handle(&iwu, del, sizeof(del));
 	CHECK_EQ(out.count, 1u);
 	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
-	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_PIN_REQUIRED);
+	CHECK_EQ(iwu.delete_request, 0u);
 	/* a save with no edit before it is 'procedure not allowed' -- and
 	 * the acknowledgement waits for the data packet last */
 	handle(&iwu, save, sizeof(save));
@@ -503,7 +504,7 @@ static void test_search_internal_names(void)
 					 0x02, 0x00, 0x01 };
 	static const uint8_t cfm2[] = { 0xC3, 0x11, 0x81, 0x82, 0x01 };
 	static const uint8_t data2[] = { 0xC3, 0x14, 0x81, 0x82, 0x8D,
-		0x01, 0x82, 0xA0, '2',
+		0x01, 0x82, 0xA1, '2',
 		0x02, 0x87, 0xC0, 'D', 'E', 'C', 'T', ' ', '2' };
 	static const uint8_t none[] = { 0xC3, 0x11, 0x81, 0x81, 0x00 };
 	struct dect_iwu iwu;
@@ -612,6 +613,70 @@ static void test_remove_handset(void)
 	CHECK_EQ(dect_iwu_remove_handset(&iwu, 2), -1);
 }
 
+/*
+ * Deleting a handset from the Internal Names List (7.4.10.4.6.1, 7.4.11.1):
+ * the PIN first, through 'Current PIN code' of the System Settings List in
+ * a parallel session, and only on a ciphered link; then the delete is a
+ * deregistration request for the owner. A wrong PIN, an unciphered link, a
+ * handset in a call each stop it; the PIN lasts until the call ends.
+ */
+static void test_delete_a_handset_needs_the_pin(void)
+{
+	static const uint8_t pin1234[4] = { 0xFF, 0xFF, 0x12, 0x34 };
+	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
+	static const uint8_t s7[] = { 0xC3, 0x00, 0x07, 0x00 };
+	static const uint8_t del2[] = { 0xC3, 0x0C, 0x81, 0x82 };
+	static const uint8_t edit_pin[] = { 0xC3, 0x08, 0x82, 0x81, 0x01 };
+	static const uint8_t save_pin[] = { 0xC3, 0x0A, 0x82, 0x81 };
+	uint8_t last_pin[] = { 0xC3, 0x14, 0x82, 0x81, 0x87,
+			       0x01, 0x85, 0x80, 0xFF, 0xFF, 0x12, 0x34 };
+	static const uint8_t del_cfm[] = { 0xC3, 0x0D, 0x81, 0x81 };
+	struct dect_iwu iwu;
+
+	base_with_two_handsets(&iwu);
+	dect_iwu_set_pin(&iwu, pin1234);
+	handle(&iwu, s6, sizeof(s6));		/* session 1: internal names */
+	handle(&iwu, s7, sizeof(s7));		/* session 2: system settings */
+
+	/* not ciphered: the PIN field may not even be edited */
+	handle(&iwu, edit_pin, sizeof(edit_pin));
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+	iwu.ciphered = 1;
+
+	/* a wrong PIN */
+	last_pin[11] = 0x35;
+	handle(&iwu, edit_pin, sizeof(edit_pin));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_EDIT_ENTRY_CFM);
+	handle(&iwu, save_pin, sizeof(save_pin));
+	handle(&iwu, last_pin, sizeof(last_pin));
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_INCORRECT_PIN);
+	handle(&iwu, del2, sizeof(del2));
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_PIN_REQUIRED);
+
+	/* the right PIN */
+	last_pin[11] = 0x34;
+	handle(&iwu, edit_pin, sizeof(edit_pin));
+	handle(&iwu, save_pin, sizeof(save_pin));
+	handle(&iwu, last_pin, sizeof(last_pin));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_SAVE_ENTRY_CFM);
+	CHECK_EQ(iwu.pin_ok, 1u);
+
+	/* handset 2 in a call: not now */
+	iwu.handsets[1].in_call = 1;
+	handle(&iwu, del2, sizeof(del2));
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_TEMP_NOT_POSSIBLE);
+	iwu.handsets[1].in_call = 0;
+
+	handle(&iwu, del2, sizeof(del2));
+	CHECK_EQ(out.len[0], sizeof(del_cfm));
+	CHECK_EQ(memcmp(out.msg[0], del_cfm, sizeof(del_cfm)), 0);
+	CHECK_EQ(iwu.delete_request, 2u);
+
+	/* the call ends: the PIN with it */
+	dect_iwu_reset_sessions(&iwu);
+	CHECK_EQ(iwu.pin_ok, 0u);
+}
+
 /* Not list access, a rejection, our own confirms fed back: silence. */
 static void test_other_records_are_ignored_or_flagged(void)
 {
@@ -701,6 +766,7 @@ int main(void)
 	test_table_41_refusals();
 	test_rename_a_handset();
 	test_remove_handset();
+	test_delete_a_handset_needs_the_pin();
 	test_search_internal_names();
 	test_other_records_are_ignored_or_flagged();
 	test_reset_sessions();

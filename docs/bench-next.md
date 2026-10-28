@@ -391,3 +391,11 @@ EXTRA=clip=0301234567,cnip=Wednesday HOLD=1 ./ringone.sh c430a
 
 Afterwards `rm /etc/opendectcell-sub.c430a.profile` returns the C430A to the
 standard defaults.
+
+**17b. Deleting a handset from another handset's list** (since R3): on the
+A540, open the handset list, pick the AS690H and delete it. The A540 should
+ask for the base PIN (it then sends it on the ciphered link). Expect, in
+order: the PIN check (`c3 0a` on list 07, our `c3 0b`), the delete
+(`c3 0c`, our `c3 0d`), then `dereg: DECT 3, asked by DECT 1's handset list
+(PIN given)` and the deregistration as in 17. Without ciphering (`-C`) the
+PIN is refused ("procedure not allowed"), as the standard wants.

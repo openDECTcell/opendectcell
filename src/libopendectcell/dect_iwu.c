@@ -158,6 +158,13 @@ void dect_iwu_reset_sessions(struct dect_iwu *iwu)
 {
 	memset(iwu->sessions, 0, sizeof(iwu->sessions));
 	iwu->save_pending = 0;
+	iwu->pin_ok = 0;		/* "in the same call" (7.4.11.1) */
+}
+
+void dect_iwu_set_pin(struct dect_iwu *iwu, const uint8_t pin[4])
+{
+	memcpy(iwu->pin, pin, sizeof(iwu->pin));
+	iwu->pin_known = 1;
 }
 
 /* ---- coding helpers ---------------------------------------------------- */
@@ -356,8 +363,10 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 			if (v >= 10u)
 				digits[n++] = (char)('0' + (v / 10u) % 10u);
 			digits[n++] = (char)('0' + v % 10u);
+			/* PIN protected (bit 1): deleting the entry deregisters
+			 * the handset, which needs the base PIN (7.4.11.1) */
 			put_field(b, field,
-				  (uint8_t)(0x20u |
+				  (uint8_t)(0x21u |
 					    (h->terminal_id == iwu->own_terminal_id
 					     ? 0x10u : 0u)),
 				  digits, n);
@@ -495,8 +504,9 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 			break;
 		switch (field) {
 		case 0x01:
-			/* 7.4.11.3.1: "always ... 'FF'H 'FF'H 'FF'H 'FF'H" */
-			put_field(b, field, 0x00, hidden_pin, sizeof(hidden_pin));
+			/* 7.4.11.3.1: "always ... 'FF'H 'FF'H 'FF'H 'FF'H";
+			 * editable, to check a PIN the user enters */
+			put_field(b, field, 0x40, hidden_pin, sizeof(hidden_pin));
 			break;
 		case 0x02:
 			/* 7.4.11.3.2 'Clock master': 30H, the FP sets the time */
@@ -668,20 +678,22 @@ static void query_fields(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
 	}
-	/* 7.4.10.4.2.2 table 47: editable fields first, then the rest. The
-	 * only editable one is the Internal Names List's name (02H). */
+	/* 7.4.10.4.2.2 table 47: editable fields first, then the rest. */
 	f = list_fields((uint8_t)list, &nf);
 	if (reply_begin(out, &b, DECT_LIA_QUERY_FIELDS_CFM))
 		return;
 	put_ext(&b, session);
-	if (list == DECT_LIA_LIST_INTERNAL_NAMES) {
+	if (list == DECT_LIA_LIST_INTERNAL_NAMES ||
+	    list == DECT_LIA_LIST_SYSTEM_SETTINGS) {
+		/* the name (06H), or 'Current PIN code' (07H) */
+		uint8_t ed = list == DECT_LIA_LIST_INTERNAL_NAMES ? 0x02 : 0x01;
 		size_t i;
 
 		put(&b, 0x01);
-		put(&b, 0x02);
+		put(&b, ed);
 		put(&b, (uint8_t)(nf - 1u));
 		for (i = 0; i < nf; i++)
-			if (f[i] != 0x02)
+			if (f[i] != ed)
 				put(&b, f[i]);
 	} else {
 		put(&b, 0x00);
@@ -914,6 +926,12 @@ static void edit_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
 	}
+	/* 7.4.11.1: the PIN fields only on a ciphered link */
+	if (list == DECT_LIA_LIST_SYSTEM_SETTINGS && !iwu->ciphered &&
+	    (memchr(wanted, 0x01, nwanted) || memchr(wanted, 0x0D, nwanted))) {
+		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+		return;
+	}
 	if (assemble(iwu, (uint8_t)list, entry, entry, wanted, nwanted,
 		     &content, data, sizeof(data))) {
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_RANGE);
@@ -986,7 +1004,25 @@ static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
 			if (!k || flen < 1u || flen > n - k)
 				goto format;
 			p += k; n -= k;
-			if (list == DECT_LIA_LIST_INTERNAL_NAMES && fid == 0x02) {
+			if (list == DECT_LIA_LIST_SYSTEM_SETTINGS &&
+			    fid == 0x01) {
+				/*
+				 * 'Current PIN code' (7.4.11.1): compare, never
+				 * store; ciphered links only. A correct PIN
+				 * opens PIN protected changes until the call
+				 * ends.
+				 */
+				if (!iwu->ciphered)
+					reason = DECT_LIA_NACK_NOT_ALLOWED;
+				else if (flen != 5u || !iwu->pin_known ||
+					 memcmp(p + 1, iwu->pin, 4)) {
+					reason = DECT_LIA_NACK_INCORRECT_PIN;
+					iwu->pin_ok = 0;
+				} else {
+					iwu->pin_ok = 1;
+				}
+			} else if (list == DECT_LIA_LIST_INTERNAL_NAMES &&
+				   fid == 0x02) {
 				/* [properties][UTF-8 name]; length 1 = reset */
 				struct dect_iwu_handset *h =
 					&iwu->handsets[iwu->save_entry - 1u];
@@ -1114,6 +1150,57 @@ malformed:
 	iwu->stats.malformed++;
 }
 
+/*
+ * "Delete entry" (7.4.10.4.6). Only the Internal Names List takes it, where
+ * it means "deregister that handset": refused while that handset is in a
+ * call ('temporarily not possible') and without the base PIN entered in
+ * this call -- its 'Number' is PIN protected ('PIN code required'). Then
+ * the confirm, with the count the list will have, and delete_request for
+ * the owner, which runs the deregistration and removes the entry. On every
+ * other list we serve it is 'procedure not allowed'.
+ */
+static void delete_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
+			 struct dect_iwu_out *out)
+{
+	unsigned session, entry;
+	size_t k = get_ext(p, n, &session);
+	struct buf b;
+	int list;
+
+	if (!k || !get_ext(p + k, n - k, &entry)) {
+		iwu->stats.malformed++;
+		return;
+	}
+	list = session_list(iwu, session);
+	if (list < 0) {
+		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
+		return;
+	}
+	if (list != DECT_LIA_LIST_INTERNAL_NAMES) {
+		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+		return;
+	}
+	if (entry < 1u || entry > iwu->n_handsets) {
+		nack(iwu, out, session, DECT_LIA_NACK_NO_ENTRY);
+		return;
+	}
+	if (iwu->handsets[entry - 1u].in_call || iwu->delete_request) {
+		nack(iwu, out, session, DECT_LIA_NACK_TEMP_NOT_POSSIBLE);
+		return;
+	}
+	if (!iwu->pin_ok) {
+		nack(iwu, out, session, DECT_LIA_NACK_PIN_REQUIRED);
+		return;
+	}
+	iwu->delete_request = iwu->handsets[entry - 1u].terminal_id;
+	if (reply_begin(out, &b, DECT_LIA_DELETE_ENTRY_CFM))
+		return;
+	put_ext(&b, session);
+	put_ext(&b, iwu->n_handsets - 1u);
+	emit(out, &b);
+	iwu->stats.replied++;
+}
+
 /* One data packet of a 'save entry': [session][content ...] (table 61). */
 static void save_data(struct dect_iwu *iwu, const uint8_t *p, size_t n)
 {
@@ -1187,6 +1274,8 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		edit_entry(iwu, p, n, out);
 		break;
 	case DECT_LIA_DELETE_ENTRY:
+		delete_entry(iwu, p, n, out);
+		break;
 	case DECT_LIA_DELETE_LIST:
 		/* table 41 notes 1 and 4: 'procedure not allowed'. */
 		refuse(iwu, p, n, out, DECT_LIA_NACK_NOT_ALLOWED);

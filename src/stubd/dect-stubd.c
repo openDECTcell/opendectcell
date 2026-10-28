@@ -5766,6 +5766,63 @@ static void uak_for_link(struct stubd *s, struct dect_link *l, int main)
 	}
 }
 
+/* Is the handset in this slot in a voice call on any link? */
+static int slot_in_call(const struct stubd *s, unsigned slot)
+{
+	const struct dect_link *ls[1 + SIDE_MAX];
+	unsigned k, n = 0;
+
+	if (s->reg.active)
+		ls[n++] = &s->reg.link;
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active)
+			ls[n++] = &s->side[k].link;
+	for (k = 0; k < n; k++) {
+		int i = hs_of_link(s, ls[k]);
+
+		if (i >= 0 && hs_slot(s, (unsigned)i) == slot &&
+		    dect_cc_busy(&ls[k]->cc) &&
+		    (ls[k]->cc.peer_basic_service >> 4) != 0x2u)
+			return 1;
+	}
+	return 0;
+}
+
+static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
+			const char *who);
+
+/*
+ * What the lists need from the daemon (7.4.10.4.6, 7.4.11.1): the base PIN
+ * to check an entered one against, whether the link is ciphered (a PIN
+ * only travels ciphered), which handsets are in a call (no deletion then),
+ * and the deletion a handset asked for, which is a deregistration.
+ */
+static void lists_tick(struct stubd *s, struct dect_link *l)
+{
+	struct dect_iwu *iwu = &l->cc.iwu;
+	unsigned j;
+
+	if (!iwu->pin_known && s->pin) {
+		uint8_t ac[4];
+
+		if (!dect_dsaa_pin_to_ac(s->pin, ac, sizeof(ac)))
+			dect_iwu_set_pin(iwu, ac);
+	}
+	iwu->ciphered = l->mm.cipher_on;
+	for (j = 0; j < iwu->n_handsets; j++)
+		iwu->handsets[j].in_call =
+			(uint8_t)slot_in_call(s, iwu->handsets[j].terminal_id);
+	if (iwu->delete_request) {
+		char who[48];
+		unsigned slot = iwu->delete_request;
+
+		iwu->delete_request = 0;
+		snprintf(who, sizeof(who), "DECT %u's handset list (PIN given)",
+			 iwu->own_terminal_id);
+		dereg_begin(s, slot, mono_ms(), who);
+	}
+}
+
 static void names_tick(struct stubd *s)
 {
 	unsigned k;
@@ -5777,11 +5834,13 @@ static void names_tick(struct stubd *s)
 	if (s->reg.active) {
 		names_take(s, &s->reg.link);
 		uak_for_link(s, &s->reg.link, 1);
+		lists_tick(s, &s->reg.link);
 	}
 	for (k = 0; k < SIDE_MAX; k++)
 		if (s->side[k].active) {
 			names_take(s, &s->side[k].link);
 			uak_for_link(s, &s->side[k].link, 0);
+			lists_tick(s, &s->side[k].link);
 		}
 }
 
@@ -6451,15 +6510,15 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	fflush(stdout);
 }
 
+static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
+			const char *who);
+
 /* SIGUSR2: deregister the handset in the slot named in DEREG_REQ_PATH. */
 static void dereg_start(struct stubd *s, uint64_t now)
 {
 	char buf[16] = "";
 	FILE *f = fopen(DEREG_REQ_PATH, "r");
-	unsigned slot = 0, i;
-	struct dect_link *l;
-	struct dect_mm_cfg cfg;
-	struct dect_mm mm;
+	unsigned slot = 0;
 
 	if (f) {
 		if (fgets(buf, sizeof(buf), f))
@@ -6467,14 +6526,26 @@ static void dereg_start(struct stubd *s, uint64_t now)
 		fclose(f);
 		(void)remove(DEREG_REQ_PATH);
 	}
+	dereg_begin(s, slot, now, "SIGUSR2");
+}
+
+static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
+			const char *who)
+{
+	unsigned i;
+	struct dect_link *l;
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
 	for (i = 0; i < s->n_hs; i++)
 		if (s->hs[i].loaded && hs_slot(s, i) == slot)
 			break;
 	if (!slot || i == s->n_hs) {
-		printf("dereg: SIGUSR2, but %s names no handset we hold "
-		       "(slot %u)\n", DEREG_REQ_PATH, slot);
+		printf("dereg: %s, but no handset we hold is in slot %u\n", who,
+		       slot);
 		return;
 	}
+	printf("dereg: DECT %u, asked by %s\n", slot, who);
 	if (s->dereg.st != DEREG_IDLE) {
 		printf("dereg: one at a time -- DECT %u waits\n", slot);
 		return;

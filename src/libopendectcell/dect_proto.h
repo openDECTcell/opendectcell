@@ -591,8 +591,18 @@
  *    our challenge before ciphering is answered with a wrong RES, the call
  *    is released, reason "authentication failed" (EN 300 444 §8.23.2.3);
  *    it went on unciphered.
+ *
+ * 76: deleting a handset from a list (2026-10-28, round 2 R3, H11/H27).
+ *    Layout change: struct dect_iwu gains pin, pin_known, pin_ok, ciphered
+ *    and delete_request, the handset entries in_call; new
+ *    dect_iwu_set_pin(), DECT_LIA_NACK_INCORRECT_PIN, _PIN_REQUIRED.
+ *    **Behaviour change:** the Internal Names 'Number' is PIN protected;
+ *    'Current PIN code' of the System Settings List is editable to enter
+ *    the base PIN, on a ciphered link only (7.4.11.1); "delete entry" on
+ *    the Internal Names List, with the PIN entered and the handset not in
+ *    a call, is confirmed and sets delete_request (a deregistration).
  */
-#define OPENDECTCELL_API_VERSION 75
+#define OPENDECTCELL_API_VERSION 76
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
