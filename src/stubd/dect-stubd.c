@@ -243,6 +243,11 @@ struct handset {
 	int      cap_known;
 	int      cap_part3;	/* NG-DECT Part 3: call status allowed */
 	int      cap_ng;	/* NG-DECT Part 1 or 3: not a pure GAP handset */
+	/*
+	 * The name a handset gave it in the Internal Names List (TS 102 527-3
+	 * §7.4.10.5.8), kept in <path>.name; empty = the default "DECT n".
+	 */
+	char     name[DECT_IWU_NAME_MAX];
 };
 
 /*
@@ -2593,6 +2598,7 @@ static int sub_load(struct stubd *s)
 static void uak_verify_send(struct stubd *s, uint8_t slot);
 
 static unsigned hs_slot(const struct stubd *s, unsigned i);
+static void hs_name(const struct stubd *s, unsigned i, char *buf, size_t cap);
 
 /*
  * holdback=MS (docs/multicell-experiments.md, test M2): every store but the
@@ -4953,8 +4959,15 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		for (k = 0; radio_on && k < SIDE_MAX; k++)
 			if (s->side[k].active && s->side[k].adopted == (int)i)
 				linked = 1;
-		fprintf(f, "%s{\"slot\":%u,\"name\":\"DECT %u\",\"store\":",
-			first ? "" : ",", hs_slot(s, i), hs_slot(s, i));
+		{
+			char nm[DECT_IWU_NAME_MAX];
+
+			hs_name(s, i, nm, sizeof(nm));
+			fprintf(f, "%s{\"slot\":%u,\"name\":",
+				first ? "" : ",", hs_slot(s, i));
+			json_str(f, nm);
+			fprintf(f, ",\"store\":");
+		}
 		json_str(f, s->hs[i].path);
 		fprintf(f, ",\"link\":%s", linked ? "true" : "false");
 		/* in contact right now while it holds a link */
@@ -5139,13 +5152,16 @@ static void main_cc_setup(struct stubd *s)
 		char hsname[DECT_IWU_NAME_MAX];
 
 		dect_iwu_set_line(&s->reg.link.cc.iwu, STUBD_LINE_ID, "Line 1");
-		snprintf(hsname, sizeof(hsname), "DECT %u", (unsigned)tid);
+		if (s->n_hs && s->cur < s->n_hs)
+			hs_name(s, s->cur, hsname, sizeof(hsname));
+		else
+			snprintf(hsname, sizeof(hsname), "DECT %u",
+				 (unsigned)tid);
 		dect_iwu_add_handset(&s->reg.link.cc.iwu, tid, hsname);
 		for (i = 0; i < s->n_hs; i++) {
 			if (i == s->cur || !s->hs[i].loaded)
 				continue;
-			snprintf(hsname, sizeof(hsname), "DECT %u",
-				 s->hs[i].slot);
+			hs_name(s, i, hsname, sizeof(hsname));
 			dect_iwu_add_handset(&s->reg.link.cc.iwu,
 					     (uint8_t)s->hs[i].slot, hsname);
 		}
@@ -5297,6 +5313,121 @@ static unsigned hs_slot(const struct stubd *s, unsigned i)
 	return s->hs[i].slot;
 }
 
+/* The handset's name for the lists and the internal caller: its own, or
+ * "DECT n" -- the default the daemon has always used. */
+static void hs_name(const struct stubd *s, unsigned i, char *buf, size_t cap)
+{
+	if (s->hs[i].name[0])
+		snprintf(buf, cap, "%s", s->hs[i].name);
+	else
+		snprintf(buf, cap, "DECT %u", hs_slot(s, i));
+}
+
+/* <path>.name, one line of UTF-8, beside the subscription store. */
+static void name_path(const struct stubd *s, unsigned i, char *buf, size_t cap)
+{
+	snprintf(buf, cap, "%s.name", s->hs[i].path);
+}
+
+static void name_load(struct stubd *s, unsigned i)
+{
+	char path[256];
+	FILE *f;
+	size_t n;
+
+	name_path(s, i, path, sizeof(path));
+	f = fopen(path, "r");
+	if (!f)
+		return;
+	n = fread(s->hs[i].name, 1, sizeof(s->hs[i].name) - 1u, f);
+	fclose(f);
+	s->hs[i].name[n] = '\0';
+	s->hs[i].name[strcspn(s->hs[i].name, "\r\n")] = '\0';
+	if (s->hs[i].name[0])
+		printf("sub: %s is called \"%s\"\n", s->hs[i].path,
+		       s->hs[i].name);
+}
+
+static void name_save(const struct stubd *s, unsigned i)
+{
+	char path[256];
+	FILE *f;
+
+	name_path(s, i, path, sizeof(path));
+	if (!s->hs[i].name[0]) {
+		(void)remove(path);		/* back to the default */
+		return;
+	}
+	f = fopen(path, "w");
+	if (!f) {
+		printf("names: cannot write %s\n", path);
+		return;
+	}
+	fprintf(f, "%s\n", s->hs[i].name);
+	fclose(f);
+}
+
+static void names_spread(struct stubd *s, unsigned i);
+
+/*
+ * A handset saved a name in the Internal Names List (dect_iwu sets
+ * names_changed): keep it for that handset, in its .name file, and show
+ * it on every link's list. An empty name is the reset to "DECT n".
+ * TS 102 527-3 also wants a list change notification to the other
+ * handsets (§7.4.10.2.2); that comes with the {FACILITY} builder.
+ */
+static void names_take(struct stubd *s, struct dect_link *l)
+{
+	struct dect_iwu *iwu = &l->cc.iwu;
+	unsigned b, j;
+
+	for (b = 0; iwu->names_changed && b < iwu->n_handsets; b++) {
+		const struct dect_iwu_handset *h = &iwu->handsets[b];
+
+		if (!(iwu->names_changed & (1u << b)))
+			continue;
+		iwu->names_changed &= ~(1u << b);
+		for (j = 0; j < s->n_hs; j++)
+			if (hs_slot(s, j) == h->terminal_id)
+				break;
+		if (j == s->n_hs)
+			continue;
+		snprintf(s->hs[j].name, sizeof(s->hs[j].name), "%s", h->name);
+		name_save(s, j);
+		printf("names: DECT %u is now %s%s%s\n", h->terminal_id,
+		       h->name[0] ? "\"" : "", h->name[0] ? h->name :
+		       "back to its default name", h->name[0] ? "\"" : "");
+		names_spread(s, j);
+	}
+	iwu->names_changed = 0;
+}
+
+static void names_spread(struct stubd *s, unsigned i)
+{
+	char name[DECT_IWU_NAME_MAX];
+	uint8_t tid = (uint8_t)hs_slot(s, i);
+	unsigned k;
+
+	hs_name(s, i, name, sizeof(name));
+	if (s->reg.active)
+		(void)dect_iwu_add_handset(&s->reg.link.cc.iwu, tid, name);
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active)
+			(void)dect_iwu_add_handset(&s->side[k].link.cc.iwu,
+						   tid, name);
+}
+
+static void names_tick(struct stubd *s)
+{
+	unsigned k;
+
+	if (s->reg.active)
+		names_take(s, &s->reg.link);
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active)
+			names_take(s, &s->side[k].link);
+}
+
 static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
 				 size_t *len)
 {
@@ -5380,7 +5511,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 			continue;
 		(void)dect_mm_hold(&sl->link.mm, id, len,
 				   (uint8_t)hs_slot(s, i), NULL, (int)i);
-		snprintf(name, sizeof(name), "DECT %u", hs_slot(s, i));
+		hs_name(s, i, name, sizeof(name));
 		dect_iwu_add_handset(&sl->link.cc.iwu, (uint8_t)hs_slot(s, i),
 				     name);
 	}
@@ -5812,7 +5943,7 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 		dect_clip_init(&ic_clip);
 		if (slot) {
 			snprintf(num, sizeof(num), "%u", slot);
-			snprintf(name, sizeof(name), "DECT %u", slot);
+			hs_name(s, (unsigned)ci_hs, name, sizeof(name));
 			(void)dect_clip_set_number(&ic_clip, num,
 					DECT_CLIP_TON_NETWORK_SPECIFIC,
 					DECT_CLIP_NPI_PRIVATE,
@@ -7405,6 +7536,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			dect_link_tick(&s->reg.link, now);
 			lapc_failed_note(&s->reg.link, "main");
 			cap_tick(s, &s->reg.link);
+			names_tick(s);		/* a handset renamed one */
 			/*
 			 * The call has gone away: release the audio channel.
 			 * Without this it stays armed for the life of the link
@@ -8507,6 +8639,8 @@ int main(int argc, char **argv)
 			       "fetched on demand after %u ms\n",
 			       s.audio.remote_path, s.audio.fetch_delay_ms);
 		}
+		for (i = 0; i < s.n_hs; i++)
+			name_load(&s, i);
 		/*
 		 * A first store that does not exist yet (an enrolment) has no
 		 * slot; it used to default to 1 and silently share it with

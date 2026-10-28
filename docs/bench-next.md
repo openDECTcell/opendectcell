@@ -297,3 +297,17 @@ runs above will do), then open its base settings menu if it has one
 |---|---|
 | the A540 stays idle and normal; a base menu may show "openDECTcell" as the firmware | the list works |
 | the A540 keeps showing "please wait" or resyncs every few seconds | it dislikes the new list: the log shows sessions on list 07; the agent reads it |
+
+### 15. Rename a handset from the handset (3 minutes, any run)
+
+Since `c9c2afd` and the daemon commit after it, the Internal Names List takes
+a new name. On the **A540**, open the internal list (INT, or the handset list
+in the menu), pick a handset and rename it (e.g. "Kueche"); save.
+
+| you see | meaning |
+|---|---|
+| the new name stays in the list, and the log shows `names: DECT n is now "Kueche"` | renaming works; `/etc/opendectcell-sub.<model>.name` holds it, and it survives a restart |
+| "not possible" or the old name comes back | the log shows the edit and save records (`c3 08`, `c3 0a`, `c3 13/14`) and our answer; the agent reads it |
+
+Other handsets learn the new name the next time they read the list; the
+notification that makes them read it at once is not built yet.
