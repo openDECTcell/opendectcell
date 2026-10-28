@@ -299,6 +299,47 @@ static void test_register_without_a_usable_pin(void)
 }
 
 /* After registration the PP runs location registration; we must LOCATE-ACCEPT. */
+/*
+ * LOCATE-ACCEPT names our own location area (class A: LAL 36, octet 0x64,
+ * as stock, A-0127), whether the handset sent none or another one.
+ */
+static void test_locate_accept_names_our_area(void)
+{
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1 };
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t other[1] = { 0x5f };
+	struct dect_mm mm;
+	struct dect_nwk_hdr h;
+	uint8_t buf[64], out[64];
+	const uint8_t *ies, *la;
+	size_t n, ies_len, la_len, k;
+
+	for (k = 0; k < 2; k++) {
+		dect_mm_init(&mm, &cfg);		/* rfpi 0: class A */
+		memcpy(mm.port_id, ours, sizeof(ours));
+		mm.port_id_len = sizeof(ours);
+		n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+				       DECT_TI_ORIGINATOR, 0,
+				       DECT_MM_LOCATE_REQUEST);
+		n = dect_nwk_put_ie(buf, sizeof(buf), n,
+				    DECT_IE_PORTABLE_IDENTITY, ours,
+				    sizeof(ours));
+		if (k)
+			n = dect_nwk_put_ie(buf, sizeof(buf), n,
+					    DECT_IE_LOCATION_AREA, other,
+					    sizeof(other));
+		dect_mm_rx(&mm, buf, n, NULL, NULL);
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+		dect_nwk_parse(out, n, &h, &ies, &ies_len);
+		la = dect_nwk_find_ie(ies, ies_len, DECT_IE_LOCATION_AREA,
+				      &la_len);
+		CHECK(la != NULL && la_len == 1u);
+		if (la && la_len == 1u)
+			CHECK_EQ(la[0], 0x64);
+	}
+}
+
 static void test_locate(void)
 {
 	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1 };
@@ -1092,6 +1133,7 @@ int main(void)
 	test_locate();
 	test_cipher();
 	test_term_cap();
+	test_locate_accept_names_our_area();
 	test_tpui_assignment_is_confirmed_by_the_ack();
 	test_tpui_assignment_times_out_at_ten_seconds();
 	test_a_late_ack_is_visible_as_late();

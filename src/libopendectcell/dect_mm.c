@@ -416,6 +416,21 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	off = hdr(mm, b, DECT_TI_RESPONDER, DECT_MM_LOCATE_ACCEPT);
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_PORTABLE_IDENTITY,
 			      tpui, sizeof(tpui));
+	/*
+	 * <<LOCATION-AREA>> is mandatory and names OUR area (EN 300 175-5
+	 * table 54, EN 300 444 table 45), not the handset's: LI-type 1 and
+	 * the location area level, which for a class A ARI is its PARI length,
+	 * 36 -- octet 0x64, stock's value in every capture [CR A-0127]. We
+	 * echoed the handset's element, and sent none when it sent none (spec
+	 * sweep, finding 14). Another ARI class keeps the echo until its
+	 * level is known.
+	 */
+	if (!(mm->cfg.rfpi[0] & 0x70u)) {		/* ARC 000: class A */
+		static const uint8_t own[1] = { 0x40u | 36u };
+
+		la = own;
+		la_len = sizeof(own);
+	}
 	if (la && la_len)
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_LOCATION_AREA, la, la_len);

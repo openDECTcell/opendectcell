@@ -328,8 +328,13 @@
  *    gains ie_missing. **Behaviour change:** a {CC-SETUP} without
  *    <<BASIC-SERVICE>> gets {CC-RELEASE-COM} "mandatory information element
  *    missing" (EN 300 175-5 §17.6.1) instead of being connected.
+ *
+ * 38: our own location area (2026-10-28). No layout change. **Behaviour
+ *    change:** with a class A RFPI, {LOCATE-ACCEPT} always carries our
+ *    <<LOCATION-AREA>> (LI-type 1, LAL 36: 0x64, stock's value, A-0127),
+ *    instead of echoing the handset's element or sending none.
  */
-#define OPENDECTCELL_API_VERSION 37
+#define OPENDECTCELL_API_VERSION 38
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
