@@ -1,5 +1,11 @@
 # Handset compatibility
 
+> **Update, 2026-10-28:** per-handset behaviour now lives in handset
+> profiles ([handset-profiles.md](handset-profiles.md)), chosen when a handset
+> registers; the reasoning below is why the library itself stays the
+> standard. The short user-level list of tested handsets is in
+> [status.md](status.md#handsets).
+
 One table, kept current, of what each handset has actually been observed to do
 against **our** base. It exists to answer a question that keeps coming up --
 "should `libopendectcell` grow per-handset support?" -- with evidence instead of

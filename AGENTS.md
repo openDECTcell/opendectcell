@@ -7,7 +7,8 @@ This file keeps work consistent across sessions and agents. Read it completely b
 openDECTcell turns used AVM FRITZ!Boxes into open DECT base stations under OpenWrt.
 - **On the chip:** the Dialog SC144xx DECT chip runs AVM's unchanged "STUB" firmware, which handles the radio, the MAC and codec conversion. The STUB is uploaded at runtime.
 - **On the box, our code:** the firmware loader, a kernel module for the PCM/TDM link (on the 7520: the IPQ4019 ADSS TDM block; on the 7412: the VR9 SSC in SPI-slave mode), the control-channel daemon, and the DECT protocol library (DLC/NWK, in C).
-- **On a server:** the separate repository **opendectcell-controller** turns DECT into SIP. It is not a PBX.
+- **SIP on the box:** the `opendectcell-baresip` package connects the handsets' calls to SIP accounts through baresip (since 2026-10-28).
+- **On a server, later:** the separate repository **opendectcell-controller** joins several boxes into one DECT system and turns DECT into SIP centrally. It is not a PBX.
 
 First target: FRITZ!Box 7520 (since 2026-10-17; previously the 7412). See `README.md` and `ROADMAP.md`.
 
@@ -83,7 +84,8 @@ room.
 | `tools/` | Analysis tools (Python stdlib preferred; `the analysis tooling` for headless scripts) |
 | `kernel/` | Kernel modules, one per OpenWrt target (`kmod-opendectcell-lantiq`, …) with the transport drivers and the board table (GPL-2.0) |
 | `boards/` | Board profiles, one per model, named after OpenWrt's `board_name` (e.g. `avm,fritz7412`); see `docs/hardware-abstraction.md` |
-| `src/` | Userspace C: `libopendectcell` (DECT protocol library), `dect-fwload`, `dect-stubd`, `dect-probe` |
+| `src/` | Userspace C: `libopendectcell` (DECT protocol library), `dect-fwload`, `dect-stubd`, the baresip module, development tools |
+| `profiles/` | Handset profiles (`docs/handset-profiles.md`) |
 | `tests/` | Unit tests, chip/STUB simulator, golden traces |
 | `openwrt/` | OpenWrt feed: package Makefiles, init scripts, UCI defaults |
 | `work/` | **git-ignored**: AVM files, the analysis tooling projects, analyser output, captures |

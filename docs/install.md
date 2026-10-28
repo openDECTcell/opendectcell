@@ -1,8 +1,27 @@
-# Installing openDECTcell from a release
+# Installing openDECTcell
 
-Each release on GitHub has ready-built packages for OpenWrt. You need a box
-that already runs OpenWrt, of exactly the version named in the release
-(the kernel module only loads into the kernel it was built for).
+Each release on GitHub has ready-built, signed packages for OpenWrt. This
+guide takes you from a FRITZ!Box running OpenWrt to a handset making calls.
+
+## Before you start
+
+- **A FRITZ!Box 7520 or 7530 with OpenWrt**, of exactly the version named in
+  the release (the kernel module only loads into the kernel it was built
+  for). Installing OpenWrt itself is described on the
+  [OpenWrt wiki](https://openwrt.org/toh/avm/avm_fritz_box_7530).
+- **Internet access on the box** while installing.
+- **A PC with Python 3** ([python.org](https://www.python.org/downloads/);
+  Linux usually has it) and this repository, or at least the files
+  `tools/dect-fw-extract.py` and `tools/sqfs_be.py`.
+- **The official FRITZ!OS image for your box** from AVM (step 3).
+- **Your DECT handsets.** If a handset is still registered with another
+  base, it can usually register with a second one; otherwise reset it as
+  its manual describes.
+
+Good to know: on these boxes the DECT chip is connected to the same serial
+port as the router's console. openDECTcell switches the serial console off so
+the chip can use it. This matters only if you have soldered on a serial
+cable.
 
 ## 1. Which files
 
@@ -60,27 +79,55 @@ same way).
 
 ## 3. The DECT chip firmware
 
-openDECTcell may not ship AVM's firmware for the DECT chip, so every user
-extracts it once from an official FRITZ!OS image for their box, on their own
-PC: see [firmware-sourcing.md](firmware-sourcing.md). OpenWrt upgrades keep
-it.
+The DECT chip needs AVM's firmware, which the router uploads at every start.
+openDECTcell may not ship it, so you take it once from the official FRITZ!OS
+image for your box, on your own PC. Why, and which builds are known:
+[firmware-sourcing.md](firmware-sourcing.md).
+
+1. Download the FRITZ!OS image for your model from AVM (download.avm.de,
+   the folder of your box, `fritz.os`). openDECTcell is tested with
+   **FRITZ!OS 07.56** of the 7520 (`FRITZ.Box_7520-07.56.image`); 08.25 is
+   known as well. A copy from elsewhere works too: the tool checks the
+   firmware inside it.
+2. On the PC:
+   ```sh
+   python3 tools/dect-fw-extract.py FRITZ.Box_7520-07.56.image
+   ```
+   It finds the two firmware files, checks them, saves them to
+   `./opendectcell-firmware/` and prints the commands for the next step, for
+   example:
+   ```sh
+   scp -O opendectcell-firmware/*.hex root@192.168.1.1:/etc/opendectcell/firmware/
+   ```
+   and an `ssh … uci set …` line that tells the box which build it got.
+   Run them. They use OpenWrt's default address 192.168.1.1; for another
+   one, add `--box root@ADDRESS` to the first command.
+
+The files stay on the box across OpenWrt upgrades.
 
 ## 4. Switch on and register
+
+In the web interface, open **Network > DECT**, tick *Enable the DECT base*
+and press *Save & Apply*. On the command line:
 
 ```sh
 uci set opendectcell.main.enabled=1; uci commit opendectcell
 /etc/init.d/opendectcell start
 ```
 
-Then open Network > DECT in the web interface, tab Handsets. Below the list:
+Status > DECT now shows the base as on the air. Then, in Network > DECT, tab
+**Handsets**, below the list:
 
 1. Choose the handset's manufacturer and model, if it is listed; otherwise
    keep "Generic DECT GAP/CAT-iq handset".
 2. Press *Register a handset*, then start the registration on the handset
-   and enter the PIN shown there (8 random digits; *New PIN* makes another,
-   *PIN length* allows fewer for a handset that cannot take 8).
+   (often under Settings > Registration, "Register handset") and enter the
+   PIN shown in the web page: 8 random digits. *New PIN* makes another one;
+   *PIN length* allows 6 or 4 digits for a handset that cannot take 8.
 
-Registration closes after one handset has registered, or after two minutes.
+Registration is open only while you are registering: it closes after one
+handset has registered, or after two minutes. The handset then appears in
+the list as *DECT 1*, *DECT 2* and so on; *Edit* renames it.
 
 ## 5. Phone lines (SIP)
 
@@ -105,3 +152,22 @@ phone" set up for it.
 A newer release installs the same way, over the old one; your settings in
 `/etc/config/opendectcell` stay. `apk del opendectcell-baresip luci-app-opendectcell openDECTcell
 kmod-opendectcell-ipq40xx` removes everything again.
+
+## When something doesn't work
+
+The *Log* tab of Status > DECT shows what the base and the SIP side say.
+
+| What you see | What it means, and what to do |
+|---|---|
+| "UNTRUSTED signature" when uploading a package | The project's key is not added yet: step 2, point 1 |
+| The kernel module does not load | The box runs a different OpenWrt version than the release was built for. Install the matching OpenWrt version, or build the packages yourself |
+| Log: "chip firmware missing" | Step 3 is not done, or the files are in another folder than `/etc/opendectcell/firmware/` |
+| Log: "not a firmware build openDECTcell knows" | The image is from a FRITZ!OS version openDECTcell does not know. Use one listed in [firmware-sourcing.md](firmware-sourcing.md) |
+| The handset searches for its base after the box restarted | Handsets wait longer and longer between searches. Give it half a minute, or press a key on it |
+| The handset says the PIN is wrong | Enter the PIN shown in the web page right now (*New PIN* changes it). Some handsets first try 0000 by themselves |
+| Registration does not start | Press *Register a handset* again: the window closes after two minutes |
+| The VoIP tab shows a line as not registered | The reason is shown next to it. Check user name, password and registrar in the VoIP profile |
+| A call is "busy" right away | Only one SIP call at a time is supported for now |
+
+If you are stuck, please open an issue: [CONTRIBUTING.md](../CONTRIBUTING.md)
+says what to include.

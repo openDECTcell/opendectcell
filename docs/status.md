@@ -1,0 +1,96 @@
+# What works, and what doesn't yet
+
+The state of openDECTcell **0.3.1** (October 2026), tested on a FRITZ!Box 7520 with
+OpenWrt 25.12.5. "Tested" means seen working on real hardware with real
+handsets, not only in the unit tests.
+
+Legend: ✅ works and tested · 🟡 works with limits, or built but not fully
+tested · ❌ not built yet · ➖ out of scope for now
+
+## The base station
+
+| Feature | State | Notes |
+|---|---|---|
+| Starting the DECT chip with AVM's chip firmware | ✅ | You supply the firmware yourself; see [install.md](install.md), step 3 |
+| Base on the air, handsets find it | ✅ | |
+| Registering handsets with a PIN | ✅ | Random 8-digit PIN by default; 6 or 4 digits for handsets that need it. Registration is open only for two minutes after you press *Register a handset* |
+| Up to six handsets | 🟡 | Three handsets at once tested |
+| Authentication and encryption | ✅ | Every call is encrypted by default |
+| Deregistering a handset from the web page | ✅ | The handset must be switched on and in range |
+| Deregistering from the handset's own menu | 🟡 | Only some handsets offer it; not yet working on the Gigaset A540 |
+| Handset names (*DECT 1*, *Kitchen*, …) | ✅ | Set in the web page or renamed on the handset |
+| Fon/DECT LED | ✅ | On while the radio is on, blinks on activity |
+| Signal strength and link quality per handset | ✅ | Status > DECT |
+| Handset models with their own settings ("profiles") | 🟡 | Profiles for the Gigaset A540, C430A and AS690H; every other handset uses the standard behaviour |
+
+## Calls
+
+| Feature | State | Notes |
+|---|---|---|
+| Calls in and out through a SIP account | ✅ | One SIP call at a time |
+| HD voice (wideband, G.722) | ✅ | Both directions, the default |
+| Narrowband voice (handsets without HD) | 🟡 | Works for calls between handsets; not yet passed on to SIP calls |
+| Caller's number on the display | ✅ | |
+| Caller's name on the display | 🟡 | Sent the standard way; the C430A and AS690H show it only as a separate text screen, and on the A540 it is still being tested |
+| Line name on the display ("via Line 1") | ✅ | CAT-iq handsets |
+| Calls between handsets (internal calls) | ✅ | |
+| Two calls at the same time | 🟡 | Tested for calls between handsets; on SIP only one call at a time |
+| Two SIP accounts per handset (Line 1, Line 2) | 🟡 | Both ring the handset; outgoing calls always use Line 1 |
+| One SIP account ringing several handsets | ❌ | A VoIP profile is the line of one handset for now |
+| Call waiting, hold, switching between calls | ❌ | Designed ([lines-and-calls.md](lines-and-calls.md)), not built |
+| "Busy" when all voice channels are taken | ✅ | |
+| Phonebook and call lists on the handset | ❌ | Planned, from a vCard source over HTTPS |
+| Voicemail indicator on the handset | ❌ | The VoIP profile can subscribe to it, but the handset is not told yet |
+
+## Web interface (LuCI)
+
+| Feature | State | Notes |
+|---|---|---|
+| Network > DECT: settings, handsets, VoIP profiles | ✅ | |
+| Status > DECT: DECT, VoIP and Log tabs | ✅ | Live view of the base, the handsets, SIP registrations and running calls with codec and encryption |
+| Uploading the chip firmware in the web page | ❌ | Copy it with `scp` for now |
+
+## Hardware
+
+| Box | State | Notes |
+|---|---|---|
+| FRITZ!Box 7520 | ✅ | The development box |
+| FRITZ!Box 7530 | 🟡 | Same hardware as the 7520 and the same OpenWrt image, but not tested on one yet |
+| FRITZ!Box 7412 | 🟡 | Packages are built, the chip interface is analysed, but nobody has run them on a 7412 yet |
+| FRITZ!Box 7362 SL | ❌ | Analysed only |
+| Other FRITZ!Boxes | ❌ | Many use the same DECT chip; see [hardware-abstraction.md](hardware-abstraction.md) for what a new model needs |
+
+Only **OpenWrt 25.12.5** is supported: the kernel module must be built for the
+exact kernel on the box.
+
+## Handsets
+
+| Handset | Standard | Tested with openDECTcell |
+|---|---|---|
+| Gigaset A540 CAT | CAT-iq (NG-DECT Part 3) | Registration, calls in and out, HD voice, encryption, number and line on the display, SIP calls both ways |
+| Gigaset C430A | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number |
+| Gigaset AS690H | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number |
+| AVM FRITZ!Fon C4 | CAT-iq | Registered and called during development; not tested with this release |
+
+openDECTcell follows the DECT standards (GAP, CAT-iq) rather than one maker's
+habits, so other GAP or CAT-iq handsets should work too. Reports of other
+handsets are very welcome; see [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## Not tested yet
+
+- `tools/dect-fw-extract.py` has been tested on synthetic images only, not yet
+  on a real FRITZ!OS image. If it fails for you, please open an issue.
+- Installing on a freshly flashed box (the development box was set up step
+  by step).
+- Three calls at the same time (the chip has three voice channels; two were
+  tested).
+
+## Later, or out of scope
+
+- **Several boxes as one DECT system** (multi-cell, roaming between boxes):
+  researched, with a separate controller project. Handover during a call
+  needs the boxes to be synchronised, which is unsolved. ➖ for now.
+- **ULE** (DECT smart-home devices) and **SUOTA** (handset firmware updates):
+  ➖.
+
+What is planned next: [ROADMAP.md](../ROADMAP.md).
