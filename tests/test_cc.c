@@ -1996,8 +1996,10 @@ static void test_overlap_timer(void)
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
 	dect_cc_tick(&cc, 31000);
 	n = dect_cc_poll(&cc, out, sizeof(out));
-	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
-	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE);	/* GAP 8.3.2.3 */
+	CHECK(n >= 4u && out[n - 2] == DECT_IE_RELEASE_REASON &&
+	      out[n - 1] == 0x0Du);			/* timer expiry */
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);	/* release pending */
 	CHECK_EQ(cc.stats.overlap_timeouts, 1u);
 }
 

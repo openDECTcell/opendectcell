@@ -285,8 +285,13 @@
  *    the keypad buffer is cleared for each new call. Before, the next call
  *    on a link that stayed up was ignored (same transaction value) or
  *    refused "insufficient resources" (another value).
+ *
+ * 30: overlap timeout (2026-10-28). No layout change. **Behaviour change:**
+ *    F<CC.01> expiry sends {CC-RELEASE} "timer expiry" and enters
+ *    DECT_CC_ST_RELEASED (release pending), the normal release of GAP
+ *    §8.3.2.3, instead of {CC-RELEASE-COM} and NULL.
  */
-#define OPENDECTCELL_API_VERSION 29
+#define OPENDECTCELL_API_VERSION 30
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

@@ -121,7 +121,8 @@ static void queue_iwu(struct dect_cc *cc, const uint8_t *body, size_t body_len)
  * form sends no reason, which is legal but tells the peer nothing; an abnormal
  * release should say why.
  */
-static void queue_release_com(struct dect_cc *cc, uint8_t reason)
+static void queue_release_msg(struct dect_cc *cc, uint8_t type,
+			      uint8_t reason)
 {
 	unsigned idx;
 	uint8_t *b = txq_slot(cc, &idx);
@@ -130,8 +131,7 @@ static void queue_release_com(struct dect_cc *cc, uint8_t reason)
 	if (!b)
 		return;
 	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
-				 cc->ti_flag, cc->ti_value,
-				 DECT_CC_RELEASE_COM);
+				 cc->ti_flag, cc->ti_value, type);
 	if (!off)
 		return;
 	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
@@ -139,6 +139,11 @@ static void queue_release_com(struct dect_cc *cc, uint8_t reason)
 	if (!off)
 		return;
 	txq_commit(cc, idx, off);
+}
+
+static void queue_release_com(struct dect_cc *cc, uint8_t reason)
+{
+	queue_release_msg(cc, DECT_CC_RELEASE_COM, reason);
 }
 
 /*
@@ -813,10 +818,19 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 		if (!cc->overlap_deadline_ms) {
 			cc->overlap_deadline_ms = now_ms + CC_OVERLAP_TIMER_MS;
 		} else if (now_ms >= cc->overlap_deadline_ms) {
-			/* GAP 8.3.2.3: the normal release, "timer expiry" */
+			/*
+			 * GAP 8.3.2.3 and EN 300 175-5 9.3.1.5: the NORMAL
+			 * release, {CC-RELEASE} "timer expiry", then release
+			 * pending until the handset's {CC-RELEASE-COM}. We sent
+			 * {CC-RELEASE-COM} at once, the abnormal release, while
+			 * this comment already named the clause (spec sweep,
+			 * 2026-10-28).
+			 */
 			cc->overlap_deadline_ms = 0;
-			queue_release_com(cc, RELEASE_REASON_TIMER_EXPIRY);
-			cc->state = DECT_CC_ST_NULL;
+			queue_release_msg(cc, DECT_CC_RELEASE,
+					  RELEASE_REASON_TIMER_EXPIRY);
+			cc->state = DECT_CC_ST_RELEASED;
+			cc->stats.released++;
 			cc->stats.overlap_timeouts++;
 		}
 	}
