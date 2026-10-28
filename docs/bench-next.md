@@ -350,8 +350,12 @@ the same deregistration. Expect `not reachable (paged 10 times): deleted
 WITHOUT its confirmation` after about 30 s.
 
 Third, the handset's own menu: re-register the AS690H once more and
-deregister it from the handset (Settings, Registration, De-register). Expect
-`the handset deregistered itself (accepted)`.
+deregister it from the handset (Settings, Registration, De-register). Since
+`b867058` the base first challenges it with its key: the log shows an
+{AUTHENTICATION-REQUEST} (`nwk out --> 05 40`), the handset's reply
+(`nwk in  <-- 85 41`), then the ACCEPT and `the handset deregistered itself
+(accepted)`. A REJECT there with `10` (authentication failed) means the
+handset's key and ours differ: the agent reads the log.
 
 Undo at any point: stop the daemon, `mv /etc/opendectcell-sub.as690h.deregistered
 /etc/opendectcell-sub.as690h` (or copy back the one in `/root/`), and re-register.
