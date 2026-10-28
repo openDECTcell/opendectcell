@@ -333,8 +333,16 @@
  *    change:** with a class A RFPI, {LOCATE-ACCEPT} always carries our
  *    <<LOCATION-AREA>> (LI-type 1, LAL 36: 0x64, stock's value, A-0127),
  *    instead of echoing the handset's element or sending none.
+ *
+ * 39: the line pool (2026-10-28, docs/lines-and-calls.md step 1). Layout
+ *    change: struct dect_iwu drops line_id and line_name for lines[] and
+ *    n_lines (struct dect_iwu_line: id, name, attached bitmap or all
+ *    handsets). New: dect_iwu_add_line(), dect_iwu_clear_lines(),
+ *    dect_iwu_line(). The Line Settings List serves every line, sorted by
+ *    line id, each with its own attached handsets. dect_iwu_set_line()
+ *    still makes one line with every handset attached.
  */
-#define OPENDECTCELL_API_VERSION 38
+#define OPENDECTCELL_API_VERSION 39
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

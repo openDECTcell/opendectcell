@@ -23,19 +23,65 @@ static const uint8_t fields_line[] = { 0x01, 0x02, 0x03 };	/* 7.4.11.4 */
 void dect_iwu_init(struct dect_iwu *iwu)
 {
 	memset(iwu, 0, sizeof(*iwu));
-	iwu->line_id = 1;
-	memcpy(iwu->line_name, "Line 1", 7);
+	dect_iwu_set_line(iwu, 1, "Line 1");
+}
+
+static void line_name(struct dect_iwu_line *l, const char *name)
+{
+	memset(l->name, 0, sizeof(l->name));
+	if (name)
+		strncpy(l->name, name, sizeof(l->name) - 1u);
+	if (!l->name[0])			/* 7.4.11.4.1: never empty */
+		memcpy(l->name, "Line", 5);
+}
+
+void dect_iwu_clear_lines(struct dect_iwu *iwu)
+{
+	memset(iwu->lines, 0, sizeof(iwu->lines));
+	iwu->n_lines = 0;
 }
 
 void dect_iwu_set_line(struct dect_iwu *iwu, uint8_t line_id, const char *name)
 {
-	iwu->line_id = (uint8_t)(line_id & 0x7Fu);
-	memset(iwu->line_name, 0, sizeof(iwu->line_name));
-	if (name)
-		strncpy(iwu->line_name, name, sizeof(iwu->line_name) - 1u);
-	/* "the line name value shall never be empty" (7.4.10.5.1.6) */
-	if (!iwu->line_name[0])
-		memcpy(iwu->line_name, "Line", 5);
+	struct dect_iwu_line *l;
+
+	dect_iwu_clear_lines(iwu);
+	l = &iwu->lines[0];
+	l->id = (uint8_t)(line_id & 0x7Fu);
+	l->all_handsets = 1;
+	line_name(l, name);
+	iwu->n_lines = 1;
+}
+
+int dect_iwu_add_line(struct dect_iwu *iwu, uint8_t line_id, const char *name,
+		      uint32_t attached)
+{
+	unsigned i, at;
+
+	if (line_id > 126u || iwu->n_lines >= DECT_IWU_LINES ||
+	    dect_iwu_line(iwu, line_id))
+		return -1;
+	for (at = 0; at < iwu->n_lines && iwu->lines[at].id < line_id; at++)
+		;
+	for (i = iwu->n_lines; i > at; i--)
+		iwu->lines[i] = iwu->lines[i - 1u];
+	memset(&iwu->lines[at], 0, sizeof(iwu->lines[at]));
+	iwu->lines[at].id = line_id;
+	iwu->lines[at].attached = attached;
+	line_name(&iwu->lines[at], name);
+	iwu->n_lines++;
+	return 0;
+}
+
+const struct dect_iwu_line *dect_iwu_line(const struct dect_iwu *iwu,
+					  uint8_t line_id)
+{
+	unsigned i;
+
+	for (i = 0; i < iwu->n_lines; i++)
+		if (iwu->lines[i].id == line_id)
+			return &iwu->lines[i];
+	return NULL;
 }
 
 int dect_iwu_add_handset(struct dect_iwu *iwu, uint8_t terminal_id,
@@ -203,7 +249,7 @@ static unsigned entry_count(const struct dect_iwu *iwu, uint8_t list)
 	switch (list) {
 	case DECT_LIA_LIST_SUPPORTED:		return 1;
 	case DECT_LIA_LIST_INTERNAL_NAMES:	return iwu->n_handsets;
-	case DECT_LIA_LIST_LINE_SETTINGS:	return 1;
+	case DECT_LIA_LIST_LINE_SETTINGS:	return iwu->n_lines;
 	default:				return 0;
 	}
 }
@@ -295,21 +341,23 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 		break;
 	}
 
-	case DECT_LIA_LIST_LINE_SETTINGS:
-		if (idx != 1u)
+	case DECT_LIA_LIST_LINE_SETTINGS: {
+		const struct dect_iwu_line *l;
+
+		if (idx < 1u || idx > iwu->n_lines)
 			break;
+		l = &iwu->lines[idx - 1u];
 		switch (field) {
 		case 0x01:
 			/* 7.4.11.4.1 / 7.4.10.5.1.6 'Line name'. */
-			put_field(b, field, 0x00, iwu->line_name,
-				  strlen(iwu->line_name));
+			put_field(b, field, 0x00, l->name, strlen(l->name));
 			break;
 		case 0x02: {
 			/*
 			 * 7.4.11.4.2 / 7.4.10.5.1.7 'Line id': identifier
 			 * subtype 03H "Relating to", then the value, extensible.
 			 */
-			uint8_t v[2] = { 0x03, (uint8_t)(0x80u | iwu->line_id) };
+			uint8_t v[2] = { 0x03, (uint8_t)(0x80u | l->id) };
 
 			put_field(b, field, 0x00, v, sizeof(v));
 			break;
@@ -320,22 +368,35 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 			 * bitmap with terminal 1 in bit 1, 7 terminals per
 			 * octet, extension bit set on the last octet only, and
 			 * only as many octets as the highest terminal needs.
+			 * Only registered handsets count, so a pool line names
+			 * no terminal the base does not hold.
 			 */
 			uint8_t v[1 + 19];
 			size_t n = 0, octets = 0, i;
+			unsigned hi = 0, count = 0;
 
-			v[n++] = (uint8_t)(0x80u | (iwu->n_handsets & 0x7Fu));
-			if (iwu->n_handsets) {
-				unsigned hi = iwu->handsets[iwu->n_handsets - 1u]
-						.terminal_id;
+			for (i = 0; i < iwu->n_handsets; i++) {
+				unsigned t = iwu->handsets[i].terminal_id;
 
+				if (!t || t > 32u || (!l->all_handsets &&
+				    !(l->attached & (1u << (t - 1u)))))
+					continue;
+				count++;
+				if (t > hi)
+					hi = t;
+			}
+			v[n++] = (uint8_t)(0x80u | (count & 0x7Fu));
+			if (count) {
 				octets = (hi + 6u) / 7u;
 				memset(v + 1, 0, octets);
 				for (i = 0; i < iwu->n_handsets; i++) {
-					unsigned t = iwu->handsets[i].terminal_id
-						     - 1u;
+					unsigned t = iwu->handsets[i].terminal_id;
 
-					v[1 + t / 7u] |= (uint8_t)(1u << (t % 7u));
+					if (!t || t > 32u || (!l->all_handsets &&
+					    !(l->attached & (1u << (t - 1u)))))
+						continue;
+					v[1 + (t - 1u) / 7u] |=
+						(uint8_t)(1u << ((t - 1u) % 7u));
 				}
 				v[octets] |= 0x80u;
 				n += octets;
@@ -347,6 +408,7 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 			break;
 		}
 		break;
+	}
 
 	default:
 		break;

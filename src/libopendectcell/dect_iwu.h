@@ -138,13 +138,28 @@ struct dect_iwu_stats {
 	uint32_t malformed;	/* too short, wrong discriminator, bad coding */
 };
 
+/*
+ * One line of the Line Settings List (TS 102 527-3 §7.4.11.4): a SIP line
+ * from the pool. `attached` holds terminal t in bit t-1; all_handsets
+ * attaches every registered handset (the single-line default).
+ */
+#define DECT_IWU_LINES	8u
+
+struct dect_iwu_line {
+	uint8_t  id;			/* 0..126, unique */
+	char     name[DECT_IWU_NAME_MAX];
+	uint8_t  all_handsets;
+	uint32_t attached;		/* used when !all_handsets */
+};
+
 struct dect_iwu {
 	/* The data behind the three lists; the owner fills these in. */
 	struct dect_iwu_handset handsets[DECT_IWU_HANDSETS];
 	unsigned n_handsets;
 	uint8_t  own_terminal_id;	/* the PP talking to us: 'Own' property */
-	uint8_t  line_id;		/* 7.4.11.4.2, "Relating to" subtype */
-	char     line_name[DECT_IWU_NAME_MAX];
+	/* The line pool, sorted by line id (the list's sort field). */
+	struct dect_iwu_line lines[DECT_IWU_LINES];
+	unsigned n_lines;
 
 	/* Open sessions; session identifier = index + 1. */
 	struct {
@@ -160,8 +175,23 @@ struct dect_iwu {
 
 void dect_iwu_init(struct dect_iwu *iwu);
 
-/* The one line this base offers, for the Line Settings List. */
+/* One line only, every handset attached: the single-line shortcut. */
 void dect_iwu_set_line(struct dect_iwu *iwu, uint8_t line_id, const char *name);
+
+/*
+ * Add a line to the pool, attached to the terminals in `attached` (bit t-1
+ * = terminal t). 0 on success; -1 if the id is taken or > 126, or the
+ * pool is full. Kept sorted by line id.
+ */
+int dect_iwu_add_line(struct dect_iwu *iwu, uint8_t line_id, const char *name,
+		      uint32_t attached);
+
+/* Remove every line (then add_line them). */
+void dect_iwu_clear_lines(struct dect_iwu *iwu);
+
+/* The line with this id, or NULL. */
+const struct dect_iwu_line *dect_iwu_line(const struct dect_iwu *iwu,
+					  uint8_t line_id);
 
 /* Add a registered handset to the Internal Names List. Keeps the list
  * sorted by terminal id (7.4.10.3 default sorting); a repeated id replaces

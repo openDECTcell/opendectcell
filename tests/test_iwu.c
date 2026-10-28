@@ -196,6 +196,43 @@ static void test_attached_handsets_bitmap_spans_two_octets(void)
 	CHECK_EQ(memcmp(out.msg[1], data, sizeof(data)), 0);
 }
 
+/*
+ * The line pool: two lines, each attached to one handset, served sorted by
+ * line id with their own attached-handsets bitmap (TS 102 527-3 7.4.11.4).
+ */
+static void test_line_pool(void)
+{
+	static const uint8_t start[] = { 0xC3, 0x00, 0x08, 0x00 };
+	static const uint8_t read[] = { 0xC3, 0x06, 0x81, 0x81, 0x02, 0x00,
+					0x02, 0x03 };
+	static const uint8_t data[] = {
+		0xC3, 0x14, 0x81,
+		0x81, 0x8a,				/* line 1: terminal 1 */
+		  0x02, 0x83, 0x80, 0x03, 0x81,
+		  0x03, 0x83, 0x80, 0x81, 0x81,
+		0x82, 0x8a,				/* line 2: terminal 2 */
+		  0x02, 0x83, 0x80, 0x03, 0x82,
+		  0x03, 0x83, 0x80, 0x81, 0x82,
+	};
+	struct dect_iwu iwu;
+
+	base_with_two_handsets(&iwu);
+	dect_iwu_clear_lines(&iwu);
+	CHECK_EQ(dect_iwu_add_line(&iwu, 2, "Line B", 1u << 1), 0);
+	CHECK_EQ(dect_iwu_add_line(&iwu, 1, "Line A", 1u << 0), 0);
+	CHECK_EQ(dect_iwu_add_line(&iwu, 2, "dup", 0), -1);	/* unique ids */
+	CHECK_EQ(dect_iwu_add_line(&iwu, 127, "big", 0), -1);
+	CHECK_EQ(iwu.n_lines, 2u);
+	CHECK(dect_iwu_line(&iwu, 1) == &iwu.lines[0]);	/* sorted */
+	CHECK_EQ(strcmp(dect_iwu_line(&iwu, 2)->name, "Line B"), 0);
+	CHECK(dect_iwu_line(&iwu, 3) == NULL);
+	handle(&iwu, start, sizeof(start));
+	handle(&iwu, read, sizeof(read));
+	CHECK_EQ(out.count, 2u);
+	CHECK_EQ(out.len[1], sizeof(data));
+	CHECK_EQ(memcmp(out.msg[1], data, sizeof(data)), 0);
+}
+
 /* Two sessions at once, each with its own identifier; ending one frees it. */
 static void test_two_sessions_and_end_session(void)
 {
@@ -400,6 +437,7 @@ int main(void)
 	test_read_internal_names();
 	test_read_line_settings();
 	test_attached_handsets_bitmap_spans_two_octets();
+	test_line_pool();
 	test_two_sessions_and_end_session();
 	test_read_error_cases();
 	test_query_supported_fields();
