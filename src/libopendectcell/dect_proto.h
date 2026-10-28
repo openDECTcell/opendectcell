@@ -625,8 +625,11 @@
  *   80: dect_profile_keys_json() (the key table, with labels and groups, for
  *       a settings page) and dect_profile_override() (a handset's own
  *       settings on top of its profile).
+ *
+ *   81: dect_ipei_text(), a handset's IPEI as printed text (EN 300 175-6
+ *       annex C), from its PORTABLE-IDENTITY.
  */
-#define OPENDECTCELL_API_VERSION 80
+#define OPENDECTCELL_API_VERSION 81
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

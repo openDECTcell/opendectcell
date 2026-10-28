@@ -438,6 +438,8 @@ struct stubd {
 	/* The registration window: open now, and until when (0 = no limit). */
 	int      reg_open;
 	uint64_t reg_open_until;
+	/* the profile the user picked for the next handset to enrol (LuCI) */
+	char     reg_profile[DECT_PROFILE_ID_MAX];
 	unsigned int n_xmail;
 	unsigned int xmail_idx;	/* next extra mail to send (one per loop tick) */
 	/*
@@ -5381,6 +5383,15 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 			fprintf(f, ",\"store\":");
 		}
 		json_str(f, s->hs[i].path);
+		{
+			char ipei[DECT_IPEI_TEXT_LEN];
+
+			if (!dect_ipei_text(s->hs[i].port_id, s->hs[i].port_id_len,
+					    ipei, sizeof(ipei))) {
+				fprintf(f, ",\"ipei\":");
+				json_str(f, ipei);
+			}
+		}
 		fprintf(f, ",\"link\":%s", linked ? "true" : "false");
 		if (s->hs[i].prof_id[0]) {
 			fprintf(f, ",\"profile\":");
@@ -5485,6 +5496,8 @@ static void reg_window(struct stubd *s, int open, unsigned secs,
 		printf("reg: could not send the registration mode mail\n");
 	s->reg_open = open;
 	s->reg_open_until = open && secs ? now + secs * 1000ull : 0;
+	if (!open)
+		s->reg_profile[0] = '\0';	/* the choice was for this window */
 	if (s->reg.active)
 		s->reg.link.mm.cfg.registration = reg_policy(s);
 	if (open && secs)
@@ -5509,6 +5522,7 @@ static void reg_window_tick(struct stubd *s, uint64_t now)
 		return;
 	if (want_register) {
 		want_register = 0;
+		s->reg_profile[0] = '\0';	/* a window without a pick */
 		reg_window(s, 1, s->audio.reg_signal_s, now, "SIGUSR1");
 	}
 	if (s->reg_open && s->reg_open_until && now >= s->reg_open_until)
@@ -5996,6 +6010,48 @@ static void profile_resolve(struct stubd *s, unsigned i)
 	if (dect_profile_describe(&s->hs[i].prof, desc, sizeof(desc)))
 		printf("profile: DECT %u with its own settings: %s\n",
 		       hs_slot(s, i), desc);
+}
+
+/*
+ * The handset that just enrolled into the current store gets the profile
+ * picked for it before the registration (register-window profile=): the
+ * choice is written where a later pick in LuCI goes, <store>.profile.
+ */
+static void reg_profile_apply(struct stubd *s)
+{
+	char path[320];
+	unsigned i;
+	FILE *f;
+
+	for (i = 0; i < s->n_hs; i++)
+		if (s->sub_path && !strcmp(s->hs[i].path, s->sub_path))
+			break;
+	if (i == s->n_hs)
+		return;
+	snprintf(path, sizeof(path), "%s.profile", s->hs[i].path);
+	f = fopen(path, "w");
+	if (!f || fprintf(f, "%s\n", s->reg_profile) < 0 || fclose(f)) {
+		printf("profile: could not write %s\n", path);
+		return;
+	}
+	printf("profile: DECT %u registered as %s\n", hs_slot(s, i),
+	       s->reg_profile);
+	profile_resolve(s, i);
+}
+
+/* A profile id the user may pick: a file in the profile directory. */
+static int reg_profile_ok(const struct stubd *s, const char *id)
+{
+	const char *dir = s->audio.profile_dir ? s->audio.profile_dir
+					       : PROFILE_DIR_DEFAULT;
+	char path[320];
+	size_t n = strlen(id);
+
+	if (!n || n >= DECT_PROFILE_ID_MAX ||
+	    strspn(id, "abcdefghijklmnopqrstuvwxyz0123456789-_") != n)
+		return 0;
+	snprintf(path, sizeof(path), "%s/%s.profile", dir, id);
+	return access(path, R_OK) == 0;
 }
 
 static void ctl_hs(struct stubd *s, unsigned i, const char *state);
@@ -7653,6 +7709,7 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 			uint64_t now)
 {
 	struct dect_ctl_msg m;
+	const char *pr;
 	unsigned v, i;
 
 	if (dect_ctl_parse(line, len, &m)) {
@@ -7681,6 +7738,11 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 			ctl_reply(s, m.verb, "bad-seconds", NULL, 0);
 			return;
 		}
+		pr = dect_ctl_get(&m, "profile");
+		if (pr && !reg_profile_ok(s, pr)) {
+			ctl_reply(s, m.verb, "bad-profile", NULL, 0);
+			return;
+		}
 		/* not before the start-up mails, as reg_window_tick() */
 		if (s->sess.state != DECT_SESS_UP || s->tx_slot < 0 ||
 		    s->xmail_idx < s->n_xmail) {
@@ -7688,6 +7750,10 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 			return;
 		}
 		reg_window(s, 1, v, now, "the control socket");
+		snprintf(s->reg_profile, sizeof(s->reg_profile), "%s",
+			 pr ? pr : "");
+		if (pr)
+			printf("reg: the next handset gets the profile %s\n", pr);
 		ctl_reply(s, m.verb, NULL, "seconds", v);
 	} else if (bridge_command(s, &m, now)) {
 		/* answered there */
@@ -8627,6 +8693,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		}
 		send_subscription(s);
 		sub_save(s);
+		if (s->reg_profile[0])
+			reg_profile_apply(s);
 		/*
 		 * Close registration once the handset is enrolled. AVM's documented
 		 * sequence opens registration (0x022B 'A') and closes it afterwards

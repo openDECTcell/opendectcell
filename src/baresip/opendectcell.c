@@ -14,12 +14,18 @@
  *   - the line map /var/run/opendectcell/lines ("<hs> <line> <aor>" per line,
  *     written by the init script from /etc/config/opendectcell): which account
  *     belongs to which handset. A call to an account rings its handset; a
- *     handset's calls go out on its Line 1.
+ *     handset's calls go out on its Line 1;
+ *   - the VoIP status /var/run/opendectcell/voip.json for the Monitor (Status >
+ *     DECT, tab VoIP), rewritten every 2 s and on every registration
+ *     event: each line's registration, and each call's codec, endpoints,
+ *     data rates, loss, jitter and encryption.
  *
  * One bridged call at a time, as dect-stubd's bridge is today.
  */
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -31,6 +37,8 @@
 
 #define CTL_PATH	"/var/run/opendectcell.sock"
 #define LINES_PATH	"/var/run/opendectcell/lines"
+#define STATUS_PATH	"/var/run/opendectcell/voip.json"
+#define STATUS_MS	2000u
 #define FRAME		320u	/* samples: 20 ms at 16 kHz */
 #define RATE		16000u
 #define RETRY_MS	2000u
@@ -40,6 +48,9 @@
 struct line {
 	unsigned hs, line;
 	char     aor[256];		/* sip:user@domain */
+	/* its registration as the last event told it, for the status */
+	const char *reg;		/* registering, registered, failed, ... */
+	char     why[96];		/* the server's answer to a failure */
 };
 
 struct bcall {
@@ -89,6 +100,7 @@ static struct ausrc *ausrc;
 static struct auplay *auplay;
 static struct ausrc_st *src;		/* the call's, while it exists */
 static struct auplay_st *play;
+static struct tmr status_tmr;
 
 static void ctl_connect(void *arg);
 
@@ -523,6 +535,173 @@ static void call_in(struct ua *ua, struct call *call)
 	info("openDECTcell: call from %s for DECT %u\n", peer ? peer : "?", hs);
 }
 
+/* ---- the VoIP status ----------------------------------------------------- */
+
+static struct line *line_of(const struct ua *ua)
+{
+	unsigned i;
+
+	for (i = 0; i < n_lines; i++)
+		if (aor_is(ua, lines[i].aor))
+			return &lines[i];
+	return NULL;
+}
+
+static void json_str(FILE *f, const char *v)
+{
+	fputc('"', f);
+	for (; v && *v; v++) {
+		unsigned char c = (unsigned char)*v;
+
+		if (c == '"' || c == '\\')
+			fprintf(f, "\\%c", c);
+		else if (c < 0x20)
+			fprintf(f, "\\u%04x", c);
+		else
+			fputc(c, f);
+	}
+	fputc('"', f);
+}
+
+static void json_sa(FILE *f, const struct sa *sa)
+{
+	char b[64];
+
+	if (sa && sa_isset(sa, SA_ALL) && re_snprintf(b, sizeof(b), "%J", sa) > 0)
+		json_str(f, b);
+	else
+		fputs("null", f);
+}
+
+static const char *state_name(enum call_state st)
+{
+	switch (st) {
+	case CALL_STATE_INCOMING:	return "incoming";
+	case CALL_STATE_OUTGOING:	return "calling";
+	case CALL_STATE_RINGING:	return "ringing";
+	case CALL_STATE_EARLY:		return "early media";
+	case CALL_STATE_ESTABLISHED:	return "established";
+	case CALL_STATE_TERMINATED:	return "ended";
+	default:			return "other";
+	}
+}
+
+static void status_call(FILE *f, const struct line *l, struct call *call)
+{
+	struct audio *au = call_audio(call);
+	struct stream *strm = au ? audio_strm(au) : NULL;
+	const struct aucodec *tx = au ? audio_codec(au, true) : NULL;
+	const struct aucodec *rx = au ? audio_codec(au, false) : NULL;
+	const struct sdp_media *m = strm ? stream_sdpmedia(strm) : NULL;
+	const struct rtcp_stats *rs = strm ? stream_rtcp_stats(strm) : NULL;
+	const char *enc = account_mediaenc(call_account(call));
+
+	fprintf(f, "{\"hs\":%u,\"line\":%u,\"direction\":\"%s\",\"state\":\"%s\","
+		"\"duration_s\":%u,\"peer\":", l->hs, l->line,
+		call_is_outgoing(call) ? "out" : "in",
+		state_name(call_state(call)), call_duration(call));
+	json_str(f, call_peeruri(call));
+	fprintf(f, ",\"transport\":\"%s\"", sip_transp_name(call_transp(call)));
+	if (tx) {
+		fprintf(f, ",\"codec\":");
+		json_str(f, tx->name);
+		fprintf(f, ",\"srate\":%u", tx->srate);
+	}
+	if (rx && rx != tx) {
+		fprintf(f, ",\"codec_rx\":");
+		json_str(f, rx->name);
+	}
+	fprintf(f, ",\"local\":");
+	json_sa(f, m ? sdp_media_laddr(m) : NULL);
+	fprintf(f, ",\"remote\":");
+	json_sa(f, m ? sdp_media_raddr(m) : NULL);
+	if (strm)
+		fprintf(f, ",\"tx_bps\":%u,\"rx_bps\":%u,\"tx_packets\":%u,"
+			"\"rx_packets\":%u", stream_metric_get_tx_bitrate(strm),
+			stream_metric_get_rx_bitrate(strm),
+			stream_metric_get_tx_n_packets(strm),
+			stream_metric_get_rx_n_packets(strm));
+	if (rs)
+		fprintf(f, ",\"rx_lost\":%d,\"rx_jitter_us\":%u,\"tx_lost\":%d,"
+			"\"rtt_us\":%u", rs->rx.lost, rs->rx.jit, rs->tx.lost,
+			rs->rtt);
+	fprintf(f, ",\"encryption\":");
+	json_str(f, enc && *enc ? enc : "none");
+	fprintf(f, ",\"secure\":%s}", strm && stream_is_secure(strm) ?
+		"true" : "false");
+}
+
+/* Written to a temporary file and renamed, so a reader never sees half. */
+static void status_write(void)
+{
+	FILE *f = fopen(STATUS_PATH ".tmp", "w");
+	unsigned i, first = 1;
+	struct le *le;
+
+	if (!f)
+		return;
+	fprintf(f, "{\"time\":%lld,\"base\":%s,\"lines\":[",
+		(long long)time(NULL), ctl.fd >= 0 ? "true" : "false");
+	for (i = 0; i < n_lines; i++) {
+		struct line *l = &lines[i];
+		struct ua *ua = line_ua(l->hs, l->line);
+		const char *reg = !ua ? "no account" :
+			!account_regint(ua_account(ua)) ? "off" :
+			ua_isregistered(ua) ? "registered" :
+			l->reg ? l->reg : "registering";
+
+		fprintf(f, "%s{\"hs\":%u,\"line\":%u,\"aor\":", i ? "," : "",
+			l->hs, l->line);
+		json_str(f, l->aor);
+		fprintf(f, ",\"registration\":\"%s\"", reg);
+		if (l->why[0] && !(ua && ua_isregistered(ua))) {
+			fprintf(f, ",\"reason\":");
+			json_str(f, l->why);
+		}
+		if (ua)
+			fprintf(f, ",\"interval_s\":%u",
+				account_regint(ua_account(ua)));
+		fputc('}', f);
+	}
+	fprintf(f, "],\"calls\":[");
+	LIST_FOREACH(uag_list(), le) {
+		struct ua *ua = le->data;
+		const struct line *l = line_of(ua);
+		struct le *ce;
+
+		if (!l)
+			continue;
+		LIST_FOREACH(ua_calls(ua), ce) {
+			if (!first)
+				fputc(',', f);
+			status_call(f, l, ce->data);
+			first = 0;
+		}
+	}
+	fprintf(f, "]}\n");
+	if (fclose(f) == 0)
+		(void)rename(STATUS_PATH ".tmp", STATUS_PATH);
+}
+
+static void status_tick(void *arg)
+{
+	(void)arg;
+	status_write();
+	tmr_start(&status_tmr, STATUS_MS, status_tick, NULL);
+}
+
+/* A registration event: remembered for the status, written at once. */
+static void status_reg(struct ua *ua, const char *state, const char *why)
+{
+	struct line *l = line_of(ua);
+
+	if (!l)
+		return;
+	l->reg = state;
+	str_ncpy(l->why, why ? why : "", sizeof(l->why));
+	status_write();
+}
+
 static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 {
 	struct call *call = bevent_get_call(event);
@@ -530,6 +709,18 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 
 	(void)arg;
 	switch (ev) {
+	case UA_EVENT_REGISTERING:
+		status_reg(bevent_get_ua(event), "registering", NULL);
+		break;
+	case UA_EVENT_REGISTER_OK:
+		status_reg(bevent_get_ua(event), "registered", NULL);
+		break;
+	case UA_EVENT_REGISTER_FAIL:
+		status_reg(bevent_get_ua(event), "failed", bevent_get_text(event));
+		break;
+	case UA_EVENT_UNREGISTERING:
+		status_reg(bevent_get_ua(event), "unregistering", NULL);
+		break;
 	case UA_EVENT_SIPSESS_CONN: {
 		/*
 		 * baresip 3 leaves accepting a new incoming session to the
@@ -664,11 +855,15 @@ static int module_init(void)
 	lines_load();
 	tmr_init(&ctl.retry);
 	ctl_connect(NULL);
+	tmr_init(&status_tmr);
+	status_tick(NULL);
 	return 0;
 }
 
 static int module_close(void)
 {
+	tmr_cancel(&status_tmr);
+	(void)unlink(STATUS_PATH);
 	tmr_cancel(&ctl.retry);
 	ctl_drop();
 	tmr_cancel(&ctl.retry);

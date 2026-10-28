@@ -501,4 +501,13 @@ int dect_mm_cipher_dck(const struct dect_mm *mm, uint8_t dck[DECT_MM_DCK_LEN]);
 /* Pull a pending outbound NWK message. Returns its length, or 0 if none. */
 size_t dect_mm_poll(struct dect_mm *mm, uint8_t *out, size_t cap);
 
+/*
+ * A handset's IPEI as printed text, "EEEEE PPPPPPP C" (EN 300 175-6
+ * annex C), from its <<PORTABLE-IDENTITY>> contents (port_id): only an
+ * IPUI of type N carries one. Returns 0 and fills out (at least
+ * DECT_IPEI_TEXT_LEN octets), -1 for any other identity.
+ */
+#define DECT_IPEI_TEXT_LEN 16u
+int dect_ipei_text(const uint8_t *port_id, size_t len, char *out, size_t cap);
+
 #endif /* OPENDECTCELL_DECT_MM_H */

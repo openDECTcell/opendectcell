@@ -18,7 +18,8 @@ define Package/opendectcell-baresip
   CATEGORY:=Network
   SUBMENU:=Telephony
   TITLE:=SIP for the opendectcell DECT base (baresip module)
-  DEPENDS:=+opendectcell +baresip +baresip-mod-g711 +baresip-mod-g722
+  DEPENDS:=+opendectcell +baresip +baresip-mod-g711 +baresip-mod-g722 \
+	+baresip-mod-srtp
 endef
 
 define Package/opendectcell-baresip/description

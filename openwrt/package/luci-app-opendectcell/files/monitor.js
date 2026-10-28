@@ -4,11 +4,15 @@
 'require poll';
 'require ui';
 'require uci';
+'require rpc';
 
 /*
  * Status > DECT, the DECT Monitor: what the base is doing, for someone who
- * should not have to read a log. Reads /tmp/opendectcell-state.json, which
- * dect-stubd rewrites at most once a second (docs/diagnostics.md).
+ * should not have to read a log. Two tabs: DECT reads /tmp/opendectcell-state.json,
+ * which dect-stubd rewrites at most once a second (docs/diagnostics.md);
+ * VoIP reads /var/run/opendectcell/voip.json, which the baresip module writes
+ * every 2 s. Both start with the service's own state from procd, so a
+ * stopped service is told apart from anything else that goes wrong.
  *
  * Per connection it shows what AVM's DECT Monitor shows and we have
  * decoded from the chip's connection status: carrier and frequency, time
@@ -18,13 +22,37 @@
  * Deliberately not a debugging console: raw mails stay in dect-stubd -v.
  */
 var STATE = '/tmp/opendectcell-state.json';
+var VOIP = '/var/run/opendectcell/voip.json';
 var HISTORY_S = 300;		/* the graph's span */
 var history = {};		/* handle -> [{t, dbm, q}] */
 
-function readState() {
-	return fs.read(STATE).then(function(text) {
+var callServices = rpc.declare({
+	object: 'service',
+	method: 'list',
+	params: [ 'name' ],
+	expect: { '': {} }
+});
+
+function readJson(path) {
+	return fs.read(path).then(function(text) {
 		try { return JSON.parse(text); } catch (e) { return null; }
 	}).catch(function() { return null; });
+}
+
+function readState() {
+	return readJson(STATE);
+}
+
+/* everything one refresh needs: [state, voip, procd's instances] */
+function readAll() {
+	return Promise.all([
+		readState(),
+		readJson(VOIP),
+		L.resolveDefault(callServices('opendectcell'), {}).then(function(r) {
+			return (r && r.opendectcell && r.opendectcell.instances) || {};
+		}),
+		uci.load('opendectcell').catch(function() {})
+	]);
 }
 
 function ago(ms) {
@@ -249,18 +277,21 @@ function connection(st, l) {
 
 function renderState(st) {
 	if (!st)
-		return E('p', {}, _('No state: dect-stubd is not running, or the service is disabled (Network > DECT).'));
+		return E('p', {}, _('No figures from the base.'));
 
 	var bySlot = {}, on = st.radio === 'up';
 	if (on)
 		(st.links || []).forEach(function(l) { bySlot[l.slot] = l; });
 
-	var handsets = (st.handsets || []).map(function(h) {
+	var handsets = (st.handsets || []).slice().sort(function(a, b) {
+		return a.slot - b.slot;
+	}).map(function(h) {
 		var l = bySlot[h.slot], r = l && l.radio;
 
 		return [
 			h.name,
 			String(h.slot),
+			h.ipei || '-',
 			h.part3 == null ? '-' : h.part3 ? _('CAT-iq') : _('GAP'),
 			h.profile || _('standard'),
 			!on ? _('base off') : h.link ? (l ? (CALL[l.call] || l.call) : _('connected')) : _('idle'),
@@ -279,7 +310,6 @@ function renderState(st) {
 				[ _('Registration'), st.registration !== 'open' ? _('closed') :
 					st.registration_left_s != null ?
 						_('open, %d s left').format(st.registration_left_s) : _('open') ],
-				[ _('Line'), st.line || '-' ],
 				[ _('Encryption'), yesno(st.cipher) ],
 				[ _('Handset check on reporting in'), yesno(st.locauth) ],
 				[ _('Wideband audio'), yesno(st.wideband) ],
@@ -291,7 +321,7 @@ function renderState(st) {
 		]),
 		E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('Handsets')),
-			table([ _('Name'), _('No.'), _('Type'), _('Profile'), _('State'), _('Last contact'),
+			table([ _('Name'), _('No.'), _('IPEI'), _('Type'), _('Profile'), _('State'), _('Last contact'),
 				_('Carrier'), _('Field strength'), _('Quality') ], handsets)
 		])
 	];
@@ -310,55 +340,161 @@ function renderState(st) {
 	return E('div', {}, out);
 }
 
+/*
+ * The service as procd sees it. 'main' is the DECT daemon's instance,
+ * 'baresip' the SIP side's; the reason when it is not running comes from
+ * what the settings say, so "switched off" and "failed" read differently.
+ */
+function anyLine() {
+	return uci.sections('opendectcell', 'handset').some(function(h) {
+		return h.l1_enabled == '1' || h.l2_enabled == '1';
+	});
+}
+
+function serviceRows(inst, st, voip, sip) {
+	var on = uci.get('opendectcell', 'main', 'enabled') == '1';
+	var d = inst.instance1, b = inst.baresip, rows = [];
+	var dRun = d && d.running, bRun = b && b.running;
+	var fresh = st && st.radio === 'up';
+
+	rows.push([ _('DECT service'),
+		dRun ? (fresh ? E('strong', {}, _('running')) :
+			_('running, the radio is starting or parked')) :
+		!on ? _('switched off (Network > DECT, General: Enable)') :
+		d ? _('stopped after repeated failures: see System > System Log (opendectcell)') :
+		    _('not running although switched on: see System > System Log (opendectcell)') ]);
+	if (sip) {
+		rows.push([ _('SIP client (baresip)'),
+			bRun ? E('strong', {}, _('running')) :
+			!dRun ? _('not running: it runs with the DECT service') :
+			!anyLine() ? _('not running: no handset line is switched on (Network > DECT, Handsets)') :
+			b ? _('stopped after repeated failures: see System > System Log') :
+			    _('not running: is the package opendectcell-baresip installed?') ]);
+		if (bRun)
+			rows.push([ _('Bridge to the DECT base'),
+				voip && voip.base ? _('connected') : _('not connected (yet)') ]);
+	}
+	return E('div', { 'class': 'cbi-section' }, [
+		E('h3', {}, _('Service')), table(null, rows) ]);
+}
+
+function lineName(hs, line) {
+	return uci.get('opendectcell', 'dect' + hs, 'l' + line + '_name') || _('Line %d').format(line);
+}
+
+function hsName(st, hs) {
+	var h = st && (st.handsets || []).filter(function(x) { return x.slot == hs; })[0];
+	return h ? h.name : _('DECT %d').format(hs);
+}
+
+var REG = {
+	registered: _('registered'), registering: _('registering…'),
+	failed: _('failed'), unregistering: _('signing off'),
+	off: _('off: calls by address only'), 'no account': _('no account loaded')
+};
+
+function kbps(bps) {
+	return bps == null ? '-' : _('%.1f kbit/s').format(bps / 1000);
+}
+
+function voipCall(st, c) {
+	var codec = c.codec ? c.codec + (c.srate ? ' (' + _('%d kHz').format(c.srate / 1000) + ')' : '') +
+		(c.codec_rx ? ' / ' + c.codec_rx : '') : '-';
+
+	return E('div', { 'class': 'cbi-section' }, [
+		E('h3', {}, _('Call: %s, %s').format(hsName(st, c.hs), lineName(c.hs, c.line))),
+		table(null, [
+			[ _('Direction'), c.direction == 'out' ? _('outgoing') : _('incoming') ],
+			[ _('Other party'), c.peer || '-' ],
+			[ _('State'), c.state || '-' ],
+			[ _('Duration'), c.duration_s != null ? duration(c.duration_s) : '-' ],
+			[ _('Codec'), codec ],
+			[ _('Signalling'), (c.transport || '-').toUpperCase() ],
+			[ _('Media, this end'), c.local || '-' ],
+			[ _('Media, other end'), c.remote || '-' ],
+			[ _('Data rate, sending'), kbps(c.tx_bps) ],
+			[ _('Data rate, receiving'), kbps(c.rx_bps) ],
+			[ _('Packets sent / received'), c.tx_packets != null ?
+				'%d / %d'.format(c.tx_packets, c.rx_packets) : '-' ],
+			[ _('Packets lost (receiving)'), c.rx_lost != null ? String(c.rx_lost) : '-' ],
+			[ _('Jitter (receiving)'), c.rx_jitter_us != null ?
+				_('%.1f ms').format(c.rx_jitter_us / 1000) : '-' ],
+			[ _('Round trip'), c.rtt_us ? _('%.1f ms').format(c.rtt_us / 1000) : '-' ],
+			[ _('Encryption'), c.secure ? E('strong', {}, _('on (%s)').format(c.encryption)) :
+				c.encryption && c.encryption != 'none' ?
+					_('%s asked for, not in use').format(c.encryption) : _('off') ]
+		])
+	]);
+}
+
+function renderVoip(st, voip, inst) {
+	var out = [ serviceRows(inst, st, voip, true) ];
+
+	if (!voip || !(inst.baresip && inst.baresip.running))
+		return E('div', {}, out);
+	out.push(E('div', { 'class': 'cbi-section' }, [
+		E('h3', {}, _('Lines')),
+		(voip.lines || []).length ? table([ _('Handset'), _('Line'), _('Account'),
+			_('Registration'), _('Interval') ], voip.lines.map(function(l) {
+			var r = REG[l.registration] || l.registration;
+
+			return [
+				hsName(st, l.hs), lineName(l.hs, l.line), l.aor,
+				l.registration == 'registered' ? E('strong', {}, r) :
+					l.reason ? _('%s: %s').format(r, l.reason) : r,
+				l.interval_s ? _('%d s').format(l.interval_s) : '-'
+			];
+		})) : E('p', {}, _('No line is switched on.'))
+	]));
+	if ((voip.calls || []).length)
+		voip.calls.forEach(function(c) { out.push(voipCall(st, c)); });
+	else
+		out.push(E('div', { 'class': 'cbi-section' }, [
+			E('h3', {}, _('Calls')), E('p', {}, _('No call right now.')) ]));
+	return E('div', {}, out);
+}
+
+function renderDect(st, inst) {
+	return E('div', {}, [ serviceRows(inst, st, null, false), renderState(st) ]);
+}
+
+function fill(node, child) {
+	if (!node)
+		return;
+	while (node.firstChild)
+		node.removeChild(node.firstChild);
+	node.appendChild(child);
+}
+
 return view.extend({
 	load: function() {
-		return Promise.all([ readState(), uci.load('opendectcell').catch(function() {}) ])
-			.then(function(r) { return r[0]; });
+		return readAll();
 	},
 
-	render: function(st) {
-		var box = E('div', { 'id': 'opendectcell-monitor' }, renderState(st));
+	render: function(r) {
+		var dect = E('div', { 'id': 'opendectcell-monitor' }, renderDect(r[0], r[2]));
+		var voip = E('div', { 'id': 'opendectcell-voip' }, renderVoip(r[0], r[1], r[2]));
+		var tabs = E('div', {}, [
+			E('div', { 'data-tab': 'dect', 'data-tab-title': _('DECT') }, [ dect ]),
+			E('div', { 'data-tab': 'voip', 'data-tab-title': _('VoIP') }, [ voip ])
+		]);
 
 		poll.add(function() {
-			return readState().then(function(s) {
-				var node = document.getElementById('opendectcell-monitor');
-				if (!node)
-					return;
-				while (node.firstChild)
-					node.removeChild(node.firstChild);
-				node.appendChild(renderState(s));
+			return readAll().then(function(r) {
+				fill(document.getElementById('opendectcell-monitor'), renderDect(r[0], r[2]));
+				fill(document.getElementById('opendectcell-voip'), renderVoip(r[0], r[1], r[2]));
 			});
 		}, 2);
 
-		/*
-		 * Registration is closed unless asked for: this opens it for the
-		 * service's regwindow (120 s) and the daemon closes it again
-		 * after one handset enrolled (/etc/init.d/opendectcell register).
-		 */
-		var reg = E('button', {
-			'class': 'cbi-button cbi-button-action',
-			'click': ui.createHandlerFn(this, function() {
-				return fs.exec('/etc/init.d/opendectcell', [ 'register' ])
-					.then(function(r) {
-						ui.addNotification(null, E('p', r.code == 0 ?
-							_('Registration is open. Start the registration on the handset now.') :
-							_('Could not open registration: is the DECT service running?')),
-							r.code == 0 ? 'info' : 'warning');
-					});
-			})
-		}, _('Register a handset'));
-
-		return E('div', {}, [
+		/* the tab menu goes before the panes' parent: it needs one */
+		var page = E('div', {}, [
 			E('h2', {}, _('DECT Monitor')),
 			E('div', { 'class': 'cbi-map-descr' },
-				_('Live figures of the DECT base, refreshed every 2 seconds. Settings and handset management: Network > DECT.')),
-			box,
-			E('div', { 'class': 'cbi-page-actions' }, [
-				reg, ' ',
-				E('span', {}, _('Registration PIN: %s').format(
-					uci.get('opendectcell', 'main', 'pin') || '-'))
-			])
+				_('Live figures of the DECT base and its phone lines, refreshed every 2 seconds. Settings, handsets and registration: Network > DECT.')),
+			tabs
 		]);
+		ui.tabs.initTabGroup(tabs.childNodes);
+		return page;
 	},
 
 	handleSaveApply: null,

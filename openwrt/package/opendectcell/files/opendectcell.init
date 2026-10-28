@@ -44,10 +44,12 @@ dect_load_profile
 
 # A random 4-digit registration PIN, saved in the config (also made by the
 # package's uci-defaults script at install).
+# A random PIN of pin_length digits: 8 (the most GAP allows), 6 or 4.
 pin_make() {
-	local h
-	h=$(head -c 16 /dev/urandom | sha256sum | cut -c1-4)
-	printf '%04d' $(( 0x${h:-0} % 10000 ))
+	local n
+	config_get n main pin_length 8
+	case "$n" in 4|6|8) ;; *) n=8 ;; esac
+	tr -dc 0-9 < /dev/urandom | head -c "$n"
 }
 
 # The chip builds openDECTcell was tested with (docs/firmware-sourcing.md;
@@ -199,7 +201,7 @@ bs_safe() {
 }
 
 bs_line() {
-	local sec="$1" slot="$2" n="$3" p="l${3}_" v en user dom aor line codecs c
+	local sec="$1" slot="$2" n="$3" p="l${3}_" v en user dom aor line codecs c auto
 	config_get_bool en "$sec" ${p}enabled 0
 	[ "$en" = 1 ] || return 0
 	config_get user "$sec" ${p}user
@@ -250,25 +252,43 @@ bs_line() {
 	esac
 	config_get v "$sec" ${p}rtpkeep
 	case "$v" in zero|stun|dyna|rtcp) line="$line;rtpkeep=$v" ;; esac
-	config_get v "$sec" ${p}codec 'g722 pcma pcmu'
-	codecs=""
-	for c in $v; do
-		case "$c" in g722) c=G722/16000/1 ;; pcma) c=PCMA/8000/1 ;; pcmu) c=PCMU/8000/1 ;; *) continue ;; esac
-		codecs="${codecs:+$codecs,}$c"
-	done
-	[ -n "$codecs" ] && line="$line;audio_codecs=$codecs"
-	config_get v "$sec" ${p}ptime 20
-	case "$v" in 10|20|30|40) line="$line;ptime=$v" ;; esac
-	config_get v "$sec" ${p}dtmf rtpevent
-	case "$v" in rtpevent|info|auto) line="$line;dtmfmode=$v" ;; esac
-	config_get v "$sec" ${p}rel100 yes
-	case "$v" in yes|no|required) line="$line;100rel=$v" ;; esac
+	# Media "try to autodetect" (the default): every codec offered, HD
+	# first, and key tones as the other side's offer says
+	config_get_bool auto "$sec" ${p}media_auto 1
+	if [ "$auto" = 1 ]; then
+		line="$line;audio_codecs=G722/16000/1,PCMA/8000/1,PCMU/8000/1;ptime=20;dtmfmode=auto;100rel=yes"
+	else
+		config_get v "$sec" ${p}codec 'g722 pcma pcmu'
+		codecs=""
+		for c in $v; do
+			case "$c" in g722) c=G722/16000/1 ;; pcma) c=PCMA/8000/1 ;; pcmu) c=PCMU/8000/1 ;; *) continue ;; esac
+			codecs="${codecs:+$codecs,}$c"
+		done
+		[ -n "$codecs" ] && line="$line;audio_codecs=$codecs"
+		config_get v "$sec" ${p}ptime 20
+		case "$v" in 10|20|30|40) line="$line;ptime=$v" ;; esac
+		config_get v "$sec" ${p}dtmf rtpevent
+		case "$v" in rtpevent|info|auto) line="$line;dtmfmode=$v" ;; esac
+		config_get v "$sec" ${p}rel100 yes
+		case "$v" in yes|no|required) line="$line;100rel=$v" ;; esac
+	fi
 	config_get_bool v "$sec" ${p}mwi 0
 	line="$line;mwi=$([ "$v" = 1 ] && echo yes || echo no)"
 	config_get_bool v "$sec" ${p}transfer 1
 	line="$line;call_transfer=$([ "$v" = 1 ] && echo yes || echo no)"
-	config_get v "$sec" ${p}mediaenc
-	case "$v" in srtp|srtp-mand|srtp-mandf|dtls_srtp|zrtp) line="$line;mediaenc=$v" ;; esac
+	# Encryption "try to autodetect" (the default): SRTP offered, plain
+	# RTP when the other side does not take it
+	config_get_bool auto "$sec" ${p}enc_auto 1
+	if [ "$auto" = 1 ]; then
+		if [ -f "$BS_MODS/srtp.so" ]; then
+			line="$line;mediaenc=srtp"
+		else
+			log "DECT $slot line $n: baresip-mod-srtp is not installed; speech goes unencrypted"
+		fi
+	else
+		config_get v "$sec" ${p}mediaenc
+		case "$v" in srtp|srtp-mand|srtp-mandf|dtls_srtp|zrtp) line="$line;mediaenc=$v" ;; esac
+	fi
 	line="$line;answermode=manual"
 	config_get v "$sec" ${p}extra
 	case "$v" in ";"*) line="$line$v" ;; esac
@@ -353,7 +373,7 @@ start_service() {
 	if [ -z "$pin" ]; then
 		pin=$(pin_make)
 		uci -q set opendectcell.main.pin="$pin" && uci -q commit opendectcell
-		log "made a registration PIN (Status > DECT shows it)"
+		log "made a registration PIN (Network > DECT, Handsets shows it)"
 	fi
 	config_get stores main stores '/etc/opendectcell-sub.*'
 	config_get options main options ''
@@ -387,7 +407,10 @@ start_service() {
 		*) options="${options:+$options,}led=$led_path" ;;
 		esac
 	fi
+	# the stores only: not their side files (.name, .profile,
+	# .deregistered, ...), which share the pattern
 	for f in $stores; do
+		case "${f#"${stores%%\**}"}" in *.*) continue ;; esac
 		[ -s "$f" ] && args="$args -s $f"
 	done
 	# and two stores that do not exist yet: where `register` puts new

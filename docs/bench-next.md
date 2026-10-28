@@ -584,3 +584,39 @@ IP-Telefon; registrar 192.168.178.1).
 | both calls ring through and you hear each other | the MVP works |
 | no ring on the far end | the agent reads `logread -e baresip` (registration, the account line) |
 | it rings but no sound | the audio socket: the log's `audio:` lines and baresip's |
+
+During the call, Status > DECT, tab VoIP shows the line's registration and
+the call's codec, endpoints, data rates and encryption (round 9); a
+screenshot of it is worth keeping. "Try to autodetect" is on for Media and
+Encryption by default: if the far end refuses the call (488), untick
+Encryption's and try again.
+
+### 28. Registering with a chosen model and an 8-digit PIN (5 minutes; **deregisters the A540**)
+
+Round 9: the PIN is random, 8 digits by default, and the model picked before
+registering becomes the new handset's profile.
+
+1. Network > DECT, Handsets: Deregister DECT 1 (the A540), or on the A540
+   "Mobilteil abmelden".
+2. Below the list: PIN length 8 digits, *New PIN*, Save & Apply. Then
+   Manufacturer *Gigaset*, Model *Gigaset A540*, *Register a handset*.
+3. On the A540 register to the base and enter the 8 digits.
+
+| you see | meaning |
+|---|---|
+| the A540 registers, and Status > DECT lists it with the profile gigaset-a540 | 8 digits and the model choice both work |
+| it registers but the profile reads "standard" | the PIN works; the agent reads the log's `profile: DECT n registered as` |
+| the A540 takes only 4 digits, or refuses the PIN | set PIN length 4 digits, New PIN, and register again; the agent notes which handsets need fewer digits |
+
+### 29. The IPEI against the handset's own (2 minutes, any run)
+
+Status > DECT now lists each handset's IPEI (EN 300 175-6 annex C:
+"EEEEE PPPPPPP C"), computed from the identity the handset gave at
+registration: A540 11117 0000000 4, C430A 13148 0000000 0, AS690H 14881
+0000000 0. Compare with the label under the battery or the handset's
+service display.
+
+| you see | meaning |
+|---|---|
+| the same digits | the IPEI is right |
+| other digits | the agent checks the identity bytes against the standard |

@@ -4,14 +4,18 @@
 		"read": {
 			"file": {
 				"/tmp/opendectcell-state.json": [ "read" ],
+				"/var/run/opendectcell/voip.json": [ "read" ],
 				"/etc/opendectcell/profiles": [ "list" ],
-				"/etc/opendectcell-sub.*.profile": [ "read" ]
+				"/etc/opendectcell-sub.*.profile": [ "read" ],
+				"/etc/opendectcell/profiles/*.profile": [ "read" ]
+			},
+			"ubus": {
+				"service": [ "list" ]
 			},
 			"uci": [ "opendectcell" ]
 		},
 		"write": {
 			"file": {
-				"/etc/init.d/opendectcell register": [ "exec" ],
 				"/usr/sbin/dect-stubd --ctl *": [ "exec" ],
 				"/usr/sbin/dect-stubd --profile-keys": [ "exec" ],
 				"/etc/opendectcell-sub.*.profile": [ "write" ]

@@ -77,6 +77,16 @@ answer "is this handset in range and what is it doing" without reading a log.
 
 Deliberately **not** a debugging console — raw mails stay in `dect-stubd -v`.
 
+Since round 9 (2026-10-28) the Monitor has two tabs. **DECT** is the above,
+with each handset's IPEI. **VoIP** reads `/var/run/opendectcell/voip.json`, which
+the baresip module writes every 2 s and on each registration event: per line
+its registration (and the server's answer when it failed), per call the
+codec, signalling transport, both media endpoints, bit rates, packets, loss,
+jitter, round trip and whether the speech is encrypted. Both tabs start with
+the service's state from procd (`ubus call service list`), read together with
+the settings, so "switched off", "failed to start" and "running but no line
+on" read differently.
+
 ### Controller — across cells
 
 The single-cell view is the LuCI one. The controller's job is what one cell

@@ -65,7 +65,7 @@ handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── opendectc
 | `remote-released call=5 reason=busy\|normal\|unreachable\|rejected` | BYE, 486, 404, 603 | busy: the busy tone and CS disconnecting to Part 3 (§7.4.8.3), else {CC-RELEASE} with the reason (14H user busy, 00H normal, 12H user unknown, 15H user rejection) |
 | `mwi line=1 count=3` | NOTIFY message-summary | events notification type 0 (§7.4.1.2), later |
 | `deregister hs=3` | the LuCI page | `dereg_begin()` (replaces SIGUSR2 + file) |
-| `register-window seconds=120` | the LuCI page | `reg_window()` (replaces SIGUSR1) |
+| `register-window seconds=120 profile=gigaset-a540` | the LuCI page | `reg_window()` (replaces SIGUSR1); `profile=`, optional, is the model picked before registering: the handset that enrols in this window gets it as `<store>.profile` (`reg_profile_apply()`) |
 
 Call waiting, hold and toggle (lines-and-calls.md steps 5-6) add
 `call-in` for a busy Part 3 handset (call waiting instead of `busy`),
@@ -77,7 +77,7 @@ answers; they come with those steps.
 Every command is answered on the same connection: `ok verb=deregister hs=3`,
 `ok verb=register-window seconds=120`, or `error verb=X reason=R` with R one
 of `unknown`, `malformed`, `bad-hs`, `no-handset`, `bad-seconds`,
-`not-ready`. A second client gets `error reason=busy` and is closed.
+`bad-profile` (no such file in the profile directory), `not-ready`. A second client gets `error reason=busy` and is closed.
 `register-window` without `seconds` uses `regwindow=` (120 s).
 
 `dect-stubd --ctl LINE...` is a client for scripts and the bench (the box

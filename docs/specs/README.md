@@ -9,6 +9,7 @@ goes stale.
 | `en_30017503v020901p.pdf` | EN 300 175-3 V2.9.1 — MAC layer |
 | `en_30017504v020901p.pdf` | EN 300 175-4 V2.9.1 — DLC layer |
 | `en_30017505v020901p.pdf` | EN 300 175-5 V2.9.1 — Network (NWK) layer |
+| `en_30017506v020901p.pdf` | EN 300 175-6 V2.9.1 — Identities and addressing (IPEI text, annex C) |
 | `ts_10252701v010501p.pdf` | TS 102 527-1 V1.5.1 — CAT-iq, New Generation DECT part 1 |
 | `en_300444v020501p.pdf` | **EN 300 444 V2.5.1 — Generic Access Profile (GAP)** |
 | `ts_10252703v010701p.pdf` | **TS 102 527-3 V1.7.1 — CAT-iq part 3, Extended wideband speech services** |
@@ -17,7 +18,7 @@ Fetch them with:
 
 ```sh
 UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-for p in 03 04 05; do
+for p in 03 04 05 06; do
   curl -sL -A "$UA" -o docs/specs/en_300175${p}v020901p.pdf \
     "https://www.etsi.org/deliver/etsi_en/300100_300199/300175${p}/02.09.01_60/en_300175${p}v020901p.pdf"
 done

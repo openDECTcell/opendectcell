@@ -15,10 +15,12 @@ if grep -q "^$tty::" /etc/inittab 2>/dev/null; then
 	sed -i "s|^$tty::|#$tty::|" /etc/inittab
 	logger -t opendectcell "disabled the console getty on $tty, the DECT UART"
 fi
-# A random registration PIN unless one is set.
+# A random registration PIN unless one is set: pin_length digits, 8 unless
+# chosen otherwise (Network > DECT, Handsets).
 if [ -z "$(uci -q get opendectcell.main.pin)" ]; then
-	h=$(head -c 16 /dev/urandom | sha256sum | cut -c1-4)
-	uci -q set opendectcell.main.pin="$(printf '%04d' $(( 0x${h:-0} % 10000 )))"
+	n=$(uci -q get opendectcell.main.pin_length)
+	case "$n" in 4|6|8) ;; *) n=8 ;; esac
+	uci -q set opendectcell.main.pin="$(tr -dc 0-9 < /dev/urandom | head -c "$n")"
 	uci -q commit opendectcell
 fi
 exit 0

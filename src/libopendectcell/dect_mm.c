@@ -18,6 +18,7 @@
 #include "dect_nwk.h"
 #include "dect_dsaa.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* ALLOCATION-TYPE / FIXED-IDENTITY constants (EN 300 175-5 §7.7). */
@@ -1349,4 +1350,31 @@ size_t dect_mm_poll(struct dect_mm *mm, uint8_t *out, size_t cap)
 	mm->out_head = (mm->out_head + 1) % DECT_MM_TXQ;
 	mm->out_count--;
 	return n;
+}
+
+int dect_ipei_text(const uint8_t *port_id, size_t len, char *out, size_t cap)
+{
+	uint64_t v = 0;
+	unsigned emc, psn, sum = 0, i;
+	char digits[13];
+
+	/*
+	 * Type IPUI (octet 3: 1 000 0000), 40 bits (octet 4), then PUT N
+	 * (0000) and the 36-bit IPEI: EMC 16 bits, PSN 20 bits.
+	 */
+	if (len != 7u || port_id[0] != 0x80u || port_id[1] != (0x80u | 40u) ||
+	    (port_id[2] >> 4) != 0u || cap < DECT_IPEI_TEXT_LEN)
+		return -1;
+	for (i = 2; i < 7u; i++)
+		v = v << 8 | port_id[i];
+	emc = (unsigned)(v >> 20 & 0xffffu);
+	psn = (unsigned)(v & 0xfffffu);
+	snprintf(digits, sizeof(digits), "%05u%07u", emc, psn);
+	/* each digit times its position, modulo 11; 10 is shown as '*' */
+	for (i = 0; i < 12u; i++)
+		sum += (unsigned)(digits[i] - '0') * (i + 1u);
+	sum %= 11u;
+	snprintf(out, cap, "%05u %07u %c", emc, psn,
+		 sum == 10u ? '*' : (char)('0' + sum));
+	return 0;
 }
