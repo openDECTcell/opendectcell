@@ -527,6 +527,8 @@ struct stubd {
 	 */
 	int      ring_watch;
 	int      ring_now;	/* a call-in: ring at once, no ring= timing */
+	unsigned ring_hs;	/* the handset we ring (table index), 0 by
+				 * default; a call-in names its own */
 	uint32_t ring_coll0, ring_alert0;	/* cc stats when queued */
 	unsigned ring_requeues;
 	unsigned    ring_pages;		/* pages sent for this attempt */
@@ -2608,14 +2610,20 @@ static void hs_switch(struct stubd *s, unsigned i, const char *why)
  * The identities of the handset we ring, wherever they are: in the fields
  * while it is current, in the table while the link serves another one.
  */
+static size_t ring_target_fixed_len(const struct stubd *s)
+{
+	return s->cur == s->ring_hs || !s->n_hs ? s->cc_fixed_id_len
+		: s->hs[s->ring_hs].cc_fixed_id_len;
+}
+
 static const uint8_t *ring_target_port_id(const struct stubd *s, size_t *len)
 {
-	if (s->cur == 0 || !s->n_hs) {
+	if (s->cur == s->ring_hs || !s->n_hs) {
 		*len = s->cc_port_id_len;
 		return s->cc_port_id;
 	}
-	*len = s->hs[0].cc_port_id_len;
-	return s->hs[0].cc_port_id;
+	*len = s->hs[s->ring_hs].cc_port_id_len;
+	return s->hs[s->ring_hs].cc_port_id;
 }
 
 static void sub_save(struct stubd *s)
@@ -3163,12 +3171,12 @@ static void info_tick(struct stubd *s, uint64_t now)
 	    cc->state != DECT_CC_ST_RINGING)
 		return;
 	if (!s->audio.info_ie_len && s->n_hs &&
-	    (s->hs[0].prof.cc_name_method == 1 ||
-	     s->hs[0].prof.cc_name_method == 2) &&
+	    (s->hs[s->ring_hs].prof.cc_name_method == 1 ||
+	     s->hs[s->ring_hs].prof.cc_name_method == 2) &&
 	    (s->clip.name[0] || s->clip.number[0])) {
 		/* the profile's display text: the name, else the number */
 		uint8_t ie[96];
-		size_t n = dect_profile_display(&s->hs[0].prof,
+		size_t n = dect_profile_display(&s->hs[s->ring_hs].prof,
 						s->clip.name[0] ? s->clip.name
 								: s->clip.number,
 						ie, sizeof(ie));
@@ -4366,11 +4374,12 @@ static void ring_target_tpui(const struct stubd *s, uint8_t tpui[3])
 	struct dect_mm mm;
 
 	memset(&cfg, 0, sizeof(cfg));
-	if (s->cur == 0 || !s->n_hs)
+	if (s->cur == s->ring_hs || !s->n_hs)
 		cfg.sub_slot = stubd_sub_slot(s);
 	else
-		cfg.sub_slot = (uint8_t)(s->audio.sub_slot ? s->audio.sub_slot
-							   : s->hs[0].slot);
+		cfg.sub_slot = (uint8_t)(s->audio.sub_slot && !s->ring_hs
+					 ? s->audio.sub_slot
+					 : s->hs[s->ring_hs].slot);
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tpui(&mm, tpui);
 }
@@ -4493,7 +4502,8 @@ static int ring_target_part3(const struct stubd *s)
 	const struct dect_callinfo *o = &s->audio.callinfo;
 
 	return !o->has_line && !o->has_call_id && !o->has_call_status &&
-	       s->n_hs && s->hs[0].cap_known && s->hs[0].cap_part3;
+	       s->n_hs && s->hs[s->ring_hs].cap_known &&
+	       s->hs[s->ring_hs].cap_part3;
 }
 
 /*
@@ -4512,7 +4522,7 @@ static void ring_callinfo(struct stubd *s, int on)
 
 	if (!on || !ring_target_part3(s)) {
 		dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
-		if (on && s->n_hs && !s->hs[0].cap_known)
+		if (on && s->n_hs && !s->hs[s->ring_hs].cap_known)
 			printf("ring: the target's terminal capability is not "
 			       "known yet -- no call information (an A540 "
 			       "then rings silently)\n");
@@ -4587,7 +4597,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 * another handset is that handset's; a {CC-SETUP} on it would address
 	 * the wrong one. Wait for it to clear, as for a busy CC entity.
 	 */
-	if (s->cur != 0) {
+	if (s->cur != s->ring_hs) {
 		printf("ring: this link serves %s, not the handset we ring -- "
 		       "waiting\n", s->sub_path);
 		s->ring_resp_deadline = now + RING_SETUP_RETRY_MS;
@@ -4622,7 +4632,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	{
 		/* the ring target's profile: its alerting pattern, unless
 		 * -a signal= chose one, and whether the name goes as CNIP */
-		const struct dect_hs_profile *hp = s->n_hs ? &s->hs[0].prof : NULL;
+		const struct dect_hs_profile *hp = s->n_hs ?
+			&s->hs[s->ring_hs].prof : NULL;
 
 		ring_clip = s->clip;
 		if (hp && !s->audio.signal_set &&
@@ -4748,7 +4759,7 @@ static void ring_tick(struct stubd *s, uint64_t now)
 		} else if (now - g_start < s->audio.ring_ms) {
 			return;
 		}
-		if (!s->cc_fixed_id_len) {
+		if (!ring_target_fixed_len(s)) {
 			printf("ring: no call identities -- the handset is not "
 			       "registered here, or -s is off so nothing was "
 			       "stored\n");
@@ -4768,7 +4779,8 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			unsigned k;
 
 			for (k = 0; k < SIDE_MAX; k++)
-				if (s->side[k].active && s->side[k].adopted == 0 &&
+				if (s->side[k].active &&
+				    s->side[k].adopted == (int)s->ring_hs &&
 				    link_in_use(&s->side[k].link) == 2)
 					use = 2;	/* the target, elsewhere */
 			if (use == 2) {
@@ -5624,7 +5636,8 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	unsigned i;
 
 	/* a new connection is nobody's yet; default to the ring target */
-	hs_switch(s, 0, " (new connection)");
+	hs_switch(s, s->ring_state == RING_IDLE || s->ring_state == RING_DONE
+		  ? 0u : s->ring_hs, " (new connection)");
 	{
 		struct side_link *sl = side_find(s, handle);
 
@@ -7343,7 +7356,22 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		const char *num = dect_ctl_get(m, "number");
 		const char *name = dect_ctl_get(m, "name");
 		const char *sip = dect_ctl_get(m, "sip");
+		unsigned want = 0, t = 0;
 
+		/* hs=N: the handset whose line was called (its own account) */
+		if (dect_ctl_get(m, "hs")) {
+			if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, &want)) {
+				ctl_reply(s, m->verb, "bad-hs", NULL, 0);
+				return 1;
+			}
+			for (t = 0; t < s->n_hs; t++)
+				if (ctl_listed(s, t) && hs_slot(s, t) == want)
+					break;
+			if (t == s->n_hs) {
+				ctl_reply(s, m->verb, "no-handset", "hs", want);
+				return 1;
+			}
+		}
 		if (!s->ctl.bridge) {
 			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
 			return 1;
@@ -7372,6 +7400,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		memset(&s->bc, 0, sizeof(s->bc));
 		s->bc.id = bridge_new_id(s);
 		s->bc.since = now;
+		s->ring_hs = t;
 		s->ring_state = RING_IDLE;
 		s->ring_now = 1;
 		s->ring_requeues = 0;
@@ -7379,7 +7408,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		s->ring_pages = 0;
 		s->ring_wait_since = 0;
 		printf("bridge: call %u in from \"%s\" -- ringing DECT %u\n",
-		       s->bc.id, num ? num : "", hs_slot(s, 0));
+		       s->bc.id, num ? num : "", hs_slot(s, t));
 		dect_ctl_begin(&o, "call-in-ok");
 		dect_ctl_add_uint(&o, "call", s->bc.id);
 		if (sip)
@@ -8043,7 +8072,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	 * a page response does not adopt (review, finding 2).
 	 */
 	hs_switch(s, s->reg.link.mm.adopted >= 0 ?
-		  (unsigned)s->reg.link.mm.adopted : 0u,
+		  (unsigned)s->reg.link.mm.adopted : s->ring_hs,
 		  " (promoted side link)");
 	s->reg.link.mm.cfg.registration = reg_policy(s);
 	s->reg.link.mm.cfg.defer_unknown = s->audio.remote_path != NULL;
@@ -8412,6 +8441,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "for %u ms to let the MAC finish the bearer\n",
 			       s->audio.setup_delay_ms);
 		} else {
+			if (s->cur != s->ring_hs)
+				hs_switch(s, s->ring_hs,
+					  " (the ring target answered)");
 			ring_queue_setup(s, now, "page response received");
 			/*
 			 * Push it out in the same breath. The main loop would
@@ -10556,12 +10588,13 @@ static int ctl_client(int n, char **lines)
 }
 
 /*
- * dect-stubd --bridge-echo [ring [NUMBER]]: a test bridge without SIP
+ * dect-stubd --bridge-echo [ring [NUMBER [HS]]]: a test bridge without SIP
  * (docs/bridge-interface.md §5 steps 2-3). It answers every number a
  * handset dials -- ALERTING at once, CONNECT 1.5 s later -- and plays the
  * caller's own voice back half a second late, through the audio socket.
  * "ring" first rings the first handset as a call from NUMBER (default
- * 0301234567, name "Echo test") and echoes once it is answered. Stops
+ * 0301234567, name "Echo test"; HS: that handset, else the first) and
+ * echoes once it is answered. Stops
  * when the daemon goes, or on SIGINT/SIGTERM.
  */
 #define ECHO_DELAY	25u	/* 20 ms frames: 0.5 s */
@@ -10591,7 +10624,8 @@ static int bridge_echo(int argc, char **argv)
 	if (argc >= 1 && !strcmp(argv[0], "ring"))
 		n += snprintf(line + n, sizeof(line) - (size_t)n,
 			      "call-in line=1 number=%s name=\"Echo test\" "
-			      "sip=echo\n", argc >= 2 ? argv[1] : "0301234567");
+			      "sip=echo%s%s\n", argc >= 2 ? argv[1] : "0301234567",
+			      argc >= 3 ? " hs=" : "", argc >= 3 ? argv[2] : "");
 	if (write(fd, line, (size_t)n) != n)
 		return 1;
 	printf("echo: bridge up -- dial any number on a handset\n");
