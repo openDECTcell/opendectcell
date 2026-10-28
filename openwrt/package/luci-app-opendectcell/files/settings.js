@@ -26,7 +26,6 @@
  * assignment too.
  */
 var STATE = '/tmp/opendectcell-state.json';
-var PHANTOM = {};	/* handset sections made on this page, not saved yet */
 var VOIP = '/var/run/opendectcell/voip.json';
 var CTL = '/usr/sbin/dect-stubd';
 var PROFILES = '/etc/opendectcell/profiles';
@@ -175,8 +174,8 @@ function deregisterDialog(h) {
 
 /*
  * After the base has let the handset go (it pages it first, up to about
- * 30 s): its section and lines are removed and applied. Not before: the
- * apply restarts the service, which would cut the deregistration short.
+ * 30 s): its section is removed. Not before: a restart would cut the
+ * deregistration short.
  */
 function deregisterDone(h) {
 	var t0 = Date.now();
@@ -196,17 +195,15 @@ function deregisterDone(h) {
 				ui.addNotification(null, E('p', _('DECT %d is still registered after 40 s; its settings are kept. See Status > DECT, Log.').format(h.slot)), 'warning');
 				return;
 			}
-			var saved = !PHANTOM['dect' + h.slot];
-
-			uci.remove('opendectcell', 'dect' + h.slot);
-			if (!saved) {
-				/* its section existed only on this page: nothing to apply */
+			/*
+			 * The base removes its section on its own (forget): other
+			 * changes saved here but not applied stay pending. The page
+			 * then reloads, as its rows came from the old state.
+			 */
+			return fs.exec('/etc/init.d/opendectcell', [ 'forget', String(h.slot) ]).then(function(r) {
+				if (r.code != 0)
+					ui.addNotification(null, E('p', _('DECT %d is deregistered, but its settings could not be removed: %s').format(h.slot, r.stderr || r.code)), 'warning');
 				window.location.reload();
-				return;
-			}
-			return uci.save().then(function() {
-				ui.addNotification(null, E('p', _('DECT %d deregistered; its settings are removed and its VoIP profiles are free.').format(h.slot)), 'info');
-				return ui.changes.apply(true);
 			});
 		});
 	}
@@ -602,7 +599,6 @@ return view.extend({
 				if (!uci.get('opendectcell', sid)) {
 					uci.add('opendectcell', 'handset', sid);
 					uci.set('opendectcell', sid, 'slot', String(h.slot));
-					PHANTOM[sid] = true;
 				}
 			});
 

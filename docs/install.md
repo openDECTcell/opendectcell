@@ -72,10 +72,33 @@ uci set opendectcell.main.enabled=1; uci commit opendectcell
 /etc/init.d/opendectcell start
 ```
 
-Then open Network > DECT in the web interface, tab Handsets, press
-*Register a handset* and start the registration on the handset with the
-PIN shown there. Each handset's Line 1 and Line 2 take its SIP account
-(button *Edit*).
+Then open Network > DECT in the web interface, tab Handsets. Below the list:
+
+1. Choose the handset's manufacturer and model, if it is listed; otherwise
+   keep "Generic DECT GAP/CAT-iq handset".
+2. Press *Register a handset*, then start the registration on the handset
+   and enter the PIN shown there (8 random digits; *New PIN* makes another,
+   *PIN length* allows fewer for a handset that cannot take 8).
+
+Registration closes after one handset has registered, or after two minutes.
+
+## 5. Phone lines (SIP)
+
+With `opendectcell-baresip` installed, a handset can make and take calls through
+a SIP provider or your own telephone system, e.g. a FRITZ!Box with an "IP
+phone" set up for it.
+
+1. Network > DECT, tab **VoIP Profiles**, *Add a profile*: a name for it, the
+   user name, password and registrar (the SIP server) your provider gives.
+   One profile per SIP account. The defaults ("Try to autodetect" for media
+   and encryption) suit nearly every provider; if your provider supports
+   TLS, choose it under Server and NAT.
+2. Tab **Handsets**, *Edit* the handset, tab General: pick the profile as
+   **Line 1**. Its calls go out on Line 1, and calls to that account ring
+   it. Line 2 is an optional second account that rings it too. A profile
+   can be the line of one handset only.
+3. *Save & Apply*. Status > DECT, tab VoIP shows whether the line is
+   registered, and the codec and encryption of each call.
 
 ## Upgrading and removing
 

@@ -2,14 +2,16 @@
 
 **Goal:** turn cheap, used AVM FRITZ!Boxes into **open-source DECT base stations** running OpenWrt, so that GAP/CAT-iq handsets can make calls via SIP. In a later stage, several boxes should form a **multi-cell DECT-over-IP network** with one central controller.
 
-> Status (2026-10-25): **working on the FRITZ!Box 7520 as a lab base.** GAP
-> and CAT-iq handsets register, ring and talk: a FRITZ!Fon C4 and the Gigaset
-> A540, C430A and AS690H, several at once, with **wideband (G.722) audio**
-> both ways and narrowband as the fallback. Handsets dial out with overlap
-> sending; a LuCI page shows each handset's state, channel, signal strength
-> and link quality. Not yet an end-user product: no SIP side (that is the
-> controller's job), and one call at a time. Progress and next steps:
-> the maintainers' notes, [ROADMAP.md](ROADMAP.md).
+> Status (2026-10-28): **working on the FRITZ!Box 7520, with phone calls
+> over SIP.** GAP and CAT-iq handsets register, ring and talk: a FRITZ!Fon
+> C4 and the Gigaset A540, C430A and AS690H, several at once, with
+> **wideband (G.722) audio** both ways, encrypted. Through the add-on
+> `opendectcell-baresip` a handset calls out and is called over a SIP account
+> (tested with a FRITZ!Box as the SIP server), HD end to end. The web
+> interface sets everything up (Network > DECT) and shows the base, the
+> handsets and the lines live (Status > DECT). One SIP call at a time so
+> far. Progress and next steps: the maintainers' notes,
+> [ROADMAP.md](ROADMAP.md).
 
 ## Using it (FRITZ!Box 7520/7530, OpenWrt)
 
@@ -22,15 +24,17 @@
    `scp` and `uci` lines it prints ([docs/firmware-sourcing.md](docs/firmware-sourcing.md)).
 3. Enable the service: `uci set opendectcell.main.enabled=1; uci commit openDECTcell;
    /etc/init.d/opendectcell start`.
-4. **Register a handset:** press *Register a handset* on Status > DECT (or run
-   `/etc/init.d/opendectcell register`), then start the registration on the
-   handset and enter the PIN shown next to the button (random per install,
-   `option pin` to choose your own). Registration is
-   closed at all other times; the window closes after 2 minutes
-   (`option regwindow`) or as soon as one handset has registered.
+4. **Register a handset:** Network > DECT, tab Handsets, below the list:
+   choose the handset's model if it is listed, press *Register a handset*,
+   then start the registration on the handset and enter the PIN shown there
+   (8 random digits). Registration is closed at all other times; it closes
+   after 2 minutes or as soon as one handset has registered. From the
+   command line: `/etc/init.d/opendectcell register`.
+5. **Phone lines:** with `opendectcell-baresip`, add a VoIP profile per SIP
+   account (tab VoIP Profiles) and pick it as a handset's Line 1 (Handsets,
+   Edit) ([docs/install.md](docs/install.md), step 5).
 
-Settings live in `/etc/config/opendectcell`: `wideband`, `overlap`/`dialwait`,
-`pin`, `regwindow`, `cipher`. Stopping the service parks the radio.
+Settings live in `/etc/config/opendectcell`. Stopping the service parks the radio.
 
 ## Why this is possible
 
