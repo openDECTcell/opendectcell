@@ -325,3 +325,32 @@ registers. Look for `reg: list change notice sent for line 1` and
 | the A540 behaves as before; after a rename, it shows the new name without being switched off and on | the notices work |
 | the A540 resyncs its lists right after each notice ("please wait"), once | expected: that is what a notice is for |
 | it resyncs again and again, or drops off the base | it dislikes the notice: the agent reads the `nwk out --> 64 62 7d` lines |
+
+### 17. Deregistering a handset (10 minutes; **erases a registration**)
+
+Since the deregistration commit after `a08ea6b`. Uses the **AS690H**, which is
+re-registered at the end. Before: `cp /etc/opendectcell-sub.as690h /root/` on the box.
+Start any run with all three stores (e.g. the test 13 command with
+`./ringone.sh a540`), wait until the AS690H is idle on the base, then:
+
+```
+ssh root@192.168.1.1 'echo 3 > /tmp/opendectcell-deregister; kill -USR2 $(pidof dect-stubd)'
+```
+
+(3 = the AS690H's slot as the log's `sub:` lines name it; use the slot shown.)
+
+| you see | meaning |
+|---|---|
+| the AS690H says it is no longer registered; the log shows `dereg: ... the handset confirmed` | it works as stock does |
+| the log shows `not reachable (paged 10 times)` after ~30 s | the page did not reach it: the handset kept its registration, the base erased it; the agent reads the page lines |
+| the A540's handset list loses the AS690H (test 16's notice) | the list change notice works |
+
+Then **with the AS690H switched off**, run it again for the C430A's slot is
+**not** wanted -- instead switch the re-registered AS690H off and send the
+deregistration: expect `not reachable ... deleted WITHOUT its confirmation`
+after ~30 s. Last, re-register the AS690H and deregister it **from the
+handset's own menu** (Settings, Registration, De-register): expect
+`the handset deregistered itself (accepted)`.
+
+Undo at any point: stop the daemon, `mv /etc/opendectcell-sub.as690h.deregistered
+/etc/opendectcell-sub.as690h` (or copy back the one in `/root/`), and re-register.

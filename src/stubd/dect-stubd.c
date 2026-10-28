@@ -208,6 +208,14 @@ static void on_usr1(int sig)
 	want_register = 1;
 }
 
+static volatile sig_atomic_t want_deregister;	/* SIGUSR2: see dereg_tick */
+
+static void on_usr2(int sig)
+{
+	(void)sig;
+	want_deregister = 1;
+}
+
 static uint64_t mono_ms(void)
 {
 	struct timespec t;
@@ -339,6 +347,19 @@ struct stubd {
 		uint64_t page_at;
 		int      warned;	/* codec mismatch reported */
 	} ic;
+	/*
+	 * Deregistering a handset (maintainer, 2026-10-28; stock's order from
+	 * [CR A-0128]): ACCESS-RIGHTS-TERMINATE-REQUEST on its link, paging it
+	 * first if it has none, then the erasure -- also without an answer,
+	 * so a lost or broken handset still goes.
+	 */
+	struct {
+		enum { DEREG_IDLE, DEREG_PAGING, DEREG_REQUESTED } st;
+		int      target;	/* handset table index */
+		uint8_t  tpui[3];
+		unsigned pages;
+		uint64_t page_at;
+	} dereg;
 	/* The registration window: open now, and until when (0 = no limit). */
 	int      reg_open;
 	uint64_t reg_open_until;
@@ -6108,6 +6129,226 @@ static void ic_end(struct stubd *s, const char *why)
 
 static int ic_wideband(const struct stubd *s, int p);
 
+#define DEREG_PAGES	10u		/* 3 s apart: 30 s to reach it */
+#define DEREG_PAGE_MS	3000u
+#define DEREG_REQ_PATH	"/tmp/opendectcell-deregister"
+
+/* The link serving handset i, or NULL (the same test as ic_tick's). */
+static struct dect_link *link_of_hs(struct stubd *s, int i)
+{
+	unsigned k;
+
+	if (s->reg.active && (s->reg.link.mm.adopted == i ||
+	    (s->reg.link.mm.adopted < 0 && s->cur == (unsigned)i &&
+	     s->reg.link.mm.port_id_len)))
+		return &s->reg.link;
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active && s->side[k].adopted == i)
+			return &s->side[k].link;
+	return NULL;
+}
+
+static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
+		      uint16_t n)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = prim;
+	memcpy(m.param, p, n);
+	m.param_len = n;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+}
+
+/*
+ * Erase handset i from the base, as stock does after the handset's
+ * ACCEPT [CR A-0128]: the slot's 0x0247 entry cleared, its 0x020A record
+ * overwritten with zeros. Stock also rewrites 0x017C, which A-0128 reads as
+ * a registered-handset mask and A-0114 as the bearer-slot mask the ringing
+ * needs; until the room settles which, it is left alone. The store and its
+ * .name move aside (<store>.deregistered), so a mistake can be undone by
+ * moving them back. Then the lists lose the entry and say so.
+ */
+static void dereg_erase(struct stubd *s, int i, const char *why)
+{
+	unsigned slot = hs_slot(s, (unsigned)i), k;
+	uint8_t p[1 + DECT_MM_UAK_LEN + 1];
+	char from[256], to[288];
+
+	printf("dereg: DECT %u (%s): %s\n", slot, s->hs[i].path, why);
+	if (slot >= 1u && slot <= DECT_MM_MAX_SLOT) {
+		memset(p, 0, sizeof(p));
+		p[0] = (uint8_t)slot;
+		chip_mail(s, 0x0247u, p, 3);		/* slot, 00, 00 */
+		chip_mail(s, 0x020Au, p, sizeof(p));	/* slot, 17 zeros */
+		printf("dereg: chip slot %u cleared (0x0247, 0x020A zeros)\n",
+		       slot);
+	}
+	snprintf(to, sizeof(to), "%s.deregistered", s->hs[i].path);
+	if (rename(s->hs[i].path, to))
+		printf("dereg: could not move %s aside: %s\n", s->hs[i].path,
+		       strerror(errno));
+	else
+		printf("dereg: %s moved to %s\n", s->hs[i].path, to);
+	name_path(s, (unsigned)i, from, sizeof(from));
+	snprintf(to, sizeof(to), "%s.deregistered", from);
+	(void)rename(from, to);
+	s->hs[i].loaded = 0;
+	s->hs[i].uak_valid = 0;
+	s->hs[i].absent = 1;		/* free for a new enrolment */
+	s->hs[i].name[0] = '\0';
+	s->hs[i].cap_known = 0;
+	if ((unsigned)i == s->cur) {
+		s->uak_valid = 0;
+		s->sub_port_id_len = 0;
+		s->cc_port_id_len = 0;
+		s->cc_fixed_id_len = 0;
+	}
+	if (s->reg.active)
+		(void)dect_iwu_remove_handset(&s->reg.link.cc.iwu,
+					      (uint8_t)slot);
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active)
+			(void)dect_iwu_remove_handset(&s->side[k].link.cc.iwu,
+						      (uint8_t)slot);
+	names_notify(s);		/* §7.4.10.2.2: one removed */
+	fflush(stdout);
+}
+
+/* SIGUSR2: deregister the handset in the slot named in DEREG_REQ_PATH. */
+static void dereg_start(struct stubd *s, uint64_t now)
+{
+	char buf[16] = "";
+	FILE *f = fopen(DEREG_REQ_PATH, "r");
+	unsigned slot = 0, i;
+	struct dect_link *l;
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
+	if (f) {
+		if (fgets(buf, sizeof(buf), f))
+			slot = (unsigned)strtoul(buf, NULL, 10);
+		fclose(f);
+		(void)remove(DEREG_REQ_PATH);
+	}
+	for (i = 0; i < s->n_hs; i++)
+		if (s->hs[i].loaded && hs_slot(s, i) == slot)
+			break;
+	if (!slot || i == s->n_hs) {
+		printf("dereg: SIGUSR2, but %s names no handset we hold "
+		       "(slot %u)\n", DEREG_REQ_PATH, slot);
+		return;
+	}
+	if (s->dereg.st != DEREG_IDLE) {
+		printf("dereg: one at a time -- DECT %u waits\n", slot);
+		return;
+	}
+	s->dereg.target = (int)i;
+	s->dereg.pages = 0;
+	s->dereg.page_at = now;
+	l = link_of_hs(s, (int)i);
+	if (l && dect_mm_terminate(&l->mm) == 0) {
+		s->dereg.st = DEREG_REQUESTED;
+		printf("dereg: DECT %u: ACCESS-RIGHTS-TERMINATE-REQUEST on its "
+		       "link\n", slot);
+		return;
+	}
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.sub_slot = (uint8_t)slot;
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tpui(&mm, s->dereg.tpui);
+	s->dereg.st = DEREG_PAGING;
+	printf("dereg: DECT %u has no link -- paging it\n", slot);
+}
+
+static void dereg_tick(struct stubd *s, uint64_t now)
+{
+	struct dect_link *l;
+	unsigned k;
+	int i;
+
+	/* a handset that deregistered itself: erase it the same way */
+	for (k = 0; k <= SIDE_MAX; k++) {
+		struct dect_link *pl = k < SIDE_MAX
+			? (s->side[k].active ? &s->side[k].link : NULL)
+			: (s->reg.active ? &s->reg.link : NULL);
+
+		if (!pl || !pl->mm.term_by_pt)
+			continue;
+		pl->mm.term_by_pt = 0;
+		i = pl->mm.adopted >= 0 ? pl->mm.adopted
+		    : (pl == &s->reg.link ? (int)s->cur : -1);
+		if (i >= 0 && (unsigned)i < s->n_hs && s->hs[i].loaded)
+			dereg_erase(s, i, "the handset deregistered itself "
+				    "(accepted)");
+	}
+	if (want_deregister) {
+		want_deregister = 0;
+		dereg_start(s, now);
+	}
+	if (s->dereg.st == DEREG_IDLE)
+		return;
+	i = s->dereg.target;
+	l = link_of_hs(s, i);
+	if (s->dereg.st == DEREG_PAGING) {
+		if (l && dect_mm_terminate(&l->mm) == 0) {
+			s->dereg.st = DEREG_REQUESTED;
+			printf("dereg: DECT %u came up -- "
+			       "ACCESS-RIGHTS-TERMINATE-REQUEST\n",
+			       hs_slot(s, (unsigned)i));
+			return;
+		}
+		if (now < s->dereg.page_at)
+			return;
+		if (s->dereg.pages >= DEREG_PAGES) {
+			s->dereg.st = DEREG_IDLE;
+			dereg_erase(s, i, "not reachable (paged 10 times): "
+				    "deleted WITHOUT its confirmation");
+			return;
+		}
+		{
+			/* stock's page for this: C-plane only, the TPUI */
+			uint8_t p[3] = { 0x08, s->dereg.tpui[1],
+					 s->dereg.tpui[2] };
+
+			chip_mail(s, 0x0300u, p, 3);
+		}
+		s->dereg.pages++;
+		s->dereg.page_at = now + DEREG_PAGE_MS;
+		return;
+	}
+	/* REQUESTED */
+	if (!l) {
+		s->dereg.st = DEREG_IDLE;
+		dereg_erase(s, i, "its link went down before it answered: "
+			    "deleted WITHOUT its confirmation");
+		return;
+	}
+	switch (l->mm.term_state) {
+	case DECT_MM_TERM_ACCEPTED:
+		s->dereg.st = DEREG_IDLE;
+		dereg_erase(s, i, "the handset confirmed (TERMINATE-ACCEPT)");
+		break;
+	case DECT_MM_TERM_REJECTED:
+		s->dereg.st = DEREG_IDLE;
+		dereg_erase(s, i, "the handset REFUSED (TERMINATE-REJECT): "
+			    "deleted from the base anyway");
+		break;
+	case DECT_MM_TERM_FAILED:
+		s->dereg.st = DEREG_IDLE;
+		dereg_erase(s, i, "no answer to the request, sent twice "
+			    "(<MM_access.2>): deleted WITHOUT its "
+			    "confirmation");
+		break;
+	default:
+		break;
+	}
+}
+
 static void ic_tick(struct stubd *s, uint64_t now)
 {
 	struct dect_cc *c, *t;
@@ -7551,6 +7792,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				if (s->side[k].active)
 					side_call_tick(s, &s->side[k], now);
 			ic_tick(s, now);
+			dereg_tick(s, now);
 		}
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
@@ -8925,6 +9167,7 @@ int main(int argc, char **argv)
 	signal(SIGINT, on_signal);
 	signal(SIGTERM, on_signal);
 	signal(SIGUSR1, on_usr1);
+	signal(SIGUSR2, on_usr2);
 	dect_rx_init(&s.rx);
 	dect_session_init(&s.sess, &scfg);
 
