@@ -5369,7 +5369,8 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		unsigned k, linked = 0;
 		uint64_t seen = s->hs[i].last_seen_ms;
 
-		if (i != s->cur && !s->hs[i].loaded)
+		/* the handsets the base holds: not a store just deregistered */
+		if ((i != s->cur && !s->hs[i].loaded) || s->hs[i].absent)
 			continue;
 		/*
 		 * parked: no handset has a link, whatever was up at exit.
@@ -6934,9 +6935,9 @@ static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
  * ACCEPT [CR A-0128]: the slot's 0x0247 entry cleared, its 0x020A record
  * overwritten with zeros, then 0x017C without its bit ([CR A-0129]: the
  * locked-in handset mask; stock rewrites it on every deregistration).
- * The store and its
- * .name move aside (<store>.deregistered), so a mistake can be undone by
- * moving them back. Then the lists lose the entry and say so.
+ * The store, its
+ * .name and its .profile move aside (<store>.deregistered), so a mistake
+ * can be undone by moving them back. Then the lists lose the entry and say so.
  */
 static void dereg_erase(struct stubd *s, int i, const char *why)
 {
@@ -6961,6 +6962,10 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	else
 		printf("dereg: %s moved to %s\n", s->hs[i].path, to);
 	name_path(s, (unsigned)i, from, sizeof(from));
+	snprintf(to, sizeof(to), "%s.deregistered", from);
+	(void)rename(from, to);
+	/* and its model: the next handset in this store is another one */
+	snprintf(from, sizeof(from), "%s.profile", s->hs[i].path);
 	snprintf(to, sizeof(to), "%s.deregistered", from);
 	(void)rename(from, to);
 	s->hs[i].loaded = 0;

@@ -133,18 +133,54 @@ function ago(ms) {
 function deregisterDialog(h) {
 	ui.showModal(_('Deregister DECT %d (%s)?').format(h.slot, h.name), [
 		E('p', {}, _('The base erases this handset\'s registration. The handset is told if it is in range; to use it again it has to be registered anew. A handset that is lost or switched off is erased after about 30 seconds without its confirmation.')),
+		E('p', {}, _('Its settings here go with it, its lines (SIP accounts) too.')),
 		E('div', { 'class': 'right' }, [
 			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 			E('button', {
 				'class': 'btn cbi-button-negative',
 				'click': function() {
 					ui.hideModal();
-					return ctl('deregister hs=' + h.slot)
-						.then(function(r) { report(r, _('Deregistering DECT %d.').format(h.slot)); });
+					return ctl('deregister hs=' + h.slot).then(function(r) {
+						if (!r.ok)
+							return report(r, '');
+						return deregisterDone(h);
+					});
 				}
 			}, _('Deregister'))
 		])
 	]);
+}
+
+/*
+ * After the base has let the handset go (it pages it first, up to about
+ * 30 s): its section and lines are removed and applied. Not before: the
+ * apply restarts the service, which would cut the deregistration short.
+ */
+function deregisterDone(h) {
+	var t0 = Date.now();
+
+	ui.showModal(_('Deregistering DECT %d').format(h.slot), [
+		E('p', { 'class': 'spinning' }, _('Waiting for the base to let the handset go…'))
+	]);
+	function gone() {
+		return readState().then(function(st) {
+			var still = st && (st.handsets || []).some(function(x) { return x.slot == h.slot; });
+
+			if (still && Date.now() - t0 < 40000)
+				return new Promise(function(res) { window.setTimeout(res, 2000); }).then(gone);
+			ui.hideModal();
+			if (still) {
+				ui.addNotification(null, E('p', _('DECT %d is still registered after 40 s; its settings are kept. See Status > DECT, Log.').format(h.slot)), 'warning');
+				return;
+			}
+			uci.remove('opendectcell', 'dect' + h.slot);
+			return uci.save().then(function() {
+				ui.addNotification(null, E('p', _('DECT %d deregistered; its settings and lines are removed.').format(h.slot)), 'info');
+				return ui.changes.apply(true);
+			});
+		});
+	}
+	return gone();
 }
 
 /* The override list of a section, as { key: value }. */
