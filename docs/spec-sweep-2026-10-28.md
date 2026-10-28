@@ -80,6 +80,41 @@ needed.
 
 ## Open findings, by priority
 
+**Status at the end of 2026-10-28** (the tables below are kept as written that
+afternoon; `tasks-2026-10-28.md` has a row per follow-up):
+
+| # | status |
+|---|---|
+| 1 call ids | done (`f5d150a`, API 41) |
+| 2 terminal capability | done (API 34, 35) |
+| 3 line choice | done (API 39, 40); an unattached line refused (API 44) |
+| 4 CAT-iq shaped incoming call | done for Part 3 handsets (`2c76ace`), CS call connect after CONNECT-ACK |
+| 5 ring all attached handsets | **open**: lines-and-calls.md step 4, needs the bench |
+| 6 call waiting, parallel calls | library pieces done (control codes with the negative ack API 61, the call-waiting builder API 70); **wiring open**: steps 5-6 |
+| 7 dialling from a list | done (API 32) |
+| 8 pseudo call waiting in a list session | **open** (with step 5); meanwhile the ring waits for the session (`50ced2a`) |
+| 9 a ring releasing a live link | done (`50ced2a`): never a link in use |
+| 10 CNIP | the number shows (Part 3 via the full call information); names as display text for the Part 1 Gigasets through their profile (`d58d8a5`), framing still to confirm (bench test 1) |
+| 11 re-presentation on any 32H | kept, decided (below) |
+| 12 LAPC N250 | done (API 33) |
+| 13 link release | done (`96b54e4`, default since bench test 7); <LCE.01>/<LCE.02> not built |
+| 14 our location area | done (API 38) |
+| 15 basic service to GAP handsets | done (`e750f44`) |
+| 16 U-plane before CONNECT | **open**: `bindfirst` as default needs one bench comparison |
+| 17 key allocation failure | done (API 36, <MM_key.1> API 57) |
+| 18 paging after a failed TPUI assignment | **open**: needs EN 300 175-6 for the default TPUI; the reject is handled (API 56) |
+| 19 validation batch | done (API 47-55); V(S) on NLF dropped with reason |
+| 20 <CC.02>, release collision | done (API 45, 49) |
+
+Out of spec but bench-passed: C6 kept (decided), LCE1 fixed, C10 open (16),
+M2 fixed, M7 fixed, L10 open (needs -6), L2 and L3 left for a bench check.
+Beyond the sweep the same night: TV 6 disregarded (API 51), unserved call
+classes refused (API 54), list access per table 41 and the System Settings
+List (API 63-65), renaming and search (API 66, 67), notifications (API 68),
+access rights termination with authentication (API 69, 73, 74), a wrong RES
+ending the call (API 75), the handset list's delete behind the PIN (API 76),
+optional authentication on location registration (API 77).
+
 ### 1. Blockers for the MVP (two SIP lines per handset, calls in and out, caller ID)
 
 | # | finding | clause | action |
