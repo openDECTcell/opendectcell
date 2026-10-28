@@ -656,25 +656,20 @@ return view.extend({
 			o.value(mf.id, _('another %s model').format(mf.name));
 		});
 
-		o = s.taboption('handsets', form.Button, '_register', _('New handset'),
-			running ? _('Opens registration for the registration window; start the registration on the handset then and enter the PIN below.') :
-				  _('Needs the DECT service running.'));
-		o.readonly = !running;
-		o.inputtitle = _('Register a handset');
-		o.inputstyle = 'action';
-		o.onclick = function() {
-			var mf = formval('_reg_mfr'), prof = mf ? formval('_reg_model_' + mf) || mf : '';
-
-			return ctl('register-window' + (prof ? ' profile=' + prof : '')).then(function(r) {
-				report(r, _('Registration is open for %s s. Start the registration on the handset now and enter the PIN %s.')
-					.format(uci.get('opendectcell', 'main', 'regwindow') || '120',
-						uci.get('opendectcell', 'main', 'pin') || '-'));
-			});
-		};
-
 		o = s.taboption('handsets', form.Value, 'pin', _('Registration PIN'),
 			_('The PIN a handset asks for when it registers. Random; "New PIN" makes another.'));
 		o.rmempty = false;
+		/*
+		 * 8 digits unless fewer were chosen on purpose: a PIN that does
+		 * not match the length (one made before the choice existed) is
+		 * offered as a new 8-digit one, saved with the page.
+		 */
+		o.default = randomPin(+(uci.get('opendectcell', 'main', 'pin_length') || 8));
+		o.cfgvalue = function(sid) {
+			var v = uci.get('opendectcell', sid, 'pin') || '',
+			    n = +(uci.get('opendectcell', sid, 'pin_length') || 8);
+			return v.length == n && /^[0-9]+$/.test(v) ? v : null;
+		};
 		o.validate = function(id, v) {
 			var n = +(formval('pin_length') || 8);
 			return new RegExp('^[0-9]{' + n + '}$').test(v) ? true :
@@ -695,16 +690,32 @@ return view.extend({
 		o.value('6', _('6 digits'));
 		o.value('4', _('4 digits'));
 		o.default = '8';
-		/* never chosen: the PIN made before the choice existed sets it */
-		o.cfgvalue = function(sid) {
-			var v = uci.get('opendectcell', sid, 'pin_length'),
-			    n = String((uci.get('opendectcell', sid, 'pin') || '').length);
-			return v || ([ '4', '6', '8' ].indexOf(n) >= 0 ? n : '8');
-		};
 		o.onchange = function(ev, sid, v) {
 			var pin = m.lookupOption('pin', 'main')[0];
 			pin.getUIElement('main').setValue(randomPin(+v));
 			pin.triggerValidation('main');
+		};
+
+		o = s.taboption('handsets', form.Button, '_register', _('New handset'),
+			running ? _('Opens registration for the registration window; start the registration on the handset then and enter the PIN below.') :
+				  _('Needs the DECT service running.'));
+		o.readonly = !running;
+		o.inputtitle = _('Register a handset');
+		o.inputstyle = 'action';
+		o.onclick = function() {
+			var mf = formval('_reg_mfr'), prof = mf ? formval('_reg_model_' + mf) || mf : '';
+
+			/* the base registers with the saved PIN, not one only on the page */
+			if (formval('pin') != uci.get('opendectcell', 'main', 'pin')) {
+				ui.addNotification(null, E('p', _('The PIN shown is not in use yet: press Save & Apply first, then register.')), 'warning');
+				return;
+			}
+
+			return ctl('register-window' + (prof ? ' profile=' + prof : '')).then(function(r) {
+				report(r, _('Registration is open for %s s. Start the registration on the handset now and enter the PIN %s.')
+					.format(uci.get('opendectcell', 'main', 'regwindow') || '120',
+						uci.get('opendectcell', 'main', 'pin') || '-'));
+			});
 		};
 
 		o = s.taboption('handsets', form.Value, 'regwindow', _('Registration window'),
