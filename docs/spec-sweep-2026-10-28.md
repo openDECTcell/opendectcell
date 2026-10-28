@@ -112,35 +112,56 @@ From the procedures review, ranked by risk. ✔ fixed today: M1, C4.
 Spec-correct after all, only the comment cites wrongly: no CONNECT-ACK wait on a
 handset's call (EN 300 175-5 A.1 note on <CC.05>).
 
+## Clean-room answers received the same afternoon
+
+**`[CR A-0125]` caller ID and call information (observed, stock 07.56):**
+- Stock's external SETUP to the **A540** carries `7e 0c 00 00 82 00 05 81 01 00 81 02 01 81`: line 2 (the incoming line), line type "significant delay" (VoIP), call id 1, **CS call setup**. Never a bare line identifier. The **AS690H and C430A get no <<CALL-INFORMATION>>** (consistent with finding 2: no call status to GAP handsets), the C4 a codec list instead. Internal SETUPs to the A540: `7e 06 01 00 81 02 01 81`.
+- Call status sequence to the A540: CS call setup in SETUP; the A540 echoes call id 1 in CONNECT; CS call connect in a {CC-INFO} after CONNECT-ACK; CS disconnecting, then CS idle, before release.
+- The caller name goes **twice**: <<CALLING-PARTY-NAME>> in the SETUP with octet 3 = `00` (allowed, DECT alphabet, not screened), and **as text in a {CC-INFO} <<MULTI-DISPLAY>> (0x28)** ~0.8-1.3 s after the SETUP, once the handset alerts. The text is framed by display control octets (vendor framing, kept in the answer, not here); the octet before the text is its length. With no name, the same framing carries the number.
+- On the AS690H and C430A stock **draws the call timer itself**: a {CC-INFO} MULTI-DISPLAY with `hh:mm:ss` about once a second after CONNECT-ACK.
+- A-StockTrace-1 rows 7-9 (single-octet DISPLAY, escape element) were a decoder overrun; stock's SETUP ends after 0x7E or 0x6D.
+
+**`[CR A-0126]` ciphering:** see `stub-api.md` §2.1, "Stock call layout". Stock
+loads the call key with `0x0208` before {CIPHER-REQUEST}; we never do by
+default. That, not the key number, is the expected cause of test 17's drop.
+
 ## Next bench tests, outcomes written in advance
 
-**S1, cipher (test 17 again, after `dc4cd39`):** the same ciphered call, key
-number now 8, chip path unchanged.
+**S1, cipher (test 17 again, after the A-0126 `0x0208`):** the same ciphered
+call, the chip now given the key in stock's layout before CIPHER-REQUEST, key
+number 8 (`dc4cd39`). Two runs, the key bytes reversed (`[CR A-0028]`'s
+reading, the default) and in plain order (`-k plain`).
 
 | shows | meaning |
 |---|---|
-| valid LAPC frames after CIPHER-REQUEST, the call holds | the key number was the whole fault; the chip ciphers by itself |
-| link released ~200 ms after CIPHER-REQUEST, as before | the key number was not it (or not alone); the chip still needs the DCK (Q-0065) |
-| {CIPHER-REJECT} from the handset | the handset checks the key number and now finds no key 8: our AUTH-TYPE storage is still wrong; needs EN 300 175-7 |
+| `0x0209 <link>` from the chip, valid LAPC frames after CIPHER-REQUEST, the call holds | ciphering works; that byte order is the right one |
+| `0x0209` but the link still drops ~200 ms later | the chip took the mail but the key is wrong: try the other byte order |
+| no `0x0209`, drop as before | the chip rejected or ignored the mail: compare our mail with A-0126 byte by byte before anything else |
+| {CIPHER-REJECT} from the handset | the handset finds no key 8: the AUTH-TYPE storage is still wrong; needs EN 300 175-7 |
 
-**S2, the A540's silent ring with a line id (before finding 4):** one ring each,
-<<SIGNAL>> 41H, the number in all: (a) line id only (21c again, control);
-(b) line id + line type 01; (c) + call id; (d) + "CS call setup", the standard's
-full shape (TS 102 527-3 figure 42).
-
-| shows | meaning |
-|---|---|
-| silent in a-c, aloud in d | the A540 wants the complete call information; build finding 4 that way |
-| silent in all | the A540 ignores CAT-iq call information for ringing; a device-profile quirk ("no line id") |
-| aloud from b or c on | the missing element is that one |
-
-**S3, caller name in {CC-INFO}:** CLIP and CNIP sent again in a {CC-INFO} after
-ALERTING (EN 300 444 §8.41/8.42), on the C430A.
+**S2, the A540's silent ring with a line id:** two rings, <<SIGNAL>> 41H and the
+number in both: (a) line id only (21c again, control), (b) stock's full form
+(`lineid=1,linetype=1,callid=1,callstatus=1`, which encodes to
+`7e 0c 00 00 81 00 05 81 01 00 81 02 01 81`, checked). A-0125 predicts (b) rings
+aloud.
 
 | shows | meaning |
 |---|---|
-| the name appears | placement: the name must follow in {CC-INFO} |
-| still the number only | content: wait for Q-0064 |
+| silent in a, aloud in b | the A540 wants the complete call information; build finding 4 that way, for Part 3 handsets only |
+| silent in both | the prediction is wrong; a device-profile quirk ("no line id") until explained |
+| aloud in both | 21c's silence had another cause: re-read that log |
+
+**S3, caller name in {CC-INFO} <<MULTI-DISPLAY>>:** on the C430A and AS690H,
+with the name in the SETUP (octet 3 `00`) as before, then a {CC-INFO} after
+ALERTING carrying <<MULTI-DISPLAY>>: (a) the name as plain text; (b) the name in
+stock's framing from A-0125 §5. Both through a lab option that takes the IE
+bytes, so no vendor framing goes into the library.
+
+| shows | meaning |
+|---|---|
+| the name in a | the Gigasets take the name from MULTI-DISPLAY; plain text is enough |
+| the name in b only | the framing is needed: a Gigaset manufacturer-profile entry |
+| the name in neither | not the display path either; keep the logs, ask the room what else differs |
 
 **S4, internal ring pattern:** an internal call after `5c25e3d`; the target should
 ring with its internal pattern (a different melody or rhythm from an external

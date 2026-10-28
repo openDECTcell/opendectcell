@@ -199,6 +199,23 @@ Unless a row says otherwise, current host command encoders use source `0x22`, de
 
 “30-byte” and “33-byte” descriptions in the older discussion include the two primitive bytes: parameter lengths are 28 and 31. Neither variant proves cipher-on, and the selector, input choice and activation indication remain open. [G A-0028; S `send_chip_cipher()`]
 
+**Stock call layout, from the encrypted and unencrypted stock calls `[CR A-0126]` (2026-10-28, observed, 07.56).** This supersedes the selector and the RES/RAND fields above for calls:
+
+| Parameter bytes | Stock content on a call |
+| --- | --- |
+| 0 | the link (connection handle) |
+| 1..8 | the 8-byte per-call key; varies per call, matches no over-air RAND, RS or RES, so consistent with the DCK; byte order not stated |
+| 9..23 | `00` |
+| 24..25 | `FF FF` |
+| 26..27 | `00 00` |
+
+- Sent on the connecting link **after** {AUTHENTICATION-REPLY} and **before** the over-air {CIPHER-REQUEST} (0.2 to 760 ms before it); one per link per authentication. Also sent on unencrypted calls: it loads the authentication result, it does not switch ciphering on.
+- The chip answers with **`0x0209`, one byte: the link**, 100-180 ms after {CIPHER-REQUEST}. An acknowledgement, no key in it.
+- There is **no separate cipher-enable mail**: the over-air {CIPHER-REQUEST}, which the host builds, is the trigger; the chip's MAC switches by itself. With no key loaded it drops the link, which is bench test 17's 212 ms drop.
+- The 31-byte form (`40`, a varying byte, a selector `00..03` appended) is for registration and location registration only.
+- An internal call between registered handsets sends no `0x0208` at all (the key is reused).
+- `0x1082` is not ciphering: it is in unencrypted calls and registrations too, routed to host task `0x14`, and carries an <<ESCAPE-TO-PROPRIETARY>> broadcast element `[CR A-0126]`, confirming `[CR A-0072]`.
+
 ### 2.2 Connection-status payload (`0xF625`)
 
 Offsets below are parameter offsets, not offsets from the primitive. **Measured** corpus shape is 45 bytes; shorter lengths accepted by the library are parser capabilities, not independently measured firmware variants. [D “Revised field map”; DIAG `dect_diag_decode_status()`]
