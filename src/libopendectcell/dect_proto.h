@@ -539,8 +539,18 @@
  *    struct dect_event, DECT_IE_EVENTS_NOTIFICATION, DECT_EVENT_*;
  *    dect_link_send_ciss(). No behaviour change on its own;
  *    dect_link_send_time() now queues instead of refusing a second one.
+ *
+ * 69: FT authentication and access rights termination (2026-10-28, spec
+ *    sweep C21, N.20, N.26). Layout change: struct dect_mm gains uak_known,
+ *    term_state, term_retries, term_deadline_ms, the stats ft_auth and
+ *    ft_auth_refused; new enum dect_mm_term_state, dect_mm_set_uak(),
+ *    dect_mm_terminate(), DECT_MM_ACCESS_RIGHTS_TERMINATE_*. **Behaviour
+ *    change:** a PT-initiated {AUTHENTICATION-REQUEST} (F = 0) is answered
+ *    with RES2 = A22(A21(UAK, RS), RAND_P) and RS when the UAK is known,
+ *    else {AUTHENTICATION-REJECT}; it was ignored. dect_mm_terminate() runs
+ *    EN 300 444 §8.31 with <MM_access.2>.
  */
-#define OPENDECTCELL_API_VERSION 68
+#define OPENDECTCELL_API_VERSION 69
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

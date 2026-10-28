@@ -74,6 +74,14 @@ enum dect_mm_state {
 	DECT_MM_FAILED,
 };
 
+enum dect_mm_term_state {
+	DECT_MM_TERM_NONE,
+	DECT_MM_TERM_PENDING,		/* REQUEST sent, <MM_access.2> runs */
+	DECT_MM_TERM_ACCEPTED,		/* the PT erased the subscription */
+	DECT_MM_TERM_REJECTED,
+	DECT_MM_TERM_FAILED,		/* no answer after a retransmission */
+};
+
 enum dect_mm_cipher_state {
 	DECT_MM_CIPHER_NONE,
 	DECT_MM_CIPHER_WAIT_REPLY,	/* AUTHENTICATION-REQUEST sent to the PP */
@@ -161,6 +169,8 @@ struct dect_mm_stats {
 	uint32_t key_failed;	   /* key allocations unanswered or refused */
 	uint32_t auth_timeouts;	   /* <MM_auth.1>: our AUTH-REQUEST unanswered */
 	uint32_t cipher_rejected;  /* {CIPHER-REJECT} received */
+	uint32_t ft_auth;	   /* the PT authenticated us: replies sent */
+	uint32_t ft_auth_refused;  /* ... refused: no UAK, or not DSAA/UAK */
 	uint32_t locate_deferred;  /* unknown identities held for the owner */
 	uint32_t locate_retrans;   /* the PT repeated a held request */
 	uint32_t bad_ti;	   /* MM messages ignored: TV other than 0 */
@@ -292,6 +302,13 @@ struct dect_mm {
 	 */
 	uint8_t uak[DECT_MM_UAK_LEN];
 	uint8_t subscribed;			/* 1 = authenticated, uak valid */
+	/* dect_mm_set_uak(): the stored UAK, for the handset's
+	 * authentication of us (EN 300 444 §8.23) */
+	uint8_t uak_known;
+	/* FT-initiated access rights termination, dect_mm_terminate() */
+	enum dect_mm_term_state term_state;
+	uint8_t  term_retries;
+	uint64_t term_deadline_ms;		/* <MM_access.2>, 0 = armed */
 
 	/*
 	 * Call-time ciphering: the FP authenticates the PP with the stored UAK to
@@ -404,6 +421,24 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
  * queued. (The AUTH-TYPE and CIPHER-INFO IE contents are provisional pending
  * [CR Q-0015].)
  */
+/*
+ * The handset's stored UAK, so we can answer its authentication of the FT
+ * (EN 300 444 §8.23, mandatory for the FT inside access rights
+ * termination, §8.31): RES2 = A22(A21(UAK, RS), RAND_P), with RS fresh from
+ * dect_mm_rx()'s rs. Set again after each dect_mm_init().
+ */
+void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN]);
+
+/*
+ * Terminate the access rights of the handset on this link (EN 300 444
+ * §8.31, EN 300 175-5 §13.5.2): {ACCESS-RIGHTS-TERMINATE-REQUEST} with its
+ * IPUI and our PARK. <MM_access.2> (10 s) retransmits once, then fails.
+ * Watch term_state; on DECT_MM_TERM_ACCEPTED the handset has erased the
+ * subscription and the owner should too. -1 without an identity or while
+ * one is pending.
+ */
+int dect_mm_terminate(struct dect_mm *mm);
+
 void dect_mm_start_cipher(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN],
 			  const uint8_t rand_f[8], const uint8_t rs[16]);
 

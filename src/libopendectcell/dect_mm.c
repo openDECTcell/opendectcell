@@ -203,6 +203,104 @@ static void send_auth_reply(struct dect_mm *mm, const uint8_t res2[4])
 }
 
 /*
+ * FP -> PP AUTHENTICATION-REPLY answering the PT's authentication of us
+ * (EN 300 444 §8.23, table 37): RES2 and the RS we chose, on the PT's
+ * transaction (F = 1).
+ */
+static void send_ft_auth_reply(struct dect_mm *mm, const uint8_t res2[4],
+			       const uint8_t rs[8])
+{
+	unsigned idx;
+	uint8_t *b = txq_slot(mm, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	off = hdr(mm, b, DECT_TI_RESPONDER, DECT_MM_AUTHENTICATION_REPLY);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_RES, res2, 4);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_RS, rs, 8);
+	txq_commit(mm, idx, off);
+}
+
+static void send_terminate_request(struct dect_mm *mm)
+{
+	uint8_t fixed_id[2 + DECT_MM_RFPI_LEN];
+	size_t flen = dect_mm_fixed_identity(mm, fixed_id, sizeof(fixed_id));
+	unsigned idx;
+	uint8_t *b;
+	size_t off;
+
+	if (!flen)
+		return;
+	b = txq_slot(mm, &idx);
+	if (!b)
+		return;
+	/* table 53: IPUI, and the PARK always (only for an IPUI/PARK pair) */
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_MM,
+				 DECT_TI_ORIGINATOR, 0,
+				 DECT_MM_ACCESS_RIGHTS_TERMINATE_REQUEST);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+			      DECT_IE_PORTABLE_IDENTITY, mm->port_id,
+			      mm->port_id_len);
+	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_FIXED_IDENTITY,
+			      fixed_id, flen);
+	txq_commit(mm, idx, off);
+}
+
+void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN])
+{
+	memcpy(mm->uak, uak, DECT_MM_UAK_LEN);
+	mm->uak_known = 1;
+}
+
+int dect_mm_terminate(struct dect_mm *mm)
+{
+	if (!mm->port_id_len || mm->term_state == DECT_MM_TERM_PENDING)
+		return -1;
+	send_terminate_request(mm);
+	mm->term_state = DECT_MM_TERM_PENDING;
+	mm->term_retries = 0;
+	mm->term_deadline_ms = 0;
+	return 0;
+}
+
+/*
+ * The PT authenticates us (EN 300 444 §8.23, EN 300 175-5 §13.3.3): its
+ * {AUTHENTICATION-REQUEST} on its own transaction, DSAA, key type UAK,
+ * RAND_P. A PT may do it before accepting a termination of its access
+ * rights (§8.31), where answering is mandatory for the FT. Without the
+ * UAK, or for another algorithm or key type, AUTHENTICATION-REJECT; we
+ * used to ignore the request (spec sweep, N.26/M15).
+ */
+static void on_ft_authentication(struct dect_mm *mm, const uint8_t *ies,
+				 size_t ies_len, const uint8_t rs[16])
+{
+	const uint8_t *at, *rand_p;
+	size_t at_len, rand_len;
+	uint8_t ks[DECT_AUTH_KEY_LEN], res2[4], rs8[8];
+	unsigned idx;
+	uint8_t *b;
+
+	at = dect_nwk_find_ie(ies, ies_len, DECT_IE_AUTH_TYPE, &at_len);
+	rand_p = dect_nwk_find_ie(ies, ies_len, DECT_IE_RAND, &rand_len);
+	if (!mm->uak_known || !rs || !rand_p ||
+	    rand_len != DECT_AUTH_RAND_LEN || !at || at_len < 2u ||
+	    at[0] != 0x01u || (at[1] >> 4) != 0x1u) {
+		mm->stats.ft_auth_refused++;
+		b = txq_slot(mm, &idx);
+		if (b)
+			txq_commit(mm, idx, hdr(mm, b, DECT_TI_RESPONDER,
+					   DECT_MM_AUTHENTICATION_REJECT));
+		return;
+	}
+	memcpy(rs8, rs, sizeof(rs8));
+	dect_dsaa_a21(mm->uak, rs8, ks);
+	dect_dsaa_a22(ks, rand_p, res2);
+	send_ft_auth_reply(mm, res2, rs8);
+	mm->stats.ft_auth++;
+}
+
+/*
  * FP -> PP ACCESS-RIGHTS-ACCEPT: echo the PP's PORTABLE-IDENTITY and add our
  * FIXED-IDENTITY (PARK) from the base RFPI. (The PARK encoding is the item still
  * to confirm against hardware.)
@@ -857,6 +955,19 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		if (mm->state == DECT_MM_WAIT_AUTH &&
 		    h.ti_flag == DECT_TI_RESPONDER)
 			on_auth_request(mm, ies, ies_len);
+		else if (h.ti_flag == DECT_TI_ORIGINATOR)
+			on_ft_authentication(mm, ies, ies_len, rs);
+		break;
+	case DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT:
+	case DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT:
+		/* §13.5.2: the answer stops <MM_access.2> */
+		if (mm->term_state != DECT_MM_TERM_PENDING ||
+		    h.ti_flag != DECT_TI_RESPONDER)
+			break;
+		mm->term_state = h.msg_type ==
+				 DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT
+				 ? DECT_MM_TERM_ACCEPTED : DECT_MM_TERM_REJECTED;
+		mm->term_deadline_ms = 0;
 		break;
 	case DECT_MM_AUTHENTICATION_REJECT:
 		/*
@@ -941,6 +1052,8 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 #define MM_KEY1_MS	10000u
 /* <MM_auth.1>: FT value 10 seconds (EN 300 175-5 A.5). */
 #define MM_AUTH1_MS	10000u
+/* <MM_access.2>: FT value 10 seconds (EN 300 175-5 A.5). */
+#define MM_ACCESS2_MS	10000u
 
 void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 {
@@ -957,6 +1070,23 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 	} else if (now_ms >= mm->key_deadline_ms) {
 		key_allocation_failed(mm);
 		mm->key_deadline_ms = 0;
+	}
+	/*
+	 * <MM_access.2> (§13.5.2): "at the first expiry ... the FT should
+	 * retransmit"; at the second, abort.
+	 */
+	if (mm->term_state == DECT_MM_TERM_PENDING) {
+		if (!mm->term_deadline_ms) {
+			mm->term_deadline_ms = now_ms + MM_ACCESS2_MS;
+		} else if (now_ms >= mm->term_deadline_ms) {
+			if (!mm->term_retries++) {
+				send_terminate_request(mm);
+				mm->term_deadline_ms = now_ms + MM_ACCESS2_MS;
+			} else {
+				mm->term_state = DECT_MM_TERM_FAILED;
+				mm->term_deadline_ms = 0;
+			}
+		}
 	}
 	/*
 	 * <MM_auth.1> (EN 300 444 §8.24, A.5): our {AUTHENTICATION-REQUEST}
@@ -1010,6 +1140,9 @@ uint64_t dect_mm_next_deadline(const struct dect_mm *mm)
 	if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY &&
 	    mm->auth_deadline_ms && mm->auth_deadline_ms < t)
 		t = mm->auth_deadline_ms;
+	if (mm->term_state == DECT_MM_TERM_PENDING && mm->term_deadline_ms &&
+	    mm->term_deadline_ms < t)
+		t = mm->term_deadline_ms;
 	return t;
 }
 

@@ -90,8 +90,12 @@ static void test_mm_transaction_rules(void)
 	n = pp_auth_request(buf, sizeof(buf), 0, "1234", rand_f, rs, rand_p, 0);
 	buf[0] &= 0x7Fu;			/* F = 0: the handset's own */
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
-	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+	/* its authentication of us, refused without a UAK -- not taken
+	 * as the key-allocation answer */
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REJECT);
 	CHECK_EQ(mm.stats.auth_ok, 0u);
+	n = pp_auth_request(buf, sizeof(buf), 0, "1234", rand_f, rs, rand_p, 0);
 	CHECK_EQ(mm.state, DECT_MM_WAIT_AUTH);
 
 	buf[0] |= 0x80u;			/* F = 1: the answer */
@@ -191,6 +195,98 @@ static void test_key_allocation_fails_on_timeout_or_refusal(void)
 		dect_mm_tick(&mm, 30000);			/* once */
 		CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
 		CHECK_EQ(mm.stats.key_failed, 1u);
+	}
+}
+
+/*
+ * The handset authenticates us (EN 300 444 §8.23): with the stored UAK we
+ * answer RES2 = A22(A21(UAK, RS), RAND_P) and the RS, on its transaction.
+ */
+static void test_ft_authentication(void)
+{
+	static const uint8_t at[3] = { 0x01, 0x18, 0x00 };	/* DSAA, UAK 8 */
+	uint8_t uak[16] = { 0x31, 0x41, 0x59, 0x26 };
+	uint8_t rand_p[8] = { 9, 8, 7, 6, 5, 4, 3, 2 };
+	uint8_t rs16[16] = { 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC };
+	uint8_t buf[64], out[64], ks[16], want[4];
+	struct dect_mm_cfg cfg = { .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	struct dect_nwk_hdr h;
+	const uint8_t *ies, *res, *rs;
+	size_t n, ies_len, rl, sl;
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_set_uak(&mm, uak);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_AUTHENTICATION_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_AUTH_TYPE, at, 3);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RAND, rand_p, 8);
+	dect_mm_rx(&mm, buf, n, NULL, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REPLY);
+	CHECK_EQ(dect_nwk_parse(out, n, &h, &ies, &ies_len), 0);
+	CHECK_EQ(h.ti_flag, DECT_TI_RESPONDER);
+	res = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &rl);
+	rs = dect_nwk_find_ie(ies, ies_len, DECT_IE_RS, &sl);
+	CHECK(res && rl == 4u && rs && sl == 8u);
+	dect_dsaa_a21(uak, rs16, ks);
+	dect_dsaa_a22(ks, rand_p, want);
+	CHECK(res && memcmp(res, want, 4) == 0);
+	CHECK(rs && memcmp(rs, rs16, 8) == 0);
+	CHECK_EQ(mm.stats.ft_auth, 1u);
+}
+
+/*
+ * FT-initiated termination of access rights (EN 300 444 §8.31): the request
+ * names the IPUI and our PARK; ACCEPT ends it; with no answer <MM_access.2>
+ * retransmits once at 10 s and fails at 20 s.
+ */
+static void test_terminate_access_rights(void)
+{
+	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	struct dect_mm_cfg cfg = { .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	struct dect_nwk_hdr h;
+	const uint8_t *ies, *p;
+	uint8_t buf[64], out[64];
+	size_t n, ies_len, pl;
+	int k;
+
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(dect_mm_terminate(&mm), -1);		/* nobody to name */
+	for (k = 0; k < 2; k++) {
+		dect_mm_init(&mm, &cfg);
+		memcpy(mm.port_id, ipui, sizeof(ipui));
+		mm.port_id_len = sizeof(ipui);
+		CHECK_EQ(dect_mm_terminate(&mm), 0);
+		CHECK_EQ(dect_mm_terminate(&mm), -1);	/* one at a time */
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(dect_nwk_parse(out, n, &h, &ies, &ies_len), 0);
+		CHECK_EQ(h.msg_type, DECT_MM_ACCESS_RIGHTS_TERMINATE_REQUEST);
+		CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
+		p = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+				     &pl);
+		CHECK(p && pl == sizeof(ipui) && !memcmp(p, ipui, pl));
+		CHECK(dect_nwk_find_ie(ies, ies_len, DECT_IE_FIXED_IDENTITY,
+				       &pl) != NULL);
+		dect_mm_tick(&mm, 1000);			/* armed */
+		if (!k) {
+			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+				DECT_TI_RESPONDER, 0,
+				DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT);
+			dect_mm_rx(&mm, buf, n, NULL, NULL);
+			CHECK_EQ(mm.term_state, DECT_MM_TERM_ACCEPTED);
+			CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+		} else {
+			dect_mm_tick(&mm, 11000);		/* retransmit */
+			n = dect_mm_poll(&mm, out, sizeof(out));
+			CHECK_EQ(msg_type_of(out, n),
+				 DECT_MM_ACCESS_RIGHTS_TERMINATE_REQUEST);
+			CHECK_EQ(mm.term_state, DECT_MM_TERM_PENDING);
+			dect_mm_tick(&mm, 21000);		/* give up */
+			CHECK_EQ(mm.term_state, DECT_MM_TERM_FAILED);
+			CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+		}
 	}
 }
 
@@ -1329,6 +1425,8 @@ int main(void)
 	test_mm_transaction_rules();
 	test_access_request_without_identity_is_rejected();
 	test_proposed_auth_type_is_kept();
+	test_ft_authentication();
+	test_terminate_access_rights();
 	test_key_allocation_fails_on_timeout_or_refusal();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();

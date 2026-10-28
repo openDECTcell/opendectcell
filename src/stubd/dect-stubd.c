@@ -5494,15 +5494,40 @@ static void names_spread(struct stubd *s, unsigned i)
 						   tid, name);
 }
 
+/*
+ * The UAK of the handset a link serves, so MM can answer the handset's
+ * authentication of the base (EN 300 444 §8.23; mandatory inside access
+ * rights termination, §8.31). The main link serves the current store
+ * unless it adopted another; a side link only the one it adopted.
+ */
+static void uak_for_link(struct stubd *s, struct dect_link *l, int main)
+{
+	int i = l->mm.adopted >= 0 ? l->mm.adopted
+				   : main ? (int)s->cur : -1;
+
+	if (i < 0 || (unsigned)i >= s->n_hs)
+		return;
+	if ((unsigned)i == s->cur) {
+		if (s->uak_valid)
+			dect_mm_set_uak(&l->mm, s->uak);
+	} else if (s->hs[i].uak_valid) {
+		dect_mm_set_uak(&l->mm, s->hs[i].uak);
+	}
+}
+
 static void names_tick(struct stubd *s)
 {
 	unsigned k;
 
-	if (s->reg.active)
+	if (s->reg.active) {
 		names_take(s, &s->reg.link);
+		uak_for_link(s, &s->reg.link, 1);
+	}
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].active)
+		if (s->side[k].active) {
 			names_take(s, &s->side[k].link);
+			uak_for_link(s, &s->side[k].link, 0);
+		}
 }
 
 static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
