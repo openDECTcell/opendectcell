@@ -720,6 +720,52 @@ uint8_t dect_cc_codec(const struct dect_cc *cc)
 static void accept_now(struct dect_cc *cc);
 static void proceed(struct dect_cc *cc);
 
+/* {CC-INFO}: <<SIGNAL>>, then <<CALL-INFORMATION>> {call id, status, reason} */
+static void queue_busy_info(struct dect_cc *cc, uint8_t signal, uint8_t status,
+			    int with_reason)
+{
+	struct dect_callinfo ci;
+	unsigned idx;
+	uint8_t *b = txq_slot(cc, &idx);
+	size_t off, next;
+
+	if (!b)
+		return;
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 cc->ti_flag, cc->ti_value, DECT_CC_INFO);
+	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
+				    DECT_IE_SIGNAL, signal);
+	dect_callinfo_init(&ci);
+	ci.has_call_id = 1;
+	ci.call_id = cc->status_call_id;
+	ci.has_call_status = 1;
+	ci.call_status = status;
+	ci.has_status_reason = (uint8_t)(with_reason != 0);
+	ci.status_reason = DECT_CSR_SYSTEM_BUSY;
+	next = dect_callinfo_put(b, DECT_LAPC_MSG_MAX, off, &ci);
+	if (!off || !next)
+		return;
+	txq_commit(cc, idx, next);
+}
+
+/*
+ * TS 102 527-3 §7.4.8.3, "busy system" for a Part 3 handset's call when
+ * we have no room: a CC message other than {CC-INFO} first (our
+ * CALL-PROC), then {CC-INFO} with the busy tone (04H) and CS call
+ * disconnecting, reason "system busy"; the tick releases it later. A GAP
+ * or Part 1 handset gets the plain {CC-RELEASE-COM} "insufficient
+ * resources" instead (it takes no call status). Spec sweep, A2 K8.
+ */
+#define CC_BUSY_TONE_MS		5000u	/* "after some time out", ours */
+
+static void busy_notify(struct dect_cc *cc)
+{
+	proceed(cc);
+	queue_busy_info(cc, 0x04u, DECT_CS_CALL_DISCONNECTING, 1);
+	cc->busy_notified = 1;
+	cc->busy_deadline_ms = 0;		/* armed by the tick */
+}
+
 static void on_setup(struct dect_cc *cc, int sending_complete)
 {
 	cc->stats.setup++;
@@ -740,9 +786,13 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 		return;
 	}
 	if (cc->busy) {
+		cc->stats.rejected_busy++;
+		if (cc->call_status) {		/* a Part 3 handset */
+			busy_notify(cc);
+			return;
+		}
 		queue_release_com(cc, DECT_CC_REASON_INSUFFICIENT_RESOURCES);
 		cc->state = DECT_CC_ST_NULL;
-		cc->stats.rejected_busy++;
 		return;
 	}
 	/*
@@ -809,7 +859,8 @@ static void accept_now(struct dect_cc *cc)
 /* a handset-placed call that can be connected: not list access */
 static int connectable(const struct dect_cc *cc)
 {
-	return !cc->incoming && (cc->peer_basic_service >> 4) != 0x2u &&
+	return !cc->incoming && !cc->busy_notified &&
+	       (cc->peer_basic_service >> 4) != 0x2u &&
 	       (cc->state == DECT_CC_ST_OVERLAP ||
 		cc->state == DECT_CC_ST_PROCEEDING);
 }
@@ -883,6 +934,20 @@ static void on_release(struct dect_cc *cc)
 
 void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 {
+	if (cc->busy_notified && cc->state == DECT_CC_ST_PROCEEDING) {
+		if (!cc->busy_deadline_ms) {
+			cc->busy_deadline_ms = now_ms + CC_BUSY_TONE_MS;
+		} else if (now_ms >= cc->busy_deadline_ms) {
+			/* tones off, CS idle, then the release (§7.4.8.3) */
+			queue_busy_info(cc, 0x3Fu, DECT_CS_IDLE, 0);
+			cc->busy_notified = 0;
+			cc->busy_deadline_ms = 0;
+			(void)dect_cc_release(cc);
+		}
+	} else if (cc->busy_notified && cc->state != DECT_CC_ST_PROCEEDING) {
+		cc->busy_notified = 0;		/* the handset hung up first */
+		cc->busy_deadline_ms = 0;
+	}
 	if (cc->state == DECT_CC_ST_OVERLAP) {
 		if (!cc->overlap_deadline_ms) {
 			cc->overlap_deadline_ms = now_ms + CC_OVERLAP_TIMER_MS;
@@ -936,8 +1001,11 @@ uint64_t dect_cc_next_deadline(const struct dect_cc *cc)
 	uint64_t a = cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
 	uint64_t b = cc->overlap_deadline_ms ? cc->overlap_deadline_ms
 					     : UINT64_MAX;
+	uint64_t c = cc->busy_deadline_ms ? cc->busy_deadline_ms : UINT64_MAX;
 
-	return a < b ? a : b;
+	if (b < a)
+		a = b;
+	return c < a ? c : a;
 }
 
 void dect_cc_set_busy(struct dect_cc *cc, int busy)
@@ -1045,6 +1113,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			}
 			dect_cc_clear_keypad(cc);	/* digits are per call */
 			cc->list_number = 0;
+			cc->busy_notified = 0;
 			cc->peer_line = DECT_CC_LINE_UNSET;
 			cc->line_confirmed = 0;
 			cc->ti_value = h.ti_value;

@@ -208,6 +208,60 @@ static void test_none_gets_the_selected_line(void)
 	CHECK_EQ(n, 2u + 8u);
 }
 
+/*
+ * TS 102 527-3 §7.4.8.3 for a Part 3 handset (call status on) when we have
+ * no room: CALL-PROC, CC-INFO {busy tone, call id, CS call disconnecting,
+ * system busy}; 5 s later CC-INFO {tones off, CS idle} and CC-RELEASE.
+ */
+static void test_busy_system_for_a_part3_handset(void)
+{
+	static const uint8_t busy[] = { 0xe4, 0x04, 0x7e, 0x09, 0x01, 0x00,
+					0x83, 0x02, 0x01, 0x86, 0x02, 0x02,
+					0x80 };
+	static const uint8_t idle[] = { 0xe4, 0x3f, 0x7e, 0x06, 0x01, 0x00,
+					0x83, 0x02, 0x01, 0x80 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_call_status(&cc, 1, 3);
+	dect_cc_set_busy(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);	/* non-INFO first */
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_INFO);
+	CHECK_EQ(n, 2u + sizeof(busy));
+	CHECK(memcmp(out + 2, busy, sizeof(busy)) == 0);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);	/* no CONNECT */
+	CHECK_EQ(dect_cc_accept(&cc), -1);			/* refused */
+	CHECK_EQ(cc.stats.rejected_busy, 1u);
+
+	dect_cc_tick(&cc, 1000);				/* armed: 6000 */
+	CHECK_EQ(dect_cc_next_deadline(&cc), 6000u);
+	dect_cc_tick(&cc, 5999);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	dect_cc_tick(&cc, 6000);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_INFO);
+	CHECK_EQ(n, 2u + sizeof(idle));
+	CHECK(memcmp(out + 2, idle, sizeof(idle)) == 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE);
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
+
+	/* without call status (GAP / Part 1): the plain refusal, as before */
+	dect_cc_init(&cc);
+	dect_cc_set_busy(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+}
+
 /* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
 static void test_setup_without_basic_service_is_refused(void)
 {
@@ -2234,6 +2288,7 @@ int main(void)
 	test_info_on_the_call();
 	test_setup_without_basic_service_is_refused();
 	test_none_gets_the_selected_line();
+	test_busy_system_for_a_part3_handset();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();

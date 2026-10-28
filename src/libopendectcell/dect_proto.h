@@ -362,8 +362,17 @@
  *    encoded after the call status, parsed, and valid only with one
  *    (EN 300 175-5 §7.7.56), for "system busy" (TS 102 527-3 §7.4.8.3) and
  *    the negative acknowledgements of call waiting (§7.4.3.4).
+ *
+ * 43: busy system (2026-10-28). Layout change: struct dect_cc gains
+ *    busy_notified and busy_deadline_ms. **Behaviour change:** a busy CC
+ *    entity (dect_cc_set_busy) with call status on (a Part 3 handset)
+ *    answers a handset's SETUP with CALL-PROC and the TS 102 527-3 §7.4.8.3
+ *    notification (busy tone, CS call disconnecting, "system busy"), then
+ *    after 5 s tones off, CS idle and {CC-RELEASE}; such a call is never
+ *    connectable. Without call status the plain {CC-RELEASE-COM}
+ *    "insufficient resources" stays.
  */
-#define OPENDECTCELL_API_VERSION 42
+#define OPENDECTCELL_API_VERSION 43
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

@@ -207,6 +207,12 @@ struct dect_cc {
 	 */
 	uint8_t  peer_line;
 	uint8_t  line_confirmed;
+	/*
+	 * "Busy system" notified (TS 102 527-3 §7.4.8.3): the call waits out
+	 * busy_deadline_ms with the busy tone, then is released.
+	 */
+	uint8_t  busy_notified;
+	uint64_t busy_deadline_ms;
 	/* dect_cc_set_default_line(): the FP-managed line, 0 = none set */
 	uint8_t  default_line_set;
 	uint8_t  default_line;
