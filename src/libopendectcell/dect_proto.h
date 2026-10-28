@@ -585,8 +585,14 @@
  *    H.2): ACCEPT on the right RES, else REJECT "authentication failed"
  *    (wrong RES, no UAK, its refusal, <MM_auth.1>). API 73 accepted it
  *    unauthenticated.
+ *
+ * 75: wrong RES ends the call (2026-10-28, spec sweep N.9). Layout change:
+ *    the MM stats gain auth_mismatch. **Behaviour change** (daemon): when
+ *    our challenge before ciphering is answered with a wrong RES, the call
+ *    is released, reason "authentication failed" (EN 300 444 §8.23.2.3);
+ *    it went on unciphered.
  */
-#define OPENDECTCELL_API_VERSION 74
+#define OPENDECTCELL_API_VERSION 75
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

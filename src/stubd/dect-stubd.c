@@ -7197,7 +7197,21 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.cipher_done = 1;
 		printf("call: cipher: authentication FAILED (%s)\n",
 		       s->reg.link.mm.stats.auth_timeouts ? "no reply in 10 s"
-		       : "wrong RES, or the handset refused");
+		       : s->reg.link.mm.stats.auth_mismatch ? "WRONG RES"
+		       : "the handset refused");
+		/*
+		 * A wrong RES means the handset is not the one subscribed
+		 * under that identity: EN 300 444 §8.23.2.3, "any failure ...
+		 * shall result on the interruption of any call in progress".
+		 * We let the call go on unciphered (spec sweep, N.9).
+		 */
+		if (s->reg.link.mm.stats.auth_mismatch &&
+		    dect_cc_busy(&s->reg.link.cc)) {
+			(void)dect_cc_release_reason(&s->reg.link.cc,
+						     0x09u /* auth failed */);
+			printf("call: released -- the handset failed "
+			       "authentication (EN 300 444 8.23.2.3)\n");
+		}
 	}
 	if (s->reg.link.mm.stats.cipher_timeouts && !s->reg.cipher_timeout_seen) {
 		s->reg.cipher_timeout_seen = 1;

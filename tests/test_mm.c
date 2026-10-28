@@ -874,6 +874,25 @@ static void test_cipher_timer_and_rejects(void)
 	dect_mm_tick(&mm, 20000);
 	CHECK_EQ(mm.stats.cipher_timeouts, 0u);		/* stopped by REJECT */
 
+	/* a wrong RES is counted as the mismatch the owner releases on */
+	dect_mm_init(&mm, &cfg);
+	dect_mm_start_cipher(&mm, uak, rand_f, rs);
+	(void)dect_mm_poll(&mm, out, sizeof(out));
+	{
+		uint8_t bad[4];
+
+		memcpy(bad, res, 4);
+		bad[3] ^= 0x80u;
+		n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+				       DECT_TI_RESPONDER, 0,
+				       DECT_MM_AUTHENTICATION_REPLY);
+		n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RES, bad, 4);
+		dect_mm_rx(&mm, buf, n, rand_f, rs);
+	}
+	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_FAILED);
+	CHECK_EQ(mm.stats.auth_mismatch, 1u);
+	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);	/* no CIPHER */
+
 	/* <MM_cipher.1>: 0x0209 in time stops it; without it, one timeout */
 	{
 		int k;

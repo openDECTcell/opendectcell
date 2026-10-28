@@ -170,6 +170,7 @@ struct dect_mm_stats {
 	uint32_t auth_timeouts;	   /* <MM_auth.1>: our AUTH-REQUEST unanswered */
 	uint32_t cipher_rejected;  /* {CIPHER-REJECT} received */
 	uint32_t cipher_timeouts;  /* <MM_cipher.1>: never ciphered */
+	uint32_t auth_mismatch;	   /* our challenge answered with a wrong RES */
 	uint32_t term_by_pt;	   /* handsets that deregistered themselves */
 	uint32_t term_refused;	   /* ... refused: no UAK, or it failed */
 	uint32_t ft_auth;	   /* the PT authenticated us: replies sent */

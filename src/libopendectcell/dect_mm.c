@@ -855,7 +855,10 @@ static void on_auth_reply_cipher(struct dect_mm *mm, const uint8_t *ies,
 	dect_dsaa_a11(mm->cipher_uak, mm->rs, ks);
 	dect_dsaa_a12(ks, mm->rand_f, dck, xres);
 	if (memcmp(res, xres, 4) != 0) {
+		/* not the handset it claims to be: the owner must end the
+		 * call (EN 300 444 §8.23.2.3) */
 		mm->cipher_state = DECT_MM_CIPHER_FAILED;
+		mm->stats.auth_mismatch++;
 		return;
 	}
 	memcpy(mm->dck, dck, DECT_MM_DCK_LEN);
