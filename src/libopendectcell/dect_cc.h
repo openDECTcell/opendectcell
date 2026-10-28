@@ -122,6 +122,7 @@ struct dect_cc_stats {
 	uint32_t control_codes;	/* parallel-call codes in {CC-INFO} (1CH, 17H) */
 	uint32_t negative_acks;	/* answered with the negative ack (§7.4.3.4) */
 	uint32_t service_rejected;	/* {CC-SERVICE-CHANGE}s we refused */
+	uint32_t calls_waiting;	/* call waiting indications sent */
 	/* handset-placed calls refused by dect_cc_set_busy() */
 	uint32_t rejected_busy;
 };
@@ -592,6 +593,22 @@ uint8_t dect_cc_line(const struct dect_cc *cc);
  * dodged by picking another value. Use this only to override for a test.
  */
 void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti);
+
+/*
+ * Call waiting indication to a Part 3 handset in a call (TS 102 527-3
+ * §7.4.3.5.2, A2 K2): one {CC-INFO} on the existing transaction with
+ * <<SIGNAL>> "call waiting tone on" (07H), the caller's number and name if
+ * given (for an internal caller, NPI private), and <<CALL-INFORMATION>> with
+ * ci's line and line type (none for an internal call) and its call id --
+ * a new one, not this call's -- and CS call setup. IEs in ascending order,
+ * which is also the clause's SIGNAL, number, name order. The handset then
+ * answers 1C35H (accept), 1C36H (reject) or 1C38H with that call id, which
+ * dect_cc does not act on yet (it gets the negative acknowledgement).
+ * -1 unless the call is ACTIVE with call status on, or ci has no new id.
+ */
+struct dect_clip;
+int dect_cc_call_waiting(struct dect_cc *cc, const struct dect_callinfo *ci,
+			 const struct dect_clip *id);
 
 /* Queue a CC-RELEASE to hang up an active call. Returns 0, or -1 if idle. */
 int dect_cc_release(struct dect_cc *cc);

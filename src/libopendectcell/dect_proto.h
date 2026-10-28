@@ -549,8 +549,14 @@
  *    with RES2 = A22(A21(UAK, RS), RAND_P) and RS when the UAK is known,
  *    else {AUTHENTICATION-REJECT}; it was ignored. dect_mm_terminate() runs
  *    EN 300 444 §8.31 with <MM_access.2>.
+ *
+ * 70: call waiting builder (2026-10-28, spec sweep K2, D5, D10). Layout
+ *    change: the stats gain calls_waiting. New: dect_cc_call_waiting(), a
+ *    {CC-INFO} with SIGNAL 07H, the caller's identity and the waiting
+ *    call's <<CALL-INFORMATION>> (CS call setup), for an ACTIVE call with
+ *    call status. No behaviour change until the daemon uses it.
  */
-#define OPENDECTCELL_API_VERSION 69
+#define OPENDECTCELL_API_VERSION 70
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

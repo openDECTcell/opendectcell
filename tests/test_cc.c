@@ -533,6 +533,77 @@ static void test_service_change_is_rejected(void)
 	CHECK_EQ(cc.stats.closed_unknown, 0u);
 }
 
+/*
+ * Call waiting (TS 102 527-3 §7.4.3.5.2): one {CC-INFO} on the active call
+ * with SIGNAL 07H, the caller's number and name, and the new call's line,
+ * line type, call id and CS call setup. Not without call status, not on a
+ * call that is not connected, not with the active call's own id.
+ */
+static void test_call_waiting_indication(void)
+{
+	struct dect_callinfo ci, got;
+	struct dect_clip id;
+	struct dect_nwk_hdr h;
+	struct dect_cc cc;
+	const uint8_t *ies, *v;
+	uint8_t buf[64], out[96];
+	size_t n, ies_len, vn;
+
+	dect_callinfo_init(&ci);
+	ci.has_line = 1;
+	ci.line_id = 1;
+	ci.has_line_type = 1;
+	ci.line_type = DECT_CALLINFO_NDT_DELAY;
+	ci.has_call_id = 1;
+	ci.call_id = 4;
+	dect_clip_init(&id);
+	CHECK_EQ(dect_clip_set_number(&id, "0301234567", DECT_CLIP_TON_NATIONAL,
+				      DECT_CLIP_NPI_E164, DECT_CLIP_PRES_ALLOWED,
+				      DECT_CLIP_SCR_NETWORK), 0);
+	CHECK_EQ(dect_clip_set_name(&id, "Wednesday", DECT_CLIP_ALPHABET_UTF8,
+				    DECT_CLIP_PRES_ALLOWED,
+				    DECT_CLIP_SCR_NETWORK), 0);
+
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_call_waiting(&cc, &ci, &id), -1);	/* no call */
+	dect_cc_set_call_status(&cc, 1, 3);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+	ci.call_id = 3;
+	CHECK_EQ(dect_cc_call_waiting(&cc, &ci, &id), -1);	/* its own id */
+	ci.call_id = 4;
+	CHECK_EQ(dect_cc_call_waiting(&cc, &ci, &id), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(dect_nwk_parse(out, n, &h, &ies, &ies_len), 0);
+	CHECK_EQ(h.msg_type, DECT_CC_INFO);
+	CHECK_EQ(ies[0], DECT_IE_SIGNAL);		/* SIGNAL first */
+	CHECK_EQ(ies[1], DECT_SIGNAL_CALL_WAITING_TONE);
+	CHECK(dect_nwk_find_ie(ies, ies_len, 0x6C, &vn) != NULL);	/* CPN */
+	CHECK(dect_nwk_find_ie(ies, ies_len, 0x6D, &vn) != NULL);	/* name */
+	v = dect_nwk_find_ie(ies, ies_len, DECT_IE_CALL_INFORMATION, &vn);
+	CHECK(v != NULL);
+	CHECK_EQ(dect_callinfo_parse(v, vn, &got), 0);
+	CHECK_EQ(got.line_id, 1u);
+	CHECK_EQ(got.line_type, DECT_CALLINFO_NDT_DELAY);
+	CHECK_EQ(got.call_id, 4u);
+	CHECK_EQ(got.call_status, DECT_CS_CALL_SETUP);
+	CHECK_EQ(cc.stats.calls_waiting, 1u);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);		/* the call goes on */
+
+	/* a Part 1 handset: no call waiting (§7.4.6.4.1) */
+	dect_cc_init(&cc);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	CHECK_EQ(dect_cc_call_waiting(&cc, &ci, &id), -1);
+}
+
 /* A SETUP with TI flag 1 is ignored, idle or in a call (§17.3.2.1). */
 static void test_setup_with_flag_one_is_ignored(void)
 {
@@ -2754,6 +2825,7 @@ int main(void)
 	test_setup_with_flag_one_is_ignored();
 	test_control_codes_get_a_negative_ack();
 	test_service_change_is_rejected();
+	test_call_waiting_indication();
 	test_release_with_a_reason_and_busy_system();
 	test_unserved_call_class_is_refused();
 	test_none_gets_the_selected_line();

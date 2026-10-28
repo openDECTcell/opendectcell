@@ -1601,6 +1601,40 @@ int dect_cc_info(struct dect_cc *cc, const uint8_t *ies, size_t len)
 	return 0;
 }
 
+int dect_cc_call_waiting(struct dect_cc *cc, const struct dect_callinfo *ci,
+			 const struct dect_clip *id)
+{
+	struct dect_callinfo w;
+	unsigned idx;
+	uint8_t *b;
+	size_t off, next;
+
+	if (!cc->call_status || cc->state != DECT_CC_ST_ACTIVE || !ci ||
+	    !ci->has_call_id || ci->call_id == cc->status_call_id)
+		return -1;
+	b = txq_slot(cc, &idx);
+	if (!b)
+		return -1;
+	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
+				 cc->ti_flag, cc->ti_value, DECT_CC_INFO);
+	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_SIGNAL,
+				    DECT_SIGNAL_CALL_WAITING_TONE);
+	if (!off)
+		return -1;
+	if (id)
+		off = put_identity(b, off, id);
+	w = *ci;
+	w.has_call_status = 1;
+	w.call_status = DECT_CS_CALL_SETUP;
+	w.has_status_reason = 0;
+	next = dect_callinfo_put(b, DECT_LAPC_MSG_MAX, off, &w);
+	if (!next)
+		return -1;
+	txq_commit(cc, idx, next);
+	cc->stats.calls_waiting++;
+	return 0;
+}
+
 int dect_cc_release(struct dect_cc *cc)
 {
 	return dect_cc_release_reason(cc, DECT_CC_REASON_NONE);
