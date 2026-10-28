@@ -24,10 +24,10 @@ materially weaker than the public one. Two conditionals matter:
 | **N.2 Off hook** | 8.2 outgoing call request, 8.15 incoming call connection | done |
 | **N.3 On hook (full release)** | 8.7 normal call release, 8.8 abnormal call release | done |
 | **N.4 Dialled digits (basic)** | 8.10 sending keypad information | **implemented 2026-10-23**, not yet seen on hardware |
-| **N.8 Incoming call** | 8.12 request, 8.13 confirmation, 8.14 PT alerting, 8.15 connection | 8.12/8.13/8.15 done; verified on the C4, and on the A540 since the transaction-value fix of 2026-10-24 (below). **8.14 only with `-a signal=`**: the default sends no alerting |
+| **N.8 Incoming call** | 8.12 request, 8.13 confirmation, 8.14 PT alerting, 8.15 connection | done; verified on the C4, and on the A540 since the transaction-value fix of 2026-10-24 (below). 8.14: <<SIGNAL>> 41H by default since `9c4414c`, 40H for internal calls since `5c25e3d` |
 | **N.15 Alerting** | — | done |
 | **N.18 Subscription registration on-air** | 8.30 obtaining access rights | done, verified on two vendors' handsets |
-| **N.19 Link control** | 8.35 indirect FT-initiated establishment, 8.36 direct PT-initiated, 8.37 normal release, 8.38 abnormal release | done |
+| **N.19 Link control** | 8.35 indirect FT-initiated establishment, 8.36 direct PT-initiated, 8.37 normal release, 8.38 abnormal release, 8.39 link maintenance | 8.35/8.36 done; 8.37-8.39 since 2026-10-28: the FT releases a link after its last call or list session (`0x0202`, `96b54e4`, `f93e86b`), no <LCE.01>/<LCE.02> yet. This row said "done" before 8.39 existed here (spec sweep A1) |
 
 **Eight mandatory features. As of 2026-10-23 all eight are implemented**, and
 seven of the eight are verified on hardware — N.4 is the exception and gets
@@ -149,5 +149,5 @@ Three clauses outside the feature table, found by the external review
 | clause | requirement | status |
 |---|---|---|
 | **6.9.2** | "The transaction identifier value for a CC call shall always get assigned the lowest available free number." | **broken from 2026-10-20 to 2026-10-24 and the cause of every Gigaset refusal**; fixed in `dd5a630`, verified on the A540 (run 15 rang, control run 16 refused) |
-| **8.14** | PT alerting by `<<SIGNAL>>` in `{CC-SETUP}` or in `{CC-INFO}`; "FT is required to support one of the methods" | **open**: the default build uses neither; `-a signal=0x41` (external) or `0x40` (internal) does it and should become the default |
-| **6.9.4** | an unexpected or unrecognised CC message "shall be ignored" (except release messages) | **open**: `dect_cc_rx()`'s default branch closes it with "unknown transaction", and its flag test is inverted, so it would close our own live call; see `spec-conformance.md` |
+| **8.14** | PT alerting by `<<SIGNAL>>` in `{CC-SETUP}` or in `{CC-INFO}`; "FT is required to support one of the methods" | **fixed** in `9c4414c`: 41H by default; 40H for internal calls since `5c25e3d` |
+| **6.9.4** | an unexpected or unrecognised CC message "shall be ignored" (except release messages) | **fixed** in `0ac7e38`: ignored on our own call; on a transaction we do not hold, cleared "unknown transaction" (EN 300 175-5 §17.3.2.1), extended to every message type in `6400c26` |

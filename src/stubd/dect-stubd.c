@@ -4003,7 +4003,7 @@ static int link_in_use(const struct dect_link *l)
 	return 0;
 }
 #define RING_PAGE_RETRIES	20u	/* pages before giving up (60 s) */
-#define RING_PAGE_INTERVAL	3000u	/* ms between them; the stock guard */
+#define RING_PAGE_INTERVAL	3000u	/* ms between them: <LCE.03> (EN 300 175-5 A.6) */
 #define RING_PAGE_RESP_MS	1500u	/* wait this long for the page response */
 #define RING_SETUP_RETRY_MS	2000u	/* re-try a refused CC-SETUP this often */
 #define RING_SETUP_TRIES	8u	/* ... this many times before giving up */

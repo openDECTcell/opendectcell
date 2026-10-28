@@ -527,7 +527,7 @@ int dect_cc_peer_is_speech(const struct dect_cc *cc)
 /*
  * Collect <<MULTI-KEYPAD>> from a received message. GAP §8.10: the PT sends
  * keypad information "in one or several {CC-INFO} messages", and the FT is
- * mandated to accept it in states F-02 (call present) and F-10 (active).
+ * mandated to accept it in states F-02 (overlap sending) and F-10 (active).
  * EN 300 175-5 §9.3.1.5 also allows it in the initial {CC-SETUP}, so we take
  * it from both and simply append in arrival order.
  */
@@ -941,8 +941,10 @@ static void proceed(struct dect_cc *cc)
  * {CC-CONNECT}, and with it ACTIVE: EN 300 175-5 §9.3.1.8 has the F-CC
  * "send a {CC-CONNECT} message to the P-CC. It shall then enter the
  * ACTIVE state." No {CC-CONNECT-ACK} comes for a call the handset placed
- * -- the A540 sends none (bench test 12b) -- so waiting in CONNECT PENDING
- * for one left us, and the Monitor, at "connecting" for the whole call.
+ * -- the A540 sends none (bench test 12b), and A.1 agrees: "in the FP
+ * timer CC.05 only applies in case of external handover" -- so waiting in
+ * CONNECT PENDING for one left us, and the Monitor, at "connecting" for
+ * the whole call.
  */
 static void connect_now(struct dect_cc *cc)
 {
@@ -1457,9 +1459,10 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 * sent: §8.10's figure shows the FT staying in the same state,
 		 * and LAPC has already acknowledged the frame.
 		 *
-		 * Accepted in CALL PRESENT and ACTIVE, which are F-02 and
-		 * F-10. Outside those the message is ignored rather than
-		 * closed, because {CC-INFO} is a legitimate message on a live
+		 * GAP names F-02 (overlap sending) and F-10 (active); CALL
+		 * PRESENT is F-06, kept for an incoming call's keypad.
+		 * Outside those the message is ignored rather than closed,
+		 * because {CC-INFO} is a legitimate message on a live
 		 * transaction and closing it would drop the call.
 		 */
 		if (!our_transaction(cc, &h)) {
