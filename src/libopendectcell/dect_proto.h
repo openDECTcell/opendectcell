@@ -301,8 +301,14 @@
  *    call (class 8, speech service kept), drops the prefix from the keypad
  *    and sets list_number: the number is complete (TS 102 527-3
  *    §7.4.10.6.2). Before, the call hung in PROCEEDING.
+ *
+ * 33: LAPC N250 (2026-10-28). Layout change: struct dect_lapc gains
+ *    retry_count and failed, struct dect_lapc_stats gains link_failures.
+ *    **Behaviour change:** after three unanswered retransmissions LAPC
+ *    sends DISC and sets failed (EN 300 175-4 §9.2.3.6) instead of
+ *    retransmitting for ever.
  */
-#define OPENDECTCELL_API_VERSION 32
+#define OPENDECTCELL_API_VERSION 33
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
