@@ -463,6 +463,14 @@ struct stubd {
 	uint64_t ring_wait_since;	/* a link in use held the ring back */
 	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
 	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
+	/*
+	 * After the SETUP is queued: watch it until the handset alerts. A
+	 * call lost to a crossing {CC-SETUP} of the handset's (its list sync)
+	 * is rung again once the link is free, at most RING_REQUEUE_MAX times.
+	 */
+	int      ring_watch;
+	uint32_t ring_coll0, ring_alert0;	/* cc stats when queued */
+	unsigned ring_requeues;
 	unsigned    ring_pages;		/* pages sent for this attempt */
 	uint64_t    ring_last;		/* when the last one went out */
 	uint64_t    first_contact_ms;	/* the handset's first C-plane segment, for ringattach= */
@@ -4147,6 +4155,7 @@ static int link_in_use(const struct dect_link *l)
 #define RING_PAGE_RESP_MS	1500u	/* wait this long for the page response */
 #define RING_SETUP_RETRY_MS	2000u	/* re-try a refused CC-SETUP this often */
 #define RING_SETUP_TRIES	8u	/* ... this many times before giving up */
+#define RING_REQUEUE_MAX	2u	/* rings again after a lost collision */
 
 /*
  * Print every NWK message we send, as `reg: nwk out --> ...`.
@@ -4457,6 +4466,9 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 			      &ring_clip)) {
 		ring_callinfo(s, 0);
 		s->ring_state = RING_DONE;
+		s->ring_watch = 1;
+		s->ring_coll0 = s->reg.link.cc.stats.collisions;
+		s->ring_alert0 = s->reg.link.cc.stats.alerting;
 		printf("ring: CC-SETUP queued (%s) -- the handset should ring\n",
 		       why);
 		return;
@@ -4476,10 +4488,50 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 }
 
 
+/*
+ * The queued SETUP is gone without an ALERTING: if a {CC-SETUP} of the
+ * handset's crossed it (EN 300 175-5 §9.5.2.3), ring again from the start
+ * once the link is free. The A540 opens a list call right after a location
+ * registration with a list change notice, and does not wait P<CC.06> for
+ * our re-presentation, so the ring was lost (bench, 2026-10-28).
+ */
+static void ring_watch_tick(struct stubd *s)
+{
+	const struct dect_cc *cc = &s->reg.link.cc;
+
+	if (s->ring_state != RING_DONE || !s->ring_watch)
+		return;
+	if (s->reg.active && cc->stats.alerting != s->ring_alert0) {
+		s->ring_watch = 0;		/* it rings */
+		return;
+	}
+	if (s->reg.active && cc->incoming && dect_cc_busy(cc))
+		return;				/* still presented */
+	s->ring_watch = 0;
+	if (!s->reg.active || cc->stats.collisions == s->ring_coll0)
+		return;				/* refused or ended otherwise */
+	if (s->ring_requeues >= RING_REQUEUE_MAX) {
+		printf("ring: lost to the handset's own call again -- giving "
+		       "up after %u new attempts\n", s->ring_requeues);
+		return;
+	}
+	s->ring_requeues++;
+	s->ring_state = RING_IDLE;
+	s->ring_setup_tries = 0;
+	s->ring_pages = 0;
+	s->ring_wait_since = 0;
+	printf("ring: our call was lost to the handset's own call (collision, "
+	       "9.5.2.3) -- ringing again when the link is free (%u of %u)\n",
+	       s->ring_requeues, RING_REQUEUE_MAX);
+}
+
 static void ring_tick(struct stubd *s, uint64_t now)
 {
 	if ((!s->audio.ring_ms && !s->audio.ring_attach_ms) ||
-	    s->ring_state == RING_DONE || s->sess.state != DECT_SESS_UP)
+	    s->sess.state != DECT_SESS_UP)
+		return;
+	ring_watch_tick(s);
+	if (s->ring_state == RING_DONE)
 		return;
 
 	/*
