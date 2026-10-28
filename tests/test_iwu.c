@@ -358,6 +358,40 @@ static void test_unsupported_commands_are_refused(void)
 	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
 }
 
+/*
+ * Table 41 note 1: a search of the Supported Lists or the Line Settings
+ * List, and a field query of the Supported Lists, are 'procedure not
+ * allowed'; a search of the Internal Names List is still 'not supported'.
+ */
+static void test_table_41_refusals(void)
+{
+	static const uint8_t s0[] = { 0xC3, 0x00, 0x00, 0x00 };
+	static const uint8_t s8[] = { 0xC3, 0x00, 0x08, 0x00 };
+	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
+	static const uint8_t q[] = { 0xC3, 0x04, 0x81 };
+	uint8_t search[] = { 0xC3, 0x10, 0x81, 0x00, 0x05, 0x31 };
+	struct dect_iwu iwu;
+
+	base_with_two_handsets(&iwu);
+	handle(&iwu, s0, sizeof(s0));		/* session 1: supported lists */
+	handle(&iwu, q, sizeof(q));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+	handle(&iwu, search, sizeof(search));
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+
+	base_with_two_handsets(&iwu);
+	handle(&iwu, s8, sizeof(s8));		/* session 1: line settings */
+	handle(&iwu, search, sizeof(search));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+
+	base_with_two_handsets(&iwu);
+	handle(&iwu, s6, sizeof(s6));		/* session 1: internal names */
+	handle(&iwu, search, sizeof(search));
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_SUPPORTED);
+}
+
 /* Not list access, a rejection, our own confirms fed back: silence. */
 static void test_other_records_are_ignored_or_flagged(void)
 {
@@ -442,6 +476,7 @@ int main(void)
 	test_read_error_cases();
 	test_query_supported_fields();
 	test_unsupported_commands_are_refused();
+	test_table_41_refusals();
 	test_other_records_are_ignored_or_flagged();
 	test_reset_sessions();
 	test_long_lists_are_segmented_into_packets();

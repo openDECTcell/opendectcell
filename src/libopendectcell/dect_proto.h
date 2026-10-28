@@ -494,8 +494,14 @@
  *    a bare {CC-SERVICE-REJECT} (TS 102 527-1 §7.3.4: accept or reject);
  *    on a transaction we do not hold it is ignored (EN 300 175-5
  *    §17.3.2.1), where it was cleared.
+ *
+ * 63: table 41 refusals (2026-10-28, spec sweep H3). No layout change.
+ *    **Behaviour change:** a search of the List of Supported Lists or the
+ *    Line Settings List, and a field query of the List of Supported Lists,
+ *    get the negative acknowledgement 'procedure not allowed' (TS 102 527-3
+ *    table 41 note 1): the search was 'not supported', the query answered.
  */
-#define OPENDECTCELL_API_VERSION 62
+#define OPENDECTCELL_API_VERSION 63
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

@@ -555,6 +555,11 @@ static void query_fields(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
 		return;
 	}
+	/* table 41 note 1: not on the List of Supported Lists */
+	if (list == DECT_LIA_LIST_SUPPORTED) {
+		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+		return;
+	}
 	/* 7.4.10.4.2.2 table 47: editable fields first, then the rest. We
 	 * take no 'save entry', so nothing is editable. */
 	f = list_fields((uint8_t)list, &nf);
@@ -746,9 +751,23 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 	case DECT_LIA_READ_ENTRIES:
 		read_entries(iwu, p, n, out);
 		break;
-	case DECT_LIA_SEARCH_ENTRIES:
-		refuse(iwu, p, n, out, DECT_LIA_NACK_NOT_SUPPORTED);
+	case DECT_LIA_SEARCH_ENTRIES: {
+		/*
+		 * Table 41: search is "I" on the List of Supported Lists and
+		 * the Line Settings List, answered 'procedure not allowed'
+		 * (note 1); on the Internal Names List it is mandatory and
+		 * not built yet, so 'not supported' stays there. We sent
+		 * 'not supported' for all (spec sweep, H3).
+		 */
+		unsigned session;
+		int list = get_ext(p, n, &session) ? session_list(iwu, session)
+						   : -1;
+
+		refuse(iwu, p, n, out, list == DECT_LIA_LIST_SUPPORTED ||
+		       list == DECT_LIA_LIST_LINE_SETTINGS
+		       ? DECT_LIA_NACK_NOT_ALLOWED : DECT_LIA_NACK_NOT_SUPPORTED);
 		break;
+	}
 	case DECT_LIA_EDIT_ENTRY:
 	case DECT_LIA_DELETE_ENTRY:
 	case DECT_LIA_DELETE_LIST:
