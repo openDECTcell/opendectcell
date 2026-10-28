@@ -500,8 +500,14 @@
  *    Line Settings List, and a field query of the List of Supported Lists,
  *    get the negative acknowledgement 'procedure not allowed' (TS 102 527-3
  *    table 41 note 1): the search was 'not supported', the query answered.
+ *
+ * 64: Line Settings fields (2026-10-28, spec sweep H4, M1.1). No layout
+ *    change. **Behaviour change:** the Line Settings List serves fields
+ *    08H 'Multiple calls mode' (30H, single call) and 0BH-0DH call
+ *    forwarding (off, no codes, no number), read-only, and names them in
+ *    the field query (TS 102 527-3 §7.4.11.4.8-13, table 9).
  */
-#define OPENDECTCELL_API_VERSION 63
+#define OPENDECTCELL_API_VERSION 64
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

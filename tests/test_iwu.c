@@ -174,6 +174,40 @@ static void test_read_line_settings(void)
 	CHECK_EQ(memcmp(out.msg[1], data, sizeof(data)), 0);
 }
 
+/*
+ * Fields 08H (multiple calls mode, single call) and 0BH-0DH (call
+ * forwarding, off, no codes, no number), all read-only (7.4.11.4.8-13).
+ */
+static void test_line_settings_mode_and_forwarding(void)
+{
+	static const uint8_t start[] = { 0xC3, 0x00, 0x08, 0x00 };
+	static const uint8_t read[] = { 0xC3, 0x06, 0x81, 0x81, 0x04, 0x00,
+					0x08, 0x0B, 0x0C, 0x0D };
+	static const uint8_t data[] = {
+		0xC3, 0x14, 0x81,
+		0x81, 0x9A,				/* 4 + 7 + 8 + 7 octets */
+		  0x08, 0x82, 0x80, 0x30,
+		  0x0B, 0x85, 0x80, 0x30, 0x00, 0x00, 0x00,
+		  0x0C, 0x86, 0x80, 0x30, 0x00, 0x00, 0x00, 0x00,
+		  0x0D, 0x85, 0x80, 0x30, 0x00, 0x00, 0x00,
+	};
+	struct dect_iwu iwu;
+
+	static const uint8_t q[] = { 0xC3, 0x04, 0x81 };
+	static const uint8_t q_want[] = { 0xC3, 0x05, 0x81, 0x00, 0x07, 0x01,
+					  0x02, 0x03, 0x08, 0x0B, 0x0C, 0x0D };
+
+	base_with_two_handsets(&iwu);
+	handle(&iwu, start, sizeof(start));
+	handle(&iwu, read, sizeof(read));
+	CHECK_EQ(out.count, 2u);
+	CHECK_EQ(out.len[1], sizeof(data));
+	CHECK_EQ(memcmp(out.msg[1], data, sizeof(data)), 0);
+	handle(&iwu, q, sizeof(q));			/* none editable */
+	CHECK_EQ(out.len[0], sizeof(q_want));
+	CHECK_EQ(memcmp(out.msg[0], q_want, sizeof(q_want)), 0);
+}
+
 /* The bitmap only grows with the highest terminal: terminals 1 and 8. */
 static void test_attached_handsets_bitmap_spans_two_octets(void)
 {
@@ -470,6 +504,7 @@ int main(void)
 	test_read_supported_lists_delivers_the_entry();
 	test_read_internal_names();
 	test_read_line_settings();
+	test_line_settings_mode_and_forwarding();
 	test_attached_handsets_bitmap_spans_two_octets();
 	test_line_pool();
 	test_two_sessions_and_end_session();

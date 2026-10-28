@@ -18,7 +18,9 @@ static const uint8_t supported_lists[] = {
 /* Field identifiers per list; also the "Query supported entry fields" reply. */
 static const uint8_t fields_supported[] = { 0x01 };		/* 7.4.10.5.2 */
 static const uint8_t fields_internal[] = { 0x01, 0x02, 0x03 };	/* 7.4.10.5.8 */
-static const uint8_t fields_line[] = { 0x01, 0x02, 0x03 };	/* 7.4.11.4 */
+/* 7.4.11.4; table 9 makes 08H and 0BH-0DH mandatory for the FP too */
+static const uint8_t fields_line[] = { 0x01, 0x02, 0x03, 0x08,
+				       0x0B, 0x0C, 0x0D };
 
 void dect_iwu_init(struct dect_iwu *iwu)
 {
@@ -414,6 +416,40 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 				n += octets;
 			}
 			put_field(b, field, 0x00, v, n);
+			break;
+		}
+		case 0x08: {
+			/*
+			 * 7.4.11.4.8 'Multiple calls mode': 30H single call,
+			 * 31H multiple call. We hold one call per handset and
+			 * have no call waiting, so every line is single call --
+			 * "for non-multiple call lines, the value 'Single call
+			 * mode' shall always be used". Not editable.
+			 */
+			static const uint8_t single = 0x30;
+
+			put_field(b, field, 0x00, &single, 1);
+			break;
+		}
+		case 0x0B:
+		case 0x0D: {
+			/*
+			 * 7.4.11.4.11 / .13 'Call forwarding unconditional' and
+			 * 'on busy': value 30H (off), then the activation code,
+			 * deactivation code and forwarding number lengths, all 0
+			 * -- the field's default. Not editable: forwarding needs
+			 * the network side (the bridge), which does not exist.
+			 */
+			static const uint8_t off[4] = { 0x30, 0, 0, 0 };
+
+			put_field(b, field, 0x00, off, sizeof(off));
+			break;
+		}
+		case 0x0C: {
+			/* 7.4.11.4.12 'on no answer': seconds 0 = the FP's default */
+			static const uint8_t off[5] = { 0x30, 0, 0, 0, 0 };
+
+			put_field(b, field, 0x00, off, sizeof(off));
 			break;
 		}
 		default:
