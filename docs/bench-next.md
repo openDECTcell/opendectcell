@@ -567,3 +567,20 @@ then on the A540 open the base menu, Verbindungen.
 |---|---|
 | "Festnetz" and "Büro" | the per-handset Line Settings List works |
 | only "Line 1" | the agent reads the log's `sub: DECT 1's lines:` and the list session |
+
+### 27. The first SIP call (15 minutes; needs a SIP account or a SIP phone/app)
+
+The MVP: baresip on the box with the openDECTcell module (task list M3). Needs a
+SIP peer: a softphone on the PC or a phone app calling the box directly
+(Line 1 with "Register" off, registrar = the box, 192.168.1.1), or an IP
+phone account on the a FRITZ!Box (Telefonie > Telefoniegeräte >
+IP-Telefon; registrar 192.168.178.1).
+
+1. Network > DECT, Handsets, Edit DECT 1, Line 1: on, the account; Save & Apply.
+2. Call the PC/app from the A540, talk, hang up. Then call the A540 from it.
+
+| you hear / see | meaning |
+|---|---|
+| both calls ring through and you hear each other | the MVP works |
+| no ring on the far end | the agent reads `logread -e baresip` (registration, the account line) |
+| it rings but no sound | the audio socket: the log's `audio:` lines and baresip's |

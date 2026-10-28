@@ -31,7 +31,7 @@ STUBD_SRC := src/stubd/dect-stubd.c src/libopendectcell/dect_mail.c src/libopend
 	src/libopendectcell/dect_diag.c src/libopendectcell/dect_profile.c src/libopendectcell/dect_ctl.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
-.PHONY: all check cross clean
+.PHONY: all check cross clean baresip-mod
 all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap $(BUILD)/dect-stubd $(BUILD)/dect-maildump
 
 $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
@@ -152,6 +152,18 @@ $(BUILD)/test_profile: tests/test_profile.c src/libopendectcell/dect_profile.c s
 $(BUILD)/test_ctl: tests/test_ctl.c src/libopendectcell/dect_ctl.c src/libopendectcell/dect_ctl.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_ctl.c src/libopendectcell/dect_ctl.c
+
+# The baresip module (src/baresip/opendectcell.c), for the box: needs the
+# baresip and libre sources of the version on it for their headers, e.g.
+#   make baresip-mod BARESIP_SRC=../baresip-3.16.0 RE_SRC=../re-3.16.0
+# The OpenWrt package opendectcell-baresip builds it against the feed's headers.
+baresip-mod: src/baresip/opendectcell.c src/libopendectcell/dect_ctl.c src/libopendectcell/dect_ctl.h
+	@test -n "$(BARESIP_SRC)" -a -n "$(RE_SRC)" || { echo "set BARESIP_SRC= and RE_SRC="; exit 1; }
+	@test -x "$(XCC)" || { echo "OpenWrt SDK not found: set SDK="; exit 1; }
+	@mkdir -p $(BUILD)
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -fPIC -shared \
+		-DHAVE_INTTYPES_H -I$(RE_SRC)/include -I$(BARESIP_SRC)/include -Isrc/libopendectcell \
+		-o $(BUILD)/opendectcell.so src/baresip/opendectcell.c src/libopendectcell/dect_ctl.c
 
 check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done

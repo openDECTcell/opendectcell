@@ -132,15 +132,27 @@ while the daemon runs (`-g`) and is removed on exit.
    call gets no audio socket yet. `dect-stubd --bridge-echo [ring
    [NUMBER]]` is a test bridge: it answers any dialled number and plays
    the caller's voice back 0.5 s late; `ring` also places a call-in.
-4. opendectcell-sipd with baresip on the box: one line, calls out, then in.
+4. **Built** (2026-10-28) as a baresip module, not a separate daemon:
+   `src/baresip/opendectcell.c` (package `opendectcell-baresip`, `make baresip-mod`).
+   It is the control client (it sends `bridge`), the audio source and
+   player `opendectcell` on the audio socket, and maps accounts to handsets via
+   `/var/run/opendectcell/lines`. The init script writes baresip's `config` and
+   `accounts` from each handset's Line 1/Line 2 and the VoIP tab, and runs
+   baresip when a line is on. A call to an account rings its handset
+   (`call-in hs=N`); a handset's calls go out on its Line 1. baresip 3
+   leaves accepting a new session to the application: the module does it
+   for the handsets' accounts (404 otherwise, 503 while dect-stubd is
+   away). Unanswered call-ins end with 480 (nobody answered the page) or
+   486 (the handset declined). Checked on the box with an INVITE from a
+   test peer to an invented handset: 180 at once, the base paged it,
+   480 after 60 s.
 5. `lines` and the pool: two lines, ringing all attached handsets
    (lines-and-calls.md step 4).
 6. Wideband audio over the socket (the G.722 path).
 
 ## Open points
 
-- Whether opendectcell-sipd is C (one more binary) or a baresip module inside
-  baresip (fewer processes, but our code in baresip's process).
+- Decided: a baresip module (fewer processes); see step 4.
 - The narrowband linear PCM path: which bind gives clean linear PCM both ways
   today (`call-g7.md`), and whether the audio socket should carry G.722
   untouched instead and let baresip decode it.

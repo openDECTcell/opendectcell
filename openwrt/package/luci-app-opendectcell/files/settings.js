@@ -179,6 +179,11 @@ function addKeyOptions(ss, keys) {
 	});
 }
 
+/* What a baresip account line can carry in a parameter. */
+function sipSafe(sid, v) {
+	return /[;"<>\s]/.test(v) ? _('baresip cannot take ; " < > or spaces here') : true;
+}
+
 /* A heading inside a pop-up tab (LuCI forms have no nested tabs). */
 function heading(ss, t, id, text, dep) {
 	var o = ss.taboption(t, form.DummyValue, id);
@@ -221,11 +226,14 @@ function addLineOptions(ss, t, p, optional, n) {
 	opt(form.Value, 'display', _('Display name'), _('The name the called party sees.'));
 	o = opt(form.Value, 'user', _('User name'), _('The SIP user, often the phone number.'));
 	o.rmempty = false;
+	o.validate = sipSafe;
 	o = opt(form.Value, 'authuser', _('Login name'),
 		_('When the provider wants a login other than the user name.'));
 	o.optional = true;
+	o.validate = sipSafe;
 	o = opt(form.Value, 'password', _('Password'));
 	o.password = true;
+	o.validate = sipSafe;
 	o = opt(form.Value, 'domain', _('Registrar'),
 		_('The provider\'s SIP server, host or host:port (e.g. sip.example.net, or 192.168.178.1 for a FRITZ!Box).'));
 	o.datatype = 'or(hostport,host)';
@@ -264,6 +272,7 @@ function addLineOptions(ss, t, p, optional, n) {
 	o.depends({ [on]: '1', [p + 'medianat']: 'turn' });
 	o = opt(form.Value, 'stunpass', _('TURN password'));
 	o.password = true;
+	o.validate = sipSafe;
 	o.depends({ [on]: '1', [p + 'medianat']: 'turn' });
 	o = opt(form.ListValue, 'rtpkeep', _('Keep media open'),
 		_('Packets that keep a NAT binding open while one side is silent.'));
@@ -275,7 +284,7 @@ function addLineOptions(ss, t, p, optional, n) {
 
 	heading(ss, t, '_h_' + p + 'media', _('Media'), on);
 	o = opt(form.MultiValue, 'codec', _('Codecs'),
-		_('In order of preference. G.722 keeps the handset\'s wideband (HD) audio end to end.'));
+		_('Offered in the order shown. G.722 keeps the handset\'s wideband (HD) audio end to end.'));
 	o.value('g722', 'G.722 (HD)');
 	o.value('pcma', 'G.711 A-law');
 	o.value('pcmu', 'G.711 µ-law');

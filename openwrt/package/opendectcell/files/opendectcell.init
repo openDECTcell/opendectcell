@@ -183,6 +183,163 @@ lines_write() {
 	return 0
 }
 
+# The SIP side (Network > DECT, Handsets, Line 1/Line 2, and the VoIP tab):
+# baresip with the openDECTcell module as the bridge (docs/bridge-interface.md),
+# its config and accounts written here from /etc/config/opendectcell, and the
+# line map /var/run/opendectcell/lines ("<hs> <line> <aor>") the module reads.
+BARESIP=/usr/bin/baresip
+BS_DIR=/var/run/opendectcell/baresip
+BS_MODS=/usr/lib/baresip/modules
+BS_ACCOUNTS=0
+
+# a value for an account parameter: no ; " < > or whitespace
+bs_safe() {
+	case "$1" in *[\;\"\<\>\ \	]*) return 1 ;; esac
+	return 0
+}
+
+bs_line() {
+	local sec="$1" slot="$2" n="$3" p="l${3}_" v en user dom aor line codecs c
+	config_get_bool en "$sec" ${p}enabled 0
+	[ "$en" = 1 ] || return 0
+	config_get user "$sec" ${p}user
+	config_get dom "$sec" ${p}domain
+	[ -n "$user" ] && [ -n "$dom" ] && bs_safe "$user" && bs_safe "$dom" || {
+		log "DECT $slot line $n: user name or registrar missing or not usable; line left out"
+		return 0
+	}
+	aor="sip:$user@$dom"
+	config_get v "$sec" ${p}transport udp
+	line="<$aor"
+	[ "$v" = udp ] || line="$line;transport=$v"
+	line="$line>"
+	config_get v "$sec" ${p}display
+	v=$(printf '%s' "$v" | tr -d '"<>\\')
+	[ -n "$v" ] && line="\"$v\" $line"
+	config_get v "$sec" ${p}authuser
+	[ -n "$v" ] && bs_safe "$v" && line="$line;auth_user=$v"
+	config_get v "$sec" ${p}password
+	if [ -n "$v" ]; then
+		bs_safe "$v" && line="$line;auth_pass=$v" ||
+			log "DECT $slot line $n: the password has a character baresip cannot take (; \" < > or a space)"
+	fi
+	config_get v "$sec" ${p}outbound
+	[ -n "$v" ] && bs_safe "$v" && line="$line;outbound=\"sip:$v\""
+	config_get v "$sec" ${p}outbound2
+	[ -n "$v" ] && bs_safe "$v" && line="$line;outbound2=\"sip:$v\""
+	config_get_bool v "$sec" ${p}register 1
+	if [ "$v" = 1 ]; then
+		config_get v "$sec" ${p}regint 3600
+		line="$line;regint=$v"
+	else
+		line="$line;regint=0"
+	fi
+	config_get_bool v "$sec" ${p}sipnat 0
+	[ "$v" = 1 ] && line="$line;sipnat=outbound"
+	config_get v "$sec" ${p}medianat
+	case "$v" in
+	stun|turn|ice)
+		line="$line;medianat=$v"
+		config_get c "$sec" ${p}stunserver
+		[ -n "$c" ] && bs_safe "$c" && line="$line;stunserver=\"$([ "$v" = turn ] && echo turn || echo stun):$c\""
+		config_get c "$sec" ${p}stunuser
+		[ -n "$c" ] && bs_safe "$c" && line="$line;stunuser=$c"
+		config_get c "$sec" ${p}stunpass
+		[ -n "$c" ] && bs_safe "$c" && line="$line;stunpass=$c"
+		;;
+	esac
+	config_get v "$sec" ${p}rtpkeep
+	case "$v" in zero|stun|dyna|rtcp) line="$line;rtpkeep=$v" ;; esac
+	config_get v "$sec" ${p}codec 'g722 pcma pcmu'
+	codecs=""
+	for c in $v; do
+		case "$c" in g722) c=G722/16000/1 ;; pcma) c=PCMA/8000/1 ;; pcmu) c=PCMU/8000/1 ;; *) continue ;; esac
+		codecs="${codecs:+$codecs,}$c"
+	done
+	[ -n "$codecs" ] && line="$line;audio_codecs=$codecs"
+	config_get v "$sec" ${p}ptime 20
+	case "$v" in 10|20|30|40) line="$line;ptime=$v" ;; esac
+	config_get v "$sec" ${p}dtmf rtpevent
+	case "$v" in rtpevent|info|auto) line="$line;dtmfmode=$v" ;; esac
+	config_get v "$sec" ${p}rel100 yes
+	case "$v" in yes|no|required) line="$line;100rel=$v" ;; esac
+	config_get_bool v "$sec" ${p}mwi 0
+	line="$line;mwi=$([ "$v" = 1 ] && echo yes || echo no)"
+	config_get_bool v "$sec" ${p}transfer 1
+	line="$line;call_transfer=$([ "$v" = 1 ] && echo yes || echo no)"
+	config_get v "$sec" ${p}mediaenc
+	case "$v" in srtp|srtp-mand|srtp-mandf|dtls_srtp|zrtp) line="$line;mediaenc=$v" ;; esac
+	line="$line;answermode=manual"
+	config_get v "$sec" ${p}extra
+	case "$v" in ";"*) line="$line$v" ;; esac
+	printf '%s\n' "$line" >> "$BS_DIR/accounts"
+	printf '%s %s %s\n' "$slot" "$n" "$aor" >> /var/run/opendectcell/lines
+	BS_ACCOUNTS=$((BS_ACCOUNTS + 1))
+}
+
+bs_handset() {
+	local slot
+	config_get slot "$1" slot
+	case "$slot" in [1-6]) ;; *) return ;; esac
+	bs_line "$1" "$slot" 1
+	bs_line "$1" "$slot" 2
+}
+
+bs_module() {
+	[ -f "$BS_MODS/$2" ] && printf '%s %s\n' "$1" "$2" >> "$BS_DIR/config"
+	return 0
+}
+
+# Write baresip's files; 0 when at least one line is on.
+baresip_write() {
+	local v lo hi
+	BS_ACCOUNTS=0
+	[ -x "$BARESIP" ] && [ -f "$BS_MODS/opendectcell.so" ] || return 1
+	mkdir -p "$BS_DIR"
+	chmod 700 /var/run/opendectcell "$BS_DIR"
+	: > "$BS_DIR/accounts"
+	chmod 600 "$BS_DIR/accounts"
+	: > /var/run/opendectcell/lines
+	config_foreach bs_handset handset
+	[ "$BS_ACCOUNTS" -gt 0 ] || return 1
+	{
+		echo "# written by /etc/init.d/opendectcell from /etc/config/opendectcell"
+		config_get v main sip_port 5060
+		echo "sip_listen 0.0.0.0:$v"
+		config_get v main rtp_ports '10000-20000'
+		echo "rtp_ports $v"
+		config_get v main rtp_dscp 46
+		echo "rtp_tos $((v * 4))"
+		config_get v main sip_dscp 24
+		echo "sip_tos $((v * 4))"
+		config_get v main net_interface
+		[ -n "$v" ] && echo "net_interface $v"
+		config_get v main dns_server
+		[ -n "$v" ] && echo "dns_server $v"
+		config_get_bool v main tls_verify 1
+		echo "sip_verify_server $([ "$v" = 1 ] && echo yes || echo no)"
+		config_get v main tls_cafile
+		[ -n "$v" ] && echo "sip_cafile $v"
+		config_get v main jitter '20-160'
+		lo=${v%-*}; hi=${v#*-}
+		echo "audio_jitter_buffer_type adaptive"
+		echo "audio_jitter_buffer_delay $(( (lo + 19) / 20 ))-$(( (hi + 19) / 20 ))"
+		echo "audio_player opendectcell,"
+		echo "audio_source opendectcell,"
+		echo "ausrc_srate 16000"
+		echo "auplay_srate 16000"
+		echo "ausrc_channels 1"
+		echo "auplay_channels 1"
+		echo "module_path $BS_MODS"
+	} > "$BS_DIR/config"
+	for v in g711.so g722.so stun.so turn.so ice.so srtp.so dtls_srtp.so mwi.so; do
+		bs_module module "$v"
+	done
+	bs_module module_app account.so
+	bs_module module_app opendectcell.so
+	return 0
+}
+
 start_service() {
 	local enabled pin stores options reg wb ov dw ci nocipher="" rw n spare f args=""
 	local la tc
@@ -253,6 +410,17 @@ start_service() {
 	# a crash restarts it; five quick failures in a row give up
 	procd_set_param respawn 3600 5 5
 	procd_close_instance
+
+	# the SIP side, when a handset has a line
+	if baresip_write; then
+		procd_open_instance baresip
+		procd_set_param command "$BARESIP" -f "$BS_DIR"
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_set_param respawn 3600 5 5
+		procd_close_instance
+		log "SIP: $BS_ACCOUNTS line(s), baresip with the opendectcell bridge"
+	fi
 }
 
 # Save & Apply in LuCI (Network > DECT) restarts the base with the new
