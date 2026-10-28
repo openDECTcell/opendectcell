@@ -263,3 +263,37 @@ the **A540**.
 | a busy tone (maybe "busy" on the display), then the call ends by itself after ~5 s | the busy notification works |
 | the call ends at once, no tone | the old refusal: the A540's call came on a link that has no call status, the agent reads the log |
 | the A540 hangs or shows an error | the agent reads the log |
+
+### 13. A key the base cannot serve during a call (3 minutes)
+
+Since `305b1bd` a call-control key pressed during a call (toggle, consult, hold,
+INT) is never taken for dialled digits; a Part 3 handset gets the standard
+"not possible" answer (TS 102 527-3 §7.4.3.4). On the **A540** dial **123**;
+during the call press **INT** (or the "R"/consult key, whatever the menu
+offers) and pick DECT 2. Stay in the call 10 s more, then hang up.
+
+```
+MAXSECS=90 HOLD=60 ATTACH=600000 EXTRA=playpcm=/tmp/wb16k.pcm ./ringone.sh a540
+```
+
+| you see / hear on the A540 | meaning |
+|---|---|
+| a short error tone or "not possible", and the call goes on | the negative acknowledgement works; the log shows `nwk out` with `e4 09` |
+| nothing, the call goes on | the handset ignores the tone; the log must still show `e4 09` and no `handset dialled` line for the key |
+| the call drops | the negative acknowledgement upsets it: the agent reads the log |
+
+The same on the **C430A** (Part 1, `./ringone.sh c430a`): it gets no answer; the
+log must show no `handset dialled: \x17` any more.
+
+### 14. The A540 sees the system settings list (3 minutes, any run)
+
+Since `a037fd0` the base names the DECT System Settings List among its lists,
+and the A540 reads that list when it syncs. Nothing to do but watch: after
+registration and the 10 s wait, leave the A540 idle for a minute (any of the
+runs above will do), then open its base settings menu if it has one
+(Settings, Base, or "Base info").
+
+| you see | meaning |
+|---|---|
+| the A540 stays idle and normal; a base menu may show "openDECTcell" as the firmware | the list works |
+| the A540 keeps showing "please wait" or resyncs every few seconds | it dislikes the new list: the log shows sessions on list 07; the agent reads it |
