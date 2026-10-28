@@ -118,8 +118,9 @@ done
 
 # With a key: every file must pass apk's own check against its public half
 if [ -n "${SIGN_KEY:-}" ]; then
-	rm -rf tmp/opendectcell-keys
-	mkdir -p tmp/opendectcell-keys
-	cp public-key.pem tmp/opendectcell-keys/opendectcell.pem
-	staging_dir/host/bin/apk --keys-dir tmp/opendectcell-keys verify "$out"/*.apk
+	# (apk takes --keys-dir relative to the root: an absolute path)
+	rm -rf "$sdk/tmp/opendectcell-keys"
+	mkdir -p "$sdk/tmp/opendectcell-keys"
+	cp public-key.pem "$sdk/tmp/opendectcell-keys/opendectcell.pem"
+	staging_dir/host/bin/apk --keys-dir "$sdk/tmp/opendectcell-keys" verify "$out"/*.apk
 fi
