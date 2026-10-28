@@ -103,6 +103,22 @@ const struct dect_iwu_line *dect_iwu_line(const struct dect_iwu *iwu,
 	return NULL;
 }
 
+int dect_iwu_remove_handset(struct dect_iwu *iwu, uint8_t terminal_id)
+{
+	unsigned i;
+
+	for (i = 0; i < iwu->n_handsets; i++)
+		if (iwu->handsets[i].terminal_id == terminal_id)
+			break;
+	if (i == iwu->n_handsets)
+		return -1;
+	memmove(&iwu->handsets[i], &iwu->handsets[i + 1u],
+		(iwu->n_handsets - i - 1u) * sizeof(iwu->handsets[0]));
+	iwu->n_handsets--;
+	iwu->names_changed = 0;		/* the bits named positions */
+	return 0;
+}
+
 int dect_iwu_add_handset(struct dect_iwu *iwu, uint8_t terminal_id,
 			 const char *name)
 {

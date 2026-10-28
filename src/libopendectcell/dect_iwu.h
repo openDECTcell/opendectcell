@@ -225,6 +225,9 @@ int dect_iwu_add_handset(struct dect_iwu *iwu, uint8_t terminal_id,
 /* Which handset is on the other end of this transaction (its 'Own' bit). */
 void dect_iwu_set_own(struct dect_iwu *iwu, uint8_t terminal_id);
 
+/* Take a deregistered handset out of the list; 0, or -1 if not there. */
+int dect_iwu_remove_handset(struct dect_iwu *iwu, uint8_t terminal_id);
+
 /* Forget every open session, e.g. when the call carrying them is released:
  * "The session(s) between a PP and FP shall at latest be terminated with
  * call release" (7.4.10.4.1.3). */

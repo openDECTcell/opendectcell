@@ -290,6 +290,49 @@ static void test_terminate_access_rights(void)
 	}
 }
 
+/*
+ * A handset deregisters itself: accepted for the identity the link holds,
+ * term_by_pt set for the owner; another identity is rejected "IPUI unknown".
+ */
+static void test_handset_deregisters_itself(void)
+{
+	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t other[] = { 0x80, 0xa8, 0x02, 0x44, 0x55, 0x66 };
+	struct dect_mm_cfg cfg = { .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	struct dect_nwk_hdr h;
+	const uint8_t *ies;
+	uint8_t buf[64], out[64];
+	size_t n, ies_len;
+	int k;
+
+	for (k = 0; k < 2; k++) {
+		dect_mm_init(&mm, &cfg);
+		memcpy(mm.port_id, ipui, sizeof(ipui));
+		mm.port_id_len = sizeof(ipui);
+		n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+				       DECT_TI_ORIGINATOR, 0,
+				       DECT_MM_ACCESS_RIGHTS_TERMINATE_REQUEST);
+		n = dect_nwk_put_ie(buf, sizeof(buf), n,
+				    DECT_IE_PORTABLE_IDENTITY,
+				    k ? other : ipui, sizeof(ipui));
+		dect_mm_rx(&mm, buf, n, NULL, NULL);
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(dect_nwk_parse(out, n, &h, &ies, &ies_len), 0);
+		CHECK_EQ(h.ti_flag, DECT_TI_RESPONDER);
+		if (!k) {
+			CHECK_EQ(h.msg_type,
+				 DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT);
+			CHECK_EQ(mm.term_by_pt, 1u);
+		} else {
+			CHECK_EQ(h.msg_type,
+				 DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT);
+			CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_UNKNOWN);
+			CHECK_EQ(mm.term_by_pt, 0u);
+		}
+	}
+}
+
 /* Full successful key-allocation registration with the correct PIN. */
 static void test_register_ok(void)
 {
@@ -1457,6 +1500,7 @@ int main(void)
 	test_proposed_auth_type_is_kept();
 	test_ft_authentication();
 	test_terminate_access_rights();
+	test_handset_deregisters_itself();
 	test_key_allocation_fails_on_timeout_or_refusal();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();

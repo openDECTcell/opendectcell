@@ -568,8 +568,16 @@
  *    after our {CIPHER-REQUEST} without the cipher-on indication (the
  *    chip's 0x0209) or a {CIPHER-REJECT}, the procedure is counted as
  *    failed and the call kept (EN 300 444 §8.33.2.2).
+ *
+ * 73: deregistration (2026-10-28, maintainer's decisions). Layout change:
+ *    struct dect_mm gains term_by_pt, the stats term_by_pt; new
+ *    dect_iwu_remove_handset(). **Behaviour change:** a handset's own
+ *    {ACCESS-RIGHTS-TERMINATE-REQUEST} for the identity the link holds is
+ *    accepted at once, without authentication, and term_by_pt set;
+ *    another identity gets {ACCESS-RIGHTS-TERMINATE-REJECT} "IPUI
+ *    unknown". It was ignored.
  */
-#define OPENDECTCELL_API_VERSION 72
+#define OPENDECTCELL_API_VERSION 73
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

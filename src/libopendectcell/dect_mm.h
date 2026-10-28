@@ -170,6 +170,7 @@ struct dect_mm_stats {
 	uint32_t auth_timeouts;	   /* <MM_auth.1>: our AUTH-REQUEST unanswered */
 	uint32_t cipher_rejected;  /* {CIPHER-REJECT} received */
 	uint32_t cipher_timeouts;  /* <MM_cipher.1>: never ciphered */
+	uint32_t term_by_pt;	   /* handsets that deregistered themselves */
 	uint32_t ft_auth;	   /* the PT authenticated us: replies sent */
 	uint32_t ft_auth_refused;  /* ... refused: no UAK, or not DSAA/UAK */
 	uint32_t locate_deferred;  /* unknown identities held for the owner */
@@ -312,6 +313,9 @@ struct dect_mm {
 	enum dect_mm_term_state term_state;
 	uint8_t  term_retries;
 	uint64_t term_deadline_ms;		/* <MM_access.2>, 0 = armed */
+	/* the handset terminated its own access rights; the owner erases
+	 * the subscription and clears this */
+	uint8_t  term_by_pt;
 
 	/*
 	 * Call-time ciphering: the FP authenticates the PP with the stored UAK to
@@ -439,6 +443,12 @@ void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN]);
  * Watch term_state; on DECT_MM_TERM_ACCEPTED the handset has erased the
  * subscription and the owner should too. -1 without an identity or while
  * one is pending.
+ *
+ * The other direction: a handset's own {ACCESS-RIGHTS-TERMINATE-REQUEST}
+ * for the identity this link holds is accepted at once, without
+ * authenticating it first (EN 300 175-5 §13.5.2 makes that optional;
+ * stock does none on its own path, [CR A-0128]), and term_by_pt is set
+ * for the owner. Another identity gets {ACCESS-RIGHTS-TERMINATE-REJECT}.
  */
 int dect_mm_terminate(struct dect_mm *mm);
 

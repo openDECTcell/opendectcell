@@ -253,6 +253,47 @@ void dect_mm_cipher_on(struct dect_mm *mm)
 		mm->cipher_on = 1;
 }
 
+/*
+ * The handset deregisters itself (EN 300 175-5 §13.5.2, PT-initiated):
+ * accept for the identity we hold -- the maintainer's decision of
+ * 2026-10-28, no authentication first -- and leave the erasure to the
+ * owner. A request for another IPUI, or none, is rejected "IPUI unknown".
+ */
+static void on_terminate_request(struct dect_mm *mm, const uint8_t *ies,
+				 size_t ies_len)
+{
+	const uint8_t *pid;
+	size_t pid_len;
+	unsigned idx;
+	uint8_t *b = txq_slot(mm, &idx);
+	size_t off;
+
+	if (!b)
+		return;
+	mm->ti_value = 0;
+	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+			       &pid_len);
+	if (pid && mm->port_id_len && pid_len == mm->port_id_len &&
+	    !memcmp(pid, mm->port_id, pid_len)) {
+		off = hdr(mm, b, DECT_TI_RESPONDER,
+			  DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT);
+		txq_commit(mm, idx, off);
+		mm->term_by_pt = 1;
+		mm->stats.term_by_pt++;
+		return;
+	}
+	{
+		uint8_t reason[1] = { DECT_MM_REJECT_IPUI_UNKNOWN };
+
+		off = hdr(mm, b, DECT_TI_RESPONDER,
+			  DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT);
+		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
+				      DECT_IE_REJECT_REASON, reason,
+				      sizeof(reason));
+		txq_commit(mm, idx, off);
+	}
+}
+
 void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN])
 {
 	memcpy(mm->uak, uak, DECT_MM_UAK_LEN);
@@ -965,6 +1006,10 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 			on_auth_request(mm, ies, ies_len);
 		else if (h.ti_flag == DECT_TI_ORIGINATOR)
 			on_ft_authentication(mm, ies, ies_len, rs);
+		break;
+	case DECT_MM_ACCESS_RIGHTS_TERMINATE_REQUEST:
+		if (h.ti_flag == DECT_TI_ORIGINATOR)
+			on_terminate_request(mm, ies, ies_len);
 		break;
 	case DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT:
 	case DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT:

@@ -598,6 +598,20 @@ static void test_rename_a_handset(void)
 	}
 }
 
+/* A deregistered handset leaves the list; the others keep their order. */
+static void test_remove_handset(void)
+{
+	struct dect_iwu iwu;
+
+	base_with_two_handsets(&iwu);
+	CHECK_EQ(dect_iwu_add_handset(&iwu, 3, "DECT 3"), 0);
+	CHECK_EQ(dect_iwu_remove_handset(&iwu, 2), 0);
+	CHECK_EQ(iwu.n_handsets, 2u);
+	CHECK_EQ(iwu.handsets[0].terminal_id, 1u);
+	CHECK_EQ(iwu.handsets[1].terminal_id, 3u);
+	CHECK_EQ(dect_iwu_remove_handset(&iwu, 2), -1);
+}
+
 /* Not list access, a rejection, our own confirms fed back: silence. */
 static void test_other_records_are_ignored_or_flagged(void)
 {
@@ -686,6 +700,7 @@ int main(void)
 	test_unsupported_commands_are_refused();
 	test_table_41_refusals();
 	test_rename_a_handset();
+	test_remove_handset();
 	test_search_internal_names();
 	test_other_records_are_ignored_or_flagged();
 	test_reset_sessions();
