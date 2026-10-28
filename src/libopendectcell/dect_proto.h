@@ -371,8 +371,15 @@
  *    after 5 s tones off, CS idle and {CC-RELEASE}; such a call is never
  *    connectable. Without call status the plain {CC-RELEASE-COM}
  *    "insufficient resources" stays.
+ *
+ * 44: unattached lines (2026-10-28, lines-and-calls.md step 2's rest).
+ *    Layout change: struct dect_cc gains line_refused, the stats
+ *    line_refused. New: dect_iwu_attached(). **Behaviour change:** a
+ *    handset-placed call on a line the handset is not attached to gets
+ *    {CC-RELEASE-COM} "incompatible service" (TS 102 527-3 §7.4.5.2.1;
+ *    the reason is ours, the clause names none).
  */
-#define OPENDECTCELL_API_VERSION 43
+#define OPENDECTCELL_API_VERSION 44
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

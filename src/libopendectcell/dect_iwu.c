@@ -73,6 +73,18 @@ int dect_iwu_add_line(struct dect_iwu *iwu, uint8_t line_id, const char *name,
 	return 0;
 }
 
+int dect_iwu_attached(const struct dect_iwu *iwu, uint8_t line_id,
+		      uint8_t terminal_id)
+{
+	const struct dect_iwu_line *l = dect_iwu_line(iwu, line_id);
+
+	if (!l)
+		return 0;
+	if (l->all_handsets || !terminal_id || terminal_id > 32u)
+		return 1;
+	return (l->attached >> (terminal_id - 1u)) & 1u;
+}
+
 const struct dect_iwu_line *dect_iwu_line(const struct dect_iwu *iwu,
 					  uint8_t line_id)
 {

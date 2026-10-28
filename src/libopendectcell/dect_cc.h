@@ -112,6 +112,7 @@ struct dect_cc_stats {
 	/* handset-placed calls that negotiated, but offered no G.726 */
 	uint32_t codec_unmatched;
 	uint32_t ie_missing;	/* SETUPs refused: mandatory IE missing */
+	uint32_t line_refused;	/* calls on a line the handset may not use */
 	/* handset-placed calls refused by dect_cc_set_busy() */
 	uint32_t rejected_busy;
 };
@@ -207,6 +208,7 @@ struct dect_cc {
 	 */
 	uint8_t  peer_line;
 	uint8_t  line_confirmed;
+	uint8_t  line_refused;	/* chose a line it is not attached to */
 	/*
 	 * "Busy system" notified (TS 102 527-3 §7.4.8.3): the call waits out
 	 * busy_deadline_ms with the busy tone, then is released.

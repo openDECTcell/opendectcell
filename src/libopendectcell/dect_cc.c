@@ -572,8 +572,29 @@ static void learn_peer_line(struct dect_cc *cc, const uint8_t *ies,
 	if (cc->incoming || cc->peer_line != DECT_CC_LINE_UNSET || !p)
 		return;
 	(void)dect_callinfo_parse(p, n, &ci);
-	if (ci.has_line)
-		cc->peer_line = ci.line_id;
+	if (!ci.has_line)
+		return;
+	cc->peer_line = ci.line_id;
+	/*
+	 * "The PP shall not select a line it is not attached to (in that case
+	 * the FP shall disconnect the call)" (TS 102 527-3 §7.4.5.2.1).
+	 */
+	if (ci.line_id != DECT_CALLINFO_LINE_NONE &&
+	    !dect_iwu_attached(&cc->iwu, ci.line_id, cc->iwu.own_terminal_id))
+		cc->line_refused = 1;
+}
+
+/*
+ * The release for a line the handset may not use. The clause names no
+ * release reason; "incompatible service" (05H, EN 300 175-5 §7.6.7) is
+ * the closest defined one. Abnormal release, as for any refused setup.
+ */
+static void refuse_line(struct dect_cc *cc)
+{
+	queue_release_com(cc, DECT_CC_REASON_INCOMPATIBLE_SERVICE);
+	cc->state = DECT_CC_ST_NULL;
+	cc->line_refused = 0;
+	cc->stats.line_refused++;
 }
 
 void dect_cc_set_default_line(struct dect_cc *cc, uint8_t line_id,
@@ -1116,6 +1137,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			cc->busy_notified = 0;
 			cc->peer_line = DECT_CC_LINE_UNSET;
 			cc->line_confirmed = 0;
+			cc->line_refused = 0;
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;
@@ -1130,6 +1152,11 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_keypad(cc, ies, ies_len);
 			learn_int_key(cc);
 			learn_peer_line(cc, ies, ies_len);	/* incoming = 0 now */
+			if (cc->line_refused) {
+				refuse_line(cc);
+				cc->answered = 0;
+				break;
+			}
 			on_setup(cc, dect_nwk_find_fixed_ie(ies, ies_len,
 				 DECT_IE_SENDING_COMPLETE) >= 0);
 			if (cc->state != DECT_CC_ST_OVERLAP)
@@ -1243,6 +1270,10 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_keypad(cc, ies, ies_len);
 			learn_int_key(cc);
 			learn_peer_line(cc, ies, ies_len);
+			if (cc->line_refused) {
+				refuse_line(cc);
+				break;
+			}
 			if (cc->keypad_len != before)
 				cc->stats.keypad++;
 			if (cc->state == DECT_CC_ST_OVERLAP) {

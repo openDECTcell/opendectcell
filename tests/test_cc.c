@@ -262,6 +262,45 @@ static void test_busy_system_for_a_part3_handset(void)
 	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
 }
 
+/*
+ * TS 102 527-3 §7.4.5.2.1: a handset that picks a line it is not attached
+ * to has its call released; its own line is fine.
+ */
+static void test_unattached_line_is_refused(void)
+{
+	static const uint8_t line2[] = { 0x7e, 0x03, 0x00, 0x00, 0x82 };
+	static const uint8_t line1[] = { 0x7e, 0x03, 0x00, 0x00, 0x81 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+	int k;
+
+	for (k = 0; k < 2; k++) {
+		dect_cc_init(&cc);
+		dect_iwu_clear_lines(&cc.iwu);
+		(void)dect_iwu_add_line(&cc.iwu, 1, "A", 1u << 0);
+		(void)dect_iwu_add_line(&cc.iwu, 2, "B", 1u << 1);
+		dect_iwu_set_own(&cc.iwu, 1);		/* terminal 1 */
+		n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+		memcpy(buf + n, k ? line1 : line2, sizeof(line2));
+		n += sizeof(line2);
+		buf[n++] = DECT_IE_SENDING_COMPLETE;
+		dect_cc_rx(&cc, buf, n);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		if (!k) {
+			CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+			CHECK(n >= 4u && out[n - 1] ==
+			      DECT_CC_REASON_INCOMPATIBLE_SERVICE);
+			CHECK_EQ(cc.stats.line_refused, 1u);
+			CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+		} else {
+			CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+			CHECK_EQ(cc.stats.line_refused, 0u);
+			CHECK_EQ(dect_cc_line(&cc), 1);
+		}
+	}
+}
+
 /* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
 static void test_setup_without_basic_service_is_refused(void)
 {
@@ -2289,6 +2328,7 @@ int main(void)
 	test_setup_without_basic_service_is_refused();
 	test_none_gets_the_selected_line();
 	test_busy_system_for_a_part3_handset();
+	test_unattached_line_is_refused();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();

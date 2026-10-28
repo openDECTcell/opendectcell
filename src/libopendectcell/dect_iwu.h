@@ -189,6 +189,14 @@ int dect_iwu_add_line(struct dect_iwu *iwu, uint8_t line_id, const char *name,
 /* Remove every line (then add_line them). */
 void dect_iwu_clear_lines(struct dect_iwu *iwu);
 
+/*
+ * Is the handset with this terminal id attached to the line? 0 when the
+ * line does not exist; 1 for an all-handsets line or terminal 0 (unknown:
+ * no refusal without knowledge).
+ */
+int dect_iwu_attached(const struct dect_iwu *iwu, uint8_t line_id,
+		      uint8_t terminal_id);
+
 /* The line with this id, or NULL. */
 const struct dect_iwu_line *dect_iwu_line(const struct dect_iwu *iwu,
 					  uint8_t line_id);
