@@ -705,12 +705,22 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 	learn_self_description(mm, ies, ies_len);
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
 	/*
+	 * <<PORTABLE-IDENTITY>> is mandatory in the request (EN 300 175-5
+	 * table 37), and the accept must name it (table 38): without it, reject
+	 * with "information element error" (§17.6.4). We ran key allocation
+	 * and accepted without naming anyone (spec sweep, M5).
+	 */
+	if (!pid || !pid_len || pid_len > sizeof(mm->pend_id)) {
+		send_access_reject_reason(mm, DECT_MM_REJECT_IE_ERROR);
+		return;
+	}
+	/*
 	 * No usable PIN, no registration. An empty PIN used to mean "0000",
 	 * so an owner that forgot to set one opened the base to anybody.
 	 */
 	if (mm->cfg.registration == DECT_MM_REG_CLOSED || !pin_usable(mm) ||
 	    (mm->cfg.registration == DECT_MM_REG_SAME &&
-	     (!pid || !mm->port_id_len || pid_len != mm->port_id_len ||
+	     (!mm->port_id_len || pid_len != mm->port_id_len ||
 	      memcmp(pid, mm->port_id, pid_len)))) {
 		send_access_reject_reason(mm, DECT_MM_REJECT_IPUI_NOT_ACCEPTED);
 		return;
@@ -720,12 +730,8 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 	 * overwrite port_id at once, so a stranger with the wrong PIN replaced
 	 * the identity we hold for the rest of the link.
 	 */
-	if (pid && pid_len <= sizeof(mm->pend_id)) {
-		memcpy(mm->pend_id, pid, pid_len);
-		mm->pend_id_len = pid_len;
-	} else {
-		mm->pend_id_len = 0;
-	}
+	memcpy(mm->pend_id, pid, pid_len);
+	mm->pend_id_len = pid_len;
 	send_key_allocate(mm);
 }
 

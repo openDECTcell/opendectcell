@@ -99,6 +99,27 @@ static void test_mm_transaction_rules(void)
 	CHECK_EQ(mm.stats.auth_ok, 1u);
 }
 
+/* An ACCESS-RIGHTS-REQUEST without its identity: rejected 60H (§17.6.4). */
+static void test_access_request_without_identity_is_rejected(void)
+{
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1,
+				   .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 1 }, rs16[16] = { 0 };
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_ACCESS_RIGHTS_REQUEST);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
+	CHECK_EQ(out[4], DECT_MM_REJECT_IE_ERROR);
+	CHECK_EQ(mm.stats.key_alloc_sent, 0u);
+	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+}
+
 /* Full successful key-allocation registration with the correct PIN. */
 static void test_register_ok(void)
 {
@@ -1156,6 +1177,7 @@ static void test_locate_validity_adds_a_duration(void)
 int main(void)
 {
 	test_mm_transaction_rules();
+	test_access_request_without_identity_is_rejected();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
 	test_a_held_handset_is_accepted_and_adopted();

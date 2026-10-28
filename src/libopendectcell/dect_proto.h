@@ -436,8 +436,14 @@
  *    IIP, service, supplementary-service or OA&M call gets {CC-RELEASE-COM}
  *    "service not implemented" (EN 300 444 §8.2.2.3) instead of being
  *    connected without speech.
+ *
+ * 55: access rights without identity (2026-10-28, spec sweep M5). No
+ *    layout change. **Behaviour change:** an {ACCESS-RIGHTS-REQUEST}
+ *    without <<PORTABLE-IDENTITY>> (or one too long to hold) gets
+ *    {ACCESS-RIGHTS-REJECT} "information element error" (§17.6.4) instead
+ *    of key allocation and an accept naming nobody.
  */
-#define OPENDECTCELL_API_VERSION 54
+#define OPENDECTCELL_API_VERSION 55
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
