@@ -199,6 +199,10 @@ Unless a row says otherwise, current host command encoders use source `0x22`, de
 
 “30-byte” and “33-byte” descriptions in the older discussion include the two primitive bytes: parameter lengths are 28 and 31. Neither variant proves cipher-on, and the selector, input choice and activation indication remain open. [G A-0028; S `send_chip_cipher()`]
 
+**Link release, from the stock captures `[CR A-0127]` (2026-10-28, observed, 07.56).** After the last over-air {CC-RELEASE-COM} stock sends **`0x0202 <link>`** (one byte) 28-32 ms later; the chip answers **`0x0201 <link>`**. There is no idle timer: it follows the last transaction. After a voice call no LAPC DISC goes over the air (the bearer is dropped by `0x0202`); after a list-access session stock sends a FP-to-PP LAPC DISC first. `dect-stubd -a nlr` does this (off by default until bench-tested).
+
+**Location area `[CR A-0127]`:** stock's {LOCATE-ACCEPT} always carries `07 01 64`: LI-type 1, location area level 36, the PARI length of a class A ARI (this box). The broadcast PARK length is not in any host-to-chip mail; the chip builds the beacon from the RFPI and EEPROM.
+
 **Stock call layout, from the encrypted and unencrypted stock calls `[CR A-0126]` (2026-10-28, observed, 07.56).** This supersedes the selector and the RES/RAND fields above for calls:
 
 | Parameter bytes | Stock content on a call |

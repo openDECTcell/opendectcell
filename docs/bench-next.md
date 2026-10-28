@@ -121,6 +121,27 @@ PIN=31415926 ./regall.sh as690h
 Then register the AS690H properly with **31415926** in the same window (or run
 the command again), so it keeps working.
 
+## 7. Releasing the link ourselves (nlr, 5 minutes)
+
+A new option makes the base end the radio link right after a call, as stock
+does. Off by default; this run decides whether it can be on.
+
+```
+ssh root@192.168.1.1 '/tmp/dect-stubd -g -P 0000 -s /etc/opendectcell-sub.a540 -s /etc/opendectcell-sub.c430a -s /etc/opendectcell-sub.as690h -p -C -t 150 -a mask=0x0002,codec=3,status=8000,nlr > /tmp/vNLR-$(date +%H%M%S).log 2>&1'
+```
+
+While it runs: on the **A540** dial 123, talk 5 s, hang up. Wait 10 s, then dial
+123 again. Then open the A540's **internal list** (INT) and leave it again.
+
+| you see | meaning |
+|---|---|
+| both calls fine, the list opens and closes normally | nlr is harmless: the agent makes it the default |
+| the second call fails, or the handset shows "no base" for a while | releasing the link confuses it: keep nlr off, the agent reads the log |
+| the list hangs or shows an error | the DISC after list access is wrong: the agent reads the log |
+
+The log should show `link: released after the call (0x0202 ...)` after each call
+and `... after the list session, DISC first ...` after the list.
+
 ## Also watch for, in every run
 
 The agent checks the logs for one new line: `lapc: *** ... no acknowledgement

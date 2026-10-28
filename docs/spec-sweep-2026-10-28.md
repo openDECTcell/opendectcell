@@ -47,6 +47,19 @@ list-access content beyond what the CAT-iq review read.
 | ✔ finding 2 | TS 102 527-3 §7.4.9.1, §7.4.6.4.1 | <<TERMINAL-CAPABILITY>> parsed and kept; call status only to NG-DECT Part 3 handsets, decided per IPUI before CC answers the SETUP. The bench logs decode as A540 Part 3 (PI_7 `0x16`), C430A and AS690H Part 1 (`0x12`), which is exactly whom stock sends call status (A-0125) | `6f8e112` (API 34), `44714e8` (API 35), `b9f8f8d` |
 | ✔ | A-0126 | the call key to the chip (`0x0208`) before CIPHER-REQUEST, stock's layout | `0628a67` |
 | ✔ | EN 300 444 §8.41/8.42 | `dect_cc_info()`, a {CC-INFO} with given IEs (API 31); `-a infoie=` for S3 | `b0b3a82`, `599af45` |
+| ✔ finding 17 | EN 300 175-5 §13.6; EN 300 444 §8.32.2.4 | a wrong RES1 now gets {AUTHENTICATION-REJECT}, then {ACCESS-RIGHTS-REJECT} as before | `1c8469f` (API 36) |
+| ✔ C9 (finding 19) | EN 300 175-5 §6.3.2.1, §17.6.1 | a {CC-SETUP} without <<BASIC-SERVICE>> gets {CC-RELEASE-COM} "mandatory IE missing" | `bd7ede5` (API 37) |
+| ✔ finding 14 | EN 300 175-5 table 54; A-0127 | {LOCATE-ACCEPT} names our own area, `07 01 64` (class A, LAL 36), not the handset's echo | `0c6e98e` (API 38) |
+| ✔ finding 13, part | EN 300 175-5 §14.2.7; A-0127 | release the link after its last call or list session: `0x0202`, a DISC first after list access. **Opt-in** (`-a nlr`) until bench test 7 | `96b54e4` |
+
+**`[CR A-0127]` on call waiting and calls during list access:** neither is in
+the stock captures (every captured call ended before the next began). The room
+gives TS 102 527-3's behaviour, labelled spec-derived: for a Part 3 handset in a
+call, {CC-INFO} with <<CALL-INFORMATION>> for a second call id and "CS call
+setup", plus <<SIGNAL>>; Part 1 handsets (C430A, AS690H) have no DECT-signalled
+second call. During a list session: keep the session, offer the call on the same
+link in {CC-INFO} ("pseudo call waiting", §7.4.10.6.3). A capture can be made if
+needed.
 
 **Decided, not changed:**
 - **Finding 11 (re-present on any 32H) stays.** EN 300 175-5 §9.5.2.3's FT rule is "If the FT receives a {CC-RELEASE-COM} releasing the incoming call, the FT may re-present", and the PT rule applies from CALL INITIATED, before its own SETUP is on the air: the handset can refuse our call for a call we never see, and then waits P<CC.06> for the re-presentation. Gating on a crossing SETUP we saw would break that case. Bounded at two re-presentations.
