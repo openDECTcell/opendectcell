@@ -242,6 +242,7 @@ struct handset {
 	/* runtime only: its <<TERMINAL-CAPABILITY>>, once seen (cap_tick) */
 	int      cap_known;
 	int      cap_part3;	/* NG-DECT Part 3: call status allowed */
+	int      cap_ng;	/* NG-DECT Part 1 or 3: not a pure GAP handset */
 };
 
 /*
@@ -2752,10 +2753,12 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
 	if (i < 0)
 		return;
 	h = &s->hs[i];
-	if (h->cap_known && h->cap_part3 == tc->ng_part3)
+	if (h->cap_known && h->cap_part3 == tc->ng_part3 &&
+	    h->cap_ng == (tc->ng_part1 || tc->ng_part3))
 		return;
 	h->cap_known = 1;
 	h->cap_part3 = tc->ng_part3;
+	h->cap_ng = tc->ng_part1 || tc->ng_part3;
 	printf("cap: %s reports %s%s\n", h->path,
 	       tc->ng_part3 ? "NG-DECT Part 3" :
 	       tc->ng_part1 ? "NG-DECT Part 1" : "GAP only",
@@ -4109,6 +4112,21 @@ static void send_page(struct stubd *s)
  * answer the page, which is also the order the paging procedure prescribes.
  */
 /*
+ * The <<BASIC-SERVICE>> of our SETUP to handset i. A pure GAP handset
+ * (neither NG-DECT Part 1 nor 3) gets GAP's incoming call, basic speech
+ * 0x80: EN 300 444 table 21 allows service 0 only, and TS 102 527-1 §7.3.6
+ * gives an internal call class 9 to NG handsets only. Not yet seen: as
+ * configured. Spec sweep, finding 15.
+ */
+static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
+{
+	if (i >= 0 && (unsigned)i < s->n_hs && s->hs[i].cap_known &&
+	    !s->hs[i].cap_ng)
+		return 0x80u;
+	return configured;
+}
+
+/*
  * The ring target is a Part 3 handset whose call information we choose:
  * no lab option set any <<CALL-INFORMATION>> field.
  */
@@ -4245,7 +4263,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	ring_callinfo(s, 1);
 	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
 			      s->cc_fixed_id, s->cc_fixed_id_len,
-			      s->audio.basic_svc, &s->clip)) {
+			      target_svc(s, 0, s->audio.basic_svc),
+			      &s->clip)) {
 		ring_callinfo(s, 0);
 		s->ring_state = RING_DONE;
 		printf("ring: CC-SETUP queued (%s) -- the handset should ring\n",
@@ -5743,7 +5762,9 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 		}
 		dect_cc_set_callinfo(&l->cc, &ci);
 		r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
-				     s->audio.narrowband ? 0x90u : IC_BASIC_SVC,
+				     target_svc(s, s->ic.target,
+						s->audio.narrowband ? 0x90u
+								    : IC_BASIC_SVC),
 				     slot ? &ic_clip : NULL);
 		dect_cc_set_callinfo(&l->cc, &prev);
 		if (r) {
