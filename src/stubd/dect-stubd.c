@@ -375,6 +375,8 @@ struct stubd {
 		uint8_t  tpui[3];
 		unsigned pages;
 		uint64_t page_at;
+		unsigned queue[DECT_MM_MAX_SLOT];	/* slots asked meanwhile */
+		unsigned nq;
 	} dereg;
 	/* The registration window: open now, and until when (0 = no limit). */
 	int      reg_open;
@@ -6451,21 +6453,6 @@ static int ic_wideband(const struct stubd *s, int p);
 #define DEREG_PAGE_MS	3000u
 #define DEREG_REQ_PATH	"/tmp/opendectcell-deregister"
 
-/* The link serving handset i, or NULL (the same test as ic_tick's). */
-static struct dect_link *link_of_hs(struct stubd *s, int i)
-{
-	unsigned k;
-
-	if (s->reg.active && (s->reg.link.mm.adopted == i ||
-	    (s->reg.link.mm.adopted < 0 && s->cur == (unsigned)i &&
-	     s->reg.link.mm.port_id_len)))
-		return &s->reg.link;
-	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].active && s->side[k].adopted == i)
-			return &s->side[k].link;
-	return NULL;
-}
-
 static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
 		      uint16_t n)
 {
@@ -6541,20 +6528,86 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
 			const char *who);
 
-/* SIGUSR2: deregister the handset in the slot named in DEREG_REQ_PATH. */
+/*
+ * SIGUSR2: deregister the handsets in the slots named in DEREG_REQ_PATH
+ * (one or more numbers, e.g. "1 3"), one after the other.
+ */
+/*
+ * The link that carries handset i by its own word: MM adopted it (its
+ * LOCATE-REQUEST, a call it placed, or its page response below). Not the
+ * presumption that a main link which has adopted no one serves s->cur (as
+ * ic_tick still makes) -- a deregistration sent on that went to whichever
+ * handset connected next
+ * (bench, 2026-10-28: the C430A's location registration got the AS690H's
+ * TERMINATE-REQUEST).
+ */
+static struct dect_link *link_known_hs(struct stubd *s, int i)
+{
+	unsigned k;
+
+	if (s->reg.active && s->reg.link.mm.adopted == i)
+		return &s->reg.link;
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active && s->side[k].link.mm.adopted == i)
+			return &s->side[k].link;
+	return NULL;
+}
+
+/*
+ * A page response while we page a handset to deregister it: if it carries
+ * that handset's identity, the link adopts it and dereg_tick() sends the
+ * request there. Returns 1 when it was the target's (consumed).
+ */
+static int dereg_page_response(struct stubd *s, struct side_link *sl,
+			       const struct dect_link_ind *ind)
+{
+	struct dect_link *l = sl ? &sl->link : &s->reg.link;
+	unsigned k;
+	int i = s->dereg.target;
+
+	if (s->dereg.st != DEREG_PAGING || !ind->page_response)
+		return 0;
+	for (k = 0; k < l->mm.n_held; k++)
+		if (l->mm.held[k].tag == i)
+			break;
+	if (k == l->mm.n_held || l->mm.held[k].id_len != ind->page_id_len ||
+	    memcmp(l->mm.held[k].id, ind->page_id, ind->page_id_len))
+		return 0;
+	(void)dect_mm_adopt(&l->mm, ind->page_id, ind->page_id_len);
+	if (sl) {
+		sl->adopted = i;
+	} else if ((unsigned)i != s->cur) {
+		hs_switch(s, (unsigned)i, " (deregistration)");
+		dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
+	}
+	printf("dereg: DECT %u answered the page with its own identity\n",
+	       hs_slot(s, (unsigned)i));
+	return 1;
+}
+
 static void dereg_start(struct stubd *s, uint64_t now)
 {
-	char buf[16] = "";
+	char buf[64] = "";
 	FILE *f = fopen(DEREG_REQ_PATH, "r");
-	unsigned slot = 0;
+	char *p = buf, *end;
+	unsigned slot, n = 0;
 
 	if (f) {
-		if (fgets(buf, sizeof(buf), f))
-			slot = (unsigned)strtoul(buf, NULL, 10);
+		if (!fgets(buf, sizeof(buf), f))
+			buf[0] = 0;
 		fclose(f);
 		(void)remove(DEREG_REQ_PATH);
 	}
-	dereg_begin(s, slot, now, "SIGUSR2");
+	for (;;) {
+		slot = (unsigned)strtoul(p, &end, 10);
+		if (end == p)
+			break;
+		p = end;
+		dereg_begin(s, slot, now, "SIGUSR2");
+		n++;
+	}
+	if (!n)
+		dereg_begin(s, 0, now, "SIGUSR2");
 }
 
 static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
@@ -6575,13 +6628,22 @@ static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
 	}
 	printf("dereg: DECT %u, asked by %s\n", slot, who);
 	if (s->dereg.st != DEREG_IDLE) {
-		printf("dereg: one at a time -- DECT %u waits\n", slot);
+		unsigned k;
+
+		for (k = 0; k < s->dereg.nq; k++)
+			if (s->dereg.queue[k] == slot)
+				break;
+		if (k == s->dereg.nq && s->dereg.nq < DECT_MM_MAX_SLOT &&
+		    (int)i != s->dereg.target)
+			s->dereg.queue[s->dereg.nq++] = slot;
+		printf("dereg: one at a time -- DECT %u waits its turn (%u "
+		       "waiting)\n", slot, s->dereg.nq);
 		return;
 	}
 	s->dereg.target = (int)i;
 	s->dereg.pages = 0;
 	s->dereg.page_at = now;
-	l = link_of_hs(s, (int)i);
+	l = link_known_hs(s, (int)i);
 	if (l && dect_mm_terminate(&l->mm) == 0) {
 		s->dereg.st = DEREG_REQUESTED;
 		printf("dereg: DECT %u: ACCESS-RIGHTS-TERMINATE-REQUEST on its "
@@ -6621,10 +6683,18 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 		want_deregister = 0;
 		dereg_start(s, now);
 	}
+	if (s->dereg.st == DEREG_IDLE && s->dereg.nq) {
+		unsigned slot = s->dereg.queue[0];
+
+		s->dereg.nq--;
+		memmove(s->dereg.queue, s->dereg.queue + 1,
+			s->dereg.nq * sizeof(s->dereg.queue[0]));
+		dereg_begin(s, slot, now, "the queue");
+	}
 	if (s->dereg.st == DEREG_IDLE)
 		return;
 	i = s->dereg.target;
-	l = link_of_hs(s, i);
+	l = link_known_hs(s, i);
 	if (s->dereg.st == DEREG_PAGING) {
 		if (l && dect_mm_terminate(&l->mm) == 0) {
 			s->dereg.st = DEREG_REQUESTED;
@@ -6921,6 +6991,10 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 	 * the ring timed out). Promote this link to the main one and ring on
 	 * it; anything else that answers here is not ours to ring.
 	 */
+	if (dereg_page_response(s, sl, &ind)) {
+		side_pump(s, sl);
+		return;
+	}
 	if (ind.page_response && s->ic.st == IC_PAGING) {
 		ic_target_link(s, sl, &ind, now);
 		if (s->ic.st == IC_SETUP)
@@ -7073,6 +7147,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		       ? "not used: the base is the clock master"
 		       : "ignored (7.4.2.2)");
 	}
+
+	if (dereg_page_response(s, NULL, &ind))
+		ind.page_response = 0;
 
 	/* an internal call's target answering on the main link (finding 5) */
 	if (ind.page_response && s->ic.st == IC_PAGING && s->ic.caller != -1) {

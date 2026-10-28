@@ -337,7 +337,8 @@ Start any run with all three stores (e.g. the test 13 command with
 ssh root@192.168.1.1 'echo 3 > /tmp/opendectcell-deregister; kill -USR2 $(pidof dect-stubd)'
 ```
 
-(3 = the AS690H's slot as the log's `sub:` lines name it; use the slot shown.)
+(3 = the AS690H's slot as the log's `sub:` lines name it; use the slot shown.
+Several at once: `echo "1 3" > /tmp/opendectcell-deregister`; they queue.)
 
 | you see | meaning |
 |---|---|
