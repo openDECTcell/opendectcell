@@ -85,6 +85,7 @@ struct dect_link {
 	size_t   held_len[DECT_LINK_HELD];
 	unsigned held_n;
 	uint32_t held_dropped;		/* follow-ups beyond DECT_LINK_HELD */
+	uint32_t lce_bad_ti;		/* LCE messages ignored: F = 1 or TV != 0 */
 	/*
 	 * Optional: may the handset with this IPUI get call status? Asked
 	 * when its {CC-SETUP} arrives, before CC answers it: 1 yes, 0 no, -1

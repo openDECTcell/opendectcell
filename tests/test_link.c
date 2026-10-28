@@ -179,7 +179,7 @@ static void test_page_response_without_identity_is_rejected(void)
 
 	init(&l);					/* IPUI unknown */
 	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_LCE, DECT_TI_ORIGINATOR,
-			       2, DECT_LCE_PAGE_RESPONSE);
+			       0, DECT_LCE_PAGE_RESPONSE);
 	feed_nwk(&l, msg, n, &ind);
 	CHECK_EQ(ind.page_response, 0u);
 	CHECK_EQ(l.lce_len, 0u);			/* nothing to name */
@@ -192,9 +192,46 @@ static void test_page_response_without_identity_is_rejected(void)
 	feed_nwk(&l, msg, n, &ind);
 	CHECK_EQ(ind.page_response, 0u);
 	CHECK_EQ(tx_seen_len, 2u + 2u + sizeof(ipui));	/* sent at once */
-	CHECK_EQ(tx_seen_buf[0], 0xA0u);		/* F=1, TV=2, PD LCE */
+	CHECK_EQ(tx_seen_buf[0], 0x80u);		/* F=1, TV=0, PD LCE */
 	CHECK_EQ(tx_seen_buf[1], DECT_LCE_PAGE_REJECT);
 	CHECK(memcmp(&tx_seen_buf[4], ipui, sizeof(ipui)) == 0);
+}
+
+/*
+ * A page response with F = 1 (§17.3.2.6) or a TV other than 0 (§17.3.1,
+ * table 68) is ignored: not reported, not rejected, but counted.
+ */
+static void test_page_response_with_a_bad_ti_is_ignored(void)
+{
+	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33, 0x44 };
+	static const struct { uint8_t f, tv; } bad[] = {
+		{ DECT_TI_RESPONDER, 0 }, { DECT_TI_ORIGINATOR, 1 },
+	};
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[32];
+	size_t n, i, with;
+
+	for (with = 0; with < 2; with++) {
+		for (i = 0; i < 2; i++) {
+			init(&l);
+			memcpy(l.mm.port_id, ipui, sizeof(ipui));
+			l.mm.port_id_len = sizeof(ipui);
+			tx_seen_len = 0;
+			dect_link_set_tx_log(&l, tx_seen, NULL);
+			n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_LCE,
+					       bad[i].f, bad[i].tv,
+					       DECT_LCE_PAGE_RESPONSE);
+			if (with)
+				n = dect_nwk_put_ie(msg, sizeof(msg), n,
+						    DECT_IE_PORTABLE_IDENTITY,
+						    ipui, sizeof(ipui));
+			feed_nwk(&l, msg, n, &ind);
+			CHECK_EQ(ind.page_response, 0u);
+			CHECK_EQ(tx_seen_len, 0u);	/* no PAGE-REJECT */
+			CHECK_EQ(l.lce_bad_ti, 1u);
+		}
+	}
 }
 
 static void test_page_reject_is_built_from_the_response(void)
@@ -207,12 +244,12 @@ static void test_page_reject_is_built_from_the_response(void)
 
 	init(&l);
 	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_LCE, DECT_TI_ORIGINATOR,
-			       3, DECT_LCE_PAGE_RESPONSE);
+			       0, DECT_LCE_PAGE_RESPONSE);	/* LCE: TV 0 only */
 	n = dect_nwk_put_ie(msg, sizeof(msg), n, DECT_IE_PORTABLE_IDENTITY,
 			    ipui, sizeof(ipui));
 	feed_nwk(&l, msg, n, &ind);
 	CHECK_EQ(ind.page_response, 1u);
-	CHECK_EQ(ind.page_ti, 3u);
+	CHECK_EQ(ind.page_ti, 0u);
 
 	CHECK_EQ(dect_link_page_reject(&l, ind.page_id, ind.page_id_len,
 				       ind.page_ti), 0);
@@ -220,7 +257,7 @@ static void test_page_reject_is_built_from_the_response(void)
 				       ind.page_ti), -1);	/* one deep */
 	CHECK_EQ(l.lce_len, 2u + 2u + sizeof(ipui));
 	memcpy(sent, l.lce, l.lce_len);
-	CHECK_EQ(sent[0], 0xB0u);		/* F=1, TV=3, PD LCE */
+	CHECK_EQ(sent[0], 0x80u);		/* F=1, TV=0, PD LCE */
 	CHECK_EQ(sent[1], DECT_LCE_PAGE_REJECT);
 	CHECK_EQ(sent[2], DECT_IE_PORTABLE_IDENTITY);
 	CHECK_EQ(sent[3], sizeof(ipui));
@@ -678,6 +715,7 @@ int main(void)
 {
 	test_call_status_is_asked_per_handset();
 	test_page_response_without_identity_is_rejected();
+	test_page_response_with_a_bad_ti_is_ignored();
 	test_call_id_is_asked_per_call();
 	test_init_is_quiet();
 	test_page_response_carries_the_identity();

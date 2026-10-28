@@ -274,16 +274,27 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			 */
 			const uint8_t *pid;
 			size_t pid_len;
+			/*
+			 * The handset originates its page response, so F = 0,
+			 * and LCE has the one transaction value 0 (§7.3 table
+			 * 68). F = 1 is ignored (§17.3.2.6), another value is
+			 * illegal and ignored (§17.3.1); both counted (spec
+			 * sweep, LCE7). Every saved log has F = 0, TV 0.
+			 */
+			int ti_ok = h.ti_flag == DECT_TI_ORIGINATOR &&
+				    h.ti_value == 0u;
 
+			if (!ti_ok)
+				l->lce_bad_ti++;
 			pid = dect_nwk_find_ie(ies, ies_len,
 					       DECT_IE_PORTABLE_IDENTITY, &pid_len);
-			if (h.msg_type == DECT_LCE_PAGE_RESPONSE && !pid &&
-			    l->mm.port_id_len)
+			if (ti_ok && h.msg_type == DECT_LCE_PAGE_RESPONSE &&
+			    !pid && l->mm.port_id_len)
 				(void)dect_link_page_reject(l, l->mm.port_id,
 							    l->mm.port_id_len,
 							    h.ti_value);
-			if (h.msg_type == DECT_LCE_PAGE_RESPONSE && pid &&
-			    pid_len <= sizeof(ind->page_id)) {
+			if (ti_ok && h.msg_type == DECT_LCE_PAGE_RESPONSE &&
+			    pid && pid_len <= sizeof(ind->page_id)) {
 				memcpy(ind->page_id, pid, pid_len);
 				ind->page_id_len = pid_len;
 				ind->page_ti = h.ti_value;

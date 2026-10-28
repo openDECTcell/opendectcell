@@ -417,8 +417,14 @@
  *    change:** CC disregards every message on TV 6, the connectionless
  *    value (EN 300 175-5 §7.3, §10.4.2.3), where it cleared them as unknown
  *    calls; dect_cc_set_next_ti() wraps past 5, so a call never takes 6.
+ *
+ * 52: LCE transaction identifier (2026-10-28, spec sweep LCE7). Layout
+ *    change: struct dect_link gains lce_bad_ti. **Behaviour change:** an
+ *    LCE message with F = 1 (§17.3.2.6) or TV other than 0 (§17.3.1, table
+ *    68) is ignored and counted: no page response reported, no
+ *    {LCE-PAGE-REJECT} sent.
  */
-#define OPENDECTCELL_API_VERSION 51
+#define OPENDECTCELL_API_VERSION 52
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
