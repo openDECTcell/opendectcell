@@ -415,6 +415,7 @@ struct stubd {
 	       RING_SETUP_DELAY, RING_DONE } ring_state;
 	uint64_t ring_setup_at;		/* when setupdelay=N expires */
 	uint64_t ring_release_until;	/* give the link time to go down */
+	uint64_t ring_wait_since;	/* a link in use held the ring back */
 	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
 	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
 	unsigned    ring_pages;		/* pages sent for this attempt */
@@ -3974,6 +3975,27 @@ static uint8_t ring_page_info(const struct stubd *s)
 static void pump_lapc(struct stubd *s);
 
 #define RING_RELEASE_WAIT_MS	3000u	/* [CR A-0053] DLC arms a ~5 s guard */
+#define RING_IN_USE_WAIT_MS	30000u	/* a list session or MM, at most */
+
+/*
+ * What a link is doing, for the ring: 0 nothing the NWK layer holds (the
+ * ring may release it), 1 a list-access session or an MM procedure (wait
+ * for it), 2 a voice call (the handset is busy). EN 300 175-5 §14.2.3 pages
+ * only when no suitable link exists, and the release before paging that
+ * the chip needs ([CR A-0053]) cut whatever the link carried: a ring during
+ * a call ended the call (spec sweep F-2, LCE1).
+ */
+static int link_in_use(const struct dect_link *l)
+{
+	if (dect_cc_busy(&l->cc))
+		return (l->cc.peer_basic_service >> 4) == 0x2u && !l->cc.incoming
+		       ? 1 : 2;
+	if (l->mm.state == DECT_MM_WAIT_AUTH || l->mm.ident_pending ||
+	    l->mm.cipher_state == DECT_MM_CIPHER_WAIT_REPLY ||
+	    dect_mm_locate_pending(&l->mm, NULL, NULL))
+		return 1;
+	return 0;
+}
 #define RING_PAGE_RETRIES	20u	/* pages before giving up (60 s) */
 #define RING_PAGE_INTERVAL	3000u	/* ms between them; the stock guard */
 #define RING_PAGE_RESP_MS	1500u	/* wait this long for the page response */
@@ -4340,6 +4362,46 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			       "stored\n");
 			s->ring_state = RING_DONE;
 			return;
+		}
+		/*
+		 * A link in use is not released under the handset (§14.2.3,
+		 * see link_in_use()): a voice call on it -- the ring target's
+		 * or, on the main link, another handset's -- makes this ring
+		 * "busy" (call waiting is not built yet, lines-and-calls.md
+		 * step 5); a list session or an MM procedure is waited out,
+		 * for at most RING_IN_USE_WAIT_MS, then released as before.
+		 */
+		{
+			int use = s->reg.active ? link_in_use(&s->reg.link) : 0;
+			unsigned k;
+
+			for (k = 0; k < SIDE_MAX; k++)
+				if (s->side[k].active && s->side[k].adopted == 0 &&
+				    link_in_use(&s->side[k].link) == 2)
+					use = 2;	/* the target, elsewhere */
+			if (use == 2) {
+				printf("ring: the handset (or the main link) is in "
+				       "a call -- busy, nothing released, ring "
+				       "abandoned\n");
+				s->ring_state = RING_DONE;
+				return;
+			}
+			if (use == 1 && !s->ring_wait_since) {
+				s->ring_wait_since = now;
+				printf("ring: the link carries a list session or "
+				       "an MM procedure -- waiting for it to end\n");
+			}
+			if (use == 1 &&
+			    now - s->ring_wait_since < RING_IN_USE_WAIT_MS)
+				return;
+			if (use == 1)
+				printf("ring: still in use after %u ms -- releasing "
+				       "it all the same\n", RING_IN_USE_WAIT_MS);
+			else if (s->ring_wait_since)
+				printf("ring: the link is free after %llu ms\n",
+				       (unsigned long long)(now -
+							    s->ring_wait_since));
+			s->ring_wait_since = 0;
 		}
 		/*
 		 * **Page for every call, even when the handset is attached.**

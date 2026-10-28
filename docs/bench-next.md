@@ -192,6 +192,12 @@ EXTRA=clip=0301234567 HOLD=10 ./ringone.sh a540
 | it rings silently | the log says why: look for `terminal capability is not known yet` |
 | the call drops when you answer | the CS-call-connect CC-INFO upsets it: the agent reads the log |
 
+Since the ring guard (task list item 16) the ring waits while the A540 has a
+list session open: the log may show `ring: the link carries a list session or
+an MM procedure -- waiting for it to end`, then `the link is free after N ms`.
+A few seconds' delay is expected; `still in use after 30000 ms` is not (the
+agent reads the log).
+
 ### 9. The A540 dials out: line named, timer unchanged (3 minutes)
 
 Since `8d128d1` our answer names the line the A540 is calling on (it asks for
