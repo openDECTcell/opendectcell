@@ -130,8 +130,16 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 
 ## M8b: Handset abstraction layer (new 2026-10-25; after the DECT basics, before M9)
 - **The maintainer's model** (2026-10-25): layered profiles. A **manufacturer profile** (for example "FRITZ!Fon") builds on the standards (GAP, CAT-iq) and adds manufacturer features and quirks. A **device profile** (for example "FRITZ!Fon C4") builds on the manufacturer profile and adds device quirks. Profiles can be **imported**, so new handsets need no new release. Why: on the Eventphone list, some FRITZ!Fons show incoming numbers and phonebook names and others do not. To refine in detail on Wednesday; points to settle are in the review
-- [ ] Design: a per-handset profile chosen from what the handset tells us (<<MODEL-IDENTIFIER>>, terminal capability, CAT-iq level), carrying (a) **quirks**, such as the A540 showing no call timer, plus the measured rules that once looked like quirks and turned out to be the standard (TI 0, <<SIGNAL>>), and (b) **feature modules** a handset can use. Decide where it lives: libopendectcell, so that the cell, a standalone box and the controller share one table (the controller's AGENTS.md §6 already requires a feature-module framework and a model-quirks table)
-- [ ] Handsets outside GAP/CAT-iq: several on the Eventphone compatibility list do not meet the specs. The layer should let a motivated user add a "driver" for such a handset from **on-air captures of their own handset**. Clean-room rules apply: never vendor firmware or analysed code
+- **Decided 2026-10-28 (maintainer):**
+  1. **The user picks the handset model**, before starting a registration, so registration quirks can apply too. AVM's own DECT Monitor cannot tell manufacturer and model either, and the user knows them; automatic detection is at most a later suggestion.
+  2. A device profile may carry **firmware version ranges**.
+  3. **Quirks are data, features are code:** a profile file sets behaviour (send this, omit that, a timer, a limit); feature modules (phonebook, call lists) are code that a profile can only switch on, so an imported profile cannot add code.
+  4. **The more specific layer wins:** device over manufacturer over standard. Separately, what a handset reports about itself beats a profile unless the profile marks that report as wrong.
+  5. **One profile format** for the cell, the standalone box and the controller.
+  6. **Sources:** the standards and our own on-air observations first. For a handset that does not work with our base at all, the firmware of its own base station may be analysed, through the clean-room process only (AGENTS.md §2.9).
+  First quirk candidates from the 2026-10-28 bench: the A540 places internal calls through list access plus `0x17` (standard, now handled), rings silently when a call names a line, tries PIN 0000 by itself before asking; the C430A and AS690H start their call timer a few seconds after CONNECT
+- [ ] Design: a per-handset profile chosen by the user (see above), checked against what the handset tells us (<<MODEL-IDENTIFIER>>, terminal capability, CAT-iq level), carrying (a) **quirks**, such as the A540 showing no call timer, plus the measured rules that once looked like quirks and turned out to be the standard (TI 0, <<SIGNAL>>), and (b) **feature modules** a handset can use. Decide where it lives: libopendectcell, so that the cell, a standalone box and the controller share one table (the controller's AGENTS.md §6 already requires a feature-module framework and a model-quirks table)
+- [ ] Handsets outside GAP/CAT-iq: several on the Eventphone compatibility list do not meet the specs. The layer should let a motivated user add a "driver" for such a handset from **on-air captures of their own handset**, and where that is not enough, from facts out of its own base station's firmware, gathered in a separate clean room (decided 2026-10-28; AGENTS.md §2.9). Never vendor code in the library
 - [ ] Vendor features as modules: the FRITZ!Fon phonebook and its online services (RSS and similar). What they use on air is unknown and needs stock captures (the hardware-analysis step / Freetz room questions), then a module written from the facts
 
 - [~] Feed with `kmod-opendectcell-ipq40xx` and the `opendectcell` package (programs plus board profiles; pulls in the right kmod); CI build with the OpenWrt SDK
@@ -149,7 +157,11 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [ ] Cell mode: tunnel mails (TCP, optional TLS) and audio (UDP, optional SRTP/DTLS) to the controller
 
 ## M9b: Standalone VoIP on one box (**decided 2026-10-25: prioritised**, baresip)
-- [ ] Prove the whole path, handset ↔ cell ↔ SIP ↔ PBX, on one OpenWrt box before committing to the controller: one SIP account per handset, calls in and out, caller ID, wideband, configured in LuCI. Candidate SIP stack: baresip from the OpenWrt telephony feed (BSD), driven by `dect-stubd` through a small bridge. This revisits the controller decision "multi-cell only" (the maintainers' notes) for the single-box case only
+- **Decided 2026-10-28 (maintainer):** a **direct bridge** between `dect-stubd` and baresip, with an option to use a controller instead; that option is a **dummy** until the cell protocol is finished. The bridge carries the events the cell protocol will carry (call setup, digits, alerting, connect, release, audio, diagnostics), so the controller can replace it later without touching `dect-stubd`.
+- **MVP: two SIP lines per handset**, as a **line pool**: the box holds SIP lines, and each handset is attached to up to two of them; a line may be attached to several handsets and rings on all of them. This is the CAT-iq multiple-line model (TS 102 527-3 §7.4.7, "attached handsets" in the line list). The chip carries at most three calls at once across all handsets (A-0124; two proven on 2026-10-28).
+- **Later, optional:** call lists (outgoing, incoming, missed) and phonebook access from a vCard source over **HTTPS only**, both served through CAT-iq list access.
+- [ ] Busy handling: an incoming SIP call when all three audio channels are taken, or when the target handset is already in a call (refuse on the SIP side; CAT-iq call waiting for a handset in a call). Handset-placed and internal calls without a free channel are already refused with "insufficient resources"; the exact clauses come from the spec sweep
+- [ ] Prove the whole path, handset ↔ cell ↔ SIP ↔ PBX, on one OpenWrt box before committing to the controller: two SIP lines per handset from a line pool (above), calls in and out, caller ID, wideband, configured in LuCI. Candidate SIP stack: baresip from the OpenWrt telephony feed (BSD), driven by `dect-stubd` through a small bridge. This revisits the controller decision "multi-cell only" (the maintainers' notes) for the single-box case only
 
 ## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
 - [x] Architecture, VoIP requirements and DECT feature framework (design docs in opendectcell-controller)
@@ -161,8 +173,9 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
   - 2026-10-25, one box (`docs/multicell-experiments.md`, 07.56 only): the chip admits, pages and rings handsets with no key in it, so admission is a host decision; deferred location registration (API 18) fetched a roamer's record in 2 s and registered it; a handset moving within one location area does not re-locate, so cells must fetch on any first message from an unknown IPUI or be pushed records ahead of time
   - M4: a held roamer's SETUP is answered at once (API 24), and the A540 waited 17.5 s for a 30 s fetch and connected. M6: Gigasets honour <<DURATION>> in LOCATE-ACCEPT (they re-locate every 41 s at 1 × 40.96 s), so cells could use it for presence
 - [ ] Research: inter-cell synchronisation (host-driven FSC on the 7412? STUB sync modes?) for seamless handover
-- [ ] Capacity per cell (about 3 calls); verify against the mode byte
+- [~] Capacity per cell (about 3 calls); verify against the mode byte
   - 2026-10-25: **three voice channels per chip**, narrowband or wideband, from stock captures (A-0124). Tick it once bench test 18 shows two calls in parallel on our stack
+  - 2026-10-28: **two calls in parallel on our stack** (bench test 18) and internal calls both ways (test 19). Three at once not yet tried
 
 ## Later
 - [ ] Port to the 7412 (VR9 SSC in SPI-slave mode, `kmod-opendectcell-lantiq`) and the 7362 SL (VR9 TDM)
