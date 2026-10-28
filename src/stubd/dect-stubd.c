@@ -81,6 +81,14 @@ static uint64_t fs_free_bytes(const char *path)
 
 
 /*
+ * Our one line, as the line list (TS 102 527-3 7.4.11) names it. A
+ * <<CALL-INFORMATION>> line identifier (lineid=) must name the same line:
+ * bench test 21c sent line 0 against this list's line 1 and the A540 rang
+ * silently, as for a line it is not attached to.
+ */
+#define STUBD_LINE_ID	1u
+
+/*
  * <<BASIC-SERVICE>>: high nibble call class, low nibble basic service, per
  * EN 300 175-5 §7.7.5 figure 18. The class table is NOT what we were told:
  *
@@ -4746,7 +4754,7 @@ static void main_cc_setup(struct stubd *s)
 		uint8_t tid = stubd_sub_slot(s) ? stubd_sub_slot(s) : 1u;
 		char hsname[DECT_IWU_NAME_MAX];
 
-		dect_iwu_set_line(&s->reg.link.cc.iwu, 1, "Line 1");
+		dect_iwu_set_line(&s->reg.link.cc.iwu, STUBD_LINE_ID, "Line 1");
 		snprintf(hsname, sizeof(hsname), "DECT %u", (unsigned)tid);
 		dect_iwu_add_handset(&s->reg.link.cc.iwu, tid, hsname);
 		for (i = 0; i < s->n_hs; i++) {
@@ -4970,7 +4978,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 	dect_link_set_tx_log(&sl->link, log_nwk_out_side, s);
 
 	/* every handset we hold; strangers meet the gates as usual */
-	dect_iwu_set_line(&sl->link.cc.iwu, 1, "Line 1");
+	dect_iwu_set_line(&sl->link.cc.iwu, STUBD_LINE_ID, "Line 1");
 	for (i = 0; i < s->n_hs; i++) {
 		size_t len;
 		const uint8_t *id = hs_port_id(s, i, &len);
@@ -7651,7 +7659,8 @@ static void usage(void)
 		"           in-band second calls) callid=N callstatus=N add a\n"
 		"           <<CALL-INFORMATION>> (0x7E) to the FP-originated\n"
 		"           CC-SETUP; CAT-iq 2.0 marks an external call by its line\n"
-		"           id. Our one SIP line is lineid=0,linetype=1.\n"
+		"           id. Our one SIP line is lineid=1,linetype=1, the\n"
+		"           line the line list names.\n"
 		"           handover=MS asks the chip to move the call's bearer MS ms\n"
 		"           after the bind (0x016A), which is the event that has\n"
 		"           accompanied every run where audio flowed\n"
@@ -8089,6 +8098,10 @@ int main(int argc, char **argv)
 			       ci->has_line_type ? " linetype" : "",
 			       ci->has_call_id ? " callid" : "",
 			       ci->has_call_status ? " callstatus" : "");
+		if (ci->has_line && ci->line_id != STUBD_LINE_ID)
+			printf("callinfo: WARNING: lineid=%u names a line the "
+			       "line list does not have (it has line %u only)\n",
+			       ci->line_id, STUBD_LINE_ID);
 	}
 	if (s.audio.clip_number || s.audio.clip_name)
 		printf("clip: ton=%u npi=%u clipscr=%u cnipscr=%u "
