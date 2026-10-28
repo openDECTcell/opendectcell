@@ -6827,13 +6827,17 @@ static void ic_tick(struct stubd *s, uint64_t now)
 			    !dect_cc_busy(&s->side[k].link.cc))
 				ic_setup(s, (int)k, now,
 					 "came up (adopted, no page response)");
-		/* or the main link, if the caller is not on it (finding 5) */
+		/*
+		 * or the main link, if the caller is not on it (finding 5) --
+		 * only once it has adopted the target. A main link that has
+		 * adopted no one is not presumed to serve s->cur: whichever
+		 * handset connects next would get the SETUP (the deregistration
+		 * did exactly that on the bench, 2026-10-28). The target's
+		 * page response is matched by identity in ic_target_link().
+		 */
 		if (s->ic.st == IC_PAGING && s->ic.caller != -1 &&
 		    s->reg.active && !dect_cc_busy(&s->reg.link.cc) &&
-		    (s->reg.link.mm.adopted == s->ic.target ||
-		     (s->reg.link.mm.adopted < 0 &&
-		      s->cur == (unsigned)s->ic.target &&
-		      s->reg.link.mm.port_id_len)))
+		    s->reg.link.mm.adopted == s->ic.target)
 			ic_setup(s, -1, now,
 				 "came up (adopted, no page response)");
 		if (s->ic.st != IC_PAGING)
