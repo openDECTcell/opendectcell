@@ -8,11 +8,12 @@
 
 /*
  * Status > DECT, the DECT Monitor: what the base is doing, for someone who
- * should not have to read a log. Two tabs: DECT reads /tmp/opendectcell-state.json,
- * which dect-stubd rewrites at most once a second (docs/diagnostics.md);
- * VoIP reads /var/run/opendectcell/voip.json, which the baresip module writes
- * every 2 s. Both start with the service's own state from procd, so a
- * stopped service is told apart from anything else that goes wrong.
+ * should not have to read a log. Three tabs: DECT reads
+ * /tmp/opendectcell-state.json, which dect-stubd rewrites at most once a second
+ * (docs/diagnostics.md); VoIP reads /var/run/opendectcell/voip.json, which the
+ * baresip module writes every 2 s; both start with their service's state
+ * from procd, so a stopped service is told apart from anything else that
+ * goes wrong. Log shows the system log's lines of both, for when it does.
  *
  * Per connection it shows what AVM's DECT Monitor shows and we have
  * decoded from the chip's connection status: carrier and frequency, time
@@ -357,18 +358,19 @@ function serviceRows(inst, st, voip, sip) {
 	var dRun = d && d.running, bRun = b && b.running;
 	var fresh = st && st.radio === 'up';
 
-	rows.push([ _('DECT service'),
-		dRun ? (fresh ? E('strong', {}, _('running')) :
-			_('running, the radio is starting or parked')) :
-		!on ? _('switched off (Network > DECT, General: Enable)') :
-		d ? _('stopped after repeated failures: see System > System Log (opendectcell)') :
-		    _('not running although switched on: see System > System Log (opendectcell)') ]);
-	if (sip) {
+	if (!sip)
+		rows.push([ _('DECT service'),
+			dRun ? (fresh ? E('strong', {}, _('running')) :
+				_('running, the radio is starting or parked')) :
+			!on ? _('switched off (Network > DECT, General: Enable)') :
+			d ? _('stopped after repeated failures: see the Log tab') :
+			    _('not running although switched on: see the Log tab') ]);
+	else {
 		rows.push([ _('SIP client (baresip)'),
 			bRun ? E('strong', {}, _('running')) :
 			!dRun ? _('not running: it runs with the DECT service') :
 			!anyLine() ? _('not running: no handset line is switched on (Network > DECT, Handsets)') :
-			b ? _('stopped after repeated failures: see System > System Log') :
+			b ? _('stopped after repeated failures: see the Log tab') :
 			    _('not running: is the package opendectcell-baresip installed?') ]);
 		if (bRun)
 			rows.push([ _('Bridge to the DECT base'),
@@ -458,6 +460,79 @@ function renderDect(st, inst) {
 	return E('div', {}, [ serviceRows(inst, st, null, false), renderState(st) ]);
 }
 
+/*
+ * The log lines of the base and its SIP side. logread has no "this or
+ * that" filter, so the whole system log is read and these kept: the
+ * daemons, the service's own messages (logger tag openDECTcell) and procd's
+ * about either instance.
+ */
+var LOG_KIND = [
+	[ /\bdect-stubd\[\d+\]:|procd: .*opendectcell::instance1/, 'dect' ],
+	[ /\bbaresip\[\d+\]:|procd: .*opendectcell::baresip/, 'voip' ],
+	[ /\bopendectcell(\[\d+\])?:/, 'both' ]
+];
+var LOG_MAX = 1000;		/* lines kept on the page */
+var logWhich = 'all';
+
+function readLog() {
+	return L.resolveDefault(fs.exec_direct('/sbin/logread'), '').then(function(text) {
+		var out = [];
+
+		(text || '').split('\n').forEach(function(l) {
+			l = l.replace(/\x1b\[[0-9;]*m/g, '');	/* baresip's colours */
+			for (var i = 0; i < LOG_KIND.length; i++)
+				if (LOG_KIND[i][0].test(l)) {
+					out.push([ LOG_KIND[i][1], l ]);
+					break;
+				}
+		});
+		return out.slice(-LOG_MAX);
+	});
+}
+
+function logText(lines) {
+	return lines.filter(function(x) {
+		return logWhich == 'all' || x[0] == 'both' || x[0] == logWhich;
+	}).map(function(x) { return x[1]; }).join('\n') || _('No log lines from the base or its SIP side.');
+}
+
+/* Shown again; scrolled to the end unless the reader has scrolled up. */
+function showLog(area, lines) {
+	var atEnd = area.scrollTop + area.clientHeight >= area.scrollHeight - 20;
+
+	area.value = logText(lines);
+	if (atEnd)
+		area.scrollTop = area.scrollHeight;
+}
+
+function renderLogTab(lines) {
+	var area = E('textarea', {
+		'id': 'opendectcell-log', 'readonly': 'readonly', 'wrap': 'off',
+		'style': 'width:100%;height:32em;font-family:monospace;font-size:12px'
+	});
+	var which = E('select', {
+		'class': 'cbi-input-select',
+		'change': function(ev) {
+			logWhich = ev.target.value;
+			showLog(area, area._lines || []);
+		}
+	}, [
+		E('option', { 'value': 'all' }, _('DECT and VoIP')),
+		E('option', { 'value': 'dect' }, _('DECT only')),
+		E('option', { 'value': 'voip' }, _('VoIP only'))
+	]);
+
+	area._lines = lines;
+	area.value = logText(lines);
+	requestAnimationFrame(function() { area.scrollTop = area.scrollHeight; });
+	return E('div', { 'class': 'cbi-section' }, [
+		E('div', { 'style': 'margin-bottom:.5em' }, [ _('Show') + ' ', which, ' ',
+			E('span', { 'class': 'cbi-value-description' },
+				_('The newest %d lines from the system log, refreshed every 2 seconds while this tab is open.').format(LOG_MAX)) ]),
+		area
+	]);
+}
+
 function fill(node, child) {
 	if (!node)
 		return;
@@ -468,21 +543,37 @@ function fill(node, child) {
 
 return view.extend({
 	load: function() {
-		return readAll();
+		return Promise.all([ readAll(), readLog() ]).then(function(r) {
+			return r[0].concat([ r[1] ]);
+		});
 	},
 
 	render: function(r) {
 		var dect = E('div', { 'id': 'opendectcell-monitor' }, renderDect(r[0], r[2]));
 		var voip = E('div', { 'id': 'opendectcell-voip' }, renderVoip(r[0], r[1], r[2]));
+		var logs = E('div', { 'data-tab': 'log', 'data-tab-title': _('Log') },
+			[ renderLogTab(r[4]) ]);
 		var tabs = E('div', {}, [
 			E('div', { 'data-tab': 'dect', 'data-tab-title': _('DECT') }, [ dect ]),
-			E('div', { 'data-tab': 'voip', 'data-tab-title': _('VoIP') }, [ voip ])
+			E('div', { 'data-tab': 'voip', 'data-tab-title': _('VoIP') }, [ voip ]),
+			logs
 		]);
 
 		poll.add(function() {
-			return readAll().then(function(r) {
+			var area = document.getElementById('opendectcell-log');
+
+			return Promise.all([
+				readAll(),
+				logs.getAttribute('data-tab-active') == 'true' ? readLog() : null
+			]).then(function(x) {
+				var r = x[0];
+
 				fill(document.getElementById('opendectcell-monitor'), renderDect(r[0], r[2]));
 				fill(document.getElementById('opendectcell-voip'), renderVoip(r[0], r[1], r[2]));
+				if (x[1] && area) {
+					area._lines = x[1];
+					showLog(area, x[1]);
+				}
 			});
 		}, 2);
 
@@ -490,7 +581,7 @@ return view.extend({
 		var page = E('div', {}, [
 			E('h2', {}, _('DECT Monitor')),
 			E('div', { 'class': 'cbi-map-descr' },
-				_('Live figures of the DECT base and its phone lines, refreshed every 2 seconds. Settings, handsets and registration: Network > DECT.')),
+				_('Live figures of the DECT base and its phone lines, and their log, refreshed every 2 seconds. Settings, handsets and registration: Network > DECT.')),
 			tabs
 		]);
 		ui.tabs.initTabGroup(tabs.childNodes);
