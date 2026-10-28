@@ -259,39 +259,78 @@ void dect_mm_cipher_on(struct dect_mm *mm)
  * 2026-10-28, no authentication first -- and leave the erasure to the
  * owner. A request for another IPUI, or none, is rejected "IPUI unknown".
  */
-static void on_terminate_request(struct dect_mm *mm, const uint8_t *ies,
-				 size_t ies_len)
+static void send_auth_request_fp(struct dect_mm *mm, uint8_t octet5);
+
+static void terminate_answer(struct dect_mm *mm, int accept, uint8_t why)
 {
-	const uint8_t *pid;
-	size_t pid_len;
 	unsigned idx;
 	uint8_t *b = txq_slot(mm, &idx);
 	size_t off;
 
+	mm->term_auth = 0;
+	mm->term_auth_deadline_ms = 0;
 	if (!b)
 		return;
-	mm->ti_value = 0;
-	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
-			       &pid_len);
-	if (pid && mm->port_id_len && pid_len == mm->port_id_len &&
-	    !memcmp(pid, mm->port_id, pid_len)) {
-		off = hdr(mm, b, DECT_TI_RESPONDER,
-			  DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT);
-		txq_commit(mm, idx, off);
-		mm->term_by_pt = 1;
-		mm->stats.term_by_pt++;
-		return;
-	}
-	{
-		uint8_t reason[1] = { DECT_MM_REJECT_IPUI_UNKNOWN };
+	off = hdr(mm, b, DECT_TI_RESPONDER, accept
+		  ? DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT
+		  : DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT);
+	if (!accept) {
+		uint8_t reason[1] = { why };
 
-		off = hdr(mm, b, DECT_TI_RESPONDER,
-			  DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT);
 		off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off,
 				      DECT_IE_REJECT_REASON, reason,
 				      sizeof(reason));
-		txq_commit(mm, idx, off);
+		mm->stats.term_refused++;
+	} else {
+		mm->term_by_pt = 1;
+		mm->stats.term_by_pt++;
 	}
+	txq_commit(mm, idx, off);
+}
+
+static void on_terminate_request(struct dect_mm *mm, const uint8_t *ies,
+				 size_t ies_len, const uint8_t rand_f[8],
+				 const uint8_t rs[16])
+{
+	const uint8_t *pid;
+	size_t pid_len;
+
+	mm->ti_value = 0;
+	if (mm->term_auth)
+		return;			/* a repeat while we authenticate */
+	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+			       &pid_len);
+	if (!pid || !mm->port_id_len || pid_len != mm->port_id_len ||
+	    memcmp(pid, mm->port_id, pid_len)) {
+		terminate_answer(mm, 0, DECT_MM_REJECT_IPUI_UNKNOWN);
+		return;
+	}
+	if (!mm->uak_known || !rand_f || !rs) {
+		terminate_answer(mm, 0, DECT_MM_REJECT_AUTH_FAILED);
+		return;
+	}
+	/* the challenge: UAK #8, no DCK stored (UPC 0), fresh RAND and RS */
+	memcpy(mm->cipher_uak, mm->uak, DECT_MM_UAK_LEN);
+	memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
+	memcpy(mm->rs, rs, sizeof(mm->rs));
+	mm->term_auth = 1;
+	mm->term_auth_deadline_ms = 0;
+	send_auth_request_fp(mm, 0x08u);
+}
+
+/* The handset's AUTHENTICATION-REPLY to the challenge before termination. */
+static void on_auth_reply_terminate(struct dect_mm *mm, const uint8_t *ies,
+				    size_t ies_len)
+{
+	const uint8_t *res;
+	size_t res_len;
+	uint8_t ks[DECT_AUTH_KEY_LEN], dck[DECT_CIPHER_KEY_LEN], xres[4];
+
+	res = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res_len);
+	dect_dsaa_a11(mm->cipher_uak, mm->rs, ks);
+	dect_dsaa_a12(ks, mm->rand_f, dck, xres);
+	terminate_answer(mm, res && res_len == 4u && !memcmp(res, xres, 4),
+			 DECT_MM_REJECT_AUTH_FAILED);
 }
 
 void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN])
@@ -762,7 +801,7 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 #define CIPHER_INFO_DSC  { 0x81u, 0x98u }		/* [CR A-0027] enable, DCK #8 */
 
 /* FP -> PP AUTHENTICATION-REQUEST: challenge the PP with RAND_F/RS (K = UAK). */
-static void send_auth_request_fp(struct dect_mm *mm)
+static void send_auth_request_fp(struct dect_mm *mm, uint8_t octet5)
 {
 	uint8_t at[3] = AUTH_TYPE_CIPHER;
 	unsigned idx;
@@ -771,6 +810,7 @@ static void send_auth_request_fp(struct dect_mm *mm)
 
 	if (!b)
 		return;
+	at[2] = octet5;
 	off = hdr(mm, b, DECT_TI_ORIGINATOR, DECT_MM_AUTHENTICATION_REQUEST);
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_AUTH_TYPE, at, sizeof(at));
 	off = dect_nwk_put_ie(b, DECT_LAPC_MSG_MAX, off, DECT_IE_RAND,
@@ -835,7 +875,7 @@ void dect_mm_start_cipher(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN]
 	mm->cipher_state = DECT_MM_CIPHER_WAIT_REPLY;
 	mm->auth_deadline_ms = 0;		/* <MM_auth.1> starts on the tick */
 	mm->cipher_rejected = 0;
-	send_auth_request_fp(mm);
+	send_auth_request_fp(mm, 0x18u);	/* UPC + DCK #8: ciphering */
 }
 
 int dect_mm_cipher_dck(const struct dect_mm *mm, uint8_t dck[DECT_MM_DCK_LEN])
@@ -1009,7 +1049,7 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		break;
 	case DECT_MM_ACCESS_RIGHTS_TERMINATE_REQUEST:
 		if (h.ti_flag == DECT_TI_ORIGINATOR)
-			on_terminate_request(mm, ies, ies_len);
+			on_terminate_request(mm, ies, ies_len, rand_f, rs);
 		break;
 	case DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT:
 	case DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT:
@@ -1031,6 +1071,9 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		if (mm->state == DECT_MM_WAIT_AUTH &&
 		    h.ti_flag == DECT_TI_RESPONDER)
 			key_allocation_failed(mm);
+		/* ... or our authentication of it before a termination */
+		else if (mm->term_auth && h.ti_flag == DECT_TI_RESPONDER)
+			terminate_answer(mm, 0, DECT_MM_REJECT_AUTH_FAILED);
 		/* ... or our authentication of it, before ciphering (§8.24) */
 		else if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY &&
 			 h.ti_flag == DECT_TI_RESPONDER)
@@ -1050,6 +1093,10 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		}
 		break;
 	case DECT_MM_AUTHENTICATION_REPLY:
+		if (mm->term_auth && h.ti_flag == DECT_TI_RESPONDER) {
+			on_auth_reply_terminate(mm, ies, ies_len);
+			break;
+		}
 		if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY)
 			on_auth_reply_cipher(mm, ies, ies_len);
 		break;
@@ -1125,6 +1172,13 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 	} else if (now_ms >= mm->key_deadline_ms) {
 		key_allocation_failed(mm);
 		mm->key_deadline_ms = 0;
+	}
+	/* <MM_auth.1> on the challenge before a termination: refuse it */
+	if (mm->term_auth) {
+		if (!mm->term_auth_deadline_ms)
+			mm->term_auth_deadline_ms = now_ms + MM_AUTH1_MS;
+		else if (now_ms >= mm->term_auth_deadline_ms)
+			terminate_answer(mm, 0, DECT_MM_REJECT_AUTH_FAILED);
 	}
 	/*
 	 * <MM_cipher.1> (EN 300 444 §8.33.1.1): from our {CIPHER-REQUEST} to
@@ -1213,6 +1267,9 @@ uint64_t dect_mm_next_deadline(const struct dect_mm *mm)
 	if (mm->term_state == DECT_MM_TERM_PENDING && mm->term_deadline_ms &&
 	    mm->term_deadline_ms < t)
 		t = mm->term_deadline_ms;
+	if (mm->term_auth && mm->term_auth_deadline_ms &&
+	    mm->term_auth_deadline_ms < t)
+		t = mm->term_auth_deadline_ms;
 	if (mm->cipher_state == DECT_MM_CIPHER_READY && !mm->cipher_on &&
 	    !mm->cipher_rejected && mm->cipher_deadline_ms &&
 	    mm->cipher_deadline_ms < t)

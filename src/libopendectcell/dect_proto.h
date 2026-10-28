@@ -576,8 +576,17 @@
  *    accepted at once, without authentication, and term_by_pt set;
  *    another identity gets {ACCESS-RIGHTS-TERMINATE-REJECT} "IPUI
  *    unknown". It was ignored.
+ *
+ * 74: authenticated self-deregistration (2026-10-28, maintainer). Layout
+ *    change: struct dect_mm gains term_auth and term_auth_deadline_ms, the
+ *    stats term_refused. **Behaviour change:** a handset's own
+ *    {ACCESS-RIGHTS-TERMINATE-REQUEST} is answered only after our
+ *    {AUTHENTICATION-REQUEST} with its UAK (EN 300 175-5 §13.5.2, annex
+ *    H.2): ACCEPT on the right RES, else REJECT "authentication failed"
+ *    (wrong RES, no UAK, its refusal, <MM_auth.1>). API 73 accepted it
+ *    unauthenticated.
  */
-#define OPENDECTCELL_API_VERSION 73
+#define OPENDECTCELL_API_VERSION 74
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

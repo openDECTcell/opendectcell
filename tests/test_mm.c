@@ -291,32 +291,81 @@ static void test_terminate_access_rights(void)
 }
 
 /*
- * A handset deregisters itself: accepted for the identity the link holds,
- * term_by_pt set for the owner; another identity is rejected "IPUI unknown".
+ * A handset deregisters itself (EN 300 175-5 §13.5.2): we authenticate it
+ * first with its UAK. The right RES: ACCEPT and term_by_pt. A wrong RES, no
+ * UAK, its AUTHENTICATION-REJECT or <MM_auth.1>: REJECT "authentication
+ * failed". Another identity: REJECT "IPUI unknown". An attacker who knows
+ * an IPUI -- it is on the air in every LOCATE-REQUEST -- gets no further.
  */
 static void test_handset_deregisters_itself(void)
 {
 	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
 	static const uint8_t other[] = { 0x80, 0xa8, 0x02, 0x44, 0x55, 0x66 };
+	uint8_t uak[16] = { 0x27, 0x18, 0x28, 0x18 };
+	uint8_t rand_f[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rs[16] = { 9, 9, 9, 9, 8, 8, 8, 8 };
 	struct dect_mm_cfg cfg = { .rfpi = { 1, 2, 3, 4, 5 } };
 	struct dect_mm mm;
 	struct dect_nwk_hdr h;
-	const uint8_t *ies;
-	uint8_t buf[64], out[64];
-	size_t n, ies_len;
+	const uint8_t *ies, *at;
+	uint8_t buf[64], out[64], ks[16], dck[8], res[4];
+	size_t n, ies_len, al;
 	int k;
 
-	for (k = 0; k < 2; k++) {
+	dect_dsaa_a11(uak, rs, ks);
+	dect_dsaa_a12(ks, rand_f, dck, res);
+	/* k: 0 right RES, 1 wrong RES, 2 no UAK, 3 other IPUI, 4 timeout,
+	 * 5 the handset refuses our challenge */
+	for (k = 0; k < 6; k++) {
 		dect_mm_init(&mm, &cfg);
 		memcpy(mm.port_id, ipui, sizeof(ipui));
 		mm.port_id_len = sizeof(ipui);
+		if (k != 2)
+			dect_mm_set_uak(&mm, uak);
 		n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
 				       DECT_TI_ORIGINATOR, 0,
 				       DECT_MM_ACCESS_RIGHTS_TERMINATE_REQUEST);
 		n = dect_nwk_put_ie(buf, sizeof(buf), n,
 				    DECT_IE_PORTABLE_IDENTITY,
-				    k ? other : ipui, sizeof(ipui));
-		dect_mm_rx(&mm, buf, n, NULL, NULL);
+				    k == 3 ? other : ipui, sizeof(ipui));
+		dect_mm_rx(&mm, buf, n, rand_f, rs);
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(dect_nwk_parse(out, n, &h, &ies, &ies_len), 0);
+		if (k == 2 || k == 3) {
+			CHECK_EQ(h.msg_type,
+				 DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT);
+			CHECK_EQ(out[4], k == 2 ? DECT_MM_REJECT_AUTH_FAILED
+						: DECT_MM_REJECT_IPUI_UNKNOWN);
+			CHECK_EQ(mm.term_by_pt, 0u);
+			continue;
+		}
+		/* the challenge, on our own transaction */
+		CHECK_EQ(h.msg_type, DECT_MM_AUTHENTICATION_REQUEST);
+		CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
+		at = dect_nwk_find_ie(ies, ies_len, DECT_IE_AUTH_TYPE, &al);
+		CHECK(at && al == 3u && at[1] == 0x18u && at[2] == 0x08u);
+		CHECK_EQ(mm.term_by_pt, 0u);		/* not yet */
+		if (k == 4) {
+			dect_mm_tick(&mm, 1000);
+			dect_mm_tick(&mm, 11000);		/* <MM_auth.1> */
+		} else if (k == 5) {
+			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+					       DECT_TI_RESPONDER, 0,
+					       DECT_MM_AUTHENTICATION_REJECT);
+			dect_mm_rx(&mm, buf, n, rand_f, rs);
+		} else {
+			uint8_t r[4];
+
+			memcpy(r, res, 4);
+			if (k == 1)
+				r[0] ^= 0x01u;
+			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+					       DECT_TI_RESPONDER, 0,
+					       DECT_MM_AUTHENTICATION_REPLY);
+			n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RES,
+					    r, 4);
+			dect_mm_rx(&mm, buf, n, rand_f, rs);
+		}
 		n = dect_mm_poll(&mm, out, sizeof(out));
 		CHECK_EQ(dect_nwk_parse(out, n, &h, &ies, &ies_len), 0);
 		CHECK_EQ(h.ti_flag, DECT_TI_RESPONDER);
@@ -327,9 +376,12 @@ static void test_handset_deregisters_itself(void)
 		} else {
 			CHECK_EQ(h.msg_type,
 				 DECT_MM_ACCESS_RIGHTS_TERMINATE_REJECT);
-			CHECK_EQ(out[4], DECT_MM_REJECT_IPUI_UNKNOWN);
+			CHECK_EQ(out[4], DECT_MM_REJECT_AUTH_FAILED);
 			CHECK_EQ(mm.term_by_pt, 0u);
+			CHECK_EQ(mm.stats.term_refused, 1u);
 		}
+		CHECK_EQ(mm.term_auth, 0u);
+		CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
 	}
 }
 

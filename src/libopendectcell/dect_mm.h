@@ -171,6 +171,7 @@ struct dect_mm_stats {
 	uint32_t cipher_rejected;  /* {CIPHER-REJECT} received */
 	uint32_t cipher_timeouts;  /* <MM_cipher.1>: never ciphered */
 	uint32_t term_by_pt;	   /* handsets that deregistered themselves */
+	uint32_t term_refused;	   /* ... refused: no UAK, or it failed */
 	uint32_t ft_auth;	   /* the PT authenticated us: replies sent */
 	uint32_t ft_auth_refused;  /* ... refused: no UAK, or not DSAA/UAK */
 	uint32_t locate_deferred;  /* unknown identities held for the owner */
@@ -316,6 +317,9 @@ struct dect_mm {
 	/* the handset terminated its own access rights; the owner erases
 	 * the subscription and clears this */
 	uint8_t  term_by_pt;
+	/* its request waits for our authentication of it (§13.5.2) */
+	uint8_t  term_auth;
+	uint64_t term_auth_deadline_ms;		/* <MM_auth.1>, 0 = armed */
 
 	/*
 	 * Call-time ciphering: the FP authenticates the PP with the stored UAK to
@@ -445,10 +449,15 @@ void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN]);
  * one is pending.
  *
  * The other direction: a handset's own {ACCESS-RIGHTS-TERMINATE-REQUEST}
- * for the identity this link holds is accepted at once, without
- * authenticating it first (EN 300 175-5 §13.5.2 makes that optional;
- * stock does none on its own path, [CR A-0128]), and term_by_pt is set
- * for the owner. Another identity gets {ACCESS-RIGHTS-TERMINATE-REJECT}.
+ * for the identity this link holds is answered only after we have
+ * authenticated the handset with its stored UAK (EN 300 175-5 §13.5.2,
+ * nested as in annex H.2; "if authentication of the PT is not successful,
+ * termination ... should be rejected"). An identity is no secret -- it is
+ * on the air in every location registration -- so without this anyone
+ * could deregister any handset. On the right RES, ACCEPT and term_by_pt
+ * for the owner; on a wrong one, no UAK, the PT's refusal or <MM_auth.1>,
+ * {ACCESS-RIGHTS-TERMINATE-REJECT} "authentication failed". Another
+ * identity: REJECT "IPUI unknown".
  */
 int dect_mm_terminate(struct dect_mm *mm);
 
