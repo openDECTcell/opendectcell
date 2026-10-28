@@ -1113,6 +1113,18 @@ static int our_transaction(const struct dect_cc *cc,
 	       h->ti_value == cc->ti_value && h->ti_flag != cc->ti_flag;
 }
 
+/*
+ * EN 300 175-5 §17.3.2.1: a CC message other than SETUP, RELEASE and
+ * RELEASE-COM on a transaction we do not hold is cleared with
+ * {CC-RELEASE-COM} "unknown transaction identifier", on that transaction.
+ */
+static void close_unknown(struct dect_cc *cc, const struct dect_nwk_hdr *h)
+{
+	queue_release_other(cc, h->ti_flag, h->ti_value,
+			    DECT_CC_REASON_UNKNOWN_TRANSACTION);
+	cc->stats.closed_unknown++;
+}
+
 void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 {
 	struct dect_nwk_hdr h;
@@ -1226,7 +1238,11 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		break;
 	case DECT_CC_ALERTING:
 		/* Incoming call: the handset is ringing. */
-		if (our_transaction(cc, &h) && cc->incoming &&
+		if (!our_transaction(cc, &h)) {
+			close_unknown(cc, &h);
+			break;
+		}
+		if (cc->incoming &&
 		    cc->state == DECT_CC_ST_CALL_PRESENT) {
 			learn_codec_choice(cc, ies, ies_len);
 			cc->state = DECT_CC_ST_RINGING;
@@ -1239,7 +1255,11 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 * confirms with CONNECT-ACK, and then the call is active and
 		 * the audio bind is the same as for a handset-placed call.
 		 */
-		if (our_transaction(cc, &h) && cc->incoming &&
+		if (!our_transaction(cc, &h)) {
+			close_unknown(cc, &h);
+			break;
+		}
+		if (cc->incoming &&
 		    (cc->state == DECT_CC_ST_CALL_PRESENT ||
 		     cc->state == DECT_CC_ST_RINGING)) {
 			learn_codec_choice(cc, ies, ies_len);
@@ -1251,6 +1271,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 	case DECT_CC_CONNECT_ACK:
 		if (our_transaction(cc, &h))
 			on_connect_ack(cc);
+		else
+			close_unknown(cc, &h);
 		break;
 	case DECT_CC_RELEASE:
 		/* EN 300 175-5 §17.3.2.1: unknown transaction, no action. */
@@ -1277,8 +1299,11 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		/*
 		 * <<IWU-TO-IWU>> session dialog. The peer opens sessions during
 		 * call setup and we used to drop every one; see dect_iwu.h.
-		 * Answered on any state, because the records ride whatever
-		 * transaction is up and a session open is not call state.
+		 * Answered in any state of the call we hold, because a session
+		 * open is not call state; the answers go out on that call's
+		 * transaction (queue_iwu), so one on a transaction we do not
+		 * hold is cleared instead (EN 300 175-5 §17.3.2.1). We answered
+		 * it on ours (spec sweep, I3); no saved log has one.
 		 */
 		size_t n;
 		const uint8_t *p = dect_nwk_find_ie(ies, ies_len,
@@ -1286,6 +1311,10 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		struct dect_iwu_out replies;
 		unsigned i;
 
+		if (!our_transaction(cc, &h)) {
+			close_unknown(cc, &h);
+			break;
+		}
 		if (!p)
 			break;
 		replies.count = 0;
@@ -1307,8 +1336,11 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 * closed, because {CC-INFO} is a legitimate message on a live
 		 * transaction and closing it would drop the call.
 		 */
-		if (our_transaction(cc, &h) &&
-		    (cc->state == DECT_CC_ST_CALL_PRESENT ||
+		if (!our_transaction(cc, &h)) {
+			close_unknown(cc, &h);
+			break;
+		}
+		if ((cc->state == DECT_CC_ST_CALL_PRESENT ||
 		     cc->state == DECT_CC_ST_CONNECT_PENDING ||
 		     cc->state == DECT_CC_ST_ACTIVE ||
 		     cc->state == DECT_CC_ST_OVERLAP ||
@@ -1386,11 +1418,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 * Releases never reach here, so a release is never answered
 		 * with a release.
 		 */
-		if (!our_transaction(cc, &h)) {
-			queue_release_other(cc, h.ti_flag, h.ti_value,
-					    DECT_CC_REASON_UNKNOWN_TRANSACTION);
-			cc->stats.closed_unknown++;
-		}
+		if (!our_transaction(cc, &h))
+			close_unknown(cc, &h);
 		break;
 	}
 }

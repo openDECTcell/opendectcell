@@ -404,8 +404,16 @@
  *    stats gain release_collisions. **Behaviour change:** a peer
  *    {CC-RELEASE} while ours is pending stops <CC.02> and enters NULL
  *    without a {CC-RELEASE-COM} (EN 300 175-5 §9.5.3).
+ *
+ * 50: unknown transactions (2026-10-28, spec sweep E4, I3). No layout
+ *    change. **Behaviour change:** {CC-ALERTING}, {CC-CONNECT},
+ *    {CC-CONNECT-ACK}, {CC-INFO} and {CC-IWU-INFO} on a transaction we do
+ *    not hold are cleared with {CC-RELEASE-COM} "unknown transaction
+ *    identifier" (EN 300 175-5 §17.3.2.1), like every other message type
+ *    already was. Before, they were ignored, and an IWU-INFO was answered on
+ *    our own transaction.
  */
-#define OPENDECTCELL_API_VERSION 49
+#define OPENDECTCELL_API_VERSION 50
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

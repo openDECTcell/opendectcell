@@ -412,6 +412,48 @@ static void test_release_collision(void)
 	CHECK_EQ(cc.stats.release_collisions, 0u);
 }
 
+/*
+ * ALERTING, CONNECT, CONNECT-ACK, INFO and IWU-INFO on a transaction we do
+ * not hold are cleared "unknown TI" on that transaction (§17.3.2.1), with no
+ * effect on the call we hold. They were ignored, or answered on ours.
+ */
+static void test_unknown_transaction_is_cleared(void)
+{
+	static const uint8_t types[] = {
+		DECT_CC_ALERTING, DECT_CC_CONNECT, DECT_CC_CONNECT_ACK,
+		DECT_CC_INFO, DECT_CC_IWU_INFO,
+	};
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n, i;
+	int k;
+
+	for (k = 0; k < 2; k++) {
+		dect_cc_init(&cc);
+		if (k) {			/* a call in progress on TV 0 */
+			n = pp_setup(buf, sizeof(buf), 0);
+			dect_cc_rx(&cc, buf, n);
+			while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+				;
+		}
+		for (i = 0; i < sizeof(types); i++) {
+			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC,
+					       DECT_TI_ORIGINATOR, 3, types[i]);
+			dect_cc_rx(&cc, buf, n);
+			n = dect_cc_poll(&cc, out, sizeof(out));
+			CHECK_EQ(n, 4u);
+			CHECK_EQ(out[0], 0xB3u);	/* F=1, TV=3, PD CC */
+			CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
+			CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_TRANSACTION);
+		}
+		CHECK_EQ(cc.stats.closed_unknown, (uint32_t)sizeof(types));
+		if (k)
+			CHECK_EQ(cc.ti_value, 0u);	/* the call kept */
+		else
+			CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	}
+}
+
 /* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
 static void test_setup_without_basic_service_is_refused(void)
 {
@@ -477,6 +519,21 @@ static void test_release_from_fp(void)
 	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
 }
 
+/*
+ * Open the list-access call a session rides on, as the A540 does before its
+ * first {CC-IWU-INFO} (work/box-tmp/vT3nb.log: SETUP with `e0 28`, then the
+ * session opens on that transaction), and drain our CALL-PROC.
+ */
+static void open_list_access_call(struct dect_cc *cc)
+{
+	uint8_t buf[64], out[64];
+	size_t n = pp_setup_svc(buf, sizeof(buf), 0, 0x28);
+
+	dect_cc_rx(cc, buf, n);
+	while (dect_cc_poll(cc, out, sizeof(out)) > 0)
+		;
+}
+
 /* A non-CC message (MM PD) is ignored. */
 /*
  * The exact {CC-IWU-INFO} a Gigaset A540 sends during call setup, copied from
@@ -495,6 +552,7 @@ static void test_answers_the_handsets_iwu_session_open(void)
 	uint8_t out[64];
 
 	dect_cc_init(&cc);
+	open_list_access_call(&cc);
 	dect_cc_rx(&cc, a540_iwu_open, sizeof(a540_iwu_open));
 
 	n = dect_cc_poll(&cc, out, sizeof(out));
@@ -530,6 +588,7 @@ static void test_list_read_queues_confirm_and_data_packet(void)
 	uint8_t out[64];
 
 	dect_cc_init(&cc);
+	open_list_access_call(&cc);
 	dect_cc_rx(&cc, start, sizeof(start));
 	n = dect_cc_poll(&cc, out, sizeof(out));
 	CHECK(n > 0);
@@ -602,9 +661,9 @@ static void test_iwu_does_not_change_call_state(void)
 	struct dect_cc cc;
 
 	dect_cc_init(&cc);
+	open_list_access_call(&cc);
 	dect_cc_rx(&cc, a540_iwu_open, sizeof(a540_iwu_open));
-	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
-	CHECK_EQ(cc.stats.setup, 0u);
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
 	CHECK_EQ(cc.stats.released, 0u);
 }
 
@@ -616,6 +675,7 @@ static void test_iwu_info_without_the_ie_is_ignored(void)
 	size_t n;
 
 	dect_cc_init(&cc);
+	open_list_access_call(&cc);
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
 			       0, DECT_CC_IWU_INFO);
 	dect_cc_rx(&cc, buf, n);
@@ -735,11 +795,16 @@ static void test_foreign_transaction_does_not_touch_our_call(void)
 	dect_cc_rx(&cc, buf, n);
 	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
 
+	/* ALERTING on the handset's transaction 0: cleared, not ours */
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
 			       0, DECT_CC_ALERTING);
 	dect_cc_rx(&cc, buf, n);
 	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
 	CHECK_EQ(cc.stats.alerting, 0u);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[0], 0x83u);			/* F=1, TV=0 */
+	CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_TRANSACTION);
 
 	/* Our own transaction still works: F=1 (the peer's side), TV 0. */
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_RESPONDER,
@@ -1304,7 +1369,10 @@ static void test_keypad_in_the_setup_is_collected(void)
 	CHECK_EQ(memcmp(dect_cc_keypad(&cc, &len), "*21#", 4), 0);
 }
 
-/* A {CC-INFO} on a dead transaction is ignored -- and must not close it. */
+/*
+ * A {CC-INFO} with no call: its digits are not kept, and the transaction is
+ * cleared "unknown TI" (EN 300 175-5 §17.3.2.1). It used to be ignored.
+ */
 static void test_keypad_outside_a_call_is_ignored(void)
 {
 	static const uint8_t cc_info[] = {
@@ -1319,7 +1387,9 @@ static void test_keypad_outside_a_call_is_ignored(void)
 	CHECK(dect_cc_keypad(&cc, &len) == NULL);
 	CHECK_EQ(cc.stats.keypad, 0u);
 	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
-	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+	CHECK_EQ(msg_type_of(out, dect_cc_poll(&cc, out, sizeof(out))),
+		 DECT_CC_RELEASE_COM);
+	CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_TRANSACTION);
 }
 
 /*
@@ -2443,6 +2513,7 @@ int main(void)
 	test_unattached_line_is_refused();
 	test_release_timer();
 	test_release_collision();
+	test_unknown_transaction_is_cleared();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();
