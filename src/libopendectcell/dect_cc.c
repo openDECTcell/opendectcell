@@ -528,6 +528,31 @@ static void learn_keypad(struct dect_cc *cc, const uint8_t *ies, size_t ies_len)
 	cc->keypad_len += n;
 }
 
+/*
+ * The internal-call key, 0x17 (EN 300 444 §8.19), first in the keypad of a
+ * call the handset placed: the call is an internal one, whatever its SETUP
+ * said. TS 102 527-3 §7.4.10.6.2 and figure C.21: a handset that picked
+ * the party from the Internal Names List sends "17H + number" in one
+ * {CC-INFO} on its list-access call, and "the FP shall maintain the call"
+ * -- the A540 does exactly that (bench test 19, 2026-10-28). Re-classed as
+ * call class 9, keeping the speech service, it takes the internal-call
+ * path; a list-access call has had its CALL-PROC already.
+ */
+static void learn_int_key(struct dect_cc *cc)
+{
+	unsigned cls = cc->peer_basic_service >> 4;
+
+	if (cc->incoming || !cc->keypad_len || cc->keypad[0] != 0x17u)
+		return;
+	if (cc->peer_basic_service == DECT_CC_SVC_NONE ||
+	    (cls != 0x2u && cls != 0x8u))
+		return;
+	if (cls == 0x2u && cc->state == DECT_CC_ST_PROCEEDING)
+		cc->proceeded = 1;
+	cc->peer_basic_service =
+		(uint8_t)(0x90u | (cc->peer_basic_service & 0x0Fu));
+}
+
 const uint8_t *dect_cc_keypad(const struct dect_cc *cc, size_t *len)
 {
 	if (len)
@@ -921,6 +946,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_basic_service(cc, ies, ies_len);
 			learn_codec_offer(cc, ies, ies_len);
 			learn_keypad(cc, ies, ies_len);
+			learn_int_key(cc);
 			on_setup(cc, dect_nwk_find_fixed_ie(ies, ies_len,
 				 DECT_IE_SENDING_COMPLETE) >= 0);
 			if (cc->state != DECT_CC_ST_OVERLAP)
@@ -1032,6 +1058,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			size_t before = cc->keypad_len;
 
 			learn_keypad(cc, ies, ies_len);
+			learn_int_key(cc);
 			if (cc->keypad_len != before)
 				cc->stats.keypad++;
 			if (cc->state == DECT_CC_ST_OVERLAP) {

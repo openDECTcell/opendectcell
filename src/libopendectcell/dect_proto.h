@@ -272,8 +272,14 @@
  *    **Behaviour change:** dect_mm_cfg.pin no longer defaults to "0000"
  *    when empty; a PIN that is not 4 to 8 digits refuses every
  *    {ACCESS-RIGHTS-REQUEST} ("IPUI not accepted") before KEY-ALLOCATE.
+ *
+ * 28: the internal-call key (2026-10-28). No layout change. **Behaviour
+ *    change:** a handset-placed call of class 2 (list access) or 8 whose
+ *    keypad starts with 0x17 is re-classed as class 9, keeping its speech
+ *    service (EN 300 444 §8.19, TS 102 527-3 §7.4.10.6.2), so
+ *    peer_basic_service can change after the SETUP.
  */
-#define OPENDECTCELL_API_VERSION 27
+#define OPENDECTCELL_API_VERSION 28
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
