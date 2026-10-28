@@ -370,6 +370,17 @@ static void test_cipher(void)
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REQUEST);
 	dect_nwk_parse(out, n, &h, &ies, &ies_len);
 	CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
+	{
+		/* EN 300 444 table 43: UPC 1, cipher key number 8 */
+		size_t al;
+		const uint8_t *at = dect_nwk_find_ie(ies, ies_len,
+						     DECT_IE_AUTH_TYPE, &al);
+
+		CHECK(at != NULL);
+		CHECK_EQ(al, 3u);
+		CHECK_EQ(at[0], 0x01);		/* DSAA */
+		CHECK_EQ(at[2] & 0x1Fu, 0x18u);	/* UPC + key 8 */
+	}
 
 	/* PP computes RES = A12(A11(UAK,RS),RAND_F) and replies (F=1). */
 	dect_dsaa_a11(uak, rs, ks);
@@ -383,9 +394,19 @@ static void test_cipher(void)
 	CHECK_EQ(dect_mm_cipher_dck(&mm, got_dck), 1);
 	CHECK_EQ(memcmp(got_dck, want_dck, 8), 0);
 
-	/* And a CIPHER-REQUEST is queued. */
+	/* And a CIPHER-REQUEST is queued, naming the key just stored. */
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_CIPHER_REQUEST);
+	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	{
+		size_t cl;
+		const uint8_t *ci = dect_nwk_find_ie(ies, ies_len,
+						     DECT_IE_CIPHER_INFO, &cl);
+
+		CHECK(ci != NULL && cl == 2u);
+		if (ci && cl == 2u)
+			CHECK_EQ(ci[1] & 0x0Fu, 0x08u);	/* the same key 8 */
+	}
 }
 
 

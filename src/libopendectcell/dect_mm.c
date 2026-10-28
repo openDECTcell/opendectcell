@@ -535,10 +535,15 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
  * Call-time ciphering (FP-initiated authentication + CIPHER-REQUEST).
  * CIPHER-INFO is AVM's exact over-air content `19 02 81 98` [CR A-0027 Q3]:
  * 0x81 enables the standard cipher, 0x98 identifies the DCK / key number 8.
- * AUTH-TYPE is still provisional (A-0011 saw AVM use a 0x18 second octet, i.e.
- * UAK key number 8, which matches the 0x98 above); confirm against hardware.
+ *
+ * AUTH-TYPE (EN 300 175-5 figure 28): octet 3 DSAA (0x01); octet 4 key type
+ * UAK (1) and authentication key number 8 (A-0011 saw stock send 0x18);
+ * octet 5 INC/DEF/TXC/UPC and the cipher key number. EN 300 444 table 43,
+ * "storing the DCK", wants UPC 1 and cipher key number 8: 0x18. We sent
+ * 0x10, which stores the DCK as key 0 while our CIPHER-REQUEST asks for key
+ * 8 (spec sweep, 2026-10-28).
  */
-#define AUTH_TYPE_CIPHER { 0x01u, 0x18u, 0x10u }	/* DSAA1, UAK #8, flags (TBD) */
+#define AUTH_TYPE_CIPHER { 0x01u, 0x18u, 0x18u }	/* DSAA, UAK #8, UPC + DCK #8 */
 #define CIPHER_INFO_DSC  { 0x81u, 0x98u }		/* [CR A-0027] enable, DCK #8 */
 
 /* FP -> PP AUTHENTICATION-REQUEST: challenge the PP with RAND_F/RS (K = UAK). */
