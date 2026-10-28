@@ -147,3 +147,26 @@ and `... after the list session, DISC first ...` after the list.
 The agent checks the logs for one new line: `lapc: *** ... no acknowledgement
 after 3 retransmissions -- link released ***`. If it ever appears during a call
 that was working, the new link-loss rule is too strict.
+
+## Results, 2026-10-28 afternoon `[observed on hardware]`
+
+Box at `fdbb0718` (API 38), STUB 07.56, the maintainer at the bench. Logs in
+`work/box-tmp/`, passing runs in `work/7520/golden.txt`.
+
+| test | result | log |
+|---|---|---|
+| 1 caller name, C430A | **the name shows only as base-drawn display text.** Plain {CC-INFO} <<MULTI-DISPLAY>> "Wednesday": a separate text screen without the ringer symbol, then the handset's own ringer screen with the number takes over. Stock's AS690H framing: the same. Stock's C430A two-line framing: the text screen showed the number line, not the name line, for 6-8 s, then the ringer screen again. The standard <<CALLING-PARTY-NAME>> is ignored by this Part 1 handset. A Gigaset manufacturer-profile matter (vendor display framing), not standard work | `vRINGC430A-20261028-095744-1`, `-100*` |
+| 2 A540 ring | **solved.** Bare line id: silent (control, as 21c). Stock's full <<CALL-INFORMATION>> (line, line type, call id, CS call setup): **rings aloud and shows "via Line 1 0301234567"**, the first caller number on the A540 | `vRINGA540-20261028-100803-1` |
+| 3 call timers | **pass.** C430A without call status (Part 1): its own timer still appears (8-10 s in, already at 00:04). A540 with call status (Part 3): timer at once, CONNECT `... 7e 06 01 00 81 02 01 85` | `vRINGC430A-20261028-101004-1`, `vRINGA540-20261028-101227-1` |
+| 4 encryption | **works.** The chip acknowledged `0x0208` with `0x0209 01` in both byte orders and neither call dropped (the link holds while nothing is sent). The discriminator was the handset's release after ciphering: **plain order read `03 4d e2 00` through the cipher**; reversed (A-0028's reading) arrived garbled, and its audio was wind. Plain made the default (`03ae17f`); a ciphered call with the test sound: both tones clear. Service default back to cipher on (`c51a583`) | `vS1a/b/c-20261028-1` |
+| 5 internal ring, redial | internal SETUP carried <<SIGNAL>> `e4 40`; whether the C430A's ring pattern differs was not judged. **Redial void:** only one "123" reached the base, and the A540 released its link after every call, so a second call on the same link did not occur (the fix stays covered by its unit test) | `vS45-20261028-1` |
+| 6 wrong PIN | **pass.** `05 43 60 01 10` (AUTHENTICATION-REJECT) then `85 47 60 01 10`; the AS690H showed "PIN ungültig!", then registered with the right PIN | `vREGAS690H102454` |
+| 7 nlr | **pass.** After each call `0x0202 01`, chip `0x0201 01` 24 ms later; both calls and the list worked. The list-access DISC branch did not run (the A540 ended its list links first). Made the default (`f93e86b`) | `vNLR-20261028-1` |
+
+Also: the test file `wb16k.pcm` has its voice at an amplitude of 3-22 (inaudible);
+the voice is in `wb16k-voice.pcm`. The 40 s ring delay of `ringone.sh` is now
+10 s after first contact (maintainer).
+
+**Follow-ups:** send the full call information by default to Part 3 handsets
+on every external incoming call (test 2); a Gigaset display profile for the
+caller name (test 1); internal-call CLIP (the C430A showed no caller on test 5).
