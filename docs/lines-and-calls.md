@@ -63,6 +63,14 @@ an external incoming call the per-handset ids before the answer may differ
 6. **Hold, toggle, release one, outgoing parallel call** (D4-D9).
 7. The bridge's events, then baresip.
 
+**Progress (2026-10-28 evening):** step 1 done (`e8b738a`, API 39); step 2
+done for reading the choice and naming the selected line (`7f1b9d9`,
+`8d128d1`, API 40; the A540 sends 'None', so FP-managed selection is its normal
+case), the refusal of an unattached line still open; step 3 done (`f5d150a`,
+`9a13f74`, API 41). Also: the full call information to Part 3 handsets on our
+rings, and CS call connect after they answer (`2c76ace`). On-air checks:
+`bench-next.md` tests 8-10.
+
 Steps 1-3 are desk work; 4 needs two handsets and a bench run; 5-6 need the
 A540 (the only Part 3 handset on the bench) plus a second caller, which before
 the bridge exists means an internal call from another handset.
