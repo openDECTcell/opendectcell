@@ -106,3 +106,63 @@ size_t dect_time_build_facility(uint8_t *out, size_t cap,
 		return 0;
 	return end;
 }
+
+/* An extensible value, 1 or 2 octets (TS 102 527-3 table 39 note 1). */
+static size_t put_mult(uint8_t *out, size_t cap, size_t off, unsigned v)
+{
+	if (v < 128u) {
+		if (off + 1u > cap)
+			return 0;
+		out[off++] = (uint8_t)(0x80u | v);
+		return off;
+	}
+	if (v > 16383u || off + 2u > cap)
+		return 0;
+	out[off++] = (uint8_t)((v >> 7) & 0x7Fu);
+	out[off++] = (uint8_t)(0x80u | (v & 0x7Fu));
+	return off;
+}
+
+size_t dect_events_build_facility(uint8_t *out, size_t cap,
+				  const struct dect_event *ev, unsigned n,
+				  uint8_t line_id, uint8_t line_subtype)
+{
+	size_t off, len_at;
+	unsigned i;
+
+	if (!ev || !n)
+		return 0;
+	off = dect_nwk_build_hdr(out, cap, DECT_PD_CISS, DECT_TI_ORIGINATOR,
+				 DECT_TIME_FACILITY_TI, DECT_CISS_FACILITY);
+	if (!off || off + 2u > cap)
+		return 0;
+	/* §7.7.55.1: [7DH][L] then per event [type, bit 8 = 0: a subtype
+	 * follows][subtype, bit 8 = 1][multiplicity] */
+	out[off++] = DECT_IE_EVENTS_NOTIFICATION;
+	len_at = off++;
+	for (i = 0; i < n; i++) {
+		if (ev[i].type > 0x3Fu || ev[i].subtype > 0x7Fu ||
+		    off + 2u > cap)
+			return 0;
+		out[off++] = ev[i].type;
+		out[off++] = (uint8_t)(0x80u | ev[i].subtype);
+		off = put_mult(out, cap, off, ev[i].multiplicity);
+		if (!off)
+			return 0;
+	}
+	if (off - len_at - 1u > 0xFFu)
+		return 0;
+	out[len_at] = (uint8_t)(off - len_at - 1u);
+	if (line_id != DECT_EVENT_NO_LINE) {
+		/* <<CALL-INFORMATION>> after it (7EH > 7DH): {line 0, subtype,
+		 * value with bit 8}; 'None' (127) is not allowed (table 13) */
+		if (line_id > 126u || off + 5u > cap)
+			return 0;
+		out[off++] = 0x7Eu;
+		out[off++] = 3u;
+		out[off++] = 0x00u;
+		out[off++] = line_subtype;
+		out[off++] = (uint8_t)(0x80u | line_id);
+	}
+	return off;
+}

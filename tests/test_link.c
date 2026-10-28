@@ -411,6 +411,29 @@ static void test_held_setup_is_answered_and_its_digits_kept(void)
 	CHECK_EQ(dect_link_setup_resume(&l, 0), 0);
 }
 
+/* CISS {FACILITY}s queue up to four deep and leave in order. */
+static void test_ciss_queue(void)
+{
+	static const uint8_t a[] = { 0x64, 0x62, 0x7D, 0x03, 0x03, 0x88, 0x81 };
+	static const uint8_t b[] = { 0x64, 0x62, 0x7D, 0x03, 0x03, 0x86, 0x82 };
+	struct dect_link l;
+	unsigned i;
+
+	init(&l);
+	tx_seen_len = 0;
+	dect_link_set_tx_log(&l, tx_seen, NULL);
+	CHECK_EQ(dect_link_send_ciss(&l, a, sizeof(a)), 0);
+	CHECK_EQ(dect_link_send_ciss(&l, b, sizeof(b)), 0);
+	for (i = 2; i < DECT_LINK_CISS_MAX; i++)
+		CHECK_EQ(dect_link_send_ciss(&l, b, sizeof(b)), 0);
+	CHECK_EQ(dect_link_send_ciss(&l, b, sizeof(b)), -1);	/* full */
+	CHECK_EQ(dect_link_send_ciss(&l, a, 0), -1);
+	dect_link_drain(&l, 0);
+	CHECK_EQ(tx_seen_len, sizeof(a));		/* the first, alone */
+	CHECK(memcmp(tx_seen_buf, a, sizeof(a)) == 0);
+	CHECK_EQ(l.ciss_n, DECT_LINK_CISS_MAX - 1u);
+}
+
 /* A fresh link owns its own state and has nothing to send. */
 static int cs_answer;
 
@@ -716,6 +739,7 @@ int main(void)
 	test_call_status_is_asked_per_handset();
 	test_page_response_without_identity_is_rejected();
 	test_page_response_with_a_bad_ti_is_ignored();
+	test_ciss_queue();
 	test_call_id_is_asked_per_call();
 	test_init_is_quiet();
 	test_page_response_carries_the_identity();

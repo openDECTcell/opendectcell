@@ -101,10 +101,14 @@ static void drain_nwk(struct dect_link *l, uint64_t now)
 			mlen = dect_mm_poll(&l->mm, msg, sizeof(msg));
 		if (mlen == 0)
 			mlen = dect_cc_poll(&l->cc, msg, sizeof(msg));
-		if (mlen == 0 && l->ciss_len) {
-			mlen = l->ciss_len;
-			memcpy(msg, l->ciss, mlen);
-			l->ciss_len = 0;
+		if (mlen == 0 && l->ciss_n) {
+			mlen = l->ciss_len[0];
+			memcpy(msg, l->ciss[0], mlen);
+			l->ciss_n--;
+			memmove(l->ciss[0], l->ciss[1],
+				l->ciss_n * sizeof(l->ciss[0]));
+			memmove(&l->ciss_len[0], &l->ciss_len[1],
+				l->ciss_n * sizeof(l->ciss_len[0]));
 		}
 		if (mlen == 0)
 			break;
@@ -149,14 +153,19 @@ int dect_link_page_reject(struct dect_link *l, const uint8_t *ipui,
 
 int dect_link_send_time(struct dect_link *l, const struct dect_time *t)
 {
-	size_t n;
+	uint8_t msg[DECT_LAPC_MSG_MAX];
+	size_t n = dect_time_build_facility(msg, sizeof(msg), t);
 
-	if (l->ciss_len)
-		return -1;		/* one at a time is enough */
-	n = dect_time_build_facility(l->ciss, sizeof(l->ciss), t);
-	if (!n)
+	return n ? dect_link_send_ciss(l, msg, n) : -1;
+}
+
+int dect_link_send_ciss(struct dect_link *l, const uint8_t *msg, size_t len)
+{
+	if (l->ciss_n >= DECT_LINK_CISS_MAX || !len ||
+	    len > sizeof(l->ciss[0]))
 		return -1;
-	l->ciss_len = n;
+	memcpy(l->ciss[l->ciss_n], msg, len);
+	l->ciss_len[l->ciss_n++] = len;
 	return 0;
 }
 

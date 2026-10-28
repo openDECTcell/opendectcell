@@ -52,6 +52,8 @@
 #include "dect_proto.h"
 
 /* One connection's stack. Treat the members as read-only from outside. */
+#define DECT_LINK_CISS_MAX	4u
+
 struct dect_link {
 	uint8_t  handle;	/* chip connection handle this link rides on */
 	struct dect_lc_rx  lc;
@@ -65,8 +67,11 @@ struct dect_link {
 	 * machine behind it, so a one-deep slot is the honest size. If CISS
 	 * ever grows a real entity this becomes its queue.
 	 */
-	uint8_t  ciss[DECT_LAPC_MSG_MAX];
-	size_t   ciss_len;
+	/* CISS {FACILITY}s waiting for LAPC: the date and time and the events
+	 * notifications that follow a location registration */
+	uint8_t  ciss[DECT_LINK_CISS_MAX][DECT_LAPC_MSG_MAX];
+	size_t   ciss_len[DECT_LINK_CISS_MAX];
+	unsigned ciss_n;
 	/*
 	 * A held {CC-SETUP} from an unknown IPUI, see dect_link_setup_resume().
 	 * It is answered at once (setup_answered: {CC-SETUP-ACK} or
@@ -201,6 +206,12 @@ void dect_link_tick(struct dect_link *l, uint64_t now);
  * clock still makes calls.
  */
 int dect_link_send_time(struct dect_link *l, const struct dect_time *t);
+
+/*
+ * Queue a CISS {FACILITY} built by the caller (dect_events_build_facility());
+ * it goes out after MM and CC. 0, or -1 if the queue is full or len bad.
+ */
+int dect_link_send_ciss(struct dect_link *l, const uint8_t *msg, size_t len);
 
 /*
  * Queue {LCE-PAGE-REJECT} for a page response from a handset we did not

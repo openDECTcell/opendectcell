@@ -141,8 +141,58 @@ static void test_small_buffer_yields_nothing(void)
 	CHECK_EQ(dect_time_put(buf, sizeof(buf), 0, &t), 0u);
 }
 
+/*
+ * A list change indication for the Line Settings List, one entry, on line 1
+ * "relating to" (TS 102 527-3 table 39, §7.4.10.2.1 note 1); and two events
+ * with a two-octet multiplicity and no line.
+ */
+static void test_events_notification(void)
+{
+	static const uint8_t want[] = {
+		0x64, 0x62,			/* CISS, TI 6, {FACILITY} */
+		0x7D, 0x03, 0x03, 0x88, 0x81,	/* list change, list 08H, 1 */
+		0x7E, 0x03, 0x00, 0x03, 0x81,	/* line 1, relating to */
+	};
+	static const uint8_t two[] = {
+		0x64, 0x62,
+		0x7D, 0x07, 0x01, 0x81, 0x01, 0x80,	/* missed call, 128 */
+		0x03, 0x81, 0x85,			/* list change 01H, 5 */
+	};
+	struct dect_event ev[2] = {
+		{ DECT_EVENT_LIST_CHANGE, 0x08, 1 },
+	};
+	uint8_t buf[64];
+	size_t n;
+
+	n = dect_events_build_facility(buf, sizeof(buf), ev, 1, 1,
+				       DECT_EVENT_LINE_RELATING_TO);
+	CHECK_EQ(n, sizeof(want));
+	CHECK(memcmp(buf, want, sizeof(want)) == 0);
+
+	ev[0].type = DECT_EVENT_MISSED_CALL;
+	ev[0].subtype = 0x01;
+	ev[0].multiplicity = 128;
+	ev[1].type = DECT_EVENT_LIST_CHANGE;
+	ev[1].subtype = 0x01;
+	ev[1].multiplicity = 5;
+	n = dect_events_build_facility(buf, sizeof(buf), ev, 2,
+				       DECT_EVENT_NO_LINE, 0);
+	CHECK_EQ(n, sizeof(two));
+	CHECK(memcmp(buf, two, sizeof(two)) == 0);
+
+	/* out of range: nothing */
+	CHECK_EQ(dect_events_build_facility(buf, sizeof(buf), ev, 1, 127,
+					    DECT_EVENT_LINE_RELATING_TO), 0u);
+	ev[0].multiplicity = 16384;
+	CHECK_EQ(dect_events_build_facility(buf, sizeof(buf), ev, 1,
+					    DECT_EVENT_NO_LINE, 0), 0u);
+	CHECK_EQ(dect_events_build_facility(buf, 6, ev + 1, 1,
+					    DECT_EVENT_NO_LINE, 0), 0u);
+}
+
 int main(void)
 {
+	test_events_notification();
 	test_the_standards_own_examples();
 	test_time_zone_sign_and_magnitude();
 	test_out_of_range_is_refused();

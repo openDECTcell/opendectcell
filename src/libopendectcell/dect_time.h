@@ -99,4 +99,35 @@ size_t dect_time_put(uint8_t *out, size_t cap, size_t off,
 size_t dect_time_build_facility(uint8_t *out, size_t cap,
 				const struct dect_time *t);
 
+/*
+ * Events notification towards the handset: <<EVENTS-NOTIFICATION>>
+ * (EN 300 175-5 §7.7.55) in the same CISS {FACILITY} with dummy TI 6
+ * (TS 102 527-3 §7.4.1.1), optionally with the line it concerns in
+ * <<CALL-INFORMATION>> (table 13). Used for the list change indication
+ * (§7.4.10.2), later the missed call and message waiting notifications.
+ */
+#define DECT_IE_EVENTS_NOTIFICATION	0x7Du
+#define DECT_EVENT_MESSAGE_WAITING	0x00u
+#define DECT_EVENT_MISSED_CALL		0x01u
+#define DECT_EVENT_LIST_CHANGE		0x03u
+#define DECT_EVENT_LINE_EXTERNAL	0x00u	/* line id subtypes, table 13 */
+#define DECT_EVENT_LINE_RELATING_TO	0x03u
+#define DECT_EVENT_NO_LINE		0xFFu
+
+struct dect_event {
+	uint8_t  type;		/* DECT_EVENT_* */
+	uint8_t  subtype;	/* always sent (§7.4.1.1); for a list change,
+				 * the list identifier */
+	unsigned multiplicity;	/* 0..16383 */
+};
+
+/*
+ * The {FACILITY} with n events and, unless line_id is DECT_EVENT_NO_LINE,
+ * <<CALL-INFORMATION>> naming that line with line_subtype. Returns the
+ * length, 0 if it does not fit or an argument is out of range.
+ */
+size_t dect_events_build_facility(uint8_t *out, size_t cap,
+				  const struct dect_event *ev, unsigned n,
+				  uint8_t line_id, uint8_t line_subtype);
+
 #endif /* OPENDECTCELL_DECT_TIME_H */

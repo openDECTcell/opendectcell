@@ -532,8 +532,15 @@
  *    entries like "read entries" (TS 102 527-3 §7.4.10.4.8); no match is
  *    a confirm with counter 0. On the other lists we serve it is
  *    'procedure not allowed' (table 41), the System Settings List included.
+ *
+ * 68: events notification (2026-10-28, spec sweep I1). Layout change:
+ *    struct dect_link's CISS slot becomes a queue (ciss[][], ciss_len[],
+ *    ciss_n, DECT_LINK_CISS_MAX 4). New: dect_events_build_facility(),
+ *    struct dect_event, DECT_IE_EVENTS_NOTIFICATION, DECT_EVENT_*;
+ *    dect_link_send_ciss(). No behaviour change on its own;
+ *    dect_link_send_time() now queues instead of refusing a second one.
  */
-#define OPENDECTCELL_API_VERSION 67
+#define OPENDECTCELL_API_VERSION 68
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
