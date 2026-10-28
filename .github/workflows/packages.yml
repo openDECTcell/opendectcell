@@ -1,0 +1,88 @@
+# Builds the OpenWrt packages with the official SDK (tools/release/build.sh).
+# A tag v<version> also makes a draft release with the packages and their
+# checksums; it is published by hand on GitHub after a look at it.
+name: Packages
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  OPENWRT: 25.12.5
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [ipq40xx/generic, lantiq/xrx200]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gawk gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools rsync \
+            unzip zlib1g-dev zstd file wget
+
+      - name: Slug
+        id: slug
+        run: echo "name=$(echo '${{ matrix.target }}' | tr / -)" >> "$GITHUB_OUTPUT"
+
+      - name: SDK cache
+        uses: actions/cache@v4
+        with:
+          path: build/release/*.tar.zst
+          key: sdk-${{ env.OPENWRT }}-${{ steps.slug.outputs.name }}
+
+      - name: Build
+        env:
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          SIGN_KEY_PEM: ${{ secrets.OPENDECTCELL_SIGN_KEY }}
+        run: |
+          if [ -n "$SIGN_KEY_PEM" ]; then
+            printf '%s\n' "$SIGN_KEY_PEM" > "$RUNNER_TEMP/sign.pem"
+            export SIGN_KEY="$RUNNER_TEMP/sign.pem"
+          elif [ -n "$TAG" ]; then
+            echo "a release needs the signing key (secret OPENDECTCELL_SIGN_KEY)" >&2
+            exit 1
+          else
+            echo "::warning::no signing key: these packages install only with apk add --allow-untrusted"
+          fi
+          tools/release/build.sh '${{ matrix.target }}' out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ steps.slug.outputs.name }}
+          path: out/*.apk
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cd out
+          sha256sum *.apk > SHA256SUMS
+          sed -e "s/{VERSION}/${TAG#v}/g" -e "s/{OPENWRT}/$OPENWRT/g" \
+            ../tools/release/notes.md > ../notes.md
+          gh release create "$TAG" --draft --verify-tag \
+            --title "openDECTcell ${TAG#v}" --notes-file ../notes.md \
+            *.apk SHA256SUMS ../openwrt/opendectcell-signing-key.pem

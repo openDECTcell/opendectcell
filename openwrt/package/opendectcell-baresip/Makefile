@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 include $(TOPDIR)/rules.mk
+include $(CURDIR)/../../version.mk
 
 PKG_NAME:=opendectcell-baresip
-PKG_VERSION:=0.1
+PKG_VERSION:=$(OPENDECTCELL_VERSION)
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_BUILD_DEPENDS:=baresip libre

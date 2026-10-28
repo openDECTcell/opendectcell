@@ -14,7 +14,8 @@
 ## Using it (FRITZ!Box 7520/7530, OpenWrt)
 
 1. Install the packages `kmod-opendectcell-ipq40xx`, `opendectcell` and, for the web
-   page, `luci-app-opendectcell`.
+   page, `luci-app-opendectcell` (for SIP lines also `opendectcell-baresip`). Releases
+   have them ready-built: [docs/install.md](docs/install.md).
 2. Extract the DECT chip firmware from an official FRITZ!OS image on your PC
    and copy it to the box (openDECTcell cannot ship it):
    `python3 tools/dect-fw-extract.py FRITZ.Box_7520-07.56.image`, then the

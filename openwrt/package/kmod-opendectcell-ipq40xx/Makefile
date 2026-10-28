@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-only
 include $(TOPDIR)/rules.mk
+include $(CURDIR)/../../version.mk
 include $(INCLUDE_DIR)/kernel.mk
 
 PKG_NAME:=opendectcell-ipq40xx
-PKG_VERSION:=0.1
+PKG_VERSION:=$(OPENDECTCELL_VERSION)
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
 PKG_BUILD_DIR:=$(KERNEL_BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
