@@ -620,3 +620,13 @@ service display.
 |---|---|
 | the same digits | the IPEI is right |
 | other digits | the agent checks the identity bytes against the standard |
+
+## Results, 2026-10-28 evening, at home `[observed on hardware]`
+
+The box on the the local network (192.168.1.1), Line 1 of DECT 1 as an IP phone of
+the a FRITZ!Box.
+
+| card | result |
+|---|---|
+| 27 | **passed**: A540 -> mobile and mobile -> A540, G.722 both ways, ciphered, hang-up from either side. On the way: the A540's stored key had been wrong since the lab repair of 2026-10-28 14:05 (fixed by re-registering), LuCI's commands were refused while baresip held the control socket (`0bce429`), a deregistered handset stayed listed (`0706e9b`), a new registration was hidden (`ecaaebc`), and an incoming call carried no number and line after a restart (capability now remembered) |
+| 28 | **passed**: the A540 took the 8-digit PIN, and the model picked in LuCI became its profile at enrolment |

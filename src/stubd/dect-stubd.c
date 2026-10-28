@@ -2972,6 +2972,50 @@ static int hs_by_ipui(const struct stubd *s, const uint8_t *id, size_t len)
  * its {LOCATE-REQUEST}, matched by the IPUI that link adopted, and log it
  * once. Runtime only, relearned at every daemon start (handsets locate).
  */
+/*
+ * A handset's capability as it last reported it, kept beside its store as
+ * <store>.cap ("part3 0|1" and "ng 0|1"): a handset reports it only with a
+ * location registration, which it may not repeat for hours after the base
+ * restarts, and without it an A540 rings with no number and no line.
+ */
+static void cap_save(const struct stubd *s, unsigned i)
+{
+	char path[256];
+	FILE *f;
+
+	snprintf(path, sizeof(path), "%s.cap", s->hs[i].path);
+	f = fopen(path, "w");
+	if (!f)
+		return;
+	fprintf(f, "part3 %d\nng %d\n", s->hs[i].cap_part3, s->hs[i].cap_ng);
+	fclose(f);
+}
+
+static void cap_load(struct stubd *s, unsigned i)
+{
+	char path[256], key[8];
+	int v, got = 0;
+	FILE *f;
+
+	snprintf(path, sizeof(path), "%s.cap", s->hs[i].path);
+	f = fopen(path, "r");
+	if (!f)
+		return;
+	while (fscanf(f, "%7s %d", key, &v) == 2) {
+		if (!strcmp(key, "part3"))
+			s->hs[i].cap_part3 = v != 0, got |= 1;
+		else if (!strcmp(key, "ng"))
+			s->hs[i].cap_ng = v != 0, got |= 2;
+	}
+	fclose(f);
+	if (got != 3)
+		return;
+	s->hs[i].cap_known = 1;
+	printf("cap: %s reported %s (remembered)\n", s->hs[i].path,
+	       s->hs[i].cap_part3 ? "NG-DECT Part 3" :
+	       s->hs[i].cap_ng ? "NG-DECT Part 1" : "GAP only");
+}
+
 static void cap_tick(struct stubd *s, struct dect_link *l)
 {
 	const struct dect_term_cap *tc = &l->mm.peer_cap;
@@ -3005,6 +3049,7 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
 	h->cap_known = 1;
 	h->cap_part3 = tc->ng_part3;
 	h->cap_ng = tc->ng_part1 || tc->ng_part3;
+	cap_save(s, (unsigned)i);
 	printf("cap: %s reports %s%s\n", h->path,
 	       tc->ng_part3 ? "NG-DECT Part 3" :
 	       tc->ng_part1 ? "NG-DECT Part 1" : "GAP only",
@@ -6938,7 +6983,7 @@ static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
  * overwritten with zeros, then 0x017C without its bit ([CR A-0129]: the
  * locked-in handset mask; stock rewrites it on every deregistration).
  * The store, its
- * .name and its .profile move aside (<store>.deregistered), so a mistake
+ * .name, .profile and .cap move aside (<store>.deregistered), so a mistake
  * can be undone by moving them back. Then the lists lose the entry and say so.
  */
 static void dereg_erase(struct stubd *s, int i, const char *why)
@@ -6966,8 +7011,11 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	name_path(s, (unsigned)i, from, sizeof(from));
 	snprintf(to, sizeof(to), "%s.deregistered", from);
 	(void)rename(from, to);
-	/* and its model: the next handset in this store is another one */
+	/* and its model and capability: the next one here is another */
 	snprintf(from, sizeof(from), "%s.profile", s->hs[i].path);
+	snprintf(to, sizeof(to), "%s.deregistered", from);
+	(void)rename(from, to);
+	snprintf(from, sizeof(from), "%s.cap", s->hs[i].path);
 	snprintf(to, sizeof(to), "%s.deregistered", from);
 	(void)rename(from, to);
 	s->hs[i].loaded = 0;
@@ -11243,8 +11291,10 @@ int main(int argc, char **argv)
 			       "fetched on demand after %u ms\n",
 			       s.audio.remote_path, s.audio.fetch_delay_ms);
 		}
-		for (i = 0; i < s.n_hs; i++)
+		for (i = 0; i < s.n_hs; i++) {
 			name_load(&s, i);
+			cap_load(&s, i);
+		}
 		profiles_resolve_all(&s, "startup");
 		/*
 		 * A first store that does not exist yet (an enrolment) has no
