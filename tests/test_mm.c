@@ -51,10 +51,52 @@ static size_t pp_auth_request(uint8_t *out, size_t cap, uint8_t ti,
 	if (corrupt)
 		res1[0] ^= 0xff;
 
-	off = dect_nwk_build_hdr(out, cap, DECT_PD_MM, DECT_TI_ORIGINATOR, ti,
+	/* the answer to our KEY-ALLOCATE: our transaction, so F = 1 */
+	off = dect_nwk_build_hdr(out, cap, DECT_PD_MM, DECT_TI_RESPONDER, ti,
 				 DECT_MM_AUTHENTICATION_REQUEST);
 	off = dect_nwk_put_ie(out, cap, off, DECT_IE_RES, res1, sizeof(res1));
 	return dect_nwk_put_ie(out, cap, off, DECT_IE_RAND, rand_p, 8);
+}
+
+/*
+ * MM has TV 0 only (EN 300 175-5 table 68): another value is ignored
+ * (§17.3.1). And the key-allocation answer must ride our transaction (F = 1):
+ * a handset-initiated AUTHENTICATION-REQUEST is not it.
+ */
+static void test_mm_transaction_rules(void)
+{
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1,
+				   .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 0xde, 0xad, 0xbe, 0xef, 0x12, 0x34, 0x56, 0x78 };
+	uint8_t rand_p[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rs[8] = { 0 };
+	uint8_t rs16[16] = { 0 };
+	uint8_t buf[256], out[256];
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	n = pp_access_request(buf, sizeof(buf), 2);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+	CHECK_EQ(mm.stats.access_req, 0u);
+	CHECK_EQ(mm.stats.bad_ti, 1u);
+
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_KEY_ALLOCATE);
+
+	n = pp_auth_request(buf, sizeof(buf), 0, "1234", rand_f, rs, rand_p, 0);
+	buf[0] &= 0x7Fu;			/* F = 0: the handset's own */
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+	CHECK_EQ(mm.stats.auth_ok, 0u);
+	CHECK_EQ(mm.state, DECT_MM_WAIT_AUTH);
+
+	buf[0] |= 0x80u;			/* F = 1: the answer */
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	CHECK_EQ(mm.stats.auth_ok, 1u);
 }
 
 /* Full successful key-allocation registration with the correct PIN. */
@@ -75,7 +117,7 @@ static void test_register_ok(void)
 	dect_mm_init(&mm, &cfg);
 
 	/* ACCESS-RIGHTS-REQUEST -> KEY-ALLOCATE (carrying RAND_F). */
-	n = pp_access_request(buf, sizeof(buf), 2);
+	n = pp_access_request(buf, sizeof(buf), 0);
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK(n > 0);
@@ -101,7 +143,7 @@ static void test_register_ok(void)
 	}
 
 	/* PP AUTHENTICATION-REQUEST -> AUTHENTICATION-REPLY then ACCESS-RIGHTS-ACCEPT. */
-	n = pp_auth_request(buf, sizeof(buf), 2, "1234", rand_f, rs, rand_p, 0);
+	n = pp_auth_request(buf, sizeof(buf), 0, "1234", rand_f, rs, rand_p, 0);
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	CHECK_EQ(mm.stats.auth_ok, 1);
 
@@ -224,12 +266,12 @@ static void test_register_bad_pin(void)
 	size_t n;
 
 	dect_mm_init(&mm, &cfg);
-	n = pp_access_request(buf, sizeof(buf), 1);
+	n = pp_access_request(buf, sizeof(buf), 0);
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	dect_mm_poll(&mm, out, sizeof(out));	/* KEY-ALLOCATE */
 
 	/* PP computes RES1 from the wrong PIN "9999". */
-	n = pp_auth_request(buf, sizeof(buf), 1, "9999", rand_f, rs, rand_p, 0);
+	n = pp_auth_request(buf, sizeof(buf), 0, "9999", rand_f, rs, rand_p, 0);
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	n = dect_mm_poll(&mm, out, sizeof(out));	/* §13.6 / GAP 8.32.2.4 */
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REJECT);
@@ -255,11 +297,11 @@ static void test_register_8_digit_pin(void)
 	size_t n;
 
 	dect_mm_init(&mm, &cfg);
-	n = pp_access_request(buf, sizeof(buf), 1);
+	n = pp_access_request(buf, sizeof(buf), 0);
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_KEY_ALLOCATE);
-	n = pp_auth_request(buf, sizeof(buf), 1, "31415926", rand_f, rs,
+	n = pp_auth_request(buf, sizeof(buf), 0, "31415926", rand_f, rs,
 			    rand_p, 0);
 	dect_mm_rx(&mm, buf, n, rand_f, rs16);
 	CHECK_EQ(mm.stats.auth_ok, 1);
@@ -289,7 +331,7 @@ static void test_register_without_a_usable_pin(void)
 		else
 			memset(cfg.pin, '1', sizeof(cfg.pin));
 		dect_mm_init(&mm, &cfg);
-		n = pp_access_request(buf, sizeof(buf), 1);
+		n = pp_access_request(buf, sizeof(buf), 0);
 		dect_mm_rx(&mm, buf, n, rand_f, rs16);
 		n = dect_mm_poll(&mm, out, sizeof(out));
 		CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
@@ -1046,7 +1088,7 @@ static void test_deferred_locate_for_a_roamer(void)
 	size_t n, id_len;
 
 	dect_mm_init(&mm, &cfg);
-	n = locate_ti(buf, sizeof(buf), 3, roamer, sizeof(roamer));
+	n = locate_ti(buf, sizeof(buf), 0, roamer, sizeof(roamer));
 	dect_mm_rx(&mm, buf, n, NULL, NULL);
 	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);	/* held */
 	CHECK_EQ(mm.stats.locate_deferred, 1u);
@@ -1064,7 +1106,7 @@ static void test_deferred_locate_for_a_roamer(void)
 	CHECK_EQ(dect_mm_locate_resume(&mm), 1);
 	n = dect_mm_poll(&mm, out, sizeof(out));
 	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
-	CHECK_EQ(out[0], 0xB5u);		/* F=1, TV=3, PD MM */
+	CHECK_EQ(out[0], 0x85u);		/* F=1, TV=0, PD MM */
 	CHECK(memcmp(&out[2], tpui4, sizeof(tpui4)) == 0);
 	CHECK_EQ(mm.adopted, 9);
 	CHECK_EQ(dect_mm_locate_pending(&mm, NULL, NULL), 0);
@@ -1072,7 +1114,7 @@ static void test_deferred_locate_for_a_roamer(void)
 
 	/* no record: resume rejects */
 	dect_mm_init(&mm, &cfg);
-	n = locate_ti(buf, sizeof(buf), 1, roamer, sizeof(roamer));
+	n = locate_ti(buf, sizeof(buf), 0, roamer, sizeof(roamer));
 	dect_mm_rx(&mm, buf, n, NULL, NULL);
 	CHECK_EQ(dect_mm_locate_resume(&mm), -1);
 	dect_mm_poll(&mm, out, sizeof(out));
@@ -1113,6 +1155,7 @@ static void test_locate_validity_adds_a_duration(void)
 
 int main(void)
 {
+	test_mm_transaction_rules();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
 	test_a_held_handset_is_accepted_and_adopted();

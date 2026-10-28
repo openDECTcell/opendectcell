@@ -423,8 +423,14 @@
  *    LCE message with F = 1 (§17.3.2.6) or TV other than 0 (§17.3.1, table
  *    68) is ignored and counted: no page response reported, no
  *    {LCE-PAGE-REJECT} sent.
+ *
+ * 53: MM transaction identifier (2026-10-28, spec sweep M13). Layout
+ *    change: the MM stats gain bad_ti. **Behaviour change:** an MM
+ *    message with TV other than 0 is ignored (§17.3.1, table 68), and an
+ *    {AUTHENTICATION-REQUEST} counts as the key-allocation answer only
+ *    with F = 1, on our transaction.
  */
-#define OPENDECTCELL_API_VERSION 52
+#define OPENDECTCELL_API_VERSION 53
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

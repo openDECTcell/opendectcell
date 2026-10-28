@@ -797,6 +797,15 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 
 	if (dect_nwk_parse(msg, len, &h, &ies, &ies_len) < 0 || h.pd != DECT_PD_MM)
 		return;
+	/*
+	 * MM has the one transaction value 0 (EN 300 175-5 §7.3 table 68);
+	 * another is illegal and the message ignored (§17.3.1). Every MM
+	 * message in the saved logs has TV 0 (spec sweep, M13).
+	 */
+	if (h.ti_value != 0u) {
+		mm->stats.bad_ti++;
+		return;
+	}
 
 	switch (h.msg_type) {
 	case DECT_MM_ACCESS_RIGHTS_REQUEST:
@@ -808,7 +817,15 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		on_access_rights_request(mm, ies, ies_len);
 		break;
 	case DECT_MM_AUTHENTICATION_REQUEST:
-		if (mm->state == DECT_MM_WAIT_AUTH)
+		/*
+		 * The answer to our {KEY-ALLOCATE} rides our transaction, so
+		 * it carries F = 1 (17 of 17 in the logs). One with F = 0 is
+		 * the handset starting its own authentication of the FT, a
+		 * procedure we do not serve (EN 300 444 §8.23, §6.9.4): it used
+		 * to be taken as the key-allocation answer.
+		 */
+		if (mm->state == DECT_MM_WAIT_AUTH &&
+		    h.ti_flag == DECT_TI_RESPONDER)
 			on_auth_request(mm, ies, ies_len);
 		break;
 	case DECT_MM_AUTHENTICATION_REPLY:

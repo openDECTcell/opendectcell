@@ -159,6 +159,7 @@ struct dect_mm_stats {
 	uint32_t tpui_unsolicited; /* ACKs with no assignment made: ignored */
 	uint32_t locate_deferred;  /* unknown identities held for the owner */
 	uint32_t locate_retrans;   /* the PT repeated a held request */
+	uint32_t bad_ti;	   /* MM messages ignored: TV other than 0 */
 };
 
 /*
