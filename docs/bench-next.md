@@ -311,3 +311,17 @@ in the menu), pick a handset and rename it (e.g. "Kueche"); save.
 
 Other handsets learn the new name the next time they read the list; the
 notification that makes them read it at once is not built yet.
+
+### 16. List change notices to the A540 (watch only, any run)
+
+Since the daemon commit after `569b09a`, the A540 (Part 3 only) gets a list
+change notice for the Line Settings List after every location registration,
+and one for the Internal Names List when a handset is renamed (test 15) or
+registers. Look for `reg: list change notice sent for line 1` and
+`names: list change notice sent to DECT n` in the log.
+
+| you see | meaning |
+|---|---|
+| the A540 behaves as before; after a rename, it shows the new name without being switched off and on | the notices work |
+| the A540 resyncs its lists right after each notice ("please wait"), once | expected: that is what a notice is for |
+| it resyncs again and again, or drops off the base | it dislikes the notice: the agent reads the `nwk out --> 64 62 7d` lines |

@@ -5370,6 +5370,82 @@ static void name_save(const struct stubd *s, unsigned i)
 static void names_spread(struct stubd *s, unsigned i);
 
 /*
+ * List change notifications (TS 102 527-3 §7.4.10.2), a CISS {FACILITY}
+ * with <<EVENTS-NOTIFICATION>> on a link that is up. Only to Part 3
+ * handsets: the notifications are a CAT-iq Part 3 procedure, and a Part 1
+ * or GAP handset was never sent one by us; what it would make of one is
+ * untested. A handset with no link up learns at its next location
+ * registration (the CLSS paging path is not built).
+ */
+static int notify_ok(const struct dect_link *l)
+{
+	return l->mm.peer_cap.present && l->mm.peer_cap.ng_part3;
+}
+
+/*
+ * After a location registration: one indication for the Line Settings
+ * List per line the handset is attached to, to that handset only, with
+ * the line "relating to" and the entries for that line, 1 (§7.4.10.2.1,
+ * note 1; spec sweep M1.3).
+ */
+static void locate_notify(struct dect_link *l)
+{
+	const struct dect_iwu *iwu = &l->cc.iwu;
+	unsigned i;
+
+	if (!notify_ok(l))
+		return;
+	for (i = 0; i < iwu->n_lines; i++) {
+		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
+					 DECT_LIA_LIST_LINE_SETTINGS, 1 };
+		uint8_t msg[DECT_LAPC_MSG_MAX];
+		size_t n;
+
+		if (!dect_iwu_attached(iwu, iwu->lines[i].id,
+				       iwu->own_terminal_id))
+			continue;
+		n = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
+					       iwu->lines[i].id,
+					       DECT_EVENT_LINE_RELATING_TO);
+		if (n && dect_link_send_ciss(l, msg, n) == 0)
+			printf("reg: list change notice sent for line %u "
+			       "(Line Settings List)\n", iwu->lines[i].id);
+	}
+}
+
+/*
+ * The Internal Names List changed -- a name saved, a handset added: tell
+ * every handset that is up (§7.4.10.2.2: "at least ... that other PP", and
+ * to all on an addition), no line, the number of entries.
+ */
+static void names_notify(struct stubd *s)
+{
+	struct dect_link *links[1 + SIDE_MAX];
+	unsigned k, n = 0;
+
+	if (s->reg.active)
+		links[n++] = &s->reg.link;
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active)
+			links[n++] = &s->side[k].link;
+	for (k = 0; k < n; k++) {
+		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
+					 DECT_LIA_LIST_INTERNAL_NAMES,
+					 links[k]->cc.iwu.n_handsets };
+		uint8_t msg[DECT_LAPC_MSG_MAX];
+		size_t len;
+
+		if (!notify_ok(links[k]))
+			continue;
+		len = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
+						 DECT_EVENT_NO_LINE, 0);
+		if (len && dect_link_send_ciss(links[k], msg, len) == 0)
+			printf("names: list change notice sent to DECT %u\n",
+			       links[k]->cc.iwu.own_terminal_id);
+	}
+}
+
+/*
  * A handset saved a name in the Internal Names List (dect_iwu sets
  * names_changed): keep it for that handset, in its .name file, and show
  * it on every link's list. An empty name is the reset to "DECT n".
@@ -5398,6 +5474,7 @@ static void names_take(struct stubd *s, struct dect_link *l)
 		       h->name[0] ? "\"" : "", h->name[0] ? h->name :
 		       "back to its default name", h->name[0] ? "\"" : "");
 		names_spread(s, j);
+		names_notify(s);
 	}
 	iwu->names_changed = 0;
 }
@@ -6674,6 +6751,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "conditional on ours being valid, and a "
 			       "confidently wrong clock is worse than none\n");
 		}
+		locate_notify(&s->reg.link);
 	}
 
 	if (s->reg.link.mm.state != DECT_MM_WAIT_AUTH)
@@ -6699,8 +6777,12 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		       "key type", (unsigned)(at[1] & 0x0Fu));
 	}
 	if (s->reg.link.mm.state != s->reg.reported_state &&
-	    s->reg.link.mm.state == DECT_MM_REGISTERED)
+	    s->reg.link.mm.state == DECT_MM_REGISTERED) {
 		printf("reg: handset registered\n");
+		if (s->n_hs && s->cur < s->n_hs)
+			names_spread(s, s->cur);  /* into every link's list */
+		names_notify(s);	/* §7.4.10.2.2: one added */
+	}
 	else if (s->reg.link.mm.state != s->reg.reported_state &&
 		 s->reg.link.mm.state == DECT_MM_FAILED) {
 		printf("reg: registration rejected\n");
