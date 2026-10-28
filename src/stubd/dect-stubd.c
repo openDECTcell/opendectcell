@@ -5375,11 +5375,22 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 	if (!plen || p == s->ic.caller || dect_cc_busy(&l->cc))
 		return;
 	dect_cc_set_next_ti(&l->cc, 0);
+	/*
+	 * EN 300 444 table 23: <<SIGNAL>> 40H for an internal call, 41H for
+	 * an external one, so the handset rings the internal pattern (stock
+	 * does the same, A-StockTrace-1). The SETUP is built here, so the
+	 * link's configured value is restored at once.
+	 */
+	dect_cc_set_signal(&l->cc, s->audio.signal_on,
+			   DECT_SIGNAL_ALERT_PATTERN0);
 	if (dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
 			     s->audio.narrowband ? 0x90u : IC_BASIC_SVC, NULL)) {
+		dect_cc_set_signal(&l->cc, s->audio.signal_on,
+				   s->audio.signal_value);
 		printf("intern: could not queue the SETUP to the target\n");
 		return;
 	}
+	dect_cc_set_signal(&l->cc, s->audio.signal_on, s->audio.signal_value);
 	s->ic.tside = p;
 	s->ic.st = IC_SETUP;
 	printf("intern: the target %s on %s link %u -- SETUP sent\n", how,
