@@ -84,6 +84,13 @@ struct dect_time {
 int dect_time_valid(const struct dect_time *t);
 
 /*
+ * Read a received <<TIME-DATE>> value (without tag and length): the 8-octet
+ * time-and-date form we send ourselves. 0 and *t filled if it is one and in
+ * range, else -1. A handset sends it in TS 102 527-3 §7.4.2.2.
+ */
+int dect_time_get(const uint8_t *v, size_t n, struct dect_time *t);
+
+/*
  * Append <<TIME-DATE>> with coding "time and date" and interpretation
  * "the current time/date", as TS 102 527-3 table 16 prescribes. Returns the
  * new offset, or `off` unchanged if it does not fit or `t` is out of range.

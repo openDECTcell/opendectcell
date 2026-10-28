@@ -7056,6 +7056,24 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	size_t tgt_len;
 	const uint8_t *tgt = ring_target_port_id(s, &tgt_len);
 
+	/*
+	 * A handset offering its clock (TS 102 527-3 §7.4.2.2). Our 'Clock
+	 * master' is the FP (the System Settings List says so), and the box
+	 * keeps time by NTP: logged, not used. An unidentified one is ignored,
+	 * as the clause requires.
+	 */
+	if (ind.pp_time || ind.pp_time_unknown) {
+		const struct dect_time *t = &ind.pp_time_value;
+
+		printf("time: %s handset sent its clock (20%02u-%02u-%02u "
+		       "%02u:%02u:%02u) -- %s\n",
+		       ind.pp_time ? "the" : "an UNIDENTIFIED",
+		       t->year, t->month, t->day, t->hour, t->minute,
+		       t->second, ind.pp_time
+		       ? "not used: the base is the clock master"
+		       : "ignored (7.4.2.2)");
+	}
+
 	/* an internal call's target answering on the main link (finding 5) */
 	if (ind.page_response && s->ic.st == IC_PAGING && s->ic.caller != -1) {
 		ic_target_link(s, NULL, &ind, now);

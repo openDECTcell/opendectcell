@@ -390,6 +390,34 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			 */
 			if (l->cc.stats.keypad != kp_before)
 				ind->keypad = 1;
+		} else if (dect_nwk_parse(ind->nwk, ind->nwk_len, &h, &ies,
+					  &ies_len) == 0 && h.pd == DECT_PD_CISS) {
+			/*
+			 * The PT-initiated date and time (§7.4.2.2): a
+			 * {FACILITY} with <<PORTABLE-IDENTITY>> and
+			 * <<TIME-DATE>>. Checked against the identity the link
+			 * holds and handed up; whether to use it is the
+			 * owner's (the "Clock master"). Other CISS: ignored.
+			 */
+			const uint8_t *pid, *td;
+			size_t pid_len, td_len;
+
+			if (h.msg_type != DECT_CISS_FACILITY)
+				goto drained;
+			pid = dect_nwk_find_ie(ies, ies_len,
+					       DECT_IE_PORTABLE_IDENTITY,
+					       &pid_len);
+			td = dect_nwk_find_ie(ies, ies_len, DECT_IE_TIME_DATE,
+					      &td_len);
+			if (!td || dect_time_get(td, td_len,
+						 &ind->pp_time_value))
+				goto drained;
+			if (pid && l->mm.port_id_len &&
+			    pid_len == l->mm.port_id_len &&
+			    !memcmp(pid, l->mm.port_id, pid_len))
+				ind->pp_time = 1;
+			else
+				ind->pp_time_unknown = 1;
 		} else {
 			ind->mm_message = 1;
 			dect_mm_rx(&l->mm, ind->nwk, ind->nwk_len, rand_f, rs);

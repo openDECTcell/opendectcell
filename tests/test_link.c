@@ -411,6 +411,40 @@ static void test_held_setup_is_answered_and_its_digits_kept(void)
 	CHECK_EQ(dect_link_setup_resume(&l, 0), 0);
 }
 
+/*
+ * A handset's own date and time (TS 102 527-3 §7.4.2.2): handed up when it
+ * names the link's identity, flagged unidentified otherwise.
+ */
+static void test_handset_sends_its_clock(void)
+{
+	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33, 0x44 };
+	static const uint8_t other[] = { 0x80, 0xa8, 0x02, 0x99, 0x22, 0x33, 0x44 };
+	struct dect_time t = { 26, 10, 28, 23, 59, 30, 4, 1 };
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[48];
+	size_t n;
+	int k;
+
+	for (k = 0; k < 2; k++) {
+		init(&l);
+		memcpy(l.mm.port_id, ipui, sizeof(ipui));
+		l.mm.port_id_len = sizeof(ipui);
+		n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CISS,
+				       DECT_TI_ORIGINATOR, 6,
+				       DECT_CISS_FACILITY);
+		n = dect_nwk_put_ie(msg, sizeof(msg), n,
+				    DECT_IE_PORTABLE_IDENTITY,
+				    k ? other : ipui, sizeof(ipui));
+		n = dect_time_put(msg, sizeof(msg), n, &t);
+		feed_nwk(&l, msg, n, &ind);
+		CHECK_EQ(ind.pp_time, k ? 0u : 1u);
+		CHECK_EQ(ind.pp_time_unknown, k ? 1u : 0u);
+		CHECK_EQ(ind.pp_time_value.minute, 59u);
+		CHECK_EQ(ind.pp_time_value.tz_quarters, 4);
+	}
+}
+
 /* CISS {FACILITY}s queue up to four deep and leave in order. */
 static void test_ciss_queue(void)
 {
@@ -740,6 +774,7 @@ int main(void)
 	test_page_response_without_identity_is_rejected();
 	test_page_response_with_a_bad_ti_is_ignored();
 	test_ciss_queue();
+	test_handset_sends_its_clock();
 	test_call_id_is_asked_per_call();
 	test_init_is_quiet();
 	test_page_response_carries_the_identity();

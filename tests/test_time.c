@@ -190,9 +190,35 @@ static void test_events_notification(void)
 					    DECT_EVENT_NO_LINE, 0), 0u);
 }
 
+/* dect_time_get() reads back what dect_time_put() writes, and refuses junk. */
+static void test_time_round_trip(void)
+{
+	struct dect_time t = sample(), back;
+	uint8_t buf[32], bad[8];
+	size_t n;
+
+	t.tz_quarters = -14;			/* GMT-3:30 */
+	t.tz_valid = 1;
+	n = dect_time_put(buf, sizeof(buf), 0, &t);
+	CHECK_EQ(n, 10u);
+	CHECK_EQ(dect_time_get(buf + 2, n - 2, &back), 0);
+	CHECK_EQ(back.year, t.year);
+	CHECK_EQ(back.month, t.month);
+	CHECK_EQ(back.second, t.second);
+	CHECK_EQ(back.tz_quarters, -14);
+	CHECK_EQ(back.tz_valid, 1u);
+	memcpy(bad, buf + 2, 8);
+	bad[2] = 0x13;				/* month 13 */
+	CHECK_EQ(dect_time_get(bad, 8, &back), -1);
+	bad[2] = 0x1A;				/* not BCD */
+	CHECK_EQ(dect_time_get(bad, 8, &back), -1);
+	CHECK_EQ(dect_time_get(buf + 2, 7, &back), -1);
+}
+
 int main(void)
 {
 	test_events_notification();
+	test_time_round_trip();
 	test_the_standards_own_examples();
 	test_time_zone_sign_and_magnitude();
 	test_out_of_range_is_refused();

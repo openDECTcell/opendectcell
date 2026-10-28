@@ -136,6 +136,14 @@ struct dect_link {
 struct dect_link_ind {
 	unsigned page_response : 1;	/* {LCE-PAGE-RESPONSE}, identity in page_id */
 	unsigned cc_message    : 1;
+	/*
+	 * A handset sent its date and time (TS 102 527-3 §7.4.2.2): in
+	 * pp_time if it named the identity this link holds, else
+	 * pp_time_unknown ("the FP shall ignore" an unidentified PP).
+	 */
+	unsigned pp_time       : 1;
+	unsigned pp_time_unknown : 1;
+	struct dect_time pp_time_value;
 	unsigned mm_message    : 1;
 	unsigned lapc_parse_failed : 1;	/* a segment we could not use */
 	unsigned keypad        : 1;	/* the peer sent dialled digits */

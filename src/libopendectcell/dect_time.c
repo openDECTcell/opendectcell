@@ -166,3 +166,27 @@ size_t dect_events_build_facility(uint8_t *out, size_t cap,
 	}
 	return off;
 }
+
+static int unbcd(uint8_t b, uint8_t *v)
+{
+	if ((b >> 4) > 9u || (b & 0x0Fu) > 9u)
+		return -1;
+	*v = (uint8_t)((b >> 4) * 10u + (b & 0x0Fu));
+	return 0;
+}
+
+int dect_time_get(const uint8_t *v, size_t n, struct dect_time *t)
+{
+	uint8_t q;
+
+	if (n < 8u || (v[0] >> 6) != DECT_TIME_CODING_TIME_DATE)
+		return -1;
+	if (unbcd(v[1], &t->year) || unbcd(v[2], &t->month) ||
+	    unbcd(v[3], &t->day) || unbcd(v[4], &t->hour) ||
+	    unbcd(v[5], &t->minute) || unbcd(v[6], &t->second) ||
+	    unbcd(v[7] & 0x7Fu, &q))
+		return -1;
+	t->tz_valid = v[7] != 0x00u;	/* 00H is the null value */
+	t->tz_quarters = (int16_t)((v[7] & 0x80u) ? -(int)q : (int)q);
+	return dect_time_valid(t) ? 0 : -1;
+}

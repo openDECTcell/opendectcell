@@ -610,8 +610,15 @@
  *    known handset's {LOCATE-REQUEST} is answered after our
  *    {AUTHENTICATION-REQUEST}: LOCATE-ACCEPT on the right RES, else
  *    LOCATE-REJECT "authentication failed".
+ *
+ * 78: a handset's clock (2026-10-28, task 27). Layout change: struct
+ *    dect_link_ind gains pp_time, pp_time_unknown and pp_time_value; new
+ *    dect_time_get(). **Behaviour change:** a CISS {FACILITY} with
+ *    <<TIME-DATE>> (TS 102 527-3 §7.4.2.2) is parsed and handed up, marked
+ *    unidentified unless it names the link's identity; it went to MM and
+ *    was dropped. dect-stubd logs it and keeps its own clock.
  */
-#define OPENDECTCELL_API_VERSION 77
+#define OPENDECTCELL_API_VERSION 78
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
