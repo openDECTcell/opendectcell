@@ -2956,6 +2956,7 @@ static void dial_tick(struct stubd *s, uint64_t now)
 	/* an internal call that sent its number complete: route it now */
 	if (s->reg.active && s->reg.link.cc.state == DECT_CC_ST_PROCEEDING &&
 	    !s->reg.link.cc.incoming && !s->reg.ic_tried &&
+	    !s->reg.link.cc.busy_notified &&	/* §7.4.8.3: busy tone */
 	    (s->reg.link.cc.peer_basic_service >> 4) == 0x9u) {
 		s->reg.ic_tried = 1;
 		(void)ic_start(s, -1, now);
@@ -5500,7 +5501,8 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 		dect_cc_set_busy(cc, sl->lane < 0 &&
 				 lanes_available(s, sl) <= 0);
 	if (cc->state == DECT_CC_ST_PROCEEDING && !cc->incoming &&
-	    !sl->ic_tried && (cc->peer_basic_service >> 4) == 0x9u) {
+	    !sl->ic_tried && !cc->busy_notified &&
+	    (cc->peer_basic_service >> 4) == 0x9u) {
 		sl->ic_tried = 1;	/* sent complete: route it now */
 		(void)ic_start(s, (int)(sl - s->side), now);
 		dect_link_drain(&sl->link, now);
