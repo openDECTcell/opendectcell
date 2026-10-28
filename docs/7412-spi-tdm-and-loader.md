@@ -23,6 +23,27 @@ Status: **derived statically** from the FRITZ!OS 06.88 modules on 2026-10-16 (th
 
 **Implication for OpenWrt:** an SSC slave-mode streaming driver is needed (the mainline driver only supports master mode). The hardware is the well-understood Lantiq SSC, so a dedicated small driver with FIFO or DMA plus a real-time path is feasible.
 
+## 1a. Bench 2026-10-28 (observed on hardware)
+
+Source: *observed on hardware*, FRITZ!Box 7412, OpenWrt 25.12.6 (Linux
+6.12.112), openDECTcell 0.3.1 `kmod-opendectcell-lantiq` plus the generic
+`kmod-lantiq-ssc-pcm` transport for captures; factory block read from the
+box. Radio never switched on (no radio-on mail was accepted).
+
+| Finding | Detail |
+|---|---|
+| Factory DECT block | In the `urlader` partition (`/dev/mtd0`) at offset **0x1E800**, same format as the 7520's: header `02 01`, BE16 length 17, then TLVs 1 (5 bytes), 2 (2), 3 (1), 4 (1). `dect-fwload` patches it as on the 7520 ("5 TLV patched"). RFPI is not the placeholder. |
+| Which STUB clocks PCM | Only the 7412's own **06.88** build (sha256 `72f8e27a…` / `4fabee65…`). The 7520's **07.56 and 08.25** builds upload fine but drive **no bit clock** with mode bytes 0x119, 0x105, 0x101, 0x109, 0x111, 0x11D, 0x104 and either first level. |
+| Mode byte = bit clock (06.88) | Words of 32 bit per 125 µs frame: **0x101/0x105 → 4** (1.024 MHz), **0x109 → 8**, **0x111/0x115 → 16**, **0x119/0x11D → 18** (4.608 MHz). The stock value 0x19 gives 18 words (36 slots). |
+| GPIO7 | Must stay high from before the chip's reset on; dropping it between `dect-fwload` and the next open silenced the bus (fixed in `260be17`). |
+| Bit alignment | The SSC has no frame sync; enabled while the clock runs, its words start at an arbitrary bit offset into the frame (2, 3 and 5 bits seen on different boots, constant within one). Receive and transmit must be aligned in software or the SSC enabled before the chip's clock starts [CR A-0002]. |
+| CPU engine vs rate | An interrupt-driven FIFO engine is loss-free at 4 words/frame and near loss-free at 8, but loses 1–3 % of frames at 18 words (8-word FIFO); the stock driver uses DMA [CR A-0002]. openDECTcell's hrtimer engine reads at most 8 words per 125 µs and aligns on `RX_EOM`, which stock never uses [CR A-0001], so at 18 words/frame it lost over half the data. |
+| 06.88 control channel | In mode 0x105 the chip's slots carry long runs of **0x7E** (HDLC flag?) rather than the 08.25 `0xAA` framing. A contact `0xF600` in 08.25 framing, sent in every slot, bit shift (0–15) and byte order (512 variants), drew no checksum-valid answer. The 06.88 mail framing is asked in the 7412 clean-room record (Q-0004, Q-0005). |
+
+Consequence: openDECTcell on the 7412 needs (a) the 06.88 STUB's mail framing, (b)
+bit alignment, and (c) either a slower mode (0x105 gives the 7520's 8-slot,
+1.024 MHz geometry) or a DMA engine for the stock 0x119.
+
 ## 2. STUB firmware patching (the first-stage loader, `the loader routine`)
 
 - **First-level loader:** loaded from Intel HEX at chip address 0x10080. If the file name contains `_slow`, a slow boot variant is used.
