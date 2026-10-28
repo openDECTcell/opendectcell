@@ -292,6 +292,9 @@ struct handset {
  */
 #define SIDE_MAX	3u
 
+/* control socket clients at once: the bridge and a few one-shot ones */
+#define CTL_CLIENTS	4u
+
 struct side_link {
 	int      active;
 	uint8_t  handle;
@@ -396,12 +399,21 @@ struct stubd {
 	 * time, one message per line.
 	 */
 	struct {
-		int      lfd, cfd;	/* listening, client; -1 = none */
+		int      lfd;		/* listening; -1 = none */
 		const char *path;
-		char     in[DECT_CTL_LINE_MAX];
-		size_t   in_len;
-		int      discard;	/* an over-long line: drop to its newline */
-		int      bridge;	/* the client said "bridge": calls go to it */
+		/*
+		 * Up to CTL_CLIENTS at once: the bridge (baresip) stays
+		 * connected, and LuCI's one-shot commands must not find the
+		 * socket taken.
+		 */
+		struct {
+			int    fd;	/* -1 = free */
+			char   in[DECT_CTL_LINE_MAX];
+			size_t in_len;
+			int    discard;	/* an over-long line: drop to its newline */
+		} cl[CTL_CLIENTS];
+		int      cur;		/* the client whose command runs, -1 */
+		int      bridge;	/* the client that said "bridge", -1 */
 		unsigned next_call;	/* call ids, 1..127 */
 	} ctl;
 	/*
@@ -7202,47 +7214,63 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 
 /* -------------------------------------------------------------------------
  * The control socket: docs/bridge-interface.md §2, step 1 of §5. A Unix
- * stream socket, root only (0600), one client; `hello` and an `hs` line
- * per handset when it connects, `hs` again when one is renamed or
- * deregistered; `deregister` and `register-window` from it, as SIGUSR2
+ * stream socket, root only (0600), up to CTL_CLIENTS clients at once (the
+ * bridge stays connected; LuCI's commands come and go); `hello` and an
+ * `hs` line per handset when one connects, `hs` again to every client when
+ * one is renamed or deregistered; replies go to the client that asked,
+ * call traffic only to the bridge; `deregister` and `register-window` from it, as SIGUSR2
  * and SIGUSR1 do. Nothing a SIP peer says reaches MM through here except
  * these two configuration commands (§4).
  */
-static void ctl_drop(struct stubd *s, const char *why)
+static void ctl_drop(struct stubd *s, int c, const char *why)
 {
-	if (s->ctl.cfd < 0)
+	if (c < 0 || s->ctl.cl[c].fd < 0)
 		return;
-	close(s->ctl.cfd);
-	s->ctl.cfd = -1;
-	if (s->ctl.bridge && s->bc.id) {
-		/* the far end went with the bridge */
-		printf("bridge: call %u released -- the bridge left\n",
-		       s->bc.id);
-		if (s->reg.active && dect_cc_busy(&s->reg.link.cc))
-			(void)dect_cc_release(&s->reg.link.cc);
-		s->bc.id = 0;
-		s->ring_now = 0;
+	close(s->ctl.cl[c].fd);
+	s->ctl.cl[c].fd = -1;
+	s->ctl.cl[c].in_len = 0;
+	s->ctl.cl[c].discard = 0;
+	if (c == s->ctl.bridge) {
+		s->ctl.bridge = -1;
+		if (s->bc.id) {
+			/* the far end went with the bridge */
+			printf("bridge: call %u released -- the bridge left\n",
+			       s->bc.id);
+			if (s->reg.active && dect_cc_busy(&s->reg.link.cc))
+				(void)dect_cc_release(&s->reg.link.cc);
+			s->bc.id = 0;
+			s->ring_now = 0;
+		}
 	}
-	s->ctl.bridge = 0;
-	s->ctl.in_len = 0;
-	s->ctl.discard = 0;
-	printf("ctl: client %s\n", why);
+	printf("ctl: client %d %s\n", c + 1, why);
 }
 
-static void ctl_send(struct stubd *s, struct dect_ctl_out *o)
+static void ctl_send_to(struct stubd *s, int c, struct dect_ctl_out *o)
 {
 	int n = dect_ctl_end(o);
 
-	if (s->ctl.cfd < 0)
+	if (c < 0 || s->ctl.cl[c].fd < 0)
 		return;
 	if (n < 0) {
 		printf("ctl: a line overflowed %u octets -- not sent\n",
 		       DECT_CTL_LINE_MAX);
 		return;
 	}
-	if (send(s->ctl.cfd, o->buf, (size_t)n, MSG_DONTWAIT | MSG_NOSIGNAL)
-	    != n)
-		ctl_drop(s, "not reading (or gone) -- closed");
+	if (send(s->ctl.cl[c].fd, o->buf, (size_t)n,
+		 MSG_DONTWAIT | MSG_NOSIGNAL) != n)
+		ctl_drop(s, c, "not reading (or gone) -- closed");
+}
+
+/* To the client whose command is running: answers. */
+static void ctl_send(struct stubd *s, struct dect_ctl_out *o)
+{
+	ctl_send_to(s, s->ctl.cur, o);
+}
+
+/* To the bridge: the calls it carries. */
+static void ctl_send_bridge(struct stubd *s, struct dect_ctl_out *o)
+{
+	ctl_send_to(s, s->ctl.bridge, o);
 }
 
 /* The handsets the base holds: the ones `hs` lines name. */
@@ -7252,12 +7280,14 @@ static int ctl_listed(const struct stubd *s, unsigned i)
 	       !s->hs[i].absent;
 }
 
-static void ctl_hs(struct stubd *s, unsigned i, const char *state)
+/* One `hs` line to client c, or to every client with c < 0. */
+static void ctl_hs_to(struct stubd *s, int c, unsigned i, const char *state)
 {
 	struct dect_ctl_out o;
 	char nm[DECT_IWU_NAME_MAX];
+	unsigned k;
 
-	if (s->ctl.cfd < 0 || i >= s->n_hs)
+	if (i >= s->n_hs)
 		return;
 	dect_ctl_begin(&o, "hs");
 	dect_ctl_add_uint(&o, "hs", hs_slot(s, i));
@@ -7270,7 +7300,20 @@ static void ctl_hs(struct stubd *s, unsigned i, const char *state)
 		if (s->hs[i].cap_known)
 			dect_ctl_add_uint(&o, "part3", s->hs[i].cap_part3 ? 1 : 0);
 	}
-	ctl_send(s, &o);
+	if (c >= 0) {
+		ctl_send_to(s, c, &o);
+		return;
+	}
+	for (k = 0; k < CTL_CLIENTS; k++) {
+		struct dect_ctl_out copy = o;
+
+		ctl_send_to(s, (int)k, &copy);
+	}
+}
+
+static void ctl_hs(struct stubd *s, unsigned i, const char *state)
+{
+	ctl_hs_to(s, -1, i, state);
 }
 
 static void ctl_hello(struct stubd *s)
@@ -7287,7 +7330,7 @@ static void ctl_hello(struct stubd *s)
 	ctl_send(s, &o);
 	for (i = 0; i < s->n_hs; i++)
 		if (ctl_listed(s, i))
-			ctl_hs(s, i, "registered");
+			ctl_hs_to(s, s->ctl.cur, i, "registered");
 }
 
 static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
@@ -7336,7 +7379,7 @@ static void bridge_event(struct stubd *s, const char *verb, const char *k2,
 	dect_ctl_add_uint(&o, "hs", main_hs_slot(s));
 	if (k2)
 		dect_ctl_add(&o, k2, v2);
-	ctl_send(s, &o);
+	ctl_send_bridge(s, &o);
 }
 
 static int bridge_call_out(struct stubd *s, uint64_t now)
@@ -7346,7 +7389,7 @@ static int bridge_call_out(struct stubd *s, uint64_t now)
 	size_t len;
 	char num[DECT_CTL_VAL_MAX];
 
-	if (!s->ctl.bridge || s->ctl.cfd < 0)
+	if (s->ctl.bridge < 0)
 		return 0;
 	k = dect_cc_keypad(&s->reg.link.cc, &len);
 	if (len >= sizeof(num))
@@ -7372,7 +7415,7 @@ static int bridge_call_out(struct stubd *s, uint64_t now)
 	dect_ctl_add_uint(&o, "hs", main_hs_slot(s));
 	dect_ctl_add_uint(&o, "line", STUBD_LINE_ID);
 	dect_ctl_add(&o, "number", num);
-	ctl_send(s, &o);
+	ctl_send_bridge(s, &o);
 	printf("bridge: call %u out to \"%s\" -- waiting for the far end\n",
 	       s->bc.id, num);
 	dect_link_drain(&s->reg.link, now);
@@ -7403,8 +7446,13 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 	unsigned id;
 
 	if (!strcmp(m->verb, "bridge")) {
-		s->ctl.bridge = 1;
-		printf("bridge: the client carries external calls\n");
+		if (s->ctl.bridge >= 0 && s->ctl.bridge != s->ctl.cur) {
+			ctl_reply(s, m->verb, "busy", NULL, 0);
+			return 1;
+		}
+		s->ctl.bridge = s->ctl.cur;
+		printf("bridge: client %d carries external calls\n",
+		       s->ctl.cur + 1);
 		ctl_reply(s, m->verb, NULL, NULL, 0);
 		return 1;
 	}
@@ -7428,7 +7476,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 				return 1;
 			}
 		}
-		if (!s->ctl.bridge) {
+		if (s->ctl.cur != s->ctl.bridge) {
 			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
 			return 1;
 		}
@@ -7438,7 +7486,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			if (sip)
 				dect_ctl_add(&o, "sip", sip);
 			dect_ctl_add(&o, "why", "in-call");
-			ctl_send(s, &o);
+			ctl_send_bridge(s, &o);
 			return 1;
 		}
 		dect_clip_init(&s->clip);
@@ -7469,13 +7517,17 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		dect_ctl_add_uint(&o, "call", s->bc.id);
 		if (sip)
 			dect_ctl_add(&o, "sip", sip);
-		ctl_send(s, &o);
+		ctl_send_bridge(s, &o);
 		return 1;
 	}
 	if (strcmp(m->verb, "remote-ringing") &&
 	    strcmp(m->verb, "remote-answered") &&
 	    strcmp(m->verb, "remote-released"))
 		return 0;
+	if (s->ctl.cur != s->ctl.bridge) {
+		ctl_reply(s, m->verb, "not-bridge", NULL, 0);
+		return 1;
+	}
 	if (dect_ctl_get_uint(m, "call", 1, 127, &id) || id != s->bc.id) {
 		ctl_reply(s, m->verb, "no-call", NULL, 0);
 		return 1;
@@ -7618,7 +7670,7 @@ static void ab_tick(struct stubd *s)
 		dect_ctl_add(&o, "path", AB_PATH);
 		dect_ctl_add_uint(&o, "rate", 16000);
 		dect_ctl_add_uint(&o, "frame", AB_FRAME);
-		ctl_send(s, &o);
+		ctl_send_bridge(s, &o);
 		printf("audio: call %u's speech on %s (16 kHz, 20 ms)\n",
 		       s->bc.id, AB_PATH);
 	} else if (bound && !s->reg.call_wideband && !s->ab.nb_noted) {
@@ -7802,7 +7854,10 @@ static void ctl_open(struct stubd *s)
 	mode_t old;
 	int fd;
 
-	s->ctl.lfd = s->ctl.cfd = -1;
+	s->ctl.lfd = -1;
+	for (fd = 0; fd < (int)CTL_CLIENTS; fd++)
+		s->ctl.cl[fd].fd = -1;
+	s->ctl.cur = s->ctl.bridge = -1;
 	s->ab.lfd = s->ab.cfd = -1;	/* ab_open() only after a ctl socket */
 	s->ctl.path = s->audio.ctl_path ? s->audio.ctl_path : DECT_CTL_PATH;
 	if (s->audio.no_ctl || !s->do_register)
@@ -7834,7 +7889,7 @@ static void ctl_open(struct stubd *s)
 	}
 	old = umask(077);
 	if (bind(fd, (struct sockaddr *)&a, sizeof(a)) ||
-	    chmod(s->ctl.path, 0600) || listen(fd, 1)) {
+	    chmod(s->ctl.path, 0600) || listen(fd, (int)CTL_CLIENTS)) {
 		printf("ctl: %s: %s -- no control socket\n", s->ctl.path,
 		       strerror(errno));
 		umask(old);
@@ -7851,8 +7906,11 @@ static void ab_close(struct stubd *s);
 
 static void ctl_close(struct stubd *s)
 {
+	unsigned c;
+
 	ab_close(s);
-	ctl_drop(s, "closed (exit)");
+	for (c = 0; c < CTL_CLIENTS; c++)
+		ctl_drop(s, (int)c, "closed (exit)");
 	if (s->ctl.lfd < 0)
 		return;
 	close(s->ctl.lfd);
@@ -7860,10 +7918,57 @@ static void ctl_close(struct stubd *s)
 	(void)unlink(s->ctl.path);
 }
 
-static void ctl_tick(struct stubd *s, uint64_t now)
+/* One client's input: whole lines become commands, answered to it. */
+static void ctl_read(struct stubd *s, int c, uint64_t now)
 {
 	char *nl;
 	ssize_t n;
+
+	while (s->ctl.cl[c].fd >= 0) {
+		n = recv(s->ctl.cl[c].fd, s->ctl.cl[c].in + s->ctl.cl[c].in_len,
+			 sizeof(s->ctl.cl[c].in) - s->ctl.cl[c].in_len,
+			 MSG_DONTWAIT);
+		if (n == 0) {
+			ctl_drop(s, c, "left");
+			return;
+		}
+		if (n < 0) {
+			if (errno != EAGAIN && errno != EWOULDBLOCK &&
+			    errno != EINTR)
+				ctl_drop(s, c, "read failed -- closed");
+			return;
+		}
+		s->ctl.cl[c].in_len += (size_t)n;
+		while (s->ctl.cl[c].fd >= 0 &&
+		       (nl = memchr(s->ctl.cl[c].in, '\n',
+				    s->ctl.cl[c].in_len)) != NULL) {
+			size_t l = (size_t)(nl - s->ctl.cl[c].in);
+
+			if (!s->ctl.cl[c].discard) {
+				s->ctl.cur = c;
+				ctl_command(s, s->ctl.cl[c].in, l, now);
+				s->ctl.cur = -1;
+			}
+			if (s->ctl.cl[c].fd < 0)
+				return;		/* dropped while answering */
+			s->ctl.cl[c].discard = 0;
+			memmove(s->ctl.cl[c].in, nl + 1,
+				s->ctl.cl[c].in_len - l - 1);
+			s->ctl.cl[c].in_len -= l + 1;
+		}
+		if (s->ctl.cl[c].in_len == sizeof(s->ctl.cl[c].in)) {
+			if (!s->ctl.cl[c].discard)
+				printf("ctl: a line over %u octets -- dropped\n",
+				       DECT_CTL_LINE_MAX);
+			s->ctl.cl[c].discard = 1;
+			s->ctl.cl[c].in_len = 0;
+		}
+	}
+}
+
+static void ctl_tick(struct stubd *s, uint64_t now)
+{
+	unsigned k;
 	int c;
 
 	if (s->ctl.lfd < 0)
@@ -7871,53 +7976,29 @@ static void ctl_tick(struct stubd *s, uint64_t now)
 	while ((c = accept(s->ctl.lfd, NULL, NULL)) >= 0) {
 		(void)fcntl(c, F_SETFL, fcntl(c, F_GETFL) | O_NONBLOCK);
 		(void)fcntl(c, F_SETFD, FD_CLOEXEC);
-		if (s->ctl.cfd >= 0) {
+		for (k = 0; k < CTL_CLIENTS; k++)
+			if (s->ctl.cl[k].fd < 0)
+				break;
+		if (k == CTL_CLIENTS) {
 			static const char busy[] = "error reason=busy\n";
 
 			(void)send(c, busy, sizeof(busy) - 1,
 				   MSG_DONTWAIT | MSG_NOSIGNAL);
 			close(c);
-			printf("ctl: a second client turned away\n");
+			printf("ctl: a client turned away -- all %u in use\n",
+			       CTL_CLIENTS);
 			continue;
 		}
-		s->ctl.cfd = c;
-		s->ctl.in_len = 0;
-		s->ctl.discard = 0;
-		printf("ctl: client connected\n");
+		s->ctl.cl[k].fd = c;
+		s->ctl.cl[k].in_len = 0;
+		s->ctl.cl[k].discard = 0;
+		printf("ctl: client %u connected\n", k + 1);
+		s->ctl.cur = (int)k;
 		ctl_hello(s);
+		s->ctl.cur = -1;
 	}
-	while (s->ctl.cfd >= 0) {
-		n = recv(s->ctl.cfd, s->ctl.in + s->ctl.in_len,
-			 sizeof(s->ctl.in) - s->ctl.in_len, MSG_DONTWAIT);
-		if (n == 0) {
-			ctl_drop(s, "left");
-			return;
-		}
-		if (n < 0) {
-			if (errno != EAGAIN && errno != EWOULDBLOCK &&
-			    errno != EINTR)
-				ctl_drop(s, "read failed -- closed");
-			return;
-		}
-		s->ctl.in_len += (size_t)n;
-		while (s->ctl.cfd >= 0 &&
-		       (nl = memchr(s->ctl.in, '\n', s->ctl.in_len)) != NULL) {
-			size_t l = (size_t)(nl - s->ctl.in);
-
-			if (!s->ctl.discard)
-				ctl_command(s, s->ctl.in, l, now);
-			s->ctl.discard = 0;
-			memmove(s->ctl.in, nl + 1, s->ctl.in_len - l - 1);
-			s->ctl.in_len -= l + 1;
-		}
-		if (s->ctl.in_len == sizeof(s->ctl.in)) {
-			if (!s->ctl.discard)
-				printf("ctl: a line over %u octets -- dropped\n",
-				       DECT_CTL_LINE_MAX);
-			s->ctl.discard = 1;
-			s->ctl.in_len = 0;
-		}
-	}
+	for (k = 0; k < CTL_CLIENTS; k++)
+		ctl_read(s, (int)k, now);
 }
 
 /*

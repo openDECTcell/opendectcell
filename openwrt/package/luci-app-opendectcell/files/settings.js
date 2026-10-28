@@ -95,6 +95,8 @@ function ctl(line) {
 		if (new RegExp('^ok verb=' + verb + '\\b', 'm').test(out))
 			return { ok: true };
 		m = out.match(new RegExp('^error verb=' + verb + '\\b.*reason=(\\S+)', 'm'));
+		if (!m && /^error reason=busy/m.test(out))
+			return { ok: false, reason: 'busy' };	/* every connection taken */
 		return { ok: false, reason: m ? m[1] : 'not-running' };
 	}).catch(function() {
 		return { ok: false, reason: 'not-running' };
@@ -107,7 +109,8 @@ var REASONS = {
 	'bad-name': _('the name is too long (at most 15 octets) or not valid text'),
 	'bad-hs': _('no such handset number'),
 	'not-ready': _('the base is still starting up'),
-	'bad-profile': _('the base does not know that handset model')
+	'bad-profile': _('the base does not know that handset model'),
+	'busy': _('the base is busy with other requests; try again in a moment')
 };
 
 function report(r, done) {
