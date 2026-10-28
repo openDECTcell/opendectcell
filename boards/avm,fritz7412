@@ -3,7 +3,7 @@
 # Read by /etc/init.d/opendectcell; UCI options in /etc/config/opendectcell override.
 # Keys: see docs/hardware-abstraction.md section 4.
 
-name=FRITZ!Box 7412
+name="FRITZ!Box 7412"
 transport=lantiq-ssc
 
 fw_family=441

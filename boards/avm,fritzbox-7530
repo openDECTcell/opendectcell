@@ -3,7 +3,7 @@
 # Read by /etc/init.d/opendectcell; UCI options in /etc/config/opendectcell override.
 # Keys: see docs/hardware-abstraction.md section 4.
 
-name=FRITZ!Box 7520
+name="FRITZ!Box 7520"
 transport=ipq40xx-tdm
 
 fw_family=441
