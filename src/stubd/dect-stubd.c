@@ -50,6 +50,7 @@
 #include "dect_link.h"
 #include "dect_diag.h"
 #include "dect_audio.h"
+#include "dect_profile.h"
 #include "dect_callinfo.h"
 #include "dect_clip.h"
 
@@ -8443,8 +8444,88 @@ static void usage(void)
 		"           txidle=0xff,voiceidle=0xff\n", LOOP_DELAY_MAX);
 }
 
+/* ---- handset profiles (docs/handset-profiles.md) ----------------------- */
+
+static void profile_say(void *ctx, unsigned line, const char *msg)
+{
+	const char *path = ctx;
+
+	if (line)
+		printf("profile: %s:%u: %s\n", path, line, msg);
+	else
+		printf("profile: %s: %s\n", path, msg);
+}
+
+/* Read and parse one file; 0 on success. */
+static int profile_load(const char *path, struct dect_profile *p)
+{
+	static char text[16384];
+	FILE *f = fopen(path, "r");
+	size_t n;
+
+	if (!f) {
+		printf("profile: %s: %s\n", path, strerror(errno));
+		return -1;
+	}
+	n = fread(text, 1, sizeof(text), f);
+	fclose(f);
+	if (n == sizeof(text)) {
+		printf("profile: %s: larger than %zu octets\n", path,
+		       sizeof(text));
+		return -1;
+	}
+	return dect_profile_parse(text, n, p, profile_say, (void *)path);
+}
+
+/*
+ * dect-stubd --check-profile FILE [FIRMWARE]: validate one profile without
+ * the radio, and for a device profile its manufacturer layer, looked up
+ * beside it as <extends>.profile; print what it resolves to.
+ */
+static int check_profile(const char *path, const char *fw)
+{
+	static struct dect_profile p, mfr;
+	struct dect_hs_profile hp;
+	const struct dect_profile *m = NULL;
+	char desc[1024], mpath[512];
+	const char *slash;
+
+	if (profile_load(path, &p)) {
+		printf("profile: %s: rejected\n", path);
+		return 1;
+	}
+	if (p.kind == DECT_PROFILE_DEVICE) {
+		slash = strrchr(path, '/');
+		snprintf(mpath, sizeof(mpath), "%.*s%s.profile",
+			 slash ? (int)(slash - path + 1) : 0, path, p.extends);
+		if (profile_load(mpath, &mfr) ||
+		    mfr.kind != DECT_PROFILE_MANUFACTURER ||
+		    strcmp(mfr.id, p.extends)) {
+			printf("profile: %s: its manufacturer profile %s is "
+			       "missing or bad\n", path, mpath);
+			return 1;
+		}
+		m = &mfr;
+	}
+	if (p.kind == DECT_PROFILE_MANUFACTURER)
+		dect_profile_resolve(&p, NULL, fw, &hp);
+	else
+		dect_profile_resolve(m, &p, fw, &hp);
+	printf("profile: %s: %s \"%s\"%s%s%s, %u firmware section(s)\n",
+	       path, p.id, p.name, m ? " (via " : "", m ? m->id : "",
+	       m ? ")" : "", p.n_sec - 1u);
+	if (dect_profile_describe(&hp, desc, sizeof(desc)))
+		printf("profile: resolved%s%s: %s\n", fw ? " for firmware " : "",
+		       fw ? fw : "", desc);
+	else
+		printf("profile: resolved: the standard defaults\n");
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
+	if (argc >= 3 && !strcmp(argv[1], "--check-profile"))
+		return check_profile(argv[2], argc >= 4 ? argv[3] : NULL);
 	if (getenv("OPENDECTCELL_SWAP"))
 		dect_mail_set_swap(1);
 	struct stubd s;

@@ -555,8 +555,14 @@
  *    {CC-INFO} with SIGNAL 07H, the caller's identity and the waiting
  *    call's <<CALL-INFORMATION>> (CS call setup), for an ACTIVE call with
  *    call status. No behaviour change until the daemon uses it.
+ *
+ * 71: handset profiles (2026-10-28, docs/handset-profiles.md). New module
+ *    dect_profile: dect_profile_parse(), _resolve(), _defaults(),
+ *    _describe(), _display(), _version_cmp(); struct dect_profile and
+ *    struct dect_hs_profile. No behaviour change: nothing reads the
+ *    resolved values yet.
  */
-#define OPENDECTCELL_API_VERSION 70
+#define OPENDECTCELL_API_VERSION 71
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
