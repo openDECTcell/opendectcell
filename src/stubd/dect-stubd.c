@@ -398,7 +398,40 @@ struct stubd {
 		char     in[DECT_CTL_LINE_MAX];
 		size_t   in_len;
 		int      discard;	/* an over-long line: drop to its newline */
+		int      bridge;	/* the client said "bridge": calls go to it */
+		unsigned next_call;	/* call ids, 1..127 */
 	} ctl;
+	/*
+	 * The main link's call while a bridge carries it (docs/bridge-
+	 * interface.md §2): one at a time for now.
+	 */
+	struct {
+		unsigned id;		/* 0 = none */
+		int      out;		/* 1: the handset called out, 0: call-in */
+		int      busy_seen;	/* the CC call existed */
+		int      rang, answered;	/* events sent */
+		uint64_t since;
+	} bc;
+	/*
+	 * The bridged call's speech (docs/bridge-interface.md §3): one
+	 * SOCK_SEQPACKET socket, 20 ms frames of 16 kHz linear PCM both ways,
+	 * coded to and from the wideband call's G.722 lane here.
+	 */
+	struct {
+		int      lfd, cfd;
+		unsigned call;		/* announced for this call id, 0 none */
+		int      nb_noted;	/* "narrowband: no audio socket" said */
+		struct dect_g722_state enc, dec;
+		uint8_t  down[4096];	/* G.722 octets towards the handset */
+		size_t   dh, dn;
+		uint8_t  up[160];	/* from the handset: 20 ms */
+		size_t   un;
+		uint8_t  cur[2];	/* the word on the lane now */
+		uint32_t rx_prev;
+		unsigned rx_run;
+		int      phase, locked, primed;
+		uint32_t underruns, dropped, frames_up, frames_down;
+	} ab;
 	/* The registration window: open now, and until when (0 = no limit). */
 	int      reg_open;
 	uint64_t reg_open_until;
@@ -490,6 +523,7 @@ struct stubd {
 	 * is rung again once the link is free, at most RING_REQUEUE_MAX times.
 	 */
 	int      ring_watch;
+	int      ring_now;	/* a call-in: ring at once, no ring= timing */
 	uint32_t ring_coll0, ring_alert0;	/* cc stats when queued */
 	unsigned ring_requeues;
 	unsigned    ring_pages;		/* pages sent for this attempt */
@@ -1799,6 +1833,87 @@ static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
  * cadence A-0030 §2 Q1 describes ("refills occur per buffer, not per
  * individual 8-kHz frame").
  */
+/* -------------------------------------------------------------------------
+ * The bridged call's speech on the main lane, frame by frame (wideband).
+ * Down: two G.722 octets per two frames from the socket's FIFO, locked to
+ * the handset's word changes as playsync locks the test file; silence
+ * when the FIFO runs dry. Up: each of the handset's coded words once --
+ * a word is held two frames, a longer hold is a chip underrun whose
+ * repeats would make the decoder re-adapt (tools/dect_g722_extract.py) --
+ * decoded per 20 ms and sent.
+ */
+#define AB_PATH		"/var/run/opendectcell-audio.sock"
+#define AB_FRAME	640u	/* octets: 20 ms of 16 kHz 16-bit PCM */
+#define AB_PRIME	320u	/* G.722 octets before the first: 40 ms */
+
+static void ab_pop(struct stubd *s)
+{
+	size_t cap = sizeof(s->ab.down);
+
+	if (s->ab.dn >= 2 && (s->ab.primed || s->ab.dn >= AB_PRIME)) {
+		s->ab.primed = 1;
+		s->ab.cur[0] = s->ab.down[s->ab.dh];
+		s->ab.cur[1] = s->ab.down[(s->ab.dh + 1u) % cap];
+		s->ab.dh = (s->ab.dh + 2u) % cap;
+		s->ab.dn -= 2u;
+		return;
+	}
+	{
+		static const int16_t z[4];
+
+		(void)dect_g722_encode(&s->ab.enc, z, 4, s->ab.cur);
+	}
+	if (s->ab.primed)
+		s->ab.underruns++;
+}
+
+static void ab_up(struct stubd *s, const uint8_t *w)
+{
+	int16_t pcm[320];
+
+	s->ab.up[s->ab.un++] = w[0];
+	s->ab.up[s->ab.un++] = w[1];
+	if (s->ab.un < sizeof(s->ab.up))
+		return;
+	s->ab.un = 0;
+	(void)dect_g722_decode(&s->ab.dec, s->ab.up, sizeof(s->ab.up), pcm);
+	if (s->ab.cfd < 0)
+		return;
+	if (send(s->ab.cfd, pcm, sizeof(pcm), MSG_DONTWAIT | MSG_NOSIGNAL) ==
+	    (ssize_t)sizeof(pcm))
+		s->ab.frames_up++;
+	else
+		s->ab.dropped++;
+}
+
+/* One frame of the main lane while the bridge carries the call. */
+static void ab_frame(struct stubd *s, uint8_t *fr, const uint8_t *src)
+{
+	unsigned int w = s->audio.tone_word;
+
+	if (src) {
+		uint32_t v = (uint32_t)src[0] | ((uint32_t)src[1] << 8);
+
+		if (v == s->ab.rx_prev) {
+			if (++s->ab.rx_run == 2u && lane_word_live(v))
+				ab_up(s, src);
+		} else {
+			s->ab.rx_run = 1;
+			if (!s->ab.locked && lane_word_live(v) &&
+			    lane_word_live(s->ab.rx_prev)) {
+				s->ab.locked = 1;
+				s->ab.phase = 0;
+			}
+		}
+		s->ab.rx_prev = v;
+	}
+	if (!s->ab.phase)
+		ab_pop(s);
+	s->ab.phase ^= 1;
+	fr[w * 2u] = s->ab.cur[0];
+	fr[w * 2u + 1u] = s->ab.cur[1];
+}
+
 static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		     const uint8_t *rx)
 {
@@ -1867,7 +1982,13 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		 * and visible in vF411 as dir1 8001 -> 0000 one second in).
 		 * There is nothing useful to send in that window.
 		 */
-		if (s->ic.st == IC_UP && rx && s->reg.call_bound &&
+		if (s->ab.cfd >= 0 && s->ab.call && s->reg.call_bound &&
+		    s->reg.call_wideband && s->audio.tone_word < s->slots &&
+		    s->audio.tone_word != (unsigned int)s->tx_slot) {
+			/* the bridge's speech (docs/bridge-interface.md §3) */
+			ab_frame(s, fr, rx ? rx + (f * s->slots +
+					    s->audio.tone_word) * 2u : NULL);
+		} else if (s->ic.st == IC_UP && rx && s->reg.call_bound &&
 		    ic_word(s, s->ic.caller == -1 ? s->ic.tside :
 			    s->ic.tside == -1 ? s->ic.caller :
 			    IC_PARTY_NONE) >= 0 &&
@@ -3076,6 +3197,8 @@ static void info_tick(struct stubd *s, uint64_t now)
  * internal call if it names a handset, else the routed steps (alertms,
  * bindfirst) or CONNECT at once.
  */
+static int bridge_call_out(struct stubd *s, uint64_t now);
+
 static void dial_route(struct stubd *s, uint64_t now)
 {
 	s->reg.ic_tried = 1;
@@ -3084,6 +3207,8 @@ static void dial_route(struct stubd *s, uint64_t now)
 		pump_lapc(s);
 		return;
 	}
+	if (bridge_call_out(s, now))
+		return;
 	if (s->audio.alert_ms || s->audio.bind_first) {
 		/* the steps a routed call takes; connect_tick() finishes */
 		if (dect_cc_proceed(&s->reg.link.cc) == 0) {
@@ -4569,7 +4694,7 @@ static void ring_watch_tick(struct stubd *s)
 
 static void ring_tick(struct stubd *s, uint64_t now)
 {
-	if ((!s->audio.ring_ms && !s->audio.ring_attach_ms) ||
+	if ((!s->audio.ring_ms && !s->audio.ring_attach_ms && !s->ring_now) ||
 	    s->sess.state != DECT_SESS_UP)
 		return;
 	ring_watch_tick(s);
@@ -4608,7 +4733,9 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	}
 
 	if (s->ring_state == RING_IDLE) {
-		if (s->audio.ring_attach_ms) {
+		if (s->ring_now) {
+			/* a call-in from the bridge: now */
+		} else if (s->audio.ring_attach_ms) {
 			/* Count from the handset's first contact, not ours. */
 			if (!s->first_contact_ms ||
 			    now - s->first_contact_ms < s->audio.ring_attach_ms)
@@ -6910,6 +7037,16 @@ static void ctl_drop(struct stubd *s, const char *why)
 		return;
 	close(s->ctl.cfd);
 	s->ctl.cfd = -1;
+	if (s->ctl.bridge && s->bc.id) {
+		/* the far end went with the bridge */
+		printf("bridge: call %u released -- the bridge left\n",
+		       s->bc.id);
+		if (s->reg.active && dect_cc_busy(&s->reg.link.cc))
+			(void)dect_cc_release(&s->reg.link.cc);
+		s->bc.id = 0;
+		s->ring_now = 0;
+	}
+	s->ctl.bridge = 0;
 	s->ctl.in_len = 0;
 	s->ctl.discard = 0;
 	printf("ctl: client %s\n", why);
@@ -6991,6 +7128,365 @@ static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
 }
 
 /*
+ * The bridge (docs/bridge-interface.md §2, step 2 of §5): a client that
+ * sent "bridge" carries the main link's external calls. Out: the
+ * handset's number goes out as call-out, and remote-ringing,
+ * remote-answered and remote-released drive ALERTING, CONNECT and the
+ * release. In: call-in rings the first handset, and ringing, answered and
+ * released come back. Without a bridge nothing changes: a dialled call is
+ * connected locally (the lab's test sound or loop-back).
+ */
+static unsigned bridge_new_id(struct stubd *s)
+{
+	s->ctl.next_call = s->ctl.next_call % 127u + 1u;
+	return s->ctl.next_call;
+}
+
+static unsigned main_hs_slot(struct stubd *s)
+{
+	int a = s->reg.link.mm.adopted;
+
+	return hs_slot(s, a >= 0 ? (unsigned)a : s->cur);
+}
+
+static void bridge_event(struct stubd *s, const char *verb, const char *k2,
+			 const char *v2)
+{
+	struct dect_ctl_out o;
+
+	dect_ctl_begin(&o, verb);
+	dect_ctl_add_uint(&o, "call", s->bc.id);
+	dect_ctl_add_uint(&o, "hs", main_hs_slot(s));
+	if (k2)
+		dect_ctl_add(&o, k2, v2);
+	ctl_send(s, &o);
+}
+
+static int bridge_call_out(struct stubd *s, uint64_t now)
+{
+	struct dect_ctl_out o;
+	const uint8_t *k;
+	size_t len;
+	char num[DECT_CTL_VAL_MAX];
+
+	if (!s->ctl.bridge || s->ctl.cfd < 0)
+		return 0;
+	k = dect_cc_keypad(&s->reg.link.cc, &len);
+	if (len >= sizeof(num))
+		len = sizeof(num) - 1;
+	memcpy(num, k, len);
+	num[len] = '\0';
+	if (s->bc.id) {
+		/* one bridged call at a time for now */
+		(void)dect_cc_busy_system(&s->reg.link.cc);
+		printf("bridge: a second call -- busy\n");
+		dect_link_drain(&s->reg.link, now);
+		pump_lapc(s);
+		return 1;
+	}
+	if (dect_cc_proceed(&s->reg.link.cc))
+		return 0;
+	memset(&s->bc, 0, sizeof(s->bc));
+	s->bc.id = bridge_new_id(s);
+	s->bc.out = 1;
+	s->bc.since = now;
+	dect_ctl_begin(&o, "call-out");
+	dect_ctl_add_uint(&o, "call", s->bc.id);
+	dect_ctl_add_uint(&o, "hs", main_hs_slot(s));
+	dect_ctl_add_uint(&o, "line", STUBD_LINE_ID);
+	dect_ctl_add(&o, "number", num);
+	ctl_send(s, &o);
+	printf("bridge: call %u out to \"%s\" -- waiting for the far end\n",
+	       s->bc.id, num);
+	dect_link_drain(&s->reg.link, now);
+	pump_lapc(s);
+	return 1;
+}
+
+/* remote-released's reason, as a CC release reason (§2.2 of the page) */
+static uint8_t bridge_reason(const char *r)
+{
+	if (!r || !strcmp(r, "normal"))
+		return DECT_CC_REASON_NONE;
+	if (!strcmp(r, "busy"))
+		return DECT_CC_REASON_USER_BUSY;
+	if (!strcmp(r, "unreachable"))
+		return DECT_CC_REASON_USER_UNKNOWN;
+	if (!strcmp(r, "rejected"))
+		return 0x15u;			/* user rejection */
+	return DECT_CC_REASON_NONE;
+}
+
+/* A bridge command about a call. Returns 1 when the verb was one of ours. */
+static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
+			  uint64_t now)
+{
+	struct dect_cc *cc = &s->reg.link.cc;
+	struct dect_ctl_out o;
+	unsigned id;
+
+	if (!strcmp(m->verb, "bridge")) {
+		s->ctl.bridge = 1;
+		printf("bridge: the client carries external calls\n");
+		ctl_reply(s, m->verb, NULL, NULL, 0);
+		return 1;
+	}
+	if (!strcmp(m->verb, "call-in")) {
+		const char *num = dect_ctl_get(m, "number");
+		const char *name = dect_ctl_get(m, "name");
+		const char *sip = dect_ctl_get(m, "sip");
+
+		if (!s->ctl.bridge) {
+			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
+			return 1;
+		}
+		if (s->bc.id || (s->reg.active && dect_cc_busy(cc)) ||
+		    (s->ring_state != RING_IDLE && s->ring_state != RING_DONE)) {
+			dect_ctl_begin(&o, "busy");
+			if (sip)
+				dect_ctl_add(&o, "sip", sip);
+			dect_ctl_add(&o, "why", "in-call");
+			ctl_send(s, &o);
+			return 1;
+		}
+		dect_clip_init(&s->clip);
+		if (num && *num)
+			(void)dect_clip_set_number(&s->clip, num,
+					DECT_CLIP_TON_UNKNOWN,
+					DECT_CLIP_NPI_UNKNOWN,
+					DECT_CLIP_PRES_ALLOWED,
+					DECT_CLIP_SCR_NETWORK);
+		if (name && *name)
+			(void)dect_clip_set_name(&s->clip, name,
+					DECT_CLIP_ALPHABET_UTF8,
+					DECT_CLIP_PRES_ALLOWED,
+					DECT_CLIP_SCR_NETWORK);
+		memset(&s->bc, 0, sizeof(s->bc));
+		s->bc.id = bridge_new_id(s);
+		s->bc.since = now;
+		s->ring_state = RING_IDLE;
+		s->ring_now = 1;
+		s->ring_requeues = 0;
+		s->ring_setup_tries = 0;
+		s->ring_pages = 0;
+		s->ring_wait_since = 0;
+		printf("bridge: call %u in from \"%s\" -- ringing DECT %u\n",
+		       s->bc.id, num ? num : "", hs_slot(s, 0));
+		dect_ctl_begin(&o, "call-in-ok");
+		dect_ctl_add_uint(&o, "call", s->bc.id);
+		if (sip)
+			dect_ctl_add(&o, "sip", sip);
+		ctl_send(s, &o);
+		return 1;
+	}
+	if (strcmp(m->verb, "remote-ringing") &&
+	    strcmp(m->verb, "remote-answered") &&
+	    strcmp(m->verb, "remote-released"))
+		return 0;
+	if (dect_ctl_get_uint(m, "call", 1, 127, &id) || id != s->bc.id) {
+		ctl_reply(s, m->verb, "no-call", NULL, 0);
+		return 1;
+	}
+	if (!strcmp(m->verb, "remote-released")) {
+		const char *r = dect_ctl_get(m, "reason");
+
+		printf("bridge: call %u released by the far end (%s)\n", id,
+		       r ? r : "normal");
+		s->bc.id = 0;			/* no "released" back */
+		s->ring_now = 0;
+		if (s->reg.active && dect_cc_busy(cc))
+			(void)dect_cc_release_reason(cc, bridge_reason(r));
+		else if (s->ring_state != RING_DONE)
+			s->ring_state = RING_DONE;	/* stop paging */
+	} else if (!s->bc.out || !s->reg.active) {
+		ctl_reply(s, m->verb, "no-call", NULL, 0);
+		return 1;
+	} else if (!strcmp(m->verb, "remote-ringing")) {
+		if (cc->state == DECT_CC_ST_PROCEEDING)
+			(void)dect_cc_alert(cc);
+	} else {
+		printf("bridge: call %u answered by the far end\n", id);
+		(void)dect_cc_connect(cc);
+	}
+	dect_link_drain(&s->reg.link, now);
+	pump_lapc(s);
+	ctl_reply(s, m->verb, NULL, "call", id);
+	return 1;
+}
+
+/* The bridged call's progress, as events. */
+static void bridge_tick(struct stubd *s, uint64_t now)
+{
+	const struct dect_cc *cc = &s->reg.link.cc;
+	int busy = s->reg.active && dect_cc_busy(cc);
+
+	if (!s->bc.id)
+		return;
+	if (busy)
+		s->bc.busy_seen = 1;
+	if (busy && !s->bc.out && cc->incoming) {
+		s->ring_now = 0;
+		if (!s->bc.rang && (cc->state == DECT_CC_ST_RINGING ||
+				    cc->state == DECT_CC_ST_ACTIVE)) {
+			s->bc.rang = 1;
+			bridge_event(s, "ringing", NULL, NULL);
+		}
+		if (!s->bc.answered && cc->state == DECT_CC_ST_ACTIVE) {
+			s->bc.answered = 1;
+			printf("bridge: call %u answered on DECT %u\n",
+			       s->bc.id, main_hs_slot(s));
+			bridge_event(s, "answered", NULL, NULL);
+		}
+	}
+	if (s->bc.busy_seen && !busy) {
+		printf("bridge: call %u ended on the handset\n", s->bc.id);
+		bridge_event(s, "released", "by", "hs");
+		s->bc.id = 0;
+		return;
+	}
+	/* a call-in that never got a handset: the ring gave up */
+	if (!s->bc.out && !s->bc.busy_seen &&
+	    (now - s->bc.since > 75000u ||
+	     (s->ring_state == RING_DONE && !s->ring_watch &&
+	      now - s->bc.since > 5000u))) {
+		printf("bridge: call %u in -- no handset answered the page\n",
+		       s->bc.id);
+		bridge_event(s, "released", "by", "base");
+		s->bc.id = 0;
+		s->ring_now = 0;
+	}
+}
+
+/* The audio socket: listening while the control socket is, one client. */
+static void ab_open(struct stubd *s)
+{
+	struct sockaddr_un a;
+	mode_t old;
+	int fd;
+
+	s->ab.lfd = s->ab.cfd = -1;
+	if (s->ctl.lfd < 0)
+		return;
+	memset(&a, 0, sizeof(a));
+	a.sun_family = AF_UNIX;
+	strcpy(a.sun_path, AB_PATH);
+	(void)unlink(AB_PATH);
+	fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	if (fd < 0)
+		return;
+	old = umask(077);
+	if (bind(fd, (struct sockaddr *)&a, sizeof(a)) ||
+	    chmod(AB_PATH, 0600) || listen(fd, 1)) {
+		printf("ctl: %s: %s -- no audio socket\n", AB_PATH,
+		       strerror(errno));
+		umask(old);
+		close(fd);
+		return;
+	}
+	umask(old);
+	s->ab.lfd = fd;
+}
+
+static void ab_end(struct stubd *s, const char *why)
+{
+	if (s->ab.cfd < 0)
+		return;
+	close(s->ab.cfd);
+	s->ab.cfd = -1;
+	printf("audio: socket closed (%s): %u frames up, %u down, %u "
+	       "underruns, %u dropped\n", why, s->ab.frames_up,
+	       s->ab.frames_down, s->ab.underruns, s->ab.dropped);
+}
+
+static void ab_close(struct stubd *s)
+{
+	ab_end(s, "exit");
+	if (s->ab.lfd < 0)
+		return;
+	close(s->ab.lfd);
+	s->ab.lfd = -1;
+	(void)unlink(AB_PATH);
+}
+
+static void ab_tick(struct stubd *s)
+{
+	int bound = s->bc.id && s->reg.active && s->reg.call_bound;
+	int c;
+
+	if (s->ab.lfd < 0)
+		return;
+	/* the call is up: say where its speech is */
+	if (bound && s->reg.call_wideband && s->ab.call != s->bc.id) {
+		struct dect_ctl_out o;
+
+		s->ab.call = s->bc.id;
+		dect_ctl_begin(&o, "audio");
+		dect_ctl_add_uint(&o, "call", s->bc.id);
+		dect_ctl_add(&o, "path", AB_PATH);
+		dect_ctl_add_uint(&o, "rate", 16000);
+		dect_ctl_add_uint(&o, "frame", AB_FRAME);
+		ctl_send(s, &o);
+		printf("audio: call %u's speech on %s (16 kHz, 20 ms)\n",
+		       s->bc.id, AB_PATH);
+	} else if (bound && !s->reg.call_wideband && !s->ab.nb_noted) {
+		s->ab.nb_noted = 1;
+		printf("audio: call %u is narrowband -- no audio socket yet "
+		       "(wideband only)\n", s->bc.id);
+	}
+	if (!bound) {
+		s->ab.nb_noted = 0;
+		if (s->ab.call) {
+			s->ab.call = 0;
+			ab_end(s, "the call ended");
+		}
+	}
+	while ((c = accept(s->ab.lfd, NULL, NULL)) >= 0) {
+		if (s->ab.cfd >= 0 || !s->ab.call) {
+			close(c);
+			continue;
+		}
+		(void)fcntl(c, F_SETFL, fcntl(c, F_GETFL) | O_NONBLOCK);
+		(void)fcntl(c, F_SETFD, FD_CLOEXEC);
+		s->ab.cfd = c;
+		dect_g722_init(&s->ab.enc);
+		dect_g722_init(&s->ab.dec);
+		s->ab.dh = s->ab.dn = s->ab.un = 0;
+		s->ab.rx_prev = 0xFFFFFFFFu;
+		s->ab.rx_run = 0;
+		s->ab.phase = s->ab.locked = s->ab.primed = 0;
+		s->ab.underruns = s->ab.dropped = 0;
+		s->ab.frames_up = s->ab.frames_down = 0;
+		printf("audio: the bridge connected for call %u\n", s->ab.call);
+	}
+	while (s->ab.cfd >= 0) {
+		int16_t pcm[AB_FRAME / 2u];
+		uint8_t g[AB_FRAME / 4u];
+		ssize_t n = recv(s->ab.cfd, pcm, sizeof(pcm), MSG_DONTWAIT);
+		size_t k, i, cap = sizeof(s->ab.down);
+
+		if (n == 0) {
+			ab_end(s, "the bridge closed it");
+			return;
+		}
+		if (n < 0) {
+			if (errno != EAGAIN && errno != EWOULDBLOCK &&
+			    errno != EINTR)
+				ab_end(s, "read failed");
+			return;
+		}
+		k = dect_g722_encode(&s->ab.enc, pcm, (size_t)n / 4u * 2u, g);
+		if (s->ab.dn + k > cap) {
+			s->ab.dropped++;	/* 0.5 s behind: drop this one */
+			continue;
+		}
+		for (i = 0; i < k; i++)
+			s->ab.down[(s->ab.dh + s->ab.dn + i) % cap] = g[i];
+		s->ab.dn += k;
+		s->ab.frames_down++;
+	}
+}
+
+/*
  * A handset name from the socket: at most DECT_IWU_NAME_MAX - 1 octets of
  * well-formed UTF-8 (it goes on the air in the Internal Names List); the
  * line format has already refused control characters. Empty resets it.
@@ -7056,6 +7552,8 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 		}
 		reg_window(s, 1, v, now, "the control socket");
 		ctl_reply(s, m.verb, NULL, "seconds", v);
+	} else if (bridge_command(s, &m, now)) {
+		/* answered there */
 	} else if (!strcmp(m.verb, "rename")) {
 		const char *nm = dect_ctl_get(&m, "name");
 
@@ -7093,6 +7591,8 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 	}
 }
 
+static void ab_open(struct stubd *s);
+
 static void ctl_open(struct stubd *s)
 {
 	struct sockaddr_un a;
@@ -7100,6 +7600,7 @@ static void ctl_open(struct stubd *s)
 	int fd;
 
 	s->ctl.lfd = s->ctl.cfd = -1;
+	s->ab.lfd = s->ab.cfd = -1;	/* ab_open() only after a ctl socket */
 	s->ctl.path = s->audio.ctl_path ? s->audio.ctl_path : DECT_CTL_PATH;
 	if (s->audio.no_ctl || !s->do_register)
 		return;
@@ -7140,10 +7641,14 @@ static void ctl_open(struct stubd *s)
 	umask(old);
 	s->ctl.lfd = fd;
 	printf("ctl: listening on %s (0600)\n", s->ctl.path);
+	ab_open(s);
 }
+
+static void ab_close(struct stubd *s);
 
 static void ctl_close(struct stubd *s)
 {
+	ab_close(s);
 	ctl_drop(s, "closed (exit)");
 	if (s->ctl.lfd < 0)
 		return;
@@ -8874,6 +9379,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			ic_tick(s, now);
 			dereg_tick(s, now);
 			ctl_tick(s, now);
+			bridge_tick(s, now);
+			ab_tick(s);
 		}
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
@@ -9938,6 +10445,146 @@ static int ctl_client(int n, char **lines)
 	return 0;
 }
 
+/*
+ * dect-stubd --bridge-echo [ring [NUMBER]]: a test bridge without SIP
+ * (docs/bridge-interface.md §5 steps 2-3). It answers every number a
+ * handset dials -- ALERTING at once, CONNECT 1.5 s later -- and plays the
+ * caller's own voice back half a second late, through the audio socket.
+ * "ring" first rings the first handset as a call from NUMBER (default
+ * 0301234567, name "Echo test") and echoes once it is answered. Stops
+ * when the daemon goes, or on SIGINT/SIGTERM.
+ */
+#define ECHO_DELAY	25u	/* 20 ms frames: 0.5 s */
+
+static int bridge_echo(int argc, char **argv)
+{
+	const char *path = getenv("OPENDECTCELL_CTL");
+	struct sockaddr_un a;
+	char in[DECT_CTL_LINE_MAX * 2], line[DECT_CTL_LINE_MAX];
+	static int16_t ring[ECHO_DELAY][AB_FRAME / 2u];
+	unsigned rw = 0, rn = 0, answer_call = 0;
+	uint64_t answer_at = 0;
+	size_t il = 0;
+	int fd, afd = -1, n;
+
+	signal(SIGINT, on_signal);
+	signal(SIGTERM, on_signal);
+	memset(&a, 0, sizeof(a));
+	a.sun_family = AF_UNIX;
+	strcpy(a.sun_path, path ? path : DECT_CTL_PATH);
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a))) {
+		fprintf(stderr, "echo: %s: %s\n", a.sun_path, strerror(errno));
+		return 1;
+	}
+	n = snprintf(line, sizeof(line), "bridge\n");
+	if (argc >= 1 && !strcmp(argv[0], "ring"))
+		n += snprintf(line + n, sizeof(line) - (size_t)n,
+			      "call-in line=1 number=%s name=\"Echo test\" "
+			      "sip=echo\n", argc >= 2 ? argv[1] : "0301234567");
+	if (write(fd, line, (size_t)n) != n)
+		return 1;
+	printf("echo: bridge up -- dial any number on a handset\n");
+	fflush(stdout);
+	while (!stop) {
+		struct pollfd p[2] = { { .fd = fd, .events = POLLIN },
+				       { .fd = afd, .events = POLLIN } };
+		uint64_t now = mono_ms();
+
+		if (answer_call && now >= answer_at) {
+			n = snprintf(line, sizeof(line),
+				     "remote-answered call=%u\n", answer_call);
+			if (write(fd, line, (size_t)n) != n)
+				break;
+			printf("echo: call %u answered\n", answer_call);
+			answer_call = 0;
+		}
+		if (poll(p, afd >= 0 ? 2 : 1, 100) < 0 && errno != EINTR)
+			break;
+		if (afd >= 0 && (p[1].revents & (POLLIN | POLLHUP))) {
+			ssize_t r = recv(afd, ring[rw], sizeof(ring[0]),
+					 MSG_DONTWAIT);
+
+			if (r <= 0) {
+				close(afd);
+				afd = -1;
+				printf("echo: audio closed\n");
+			} else {
+				rw = (rw + 1u) % ECHO_DELAY;
+				if (rn < ECHO_DELAY)
+					rn++;
+				/* the frame from half a second ago */
+				if (rn == ECHO_DELAY)
+					(void)send(afd, ring[rw], (size_t)r,
+						   MSG_DONTWAIT | MSG_NOSIGNAL);
+			}
+		}
+		if (!(p[0].revents & (POLLIN | POLLHUP)))
+			continue;
+		{
+			ssize_t r = read(fd, in + il, sizeof(in) - il - 1u);
+			char *nl;
+
+			if (r <= 0)
+				break;
+			il += (size_t)r;
+			while ((nl = memchr(in, '\n', il)) != NULL) {
+				struct dect_ctl_msg m;
+				size_t l = (size_t)(nl - in);
+				unsigned id;
+
+				printf("echo: << %.*s\n", (int)l, in);
+				if (!dect_ctl_parse(in, l, &m) &&
+				    !dect_ctl_get_uint(&m, "call", 1, 127, &id)) {
+					if (!strcmp(m.verb, "call-out")) {
+						n = snprintf(line, sizeof(line),
+							"remote-ringing call=%u\n", id);
+						if (write(fd, line, (size_t)n) != n)
+							stop = 1;
+						answer_call = id;
+						answer_at = mono_ms() + 1500u;
+					} else if (!strcmp(m.verb, "audio") &&
+						   dect_ctl_get(&m, "path") &&
+						   afd < 0) {
+						struct sockaddr_un aa;
+
+						memset(&aa, 0, sizeof(aa));
+						aa.sun_family = AF_UNIX;
+						snprintf(aa.sun_path,
+							 sizeof(aa.sun_path), "%s",
+							 dect_ctl_get(&m, "path"));
+						afd = socket(AF_UNIX,
+							     SOCK_SEQPACKET, 0);
+						if (afd >= 0 &&
+						    connect(afd, (struct sockaddr *)&aa,
+							    sizeof(aa))) {
+							close(afd);
+							afd = -1;
+						}
+						rn = rw = 0;
+						printf("echo: audio %s\n",
+						       afd >= 0 ? "connected"
+								: "FAILED");
+					} else if (!strcmp(m.verb, "released") &&
+						   afd >= 0) {
+						close(afd);
+						afd = -1;
+					}
+				}
+				memmove(in, nl + 1, il - l - 1u);
+				il -= l + 1u;
+			}
+			if (il == sizeof(in) - 1u)
+				il = 0;
+			fflush(stdout);
+		}
+	}
+	if (afd >= 0)
+		close(afd);
+	close(fd);
+	return 0;
+}
+
 static int check_profile(const char *path, const char *fw)
 {
 	static struct dect_profile p, mfr;
@@ -9982,6 +10629,8 @@ int main(int argc, char **argv)
 {
 	if (argc >= 2 && !strcmp(argv[1], "--ctl"))
 		return ctl_client(argc - 2, argv + 2);
+	if (argc >= 2 && !strcmp(argv[1], "--bridge-echo"))
+		return bridge_echo(argc - 2, argv + 2);
 	if (argc >= 3 && !strcmp(argv[1], "--check-profile"))
 		return check_profile(argv[2], argc >= 4 ? argv[3] : NULL);
 	if (getenv("OPENDECTCELL_SWAP"))

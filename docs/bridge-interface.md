@@ -118,10 +118,20 @@ while the daemon runs (`-g`) and is removed on exit.
 
 1. **Done** (API 79): the control socket in dect-stubd, `hello`, `hs`,
    `deregister`, `register-window`; checked on the box with `--ctl`.
-2. `call-out`, `released`, `remote-*` against a scripted client (socat or a
-   test program): the DECT side of a SIP call without SIP.
-3. The audio socket for one call, narrowband first (the chip's linear PCM),
-   checked with a loop-back client.
+2. **Built** (2026-10-28): `bridge`, `call-out`, `ringing`, `answered`,
+   `released`, `call-in` (rings the first handset), `remote-ringing`,
+   `remote-answered`, `remote-released`; one bridged call at a time on the
+   main link. Without a client that sent `bridge`, a dialled call is
+   connected locally as before.
+3. **Built** (2026-10-28), wideband first: `audio call=N
+   path=/var/run/opendectcell-audio.sock rate=16000 frame=640` once the call's
+   audio is bound; the bridge connects (SOCK_SEQPACKET) and both sides
+   exchange 640-octet frames of 16 kHz linear PCM. dect-stubd codes them
+   to and from the call's G.722 lane (40 ms of priming, silence on an
+   underrun, each of the handset's coded words taken once). A narrowband
+   call gets no audio socket yet. `dect-stubd --bridge-echo [ring
+   [NUMBER]]` is a test bridge: it answers any dialled number and plays
+   the caller's voice back 0.5 s late; `ring` also places a call-in.
 4. opendectcell-sipd with baresip on the box: one line, calls out, then in.
 5. `lines` and the pool: two lines, ringing all attached handsets
    (lines-and-calls.md step 4).

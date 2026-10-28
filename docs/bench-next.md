@@ -535,3 +535,23 @@ all three stores; on the **C430A** INT, 1.
 |---|---|
 | "DECT 2" (or the C430A's name) while it rings; the log shows `intern: caller's name "DECT 2" sent in CC-INFO` | fixed |
 | "via Intern DECT" still | the agent compares our CC-INFO with A-0130's; stock sends it about 520 ms after the SETUP, after authentication, we send it on ALERTING |
+
+### 25. The bridge without SIP: a call through the control and audio sockets (5 minutes)
+
+The MVP's DECT half (bridge-interface.md §5 steps 2-3), with the test bridge
+standing in for SIP. One run, all three stores, then in a second shell:
+
+```
+ssh root@192.168.1.1 '/tmp/dect-stubd -g -P 0000 -s /etc/opendectcell-sub.a540 -s /etc/opendectcell-sub.c430a -s /etc/opendectcell-sub.as690h -p -t 300 -a mask=0x0002,codec=3,status=8000 > /tmp/vECHO-$(date +%H%M%S).log 2>&1'
+ssh root@192.168.1.1 '/tmp/dect-stubd --bridge-echo'
+```
+
+1. On the A540 dial any number (e.g. 123) and speak.
+2. Then stop the echo bridge, start it as `--bridge-echo ring`: the A540
+   rings as "Echo test 0301234567"; answer and speak.
+
+| you hear | meaning |
+|---|---|
+| ring-back, then after 1.5 s the call connects and your voice comes back half a second late, clear | signalling and both audio directions through the sockets work: the SIP side only has to fill them |
+| it connects but stays silent | the log's `audio:` lines and the echo's `audio connected` say which half is missing; the agent reads them |
+| your voice comes back garbled or choppy | the G.722 coding or the frame timing: the `audio: socket closed` line counts underruns and drops |
