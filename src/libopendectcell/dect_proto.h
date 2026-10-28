@@ -278,8 +278,15 @@
  *    keypad starts with 0x17 is re-classed as class 9, keeping its speech
  *    service (EN 300 444 §8.19, TS 102 527-3 §7.4.10.6.2), so
  *    peer_basic_service can change after the SETUP.
+ *
+ * 29: a second call on one link (2026-10-28). No layout change.
+ *    **Behaviour change:** a {CC-SETUP} is accepted in DECT_CC_ST_RELEASED
+ *    as in NULL (EN 300 175-5 §9.5.1: release ends in the null state), and
+ *    the keypad buffer is cleared for each new call. Before, the next call
+ *    on a link that stayed up was ignored (same transaction value) or
+ *    refused "insufficient resources" (another value).
  */
-#define OPENDECTCELL_API_VERSION 28
+#define OPENDECTCELL_API_VERSION 29
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

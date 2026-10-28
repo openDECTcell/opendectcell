@@ -105,6 +105,55 @@ static void test_release_from_pp(void)
 	CHECK_EQ(cc.stats.released, 1);
 }
 
+static size_t pp_info(uint8_t *out, size_t cap, const char *digits,
+		      int complete);
+static uint8_t types_of(struct dect_cc *cc, uint8_t *types, size_t cap);
+
+/*
+ * A second call on the same link, after the first was released by either
+ * side: the SETUP is taken, not ignored, and the old digits are gone.
+ */
+static void test_second_call_on_the_same_link(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], t[8];
+	size_t n, kl;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	n = pp_info(buf, sizeof(buf), "123", 0);
+	dect_cc_rx(&cc, buf, n);
+	(void)types_of(&cc, t, sizeof(t));
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_RELEASE);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_RELEASE_COM);
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
+
+	n = pp_setup(buf, sizeof(buf), 0);		/* the redial, same TI */
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_SETUP_ACK);
+	CHECK_EQ(cc.state, DECT_CC_ST_OVERLAP);
+	(void)dect_cc_keypad(&cc, &kl);
+	CHECK_EQ(kl, 0u);
+
+	/* after our own release, completed by the handset */
+	CHECK_EQ(dect_cc_release(&cc), 0);
+	(void)types_of(&cc, t, sizeof(t));
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_RELEASE_COM);
+	dect_cc_rx(&cc, buf, n);
+	n = pp_setup(buf, sizeof(buf), 1);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_SETUP_ACK);
+	CHECK_EQ(cc.ti_value, 1);
+}
+
 /* We initiate the hang-up on an active call. */
 static void test_release_from_fp(void)
 {
@@ -2063,6 +2112,7 @@ int main(void)
 	test_call_status_in_our_answers();
 	test_internal_call_waits_for_the_owner();
 	test_int_key_makes_an_internal_call();
+	test_second_call_on_the_same_link();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();

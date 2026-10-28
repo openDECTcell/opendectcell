@@ -929,11 +929,22 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 
 	switch (h.msg_type) {
 	case DECT_CC_SETUP:
-		if (cc->state == DECT_CC_ST_NULL) {
+		/*
+		 * A released call leaves its transaction free: answering a
+		 * {CC-RELEASE} with {CC-RELEASE-COM} returns the FT to the null
+		 * state (EN 300 175-5 §9.5.1). Accepting a SETUP only in NULL
+		 * ignored the next call on the same link -- a redial, or a voice
+		 * call after a list-access call -- for as long as the link
+		 * stayed up (spec sweep, 2026-10-28). RELEASED stays visible as
+		 * "call ended" until then.
+		 */
+		if (cc->state == DECT_CC_ST_NULL ||
+		    cc->state == DECT_CC_ST_RELEASED) {
 			if (setup_from_stranger(cc, &h, ies, ies_len)) {
 				cc->answered = 0;
 				break;
 			}
+			dect_cc_clear_keypad(cc);	/* digits are per call */
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;
