@@ -345,6 +345,60 @@ static void test_release_timer(void)
 	}
 }
 
+/*
+ * dect_cc_release_reason() puts the reason in the {CC-RELEASE}; and
+ * dect_cc_busy_system() refuses an internal call in PROCEEDING: busy
+ * notification to a Part 3 handset, "insufficient resources" to others.
+ */
+static void test_release_with_a_reason_and_busy_system(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+	int part3;
+
+	dect_cc_init(&cc);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x98);	/* internal */
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	CHECK_EQ(dect_cc_release_reason(&cc, DECT_CC_REASON_USER_UNKNOWN), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE);
+	CHECK_EQ(n, 4u);
+	CHECK_EQ(out[2], DECT_IE_RELEASE_REASON);
+	CHECK_EQ(out[3], DECT_CC_REASON_USER_UNKNOWN);
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
+	CHECK_EQ(dect_cc_release_reason(&cc, 0x00), -1);	/* once */
+
+	for (part3 = 0; part3 < 2; part3++) {
+		dect_cc_init(&cc);
+		if (part3)
+			dect_cc_set_call_status(&cc, 1, 3);
+		n = pp_setup_svc(buf, sizeof(buf), 0, 0x98);
+		buf[n++] = DECT_IE_SENDING_COMPLETE;
+		dect_cc_rx(&cc, buf, n);
+		while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+			;				/* CALL-PROC */
+		CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
+		CHECK_EQ(dect_cc_busy_system(&cc), 0);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		if (part3) {
+			CHECK_EQ(msg_type_of(out, n), DECT_CC_INFO);
+			CHECK_EQ(out[2], DECT_IE_SIGNAL);
+			CHECK_EQ(out[3], 0x04u);	/* busy tone */
+			CHECK_EQ(cc.busy_notified, 1u);
+			CHECK_EQ(dect_cc_busy_system(&cc), -1);	/* once */
+		} else {
+			CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE);
+			CHECK_EQ(out[3],
+				 DECT_CC_REASON_INSUFFICIENT_RESOURCES);
+		}
+		CHECK_EQ(cc.stats.rejected_busy, 1u);
+	}
+}
+
 /* A SETUP with TI flag 1 is ignored, idle or in a call (§17.3.2.1). */
 static void test_setup_with_flag_one_is_ignored(void)
 {
@@ -2564,6 +2618,7 @@ int main(void)
 	test_info_on_the_call();
 	test_setup_without_basic_service_is_refused();
 	test_setup_with_flag_one_is_ignored();
+	test_release_with_a_reason_and_busy_system();
 	test_unserved_call_class_is_refused();
 	test_none_gets_the_selected_line();
 	test_busy_system_for_a_part3_handset();

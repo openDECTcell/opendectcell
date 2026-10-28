@@ -5698,17 +5698,27 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 		if (k[j] >= '0' && k[j] <= '9')
 			slot = slot * 10u + (unsigned)(k[j] - '0');
 	if (!s->audio.two_calls || s->ic.st != IC_IDLE) {
+		/*
+		 * With a reason the handset can show (EN 300 175-5 §7.7.18):
+		 * another internal call in the way is the system busy (TS 102
+		 * 527-3 §7.4.8.3 for a Part 3 handset), the feature switched
+		 * off "service not implemented". It went without one.
+		 */
 		printf("intern: internal call refused (%s)\n",
 		       s->audio.two_calls ? "one at a time" :
 		       "needs -a twocalls");
-		(void)dect_cc_release(cc);
+		if (s->audio.two_calls)
+			(void)dect_cc_busy_system(cc);
+		else
+			(void)dect_cc_release_reason(cc,
+				DECT_CC_REASON_SERVICE_NOT_IMPLEMENTED);
 		return 1;
 	}
 	/* lanes: the target lands on a side link; a side caller needs its own */
 	if (lanes_available(s, side >= 0 ? &s->side[side] : NULL) <
 	    (side >= 0 ? 2 : 1)) {
-		printf("intern: no free audio channel -- releasing\n");
-		(void)dect_cc_release(cc);
+		printf("intern: no free audio channel -- system busy\n");
+		(void)dect_cc_busy_system(cc);
 		return 1;
 	}
 	for (i = 0; i < s->n_hs; i++)
@@ -5716,9 +5726,9 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 			break;
 	if (i >= s->n_hs || (side < 0 && i == s->cur) ||
 	    (side >= 0 && (int)i == s->side[side].adopted)) {
-		printf("intern: no other handset in slot %u -- releasing\n",
-		       slot);
-		(void)dect_cc_release(cc);
+		printf("intern: no other handset in slot %u -- releasing, "
+		       "\"user unknown\"\n", slot);
+		(void)dect_cc_release_reason(cc, DECT_CC_REASON_USER_UNKNOWN);
 		return 1;
 	}
 	(void)dect_cc_proceed(cc);

@@ -66,6 +66,8 @@ enum dect_cc_state {
 #define DECT_CC_REASON_MANDATORY_IE_MISSING	0x03u
 #define DECT_CC_REASON_INCOMPATIBLE_SERVICE	0x05u
 #define DECT_CC_REASON_SERVICE_NOT_IMPLEMENTED	0x06u
+#define DECT_CC_REASON_USER_UNKNOWN		0x12u
+#define DECT_CC_REASON_USER_BUSY		0x14u
 /*
  * "Unknown identity": what EN 300 444 table 17 recommends in the
  * {CC-RELEASE-COM} when "the FT did not recognize the PT by its
@@ -590,6 +592,24 @@ void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti);
 
 /* Queue a CC-RELEASE to hang up an active call. Returns 0, or -1 if idle. */
 int dect_cc_release(struct dect_cc *cc);
+
+/*
+ * The same with a <<RELEASE-REASON>> (EN 300 175-5 §7.7.18), so the handset
+ * can say why: "user busy", "user unknown" ... DECT_CC_REASON_NONE sends
+ * none, as dect_cc_release() does.
+ */
+#define DECT_CC_REASON_NONE		0xFFu
+int dect_cc_release_reason(struct dect_cc *cc, uint8_t reason);
+
+/*
+ * Refuse a handset-placed call, before CONNECT, because the system is busy
+ * (no audio channel, another call in the way): to a Part 3 handset the busy
+ * system notification of TS 102 527-3 §7.4.8.3 (busy tone, CS call
+ * disconnecting "system busy", the release after 5 s), to any other a
+ * {CC-RELEASE} "insufficient resources". -1 if the call is ours, connected,
+ * idle or already notified.
+ */
+int dect_cc_busy_system(struct dect_cc *cc);
 
 /* Pull a pending outbound NWK message. Returns its length, or 0 if none. */
 size_t dect_cc_poll(struct dect_cc *cc, uint8_t *out, size_t cap);

@@ -470,8 +470,16 @@
  *    struct dect_mm gains peer_auth and peer_auth_len, from the
  *    {ACCESS-RIGHTS-REQUEST}'s <<AUTH-TYPE>>. No behaviour change; the
  *    daemon logs it with the registration's outcome.
+ *
+ * 60: release reasons (2026-10-28, spec sweep P-8.18). No layout change.
+ *    New: dect_cc_release_reason(), dect_cc_busy_system(),
+ *    DECT_CC_REASON_NONE, _USER_UNKNOWN, _USER_BUSY. dect_cc_release() is
+ *    dect_cc_release_reason(cc, DECT_CC_REASON_NONE), unchanged on the air.
+ *    The daemon's internal-call refusals now carry a reason, and "no audio
+ *    channel" / "one at a time" are the busy system of TS 102 527-3
+ *    §7.4.8.3 for a Part 3 handset.
  */
-#define OPENDECTCELL_API_VERSION 59
+#define OPENDECTCELL_API_VERSION 60
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

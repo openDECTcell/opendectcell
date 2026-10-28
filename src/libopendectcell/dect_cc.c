@@ -1495,9 +1495,31 @@ int dect_cc_info(struct dect_cc *cc, const uint8_t *ies, size_t len)
 
 int dect_cc_release(struct dect_cc *cc)
 {
+	return dect_cc_release_reason(cc, DECT_CC_REASON_NONE);
+}
+
+int dect_cc_busy_system(struct dect_cc *cc)
+{
+	if (cc->incoming || cc->state == DECT_CC_ST_ACTIVE ||
+	    !dect_cc_busy(cc) || cc->busy_notified)
+		return -1;
+	cc->stats.rejected_busy++;
+	if (cc->call_status) {			/* a Part 3 handset */
+		busy_notify(cc);
+		return 0;
+	}
+	return dect_cc_release_reason(cc,
+				      DECT_CC_REASON_INSUFFICIENT_RESOURCES);
+}
+
+int dect_cc_release_reason(struct dect_cc *cc, uint8_t reason)
+{
 	if (cc->state == DECT_CC_ST_NULL || cc->state == DECT_CC_ST_RELEASED)
 		return -1;
-	queue_msg(cc, cc->ti_flag, DECT_CC_RELEASE);
+	if (reason == DECT_CC_REASON_NONE)
+		queue_msg(cc, cc->ti_flag, DECT_CC_RELEASE);
+	else
+		queue_release_msg(cc, DECT_CC_RELEASE, reason);
 	cc->state = DECT_CC_ST_RELEASED;
 	cc->stats.released++;
 	cc->release_armed = 1;			/* <CC.02> */
