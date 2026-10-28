@@ -65,6 +65,7 @@ enum dect_cc_state {
 #define DECT_CC_REASON_UNKNOWN_TRANSACTION	0x02u
 #define DECT_CC_REASON_MANDATORY_IE_MISSING	0x03u
 #define DECT_CC_REASON_INCOMPATIBLE_SERVICE	0x05u
+#define DECT_CC_REASON_SERVICE_NOT_IMPLEMENTED	0x06u
 /*
  * "Unknown identity": what EN 300 444 table 17 recommends in the
  * {CC-RELEASE-COM} when "the FT did not recognize the PT by its
@@ -115,6 +116,7 @@ struct dect_cc_stats {
 	uint32_t line_refused;	/* calls on a line the handset may not use */
 	uint32_t release_timeouts;	/* <CC.02> expired, we completed it */
 	uint32_t release_collisions;	/* both sides released (§9.5.3) */
+	uint32_t service_refused;	/* SETUPs of a call class not served */
 	/* handset-placed calls refused by dect_cc_set_busy() */
 	uint32_t rejected_busy;
 };

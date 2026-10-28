@@ -429,8 +429,15 @@
  *    message with TV other than 0 is ignored (§17.3.1, table 68), and an
  *    {AUTHENTICATION-REQUEST} counts as the key-allocation answer only
  *    with F = 1, on our transaction.
+ *
+ * 54: unserved call classes (2026-10-28, spec sweep N.32). Layout change:
+ *    the stats gain service_refused; new DECT_CC_REASON_SERVICE_NOT_
+ *    IMPLEMENTED. **Behaviour change:** a {CC-SETUP} for a ULE, message,
+ *    IIP, service, supplementary-service or OA&M call gets {CC-RELEASE-COM}
+ *    "service not implemented" (EN 300 444 §8.2.2.3) instead of being
+ *    connected without speech.
  */
-#define OPENDECTCELL_API_VERSION 53
+#define OPENDECTCELL_API_VERSION 54
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

@@ -1118,6 +1118,26 @@ static int our_transaction(const struct dect_cc *cc,
  * RELEASE-COM on a transaction we do not hold is cleared with
  * {CC-RELEASE-COM} "unknown transaction identifier", on that transaction.
  */
+/*
+ * The call classes of <<BASIC-SERVICE>> (EN 300 175-5 §7.6.4) a base like
+ * ours does not serve: ULE, message, DECT/ISDN IIP, service, supplementary
+ * service and OA&M calls. A SETUP for one is rejected, which the FT may do
+ * with any reason (EN 300 444 §8.2.2.3); we used to connect it as a call
+ * without speech (spec sweep, N.32). The AS690H placed one service call
+ * after registering, `e0 b8` plus a Gigaset proprietary escape
+ * (vREGAS690H095638.log), and released it itself. Reserved values are
+ * processed as before (EN 300 444 §6.9.4).
+ */
+static int served_call_class(int svc)
+{
+	switch ((unsigned)svc >> 4) {
+	case 0x3u: case 0x4u: case 0x7u: case 0xBu: case 0xDu: case 0xEu:
+		return 0;
+	default:
+		return 1;
+	}
+}
+
 static void close_unknown(struct dect_cc *cc, const struct dect_nwk_hdr *h)
 {
 	queue_release_other(cc, h->ti_flag, h->ti_value,
@@ -1183,6 +1203,14 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 				queue_release_other(cc, h.ti_flag, h.ti_value,
 					DECT_CC_REASON_MANDATORY_IE_MISSING);
 				cc->stats.ie_missing++;
+				cc->answered = 0;
+				break;
+			}
+			if (!served_call_class(dect_nwk_find_fixed_ie(ies,
+					ies_len, DECT_IE_BASIC_SERVICE))) {
+				queue_release_other(cc, h.ti_flag, h.ti_value,
+					DECT_CC_REASON_SERVICE_NOT_IMPLEMENTED);
+				cc->stats.service_refused++;
 				cc->answered = 0;
 				break;
 			}

@@ -454,6 +454,41 @@ static void test_unknown_transaction_is_cleared(void)
 	}
 }
 
+/*
+ * A call class we do not serve is refused "service not implemented"; the
+ * classes we do serve, and reserved ones, are not. The first case is the
+ * AS690H's service call, vREGAS690H095638.log.
+ */
+static void test_unserved_call_class_is_refused(void)
+{
+	static const uint8_t refused[] = { 0x38, 0x48, 0x78, 0xB8, 0xD8, 0xE8 };
+	static const uint8_t served[] = { 0x28, 0x88, 0x98, 0xA8, 0x00 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n, i;
+
+	for (i = 0; i < sizeof(refused); i++) {
+		dect_cc_init(&cc);
+		n = pp_setup_svc(buf, sizeof(buf), 0, refused[i]);
+		dect_cc_rx(&cc, buf, n);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+		CHECK(n >= 4u &&
+		      out[n - 1] == DECT_CC_REASON_SERVICE_NOT_IMPLEMENTED);
+		CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+		CHECK_EQ(cc.stats.service_refused, 1u);
+		CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	}
+	for (i = 0; i < sizeof(served); i++) {
+		dect_cc_init(&cc);
+		n = pp_setup_svc(buf, sizeof(buf), 0, served[i]);
+		dect_cc_rx(&cc, buf, n);
+		n = dect_cc_poll(&cc, out, sizeof(out));
+		CHECK(msg_type_of(out, n) != DECT_CC_RELEASE_COM);
+		CHECK_EQ(cc.stats.service_refused, 0u);
+	}
+}
+
 /* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
 static void test_setup_without_basic_service_is_refused(void)
 {
@@ -1199,6 +1234,13 @@ static void test_peer_basic_service_decides_speech(void)
 		dect_cc_init(&cc);
 		n = pp_setup_svc(buf, sizeof(buf), 0, cases[i].svc);
 		dect_cc_rx(&cc, buf, n);
+		if (cases[i].svc == 0x40 || cases[i].svc == 0x39 ||
+		    cases[i].svc == 0xB0) {
+			/* a class we do not serve: refused before anything */
+			CHECK_EQ(cc.stats.service_refused, 1u);
+			CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+			continue;
+		}
 		CHECK_EQ(cc.peer_basic_service, cases[i].svc);
 		CHECK_EQ(dect_cc_peer_is_speech(&cc), cases[i].speech);
 		/*
@@ -1206,7 +1248,7 @@ static void test_peer_basic_service_decides_speech(void)
 		 * A LiA service call (class 0010) is only CALL-PROC'd, never
 		 * connected (TS 102 527-3 7.4.10.6.1), and an internal call
 		 * (class 1001) waits for the owner to reach the other handset;
-		 * every other class is taken through to CONNECT.
+		 * every other class served is taken through to CONNECT.
 		 */
 		CHECK_EQ(cc.state, (cases[i].svc >> 4) == 0x2u ||
 			 (cases[i].svc >> 4) == 0x9u
@@ -2522,6 +2564,7 @@ int main(void)
 	test_info_on_the_call();
 	test_setup_without_basic_service_is_refused();
 	test_setup_with_flag_one_is_ignored();
+	test_unserved_call_class_is_refused();
 	test_none_gets_the_selected_line();
 	test_busy_system_for_a_part3_handset();
 	test_unattached_line_is_refused();
