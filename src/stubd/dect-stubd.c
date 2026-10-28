@@ -2798,7 +2798,12 @@ static uint8_t alloc_call_id(const struct stubd *s, const struct dect_link *me)
 /* dect_link's question for a handset's new call: its call id. */
 static uint8_t call_id_for(void *ctx, const struct dect_link *l)
 {
-	return alloc_call_id(ctx, l);
+	uint8_t id = alloc_call_id(ctx, l);
+
+	if (id)
+		printf("call: call id %u for the handset's call on handle %u\n",
+		       (unsigned int)id, (unsigned int)l->handle);
+	return id;
 }
 
 /*
