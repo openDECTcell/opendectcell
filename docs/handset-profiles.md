@@ -1,11 +1,17 @@
 # Handset profiles: the file format
 
-**Status (2026-10-28): format defined, loader not built yet.** This page is the
-contract for whoever writes a profile: the maintainer, a contributor, or the
-clean-room agent that turns facts about a vendor's handset into a file. The
-loader in `dect-stubd` will implement exactly this page; every key below names
-the behaviour it replaces today (a `dect-stubd -a` lab option or a built-in
-default), so a profile can be tried by hand now with that option.
+**Status (2026-10-28, night): format defined; parser, layers and
+`--check-profile` built (`dect_profile`, API 71); `dect-stubd` applies a
+handset's profile** (its `<store>.profile`, below) for these keys:
+`cc.call_status`, `cc.basic_service`, `cc.signal.external` (unless `-a
+signal=` is given), `cc.name.method` and `cc.name.display` (on our ring),
+`lce.release_after_call`, `notify`, `trust.terminal_capability` with
+`cap.ngdect`, and `reg.tries_0000_first` (log text). The other keys are
+accepted and resolved; the log says when a handset's profile uses one that
+this build does not act on yet. This page is the contract for whoever writes
+a profile: the maintainer, a contributor, or the clean-room agent that turns
+facts about a vendor's handset into a file. Every key below names the
+behaviour it replaces (a `dect-stubd -a` lab option or a built-in default).
 
 Decisions behind it: ROADMAP M8b, "Decided 2026-10-28", points 1-7, and
 AGENTS.md §1a and §2.9.
@@ -36,7 +42,10 @@ or keep it. It never adds a protocol of its own.
   a handset, never to a call in progress.
 - **The user picks the model** for each handset, before registering it
   (decision 1): the choice is stored with the handset and names a device
-  profile `id`. That way registration quirks apply too. Without a choice the
+  profile `id`. Today that is the file `<store>.profile` beside the
+  subscription store (`/etc/opendectcell-sub.c430a.profile`): the `id` on the
+  first line, the firmware version, if known, on the second. `-a
+  profiles=DIR` points the daemon at another profile directory. That way registration quirks apply too. Without a choice the
   handset gets the standard defaults. `match.model` (below) is only ever a
   suggestion shown to the user, never an automatic choice.
 - `dect-stubd --check-profile FILE` reads one file without touching the radio

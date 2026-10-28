@@ -370,3 +370,23 @@ in slots 1-3 the log shows `sub: locked-in handset mask 0x017c 00 07`.
 |---|---|
 | all three ring and attach as before | as expected: they rang with `09` too, so the mask does not gate our paging |
 | a handset that rang before no longer rings, or no longer attaches | the mask matters after all: re-run with `EXTRA=slotmask=0x09` to confirm, and the agent reads both logs |
+
+### 18. A handset profile takes effect (5 minutes)
+
+Since round 2 (R2) the daemon applies a handset's profile. Copy the example
+files of `docs/handset-profiles.md` §8 to the box and pick the C430A's model:
+
+```
+ssh root@192.168.1.1 'mkdir -p /etc/opendectcell/profiles'
+scp gigaset.profile gigaset-c430a.profile root@192.168.1.1:/etc/opendectcell/profiles/
+ssh root@192.168.1.1 'echo gigaset-c430a > /etc/opendectcell-sub.c430a.profile; /tmp/dect-stubd --check-profile /etc/opendectcell/profiles/gigaset-c430a.profile'
+EXTRA=clip=0301234567,cnip=Wednesday HOLD=1 ./ringone.sh c430a
+```
+
+| you see | meaning |
+|---|---|
+| the log shows `profile: DECT 2 = gigaset-c430a (via gigaset): cc.name.method=both ...` and `call: profile display text sent`; the C430A shows what test 1 showed with stock's framing | the profile path works end to end; what the display shows is the framing question of test 1 |
+| `profile: ... unusable -- standard defaults` | the file did not parse: `--check-profile` above names the line |
+
+Afterwards `rm /etc/opendectcell-sub.c430a.profile` returns the C430A to the
+standard defaults.

@@ -209,6 +209,13 @@ static void on_usr1(int sig)
 }
 
 static volatile sig_atomic_t want_deregister;	/* SIGUSR2: see dereg_tick */
+static volatile sig_atomic_t want_profiles;	/* SIGHUP: reload profiles */
+
+static void on_hup(int sig)
+{
+	(void)sig;
+	want_profiles = 1;
+}
 
 static void on_usr2(int sig)
 {
@@ -257,6 +264,15 @@ struct handset {
 	 * §7.4.10.5.8), kept in <path>.name; empty = the default "DECT n".
 	 */
 	char     name[DECT_IWU_NAME_MAX];
+	/*
+	 * Its handset profile (docs/handset-profiles.md): the model the user
+	 * picked, in <path>.profile (the id, and optionally the firmware
+	 * version on a second line), resolved at startup and on SIGHUP.
+	 * Defaults when there is none.
+	 */
+	char     prof_id[DECT_PROFILE_ID_MAX];
+	char     prof_fw[24];
+	struct dect_hs_profile prof;
 };
 
 /*
@@ -1038,6 +1054,8 @@ struct stubd {
 		 */
 		int      signal_on;
 		uint8_t  signal_value;
+		int      signal_set;	/* -a signal= given: beats a profile */
+		const char *profile_dir;	/* -a profiles=DIR */
 		/*
 		 * ti=N: pin the CC transaction identifier of an FP-originated
 		 * SETUP; -1 (the default) uses the lowest free value, 0.
@@ -2775,12 +2793,27 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
 	struct handset *h;
 	int i;
 
-	if (!tc->present || !l->mm.port_id_len)
+	if (!l->mm.port_id_len)
 		return;
 	i = hs_by_ipui(s, l->mm.port_id, l->mm.port_id_len);
 	if (i < 0)
 		return;
 	h = &s->hs[i];
+	/* the profile says the handset's own report is wrong (§5.3) */
+	if (!h->prof.trust_terminal_capability && h->prof.cap_ngdect) {
+		if (!h->cap_known)
+			printf("cap: %s: the profile sets %s (the handset's "
+			       "report is not trusted)\n", h->path,
+			       h->prof.cap_ngdect == 3 ? "NG-DECT Part 3" :
+			       h->prof.cap_ngdect == 2 ? "NG-DECT Part 1" :
+			       "GAP only");
+		h->cap_known = 1;
+		h->cap_part3 = h->prof.cap_ngdect == 3;
+		h->cap_ng = h->prof.cap_ngdect >= 2;
+		return;
+	}
+	if (!tc->present)
+		return;
 	if (h->cap_known && h->cap_part3 == tc->ng_part3 &&
 	    h->cap_ng == (tc->ng_part1 || tc->ng_part3))
 		return;
@@ -2849,6 +2882,8 @@ static int call_status_for(void *ctx, const uint8_t *ipui, size_t len)
 	const struct stubd *s = ctx;
 	int i = hs_by_ipui(s, ipui, len);
 
+	if (i >= 0 && s->hs[i].prof.cc_call_status != DECT_PROF_AUTO)
+		return s->hs[i].prof.cc_call_status == DECT_PROF_ON;
 	if (i < 0 || !s->hs[i].cap_known || s->audio.all_call_status)
 		return -1;
 	return !s->audio.no_call_status && s->hs[i].cap_part3;
@@ -2895,6 +2930,18 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 	if (!s->audio.nlr || !s->reg.nlr_armed ||
 	    l->lapc.outstanding || l->lapc.txq_count)
 		return;
+	{
+		/* lce.release_after_call = no in the handset's profile */
+		int i = l->mm.adopted >= 0 ? l->mm.adopted : (int)s->cur;
+
+		if (i >= 0 && (unsigned)i < s->n_hs &&
+		    !s->hs[i].prof.lce_release_after_call) {
+			s->reg.nlr_armed = 0;
+			printf("link: kept after the call (profile: "
+			       "lce.release_after_call = no)\n");
+			return;
+		}
+	}
 	if (s->reg.nlr_lia && !s->reg.nlr_disc_at) {
 		dect_lapc_disconnect(&l->lapc);	/* a CO link: DISC on air */
 		pump_lapc(s);
@@ -2928,8 +2975,32 @@ static void info_tick(struct stubd *s, uint64_t now)
 		s->reg.info_sent = 0;
 		return;
 	}
-	if (!s->audio.info_ie_len || s->reg.info_sent || !cc->incoming ||
+	if (s->reg.info_sent || !cc->incoming ||
 	    cc->state != DECT_CC_ST_RINGING)
+		return;
+	if (!s->audio.info_ie_len && s->n_hs &&
+	    (s->hs[0].prof.cc_name_method == 1 ||
+	     s->hs[0].prof.cc_name_method == 2) &&
+	    (s->clip.name[0] || s->clip.number[0])) {
+		/* the profile's display text: the name, else the number */
+		uint8_t ie[96];
+		size_t n = dect_profile_display(&s->hs[0].prof,
+						s->clip.name[0] ? s->clip.name
+								: s->clip.number,
+						ie, sizeof(ie));
+
+		s->reg.info_sent = 1;
+		if (!n || dect_cc_info(cc, ie, n)) {
+			printf("call: profile display text: could not queue it\n");
+			return;
+		}
+		printf("call: profile display text sent in CC-INFO (%zu "
+		       "octets) on ALERTING\n", n);
+		dect_link_drain(&s->reg.link, now);
+		pump_lapc(s);
+		return;
+	}
+	if (!s->audio.info_ie_len)
 		return;
 	s->reg.info_sent = 1;
 	if (dect_cc_info(cc, s->audio.info_ie, s->audio.info_ie_len)) {
@@ -4191,8 +4262,15 @@ static void send_page(struct stubd *s)
  * gives an internal call class 9 to NG handsets only. Not yet seen: as
  * configured. Spec sweep, finding 15.
  */
+static struct dect_clip ring_clip;	/* s->clip as the target's profile wants it */
+
 static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
 {
+	if (i >= 0 && (unsigned)i < s->n_hs && s->hs[i].prof.cc_basic_service)
+		/* the profile: 1 wideband, 2 basic speech; the class stays */
+		return (uint8_t)((configured & 0xF0u) |
+				 (s->hs[i].prof.cc_basic_service == 1 ? 0x08u
+								      : 0x00u));
 	if (i >= 0 && (unsigned)i < s->n_hs && s->hs[i].cap_known &&
 	    !s->hs[i].cap_ng)
 		return 0x80u;
@@ -4334,10 +4412,23 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 						s->reg.link.cc.call_status, id);
 	}
 	ring_callinfo(s, 1);
+	{
+		/* the ring target's profile: its alerting pattern, unless
+		 * -a signal= chose one, and whether the name goes as CNIP */
+		const struct dect_hs_profile *hp = s->n_hs ? &s->hs[0].prof : NULL;
+
+		ring_clip = s->clip;
+		if (hp && !s->audio.signal_set &&
+		    hp->cc_signal_external != DECT_SIGNAL_ALERT_PATTERN1)
+			dect_cc_set_signal(&s->reg.link.cc, 1,
+					   hp->cc_signal_external);
+		if (hp && (hp->cc_name_method == 1 || hp->cc_name_method == 3))
+			ring_clip.name[0] = '\0';	/* display or none */
+	}
 	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
 			      s->cc_fixed_id, s->cc_fixed_id_len,
 			      target_svc(s, 0, s->audio.basic_svc),
-			      &s->clip)) {
+			      &ring_clip)) {
 		ring_callinfo(s, 0);
 		s->ring_state = RING_DONE;
 		printf("ring: CC-SETUP queued (%s) -- the handset should ring\n",
@@ -5413,6 +5504,116 @@ static void name_save(const struct stubd *s, unsigned i)
 
 static void names_spread(struct stubd *s, unsigned i);
 
+/* The handset table index a link serves, or -1. */
+static int hs_of_link(const struct stubd *s, const struct dect_link *l)
+{
+	int i = l->mm.adopted;
+
+	if (i < 0 && l == &s->reg.link)
+		i = (int)s->cur;
+	return i >= 0 && (unsigned)i < s->n_hs ? i : -1;
+}
+
+static int profile_load(const char *path, struct dect_profile *p);
+
+#define PROFILE_DIR_DEFAULT	"/etc/opendectcell/profiles"
+
+/*
+ * Handset i's profile: <path>.profile names the model's id (and on a
+ * second line its firmware version); the device file and its manufacturer
+ * file come from the profile directory. Resolved into hs[i].prof and
+ * logged once, with each key that differs from the standard and the keys
+ * this build accepts but does not act on yet. Anything missing or broken:
+ * the defaults, said so.
+ */
+static void profile_resolve(struct stubd *s, unsigned i)
+{
+	static struct dect_profile dev, mfr;
+	const char *dir = s->audio.profile_dir ? s->audio.profile_dir
+					       : PROFILE_DIR_DEFAULT;
+	char path[320], line[64], desc[1024];
+	const struct dect_profile *m = NULL, *d = NULL;
+	struct dect_hs_profile *hp = &s->hs[i].prof, def;
+	FILE *f;
+
+	dect_profile_defaults(hp);
+	s->hs[i].prof_id[0] = '\0';
+	s->hs[i].prof_fw[0] = '\0';
+	snprintf(path, sizeof(path), "%s.profile", s->hs[i].path);
+	f = fopen(path, "r");
+	if (!f)
+		return;				/* no choice made: standard */
+	if (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, " \t\r\n")] = '\0';
+		snprintf(s->hs[i].prof_id, sizeof(s->hs[i].prof_id), "%.31s",
+			 line);
+	}
+	if (fgets(line, sizeof(line), f)) {
+		line[strcspn(line, " \t\r\n")] = '\0';
+		snprintf(s->hs[i].prof_fw, sizeof(s->hs[i].prof_fw), "%.23s",
+			 line);
+	}
+	fclose(f);
+	if (!s->hs[i].prof_id[0])
+		return;
+	snprintf(path, sizeof(path), "%s/%s.profile", dir, s->hs[i].prof_id);
+	if (profile_load(path, &dev) || strcmp(dev.id, s->hs[i].prof_id)) {
+		printf("profile: %s: %s unusable -- standard defaults\n",
+		       s->hs[i].path, path);
+		return;
+	}
+	if (dev.kind == DECT_PROFILE_DEVICE) {
+		d = &dev;
+		snprintf(path, sizeof(path), "%s/%s.profile", dir, dev.extends);
+		if (profile_load(path, &mfr) ||
+		    mfr.kind != DECT_PROFILE_MANUFACTURER ||
+		    strcmp(mfr.id, dev.extends))
+			printf("profile: %s: manufacturer file %s unusable -- "
+			       "the device layer alone\n", s->hs[i].path,
+			       path);
+		else
+			m = &mfr;
+	} else {
+		m = &dev;			/* a manufacturer file chosen */
+	}
+	dect_profile_resolve(m, d, s->hs[i].prof_fw, hp);
+	if (dect_profile_describe(hp, desc, sizeof(desc)))
+		printf("profile: DECT %u = %s%s%s%s%s: %s\n", hs_slot(s, i),
+		       s->hs[i].prof_id, d && m ? " (via " : "",
+		       d && m ? m->id : "", d && m ? ")" : "",
+		       s->hs[i].prof_fw[0] ? ", firmware given" : "", desc);
+	else
+		printf("profile: DECT %u = %s: the standard defaults\n",
+		       hs_slot(s, i), s->hs[i].prof_id);
+	/* accepted but not acted on in this build: say so, not silently */
+	dect_profile_defaults(&def);
+	if (hp->cc_ring_callinfo != def.cc_ring_callinfo ||
+	    hp->cc_connect_status_info != def.cc_connect_status_info ||
+	    hp->cc_bind_before_connect != def.cc_bind_before_connect ||
+	    hp->cc_name_alphabet != def.cc_name_alphabet ||
+	    hp->cc_timer != def.cc_timer ||
+	    hp->cc_number_method != def.cc_number_method ||
+	    hp->lists_serve != def.lists_serve ||
+	    hp->line_selection != def.line_selection ||
+	    hp->cc_signal_internal != def.cc_signal_internal ||
+	    hp->feature_call_waiting != def.feature_call_waiting ||
+	    hp->feature_call_lists != def.feature_call_lists ||
+	    hp->feature_contacts != def.feature_contacts)
+		printf("profile: DECT %u: some of its keys are not acted on "
+		       "in this build (see docs/handset-profiles.md, "
+		       "'today')\n", hs_slot(s, i));
+}
+
+static void profiles_resolve_all(struct stubd *s, const char *why)
+{
+	unsigned i;
+
+	printf("profile: resolving the handsets' profiles (%s)\n", why);
+	for (i = 0; i < s->n_hs; i++)
+		profile_resolve(s, i);
+	fflush(stdout);
+}
+
 /*
  * List change notifications (TS 102 527-3 §7.4.10.2), a CISS {FACILITY}
  * with <<EVENTS-NOTIFICATION>> on a link that is up. Only to Part 3
@@ -5421,8 +5622,14 @@ static void names_spread(struct stubd *s, unsigned i);
  * untested. A handset with no link up learns at its next location
  * registration (the CLSS paging path is not built).
  */
-static int notify_ok(const struct dect_link *l)
+static int hs_of_link(const struct stubd *s, const struct dect_link *l);
+
+static int notify_ok(const struct stubd *s, const struct dect_link *l)
 {
+	int i = hs_of_link(s, l);
+
+	if (i >= 0 && s->hs[i].prof.notify != DECT_PROF_AUTO)
+		return s->hs[i].prof.notify == DECT_PROF_ON;
 	return l->mm.peer_cap.present && l->mm.peer_cap.ng_part3;
 }
 
@@ -5432,12 +5639,12 @@ static int notify_ok(const struct dect_link *l)
  * the line "relating to" and the entries for that line, 1 (§7.4.10.2.1,
  * note 1; spec sweep M1.3).
  */
-static void locate_notify(struct dect_link *l)
+static void locate_notify(const struct stubd *s, struct dect_link *l)
 {
 	const struct dect_iwu *iwu = &l->cc.iwu;
 	unsigned i;
 
-	if (!notify_ok(l))
+	if (!notify_ok(s, l))
 		return;
 	for (i = 0; i < iwu->n_lines; i++) {
 		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
@@ -5479,7 +5686,7 @@ static void names_notify(struct stubd *s)
 		uint8_t msg[DECT_LAPC_MSG_MAX];
 		size_t len;
 
-		if (!notify_ok(links[k]))
+		if (!notify_ok(s, links[k]))
 			continue;
 		len = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
 						 DECT_EVENT_NO_LINE, 0);
@@ -5563,6 +5770,10 @@ static void names_tick(struct stubd *s)
 {
 	unsigned k;
 
+	if (want_profiles) {
+		want_profiles = 0;
+		profiles_resolve_all(s, "SIGHUP");
+	}
 	if (s->reg.active) {
 		names_take(s, &s->reg.link);
 		uak_for_link(s, &s->reg.link, 1);
@@ -7042,7 +7253,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "conditional on ours being valid, and a "
 			       "confidently wrong clock is worse than none\n");
 		}
-		locate_notify(&s->reg.link);
+		locate_notify(s, &s->reg.link);
 	}
 
 	if (s->reg.link.mm.state != DECT_MM_WAIT_AUTH)
@@ -7076,7 +7287,12 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	}
 	else if (s->reg.link.mm.state != s->reg.reported_state &&
 		 s->reg.link.mm.state == DECT_MM_FAILED) {
-		printf("reg: registration rejected\n");
+		printf("reg: registration rejected%s\n",
+		       s->n_hs && s->cur < s->n_hs &&
+		       s->hs[s->cur].prof.reg_tries_0000_first &&
+		       s->reg.link.mm.stats.auth_fail
+		       ? " (expected: this model tries PIN 0000 by itself "
+			 "first, profile reg.tries_0000_first)" : "");
 		/* back to the ring target's store (review, finding 13) */
 		if (s->reg.enrol_switched) {
 			s->reg.enrol_switched = 0;
@@ -8033,6 +8249,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
 			    !(klen == 3 && !memcmp(key, "led", 3)) &&
 			    !(klen == 9 && !memcmp(key, "statefile", 9)) &&
+			    !(klen == 8 && !memcmp(key, "profiles", 8)) &&
 			    !(klen == 6 && !memcmp(key, "remote", 6)) &&
 			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
@@ -8265,6 +8482,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if (klen == 6 && !memcmp(key, "signal", 6)) {
 			a->signal_value = (uint8_t)v;
 			a->signal_on = 1;
+			a->signal_set = 1;
 		}
 		else if (!eq && klen == 8 && !memcmp(key, "nosignal", 8))
 			a->signal_on = 0;	/* control runs only, see run 18 */
@@ -8390,6 +8608,15 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if (klen == 6 && !memcmp(key, "remode", 6)) {
 			a->remode_ms = (unsigned)v;
 			a->remode_set = 1;
+		} else if (eq && klen == 8 && !memcmp(key, "profiles", 8)) {
+			size_t n = (size_t)(spec - (eq + 1));
+			char *path = malloc(n + 1);
+
+			if (!path)
+				return -1;
+			memcpy(path, eq + 1, n);
+			path[n] = '\0';
+			a->profile_dir = path;
 		} else if (eq && klen == 9 && !memcmp(key, "statefile", 9)) {
 			size_t n = (size_t)(spec - (eq + 1));
 			char *path = malloc(n + 1);
@@ -9132,6 +9359,7 @@ int main(int argc, char **argv)
 		}
 		for (i = 0; i < s.n_hs; i++)
 			name_load(&s, i);
+		profiles_resolve_all(&s, "startup");
 		/*
 		 * A first store that does not exist yet (an enrolment) has no
 		 * slot; it used to default to 1 and silently share it with
@@ -9205,6 +9433,7 @@ int main(int argc, char **argv)
 	signal(SIGTERM, on_signal);
 	signal(SIGUSR1, on_usr1);
 	signal(SIGUSR2, on_usr2);
+	signal(SIGHUP, on_hup);
 	dect_rx_init(&s.rx);
 	dect_session_init(&s.sess, &scfg);
 
