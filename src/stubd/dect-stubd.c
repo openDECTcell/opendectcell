@@ -239,6 +239,9 @@ struct handset {
 	int      remote;	/* remote=: a roamer the cell must fetch */
 	int      absent;	/* the file does not exist: free for enrolment */
 	int      fetched;	/* ... and has, this run */
+	/* runtime only: its <<TERMINAL-CAPABILITY>>, once seen (cap_tick) */
+	int      cap_known;
+	int      cap_part3;	/* NG-DECT Part 3: call status allowed */
 };
 
 /*
@@ -922,6 +925,14 @@ struct stubd {
 		 * the Gigasets key their call timer on (clean room A-0122).
 		 */
 		int      no_call_status;
+		/*
+		 * allcallstatus: call status to every handset, as before
+		 * 2026-10-28. By default only a handset that says it is NG-DECT
+		 * Part 3 gets it: "A Part 3 FP shall not send any call status
+		 * to GAP or NG Part 1 devices" (TS 102 527-3 §7.4.6.4.1), and
+		 * stock sends it to the A540 (Part 3) only (A-0125).
+		 */
+		int      all_call_status;
 		/*
 		 * pagehdr=N: a FOURTH payload byte on the 0x0300 page.
 		 *
@@ -2694,6 +2705,64 @@ static void fetch_tick(struct stubd *s, uint64_t now)
  * controller, which would decide on the number instead.
  */
 static int ic_start(struct stubd *s, int side, uint64_t now);
+
+/* The handset table entry with this IPUI, or -1. */
+static int hs_by_ipui(const struct stubd *s, const uint8_t *id, size_t len)
+{
+	unsigned i;
+
+	for (i = 0; i < s->n_hs; i++)
+		if (s->hs[i].port_id_len == len && len &&
+		    !memcmp(s->hs[i].port_id, id, len))
+			return (int)i;
+	return -1;
+}
+
+/*
+ * Learn each handset's <<TERMINAL-CAPABILITY>> from whichever link carried
+ * its {LOCATE-REQUEST}, matched by the IPUI that link adopted, and log it
+ * once. Runtime only, relearned at every daemon start (handsets locate).
+ */
+static void cap_tick(struct stubd *s, struct dect_link *l)
+{
+	const struct dect_term_cap *tc = &l->mm.peer_cap;
+	struct handset *h;
+	int i;
+
+	if (!tc->present || !l->mm.port_id_len)
+		return;
+	i = hs_by_ipui(s, l->mm.port_id, l->mm.port_id_len);
+	if (i < 0)
+		return;
+	h = &s->hs[i];
+	if (h->cap_known && h->cap_part3 == tc->ng_part3)
+		return;
+	h->cap_known = 1;
+	h->cap_part3 = tc->ng_part3;
+	printf("cap: %s reports %s%s\n", h->path,
+	       tc->ng_part3 ? "NG-DECT Part 3" :
+	       tc->ng_part1 ? "NG-DECT Part 1" : "GAP only",
+	       tc->ng_part3 || s->audio.all_call_status ?
+	       "" : " -- no call status to it");
+	fflush(stdout);
+}
+
+/*
+ * dect_link's question when a handset's {CC-SETUP} arrives: call status
+ * for it? Only an NG-DECT Part 3 handset gets it (TS 102 527-3 §7.4.6.4.1;
+ * stock sends it to the A540 alone, A-0125). Not yet seen: no opinion, so
+ * the default stays and the A540's call timer (test 15) cannot be lost to
+ * a missing location registration.
+ */
+static int call_status_for(void *ctx, const uint8_t *ipui, size_t len)
+{
+	const struct stubd *s = ctx;
+	int i = hs_by_ipui(s, ipui, len);
+
+	if (i < 0 || !s->hs[i].cap_known || s->audio.all_call_status)
+		return -1;
+	return !s->audio.no_call_status && s->hs[i].cap_part3;
+}
 
 /*
  * Say so, once, when LAPC gave up after N250 retransmissions and released
@@ -4821,6 +4890,8 @@ static void main_cc_setup(struct stubd *s)
 	dect_cc_set_call_status(&s->reg.link.cc, !s->audio.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
+	s->reg.link.call_status_for = call_status_for;
+	s->reg.link.call_status_ctx = s;
 	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
 	/* the lowest free value, 0, unless -a ti= says otherwise */
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
@@ -5033,6 +5104,8 @@ static int side_start(struct stubd *s, uint8_t handle)
 	dect_cc_set_call_status(&sl->link.cc, !s->audio.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
+	sl->link.call_status_for = call_status_for;
+	sl->link.call_status_ctx = s;
 	sl->lane = -1;
 	sl->ic_tried = 0;
 	sl->dial_len = 0;
@@ -6914,6 +6987,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 					continue;
 				dect_link_tick(&s->side[k].link, now);
 				lapc_failed_note(&s->side[k].link, "side");
+				cap_tick(s, &s->side[k].link);
 				side_pump(s, &s->side[k]);
 			}
 		}
@@ -6946,6 +7020,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			 */
 			dect_link_tick(&s->reg.link, now);
 			lapc_failed_note(&s->reg.link, "main");
+			cap_tick(s, &s->reg.link);
 			/*
 			 * The call has gone away: release the audio channel.
 			 * Without this it stays armed for the life of the link
@@ -7191,6 +7266,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->alert_ms = (unsigned)v;
 		else if (!eq && klen == 9 && !memcmp(key, "bindfirst", 9))
 			a->bind_first = 1;
+		else if (!eq && klen == 13 && !memcmp(key, "allcallstatus", 13))
+			a->all_call_status = 1;
 		else if (!eq && klen == 12 && !memcmp(key, "nocallstatus", 12))
 			a->no_call_status = 1;
 		else if (klen == 8 && !memcmp(key, "pagemail", 8)) {
@@ -7625,6 +7702,8 @@ static void usage(void)
 		"           0x80 with narrowband)\n"
 		"           nocallstatus no <<CALL-INFORMATION>> call status in our\n"
 		"           SETUP-ACK/CALL-PROC/ALERTING/CONNECT to a handset's call\n"
+		"           allcallstatus call status to every handset, not only to\n"
+		"           those reporting NG-DECT Part 3 (the default since API 34)\n"
 		"           alertms=N    ALERTING after CALL-PROC, CONNECT N ms later\n"
 		"           bindfirst    bind the audio after CALL-PROC, CONNECT once\n"
 		"           it is up (EN 300 175-5 9.3.1.8)\n"
