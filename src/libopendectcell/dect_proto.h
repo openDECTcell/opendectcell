@@ -390,8 +390,12 @@
  *    <<PORTABLE-IDENTITY>> is cleared with {LCE-PAGE-REJECT} when the link
  *    knows the handset's IPUI (EN 300 175-5 §17.6.5, table 65), and still
  *    ignored when it does not.
+ *
+ * 47: SETUP flag (2026-10-28, spec sweep C8). No layout change.
+ *    **Behaviour change:** a {CC-SETUP} with TI flag 1 is ignored (EN 300
+ *    175-5 §17.3.2.1); before, it opened a call or counted as a collision.
  */
-#define OPENDECTCELL_API_VERSION 46
+#define OPENDECTCELL_API_VERSION 47
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

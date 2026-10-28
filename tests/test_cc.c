@@ -345,6 +345,34 @@ static void test_release_timer(void)
 	}
 }
 
+/* A SETUP with TI flag 1 is ignored, idle or in a call (§17.3.2.1). */
+static void test_setup_with_flag_one_is_ignored(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+	int k;
+
+	for (k = 0; k < 2; k++) {
+		dect_cc_init(&cc);
+		if (k) {			/* a call in progress on TV 0 */
+			n = pp_setup(buf, sizeof(buf), 0);
+			dect_cc_rx(&cc, buf, n);
+			while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+				;
+		}
+		n = pp_setup(buf, sizeof(buf), 1);
+		buf[0] |= 0x80u;			/* F = 1 */
+		dect_cc_rx(&cc, buf, n);
+		CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+		CHECK_EQ(cc.stats.collisions, 0u);
+		if (!k)
+			CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+		else
+			CHECK_EQ(cc.ti_value, 0u);	/* the call kept */
+	}
+}
+
 /* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
 static void test_setup_without_basic_service_is_refused(void)
 {
@@ -2370,6 +2398,7 @@ int main(void)
 	test_second_call_on_the_same_link();
 	test_info_on_the_call();
 	test_setup_without_basic_service_is_refused();
+	test_setup_with_flag_one_is_ignored();
 	test_none_gets_the_selected_line();
 	test_busy_system_for_a_part3_handset();
 	test_unattached_line_is_refused();

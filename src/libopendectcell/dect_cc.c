@@ -1125,6 +1125,14 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 	switch (h.msg_type) {
 	case DECT_CC_SETUP:
 		/*
+		 * The originating side sends F = 0: a {CC-SETUP} with the flag
+		 * set to 1 is ignored (EN 300 175-5 §17.3.2.1), and is not a
+		 * collision either (§17.3.3 asks for the flag "correctly set
+		 * to 0"). We used to take it as a new call (spec sweep, C8).
+		 */
+		if (h.ti_flag != DECT_TI_ORIGINATOR)
+			break;
+		/*
 		 * A released call leaves its transaction free: answering a
 		 * {CC-RELEASE} with {CC-RELEASE-COM} returns the FT to the null
 		 * state (EN 300 175-5 §9.5.1). Accepting a SETUP only in NULL
