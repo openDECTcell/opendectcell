@@ -5677,6 +5677,8 @@ static void ic_target_link(struct stubd *s, struct side_link *sl,
  * response, or once the link has adopted it (the A540 answers a page with
  * a location registration, M2' and 12b).
  */
+static struct dect_clip ic_clip;	/* the internal caller, kept for re-presentation */
+
 static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 {
 	const uint8_t *port, *fixed;
@@ -5698,12 +5700,62 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 	 */
 	dect_cc_set_signal(&l->cc, s->audio.signal_on,
 			   DECT_SIGNAL_ALERT_PATTERN0);
-	if (dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
-			     s->audio.narrowband ? 0x90u : IC_BASIC_SVC, NULL)) {
-		dect_cc_set_signal(&l->cc, s->audio.signal_on,
-				   s->audio.signal_value);
-		printf("intern: could not queue the SETUP to the target\n");
-		return;
+	/*
+	 * Who is calling (EN 300 444 §8.43/§8.44): the caller's terminal
+	 * number, network-specific type in the private plan (table 82), and
+	 * its handset name in the DECT alphabet (table 83), both "verified
+	 * and passed". Bench test 5 (2026-10-28): the C430A showed no caller.
+	 */
+	{
+		int ci_hs = s->ic.caller < 0 ? (int)s->cur
+			    : s->side[s->ic.caller].adopted;
+		unsigned slot = ci_hs >= 0 ? hs_slot(s, (unsigned)ci_hs) : 0u;
+		char num[12], name[DECT_IWU_NAME_MAX + 12];
+		struct dect_callinfo prev = l->cc.callinfo, ci;
+		int r;
+
+		dect_clip_init(&ic_clip);
+		if (slot) {
+			snprintf(num, sizeof(num), "%u", slot);
+			snprintf(name, sizeof(name), "DECT %u", slot);
+			(void)dect_clip_set_number(&ic_clip, num,
+					DECT_CLIP_TON_NETWORK_SPECIFIC,
+					DECT_CLIP_NPI_PRIVATE,
+					DECT_CLIP_PRES_ALLOWED,
+					DECT_CLIP_SCR_USER_PASSED);
+			(void)dect_clip_set_name(&ic_clip, name,
+					DECT_CLIP_ALPHABET_DECT,
+					DECT_CLIP_PRES_ALLOWED,
+					DECT_CLIP_SCR_USER_PASSED);
+		}
+		/*
+		 * A Part 3 target: the call id and CS call setup, no line (an
+		 * internal call has none), as stock sends the A540: 7e 06 01
+		 * 00 81 02 01 81 [CR A-0125]; TS 102 527-3 §7.4.6.3.
+		 */
+		dect_callinfo_init(&ci);
+		if (s->hs[s->ic.target].cap_known &&
+		    s->hs[s->ic.target].cap_part3 && !s->audio.no_call_status) {
+			ci.has_call_id = 1;
+			ci.call_id = l->cc.status_call_id;
+			ci.has_call_status = 1;
+			ci.call_status = DECT_CS_CALL_SETUP;
+		}
+		dect_cc_set_callinfo(&l->cc, &ci);
+		r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
+				     s->audio.narrowband ? 0x90u : IC_BASIC_SVC,
+				     slot ? &ic_clip : NULL);
+		dect_cc_set_callinfo(&l->cc, &prev);
+		if (r) {
+			dect_cc_set_signal(&l->cc, s->audio.signal_on,
+					   s->audio.signal_value);
+			printf("intern: could not queue the SETUP to the target\n");
+			return;
+		}
+		if (slot)
+			printf("intern: caller shown as %s / \"%s\"%s\n", num,
+			       name, ci.has_call_status ?
+			       ", call id and CS call setup (Part 3)" : "");
 	}
 	dect_cc_set_signal(&l->cc, s->audio.signal_on, s->audio.signal_value);
 	s->ic.tside = p;
