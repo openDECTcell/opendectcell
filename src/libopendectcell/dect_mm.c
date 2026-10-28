@@ -707,6 +707,13 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 
 	mm->stats.access_req++;
 	learn_self_description(mm, ies, ies_len);
+	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_AUTH_TYPE, &pid_len);
+	mm->peer_auth_len = 0;
+	if (pid && pid_len >= 2) {	/* spec sweep, M6: seen, logged */
+		mm->peer_auth_len = pid_len < sizeof(mm->peer_auth) ?
+				    (uint8_t)pid_len : sizeof(mm->peer_auth);
+		memcpy(mm->peer_auth, pid, mm->peer_auth_len);
+	}
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
 	/*
 	 * <<PORTABLE-IDENTITY>> is mandatory in the request (EN 300 175-5

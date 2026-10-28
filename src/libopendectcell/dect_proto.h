@@ -465,8 +465,13 @@
  *    {AUTHENTICATION-REJECT}; a {CIPHER-REJECT} is recorded and the call
  *    kept (EN 300 444 §8.33.2.1). <MM_cipher.1> is not built: its stop
  *    condition is DL_ENC_KEY-ind, a chip event we cannot see yet.
+ *
+ * 59: the proposed AUTH-TYPE (2026-10-28, spec sweep M6). Layout change:
+ *    struct dect_mm gains peer_auth and peer_auth_len, from the
+ *    {ACCESS-RIGHTS-REQUEST}'s <<AUTH-TYPE>>. No behaviour change; the
+ *    daemon logs it with the registration's outcome.
  */
-#define OPENDECTCELL_API_VERSION 58
+#define OPENDECTCELL_API_VERSION 59
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

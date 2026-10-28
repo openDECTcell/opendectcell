@@ -99,6 +99,35 @@ static void test_mm_transaction_rules(void)
 	CHECK_EQ(mm.stats.auth_ok, 1u);
 }
 
+/*
+ * The <<AUTH-TYPE>> a handset proposes is kept for the log: the C4 asks for
+ * DSAA2 (`0a 03 02 48 00`), the Gigasets for DSAA (`01 48 00`), both with
+ * the authentication code, key 8.
+ */
+static void test_proposed_auth_type_is_kept(void)
+{
+	static const uint8_t c4_at[3] = { 0x02, 0x48, 0x00 };
+	uint8_t pid[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1,
+				   .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 1 }, rs16[16] = { 0 };
+	uint8_t buf[64];
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR,
+			       0, DECT_MM_ACCESS_RIGHTS_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    pid, sizeof(pid));
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_AUTH_TYPE,
+			    c4_at, sizeof(c4_at));
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	CHECK_EQ(mm.peer_auth_len, 3u);
+	CHECK(memcmp(mm.peer_auth, c4_at, 3) == 0);
+	CHECK_EQ(mm.stats.key_alloc_sent, 1u);		/* DSAA all the same */
+}
+
 /* An ACCESS-RIGHTS-REQUEST without its identity: rejected 60H (§17.6.4). */
 static void test_access_request_without_identity_is_rejected(void)
 {
@@ -1299,6 +1328,7 @@ int main(void)
 {
 	test_mm_transaction_rules();
 	test_access_request_without_identity_is_rejected();
+	test_proposed_auth_type_is_kept();
 	test_key_allocation_fails_on_timeout_or_refusal();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();

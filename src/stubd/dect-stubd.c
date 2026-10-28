@@ -6482,6 +6482,20 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 
 	/* once per outcome, not on every message that follows it */
 	if (s->reg.link.mm.state != s->reg.reported_state &&
+	    s->reg.link.mm.peer_auth_len >= 2 &&
+	    (s->reg.link.mm.state == DECT_MM_REGISTERED ||
+	     s->reg.link.mm.state == DECT_MM_FAILED)) {
+		const uint8_t *at = s->reg.link.mm.peer_auth;
+
+		printf("reg: it proposed %s with %s %u (we run DSAA from the "
+		       "PIN)\n",
+		       at[0] == 0x01 ? "DSAA" : at[0] == 0x02 ? "DSAA2" :
+		       "another algorithm",
+		       (at[1] >> 4) == 0x4 ? "the authentication code" :
+		       (at[1] >> 4) == 0x1 ? "user authentication key" :
+		       "key type", (unsigned)(at[1] & 0x0Fu));
+	}
+	if (s->reg.link.mm.state != s->reg.reported_state &&
 	    s->reg.link.mm.state == DECT_MM_REGISTERED)
 		printf("reg: handset registered\n");
 	else if (s->reg.link.mm.state != s->reg.reported_state &&

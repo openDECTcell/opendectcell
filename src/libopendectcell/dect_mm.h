@@ -269,6 +269,13 @@ struct dect_mm {
 	uint8_t peer_codecs[16];
 	size_t  peer_codecs_len;
 	struct dect_term_cap peer_cap;	/* the last one it sent */
+	/*
+	 * <<AUTH-TYPE>> of its last {ACCESS-RIGHTS-REQUEST}: what it proposes
+	 * (octet 3 algorithm, octet 4 key type and number). Not acted on: we
+	 * always run DSAA key allocation from the PIN (EN 300 444 table 50).
+	 */
+	uint8_t peer_auth[3];
+	uint8_t peer_auth_len;
 
 	/* A held {LOCATE-REQUEST}, see cfg.defer_unknown. */
 	uint8_t locate_pending;
