@@ -370,7 +370,7 @@ void dect_cc_set_callinfo(struct dect_cc *cc, const struct dect_callinfo *ci)
 
 void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti)
 {
-	cc->next_ti = (uint8_t)(ti % 7u);
+	cc->next_ti = (uint8_t)(ti % 6u);	/* 6 is connectionless only */
 }
 
 int dect_cc_busy(const struct dect_cc *cc)
@@ -1132,6 +1132,17 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 	size_t ies_len;
 
 	if (dect_nwk_parse(msg, len, &h, &ies, &ies_len) < 0 || h.pd != DECT_PD_CC)
+		return;
+	/*
+	 * TV 6 is the connectionless (dummy) transaction value, never a call
+	 * (EN 300 175-5 §7.3). On it only a {FACILITY} carrying <<FACILITY>>,
+	 * <<EVENTS-NOTIFICATION>>, <<TIME-DATE>> or <<IWU-TO-IWU>> means
+	 * anything; everything else "shall" be disregarded (§10.4.2.3), and
+	 * CC serves none of those. The Gigasets sent a FACILITY of AVM's
+	 * proprietary escape there until 2026-10-24 (call-g7.md, [CR A-0055]),
+	 * which we cleared as an unknown call (13fa578) and so cycled the link.
+	 */
+	if (h.ti_value == 6u)
 		return;
 
 	switch (h.msg_type) {

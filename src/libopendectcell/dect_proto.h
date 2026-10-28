@@ -412,8 +412,13 @@
  *    identifier" (EN 300 175-5 §17.3.2.1), like every other message type
  *    already was. Before, they were ignored, and an IWU-INFO was answered on
  *    our own transaction.
+ *
+ * 51: the connectionless TV (2026-10-28). No layout change. **Behaviour
+ *    change:** CC disregards every message on TV 6, the connectionless
+ *    value (EN 300 175-5 §7.3, §10.4.2.3), where it cleared them as unknown
+ *    calls; dect_cc_set_next_ti() wraps past 5, so a call never takes 6.
  */
-#define OPENDECTCELL_API_VERSION 50
+#define OPENDECTCELL_API_VERSION 51
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

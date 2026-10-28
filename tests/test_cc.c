@@ -848,13 +848,20 @@ static void test_unhandled_message_on_our_call_is_ignored(void)
 	}
 	CHECK_EQ(cc.stats.closed_unknown, 0u);
 
-	/* The same message on a transaction we do not hold is closed. */
+	/* On the connectionless TV 6 it is disregarded (§10.4.2.3) ... */
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
 			       6, DECT_CC_FACILITY);
 	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0);
+	CHECK_EQ(cc.stats.closed_unknown, 0u);
+
+	/* ... and on a transaction we do not hold, closed. */
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       5, DECT_CC_FACILITY);
+	dect_cc_rx(&cc, buf, n);
 	n = dect_cc_poll(&cc, out, sizeof(out));
 	CHECK_EQ(n, 4u);
-	CHECK_EQ(out[0], 0xE3u);		/* F=1, TV=6, PD CC */
+	CHECK_EQ(out[0], 0xD3u);		/* F=1, TV=5, PD CC */
 	CHECK_EQ(out[1], DECT_CC_RELEASE_COM);
 	CHECK_EQ(out[3], DECT_CC_REASON_UNKNOWN_TRANSACTION);
 	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
@@ -976,7 +983,7 @@ static void test_transaction_value_is_lowest_free(void)
 
 /*
  * dect_cc_set_next_ti() is honoured, for tests that need another value, and
- * 7 (the extended-TI escape) wraps to 0.
+ * wraps past 5: 6 is the connectionless value, 7 the extension escape.
  */
 static void test_transaction_value_rotates(void)
 {
@@ -997,8 +1004,8 @@ static void test_transaction_value_rotates(void)
 		n = dect_cc_poll(&cc, msg, sizeof(msg));
 		CHECK(n > 0);
 		CHECK_EQ(dect_nwk_parse(msg, n, &h, &ies, &ies_len), 0);
-		/* 7 wraps to 0: only 0..6 are valid for the originating side */
-		CHECK_EQ(h.ti_value, ti % 7u);
+		/* a call takes 0..5 only (EN 300 175-5 §7.3) */
+		CHECK_EQ(h.ti_value, ti % 6u);
 		CHECK_EQ(h.ti_flag, DECT_TI_ORIGINATOR);
 		CHECK_EQ(h.msg_type, DECT_CC_SETUP);
 	}
@@ -1069,10 +1076,11 @@ static void test_setup_carries_line_identifier(void)
 
 
 /*
- * [CR A-0055] The handset sends {CC-FACILITY} (0x62) with AVM proprietary
- * content. We cannot answer it, and silence is not neutral: vF423 measured
- * twelve retransmissions in sixty seconds, which keeps the link busy forever
- * and is why no call on a linked handset ever got audio. Close it instead.
+ * [CR A-0055] The handsets sent {CC-FACILITY} (0x62) with AVM proprietary
+ * content on the connectionless TV 6 until 2026-10-24 (vF423: twelve in sixty
+ * seconds unanswered, twenty when closed). The standard disregards it there
+ * (EN 300 175-5 §10.4.2.3); on a call transaction we do not hold, it is
+ * closed like any other message.
  */
 static void test_closes_a_facility_transaction(void)
 {
@@ -1083,6 +1091,12 @@ static void test_closes_a_facility_transaction(void)
 	dect_cc_init(&cc);
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
 			       6, DECT_CC_FACILITY);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);	/* TV 6 */
+	CHECK_EQ(cc.stats.closed_unknown, 0u);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       2, DECT_CC_FACILITY);
 	dect_cc_rx(&cc, buf, n);
 
 	/* A {CC-RELEASE} goes out, in the handset's transaction, flag flipped. */
@@ -1112,7 +1126,7 @@ static void test_facility_does_not_disturb_a_live_call(void)
 		;			/* drain the SETUP */
 
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
-			       6, DECT_CC_FACILITY);
+			       2, DECT_CC_FACILITY);
 	dect_cc_rx(&cc, buf, n);
 	CHECK_EQ(cc.stats.closed_unknown, 1u);
 	CHECK_EQ(dect_cc_busy(&cc), 1);		/* the call is still up */
