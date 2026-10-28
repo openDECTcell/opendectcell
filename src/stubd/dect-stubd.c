@@ -934,6 +934,14 @@ struct stubd {
 		 */
 		int      all_call_status;
 		/*
+		 * nlr: release the link ourselves once its last call or list
+		 * session has ended (EN 300 175-5 §14.2.7), as stock does:
+		 * `0x0202 <link>` ~30 ms after the last {CC-RELEASE-COM}, a
+		 * LAPC DISC first on a list-access link [CR A-0127]. Off by
+		 * default until a bench run shows it is harmless.
+		 */
+		int      nlr;
+		/*
 		 * pagehdr=N: a FOURTH payload byte on the 0x0300 page.
 		 *
 		 * [CR A-0091] corrects [CR A-0076] §2. The page builder does
@@ -1197,6 +1205,10 @@ struct stubd {
 		int enrol_switched;	/* ... and it moved off store 0 */
 		int ic_tried;		/* this call was checked for internal */
 		int info_sent;		/* infoie= went out on this call */
+		int cc_was_busy;	/* nlr: the last tick had a call */
+		int nlr_armed;		/* nlr: a call ended, release pending */
+		int nlr_lia;		/* ... and it was list access: DISC first */
+		uint64_t nlr_disc_at;	/* ... DISC queued at, 0 = not yet */
 		size_t   dial_len;	/* digits seen so far in OVERLAP */
 		uint64_t dial_change_ms;	/* when the last ones arrived */
 		int      connect_staged;	/* alertms/bindfirst: CONNECT due */
@@ -2777,6 +2789,55 @@ static void lapc_failed_note(struct dect_link *l, const char *which)
 	l->lapc.failed = 2;		/* noted */
 	printf("lapc: *** %s link: no acknowledgement after 3 retransmissions "
 	       "-- link released (DISC, abnormal) ***\n", which);
+	fflush(stdout);
+}
+
+/*
+ * -a nlr: once the main link's call or list session has ended and LAPC has
+ * nothing outstanding (the last {CC-RELEASE-COM} is acknowledged), release
+ * the link: a DISC first if it was list access, then `0x0202 <link>`
+ * [CR A-0127]. The chip's 0x0201 then runs the usual release path. A new
+ * call before that disarms it.
+ */
+static void nlr_tick(struct stubd *s, uint64_t now)
+{
+	struct dect_link *l = &s->reg.link;
+	int busy = s->reg.active && dect_cc_busy(&l->cc);
+	struct dect_mail m;
+
+	if (busy || !s->reg.active) {
+		s->reg.nlr_armed = 0;
+		s->reg.nlr_disc_at = 0;
+	} else if (s->reg.cc_was_busy) {
+		s->reg.nlr_armed = 1;
+		s->reg.nlr_lia = (l->cc.peer_basic_service >> 4) == 0x2u;
+		s->reg.nlr_disc_at = 0;
+	}
+	s->reg.cc_was_busy = busy;
+	if (!s->audio.nlr || !s->reg.nlr_armed ||
+	    l->lapc.outstanding || l->lapc.txq_count)
+		return;
+	if (s->reg.nlr_lia && !s->reg.nlr_disc_at) {
+		dect_lapc_disconnect(&l->lapc);	/* a CO link: DISC on air */
+		pump_lapc(s);
+		s->reg.nlr_disc_at = now ? now : 1;
+		return;
+	}
+	if (s->reg.nlr_lia && now - s->reg.nlr_disc_at < 100u)
+		return;			/* let the DISC reach the air */
+	s->reg.nlr_armed = 0;
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0202u;		/* release the link [CR A-0127] */
+	m.param[0] = s->reg.handle;
+	m.param_len = 1;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	printf("link: released after the %s (0x0202 on handle %u, nlr)\n",
+	       s->reg.nlr_lia ? "list session, DISC first" : "call",
+	       (unsigned int)s->reg.handle);
 	fflush(stdout);
 }
 
@@ -6895,6 +6956,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		fetch_tick(s, now);
 		dial_tick(s, now);
 		info_tick(s, now);
+		nlr_tick(s, now);
 		connect_tick(s, now);
 		reg_window_tick(s, now);
 		{
@@ -7266,6 +7328,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->alert_ms = (unsigned)v;
 		else if (!eq && klen == 9 && !memcmp(key, "bindfirst", 9))
 			a->bind_first = 1;
+		else if (!eq && klen == 3 && !memcmp(key, "nlr", 3))
+			a->nlr = 1;
 		else if (!eq && klen == 13 && !memcmp(key, "allcallstatus", 13))
 			a->all_call_status = 1;
 		else if (!eq && klen == 12 && !memcmp(key, "nocallstatus", 12))
@@ -7702,6 +7766,8 @@ static void usage(void)
 		"           0x80 with narrowband)\n"
 		"           nocallstatus no <<CALL-INFORMATION>> call status in our\n"
 		"           SETUP-ACK/CALL-PROC/ALERTING/CONNECT to a handset's call\n"
+		"           nlr          release the link after its last call or list\n"
+		"           session (0x0202, a DISC first after list access)\n"
 		"           allcallstatus call status to every handset, not only to\n"
 		"           those reporting NG-DECT Part 3 (the default since API 34)\n"
 		"           alertms=N    ALERTING after CALL-PROC, CONNECT N ms later\n"
