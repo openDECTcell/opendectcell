@@ -396,6 +396,45 @@ static void test_call_status_is_asked_per_handset(void)
 	}
 }
 
+static uint8_t id_for(void *ctx, const struct dect_link *l)
+{
+	(void)ctx;
+	(void)l;
+	return 5;
+}
+
+/* The owner's call id goes into the first answer to the handset's SETUP. */
+static void test_call_id_is_asked_per_call(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x03, 0x11, 0x22, 0x33, 0x44 };
+	static const uint8_t id5[] = { 0x01, 0x00, 0x85 };
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[32];
+	size_t n, i;
+	int found = 0;
+
+	init(&l);
+	memcpy(l.mm.port_id, ours, sizeof(ours));
+	l.mm.port_id_len = sizeof(ours);
+	dect_cc_set_call_status(&l.cc, 1, 1);
+	l.call_id_for = id_for;
+	tx_seen_len = 0;
+	dect_link_set_tx_log(&l, tx_seen, NULL);
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC,
+			       DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+	n = dect_nwk_put_ie(msg, sizeof(msg), n, DECT_IE_PORTABLE_IDENTITY,
+			    ours, sizeof(ours));
+	msg[n++] = DECT_IE_BASIC_SERVICE;
+	msg[n++] = 0x80;
+	feed_nwk(&l, msg, n, &ind);
+	CHECK_EQ(l.cc.status_call_id, 5);
+	for (i = 2; i + 3u <= tx_seen_len; i++)
+		if (!memcmp(tx_seen_buf + i, id5, sizeof(id5)))
+			found = 1;
+	CHECK_EQ(found, 1);
+}
+
 static void test_init_is_quiet(void)
 {
 	struct dect_link l;
@@ -606,6 +645,7 @@ static void test_unusable_segment_still_drains_the_queue(void)
 int main(void)
 {
 	test_call_status_is_asked_per_handset();
+	test_call_id_is_asked_per_call();
 	test_init_is_quiet();
 	test_page_response_carries_the_identity();
 	test_cc_admits_only_the_handset_mm_holds();

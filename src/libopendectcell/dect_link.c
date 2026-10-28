@@ -312,6 +312,15 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 					dect_cc_set_call_status(
 						&l->cc, cs,
 						l->cc.status_call_id);
+				if (l->call_id_for && !dect_cc_busy(&l->cc)) {
+					uint8_t id = l->call_id_for(
+						l->call_status_ctx, l);
+
+					if (id)
+						dect_cc_set_call_status(
+							&l->cc,
+							l->cc.call_status, id);
+				}
 
 				/*
 				 * A roamer that did not locate here (same

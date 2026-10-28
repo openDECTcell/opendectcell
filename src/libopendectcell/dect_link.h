@@ -94,6 +94,13 @@ struct dect_link {
 	 */
 	int    (*call_status_for)(void *ctx, const uint8_t *ipui, size_t len);
 	void    *call_status_ctx;
+	/*
+	 * Optional, same ctx: the call id for the handset's new call, asked
+	 * at its {CC-SETUP} before CC answers (call ids are unique system-
+	 * wide, TS 102 527-3 §7.4.6.1, which only the owner can see). 0 keeps
+	 * the current id.
+	 */
+	uint8_t (*call_id_for)(void *ctx, const struct dect_link *l);
 	/* One pending LCE message: the {LCE-PAGE-REJECT}, sent first. */
 	uint8_t  lce[DECT_LAPC_MSG_MAX];
 	size_t   lce_len;

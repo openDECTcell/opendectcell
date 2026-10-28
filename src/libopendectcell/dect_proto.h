@@ -350,8 +350,13 @@
  *    first call-status answer to an external handset-placed call names the
  *    selected line (the handset's, or ours for 'None') and its line type
  *    (TS 102 527-3 §7.4.5.2.1, §7.4.5.2.4).
+ *
+ * 41: call ids per call (2026-10-28, lines-and-calls.md step 3). Layout
+ *    change: struct dect_link gains call_id_for, an optional owner hook
+ *    asked for the call id of a handset's new call at its {CC-SETUP},
+ *    before CC answers (TS 102 527-3 §7.4.6.1: unique system-wide).
  */
-#define OPENDECTCELL_API_VERSION 40
+#define OPENDECTCELL_API_VERSION 41
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
