@@ -416,3 +416,38 @@ EXTRA=locauth HOLD=1 ./ringone.sh a540
 | it comes back to "registered" as usual; the log shows `nwk out --> 05 40` then `nwk in <-- 85 41` then the LOCATE-ACCEPT | it answers the challenge: locauth can become the default |
 | it shows "not registered" or searches; the log has a LOCATE-REJECT with `10` | its RES did not match (wrong stored key, or it answers differently): the agent reads the log |
 | it takes clearly longer to attach | note how long; a few hundred ms is the expected cost |
+
+## Results, 2026-10-28 evening `[observed on hardware]`
+
+Box at `05b71bb` (API 78), STUB 07.56, the maintainer at the bench, call
+ciphering on in every run (`CIPHER=1`, new in `ringone.sh`). Logs in
+`work/box-tmp/`.
+
+| test | result | log |
+|---|---|---|
+| basics | **pass.** All three located (3 LOCATE-ACCEPT, 0 reject); the A540 took a call, A540, AS690H and C430A each called out; every call ciphered (`0x0209`), no <MM_cipher.1> or <MM_auth.1> expiry, no link loss. A second call during a call was refused with 32H (two calls off) | `vRINGA540-20261028-131902-1` |
+| ring during a list sync | **defect.** The Line Settings change notice after the A540's location registration made it start a list session; its LiA {CC-SETUP} crossed our ring. We released its call (32H) and re-presented; the A540 released ours with 32H and opened its list call again at once (it does not wait P<CC.06>), and the ring was lost. Re-run with `ATTACH=30000`: fine | `vRINGA540-20261028-132419-1` |
+| 8 A540 rings by default | **pass.** Rings aloud, "via Line 1 0301234567", timer at once | `vRINGA540-20261028-132654-1` |
+| 9 A540 dials out | **pass.** CALL-PROC names line 1, timer at once | same |
+| 13 key during a call | **pass.** A540: INT, DECT 2 arrives as `2c 02 17 32`; our `e4 09` shows "Code unbekannt", the call goes on (twice). C430A: three `17` keypads, no answer, no dialled-digit line | same |
+| 14 system settings list | **pass.** "Basisversion" shows "openDECTcell" (field 09). The A540 also reads field 0C, which we do not list, and gets an empty entry; no visible effect | same, `vS11-20261028-133714` |
+| 11 internal call shows the caller | **half.** C430A (Part 1) shows "1". A540 (Part 3) shows "via Intern DECT" instead of the caller although the SETUP carries `6c 03 39 81 32`, `6d 07 01 "DECT 2"` and the call information | `vS11-20261028-133714` |
+| line settings edit | as built: "Verbind.-Name" and "Zugeordnete Mobilteile" answer "Nicht möglich" (fields not editable); the A540 then saves an empty data packet | same |
+| 10 two calls | **pass.** A540 call id 1, C430A call id 2, both heard the voice | `vRINGA540-20261028-134338-1` |
+| 15/16 rename | **pass.** INT, DECT 3, Optionen, Name ändern: `names: DECT 3 is now "Kueche"`; "Gespeichert", no resync loop; the name shows in LuCI | same |
+| internal call to the AS690H | the AS690H rang 29 s and sent nothing until the A540 hung up: its red key only silences the ringer | same |
+| 12 busy when full | **pass.** `e4 04` + CS call disconnecting, then tones off and release; the A540 shows "Nicht möglich" with the busy tone. The C430A's first 123 was refused with 32H while the A540 held a list session (one call without `twocalls`) | `vRINGC430A-20261028-134920-1` |
+| 18 profile | **pass.** `profile: DECT 2 = gigaset-c430a (via gigaset)`, display text sent on ALERTING; "Wednesday" full screen, after 10-15 s the ringer screen with the number (as test 1) | `vRINGC430A-20261028-135257-1` |
+| 19 locauth | **pass, all three.** {AUTHENTICATION-REQUEST} inside the location registration, the reply, then LOCATE-ACCEPT; about 280 ms on the A540. Visible: a short sync, then the idle screen | `vRINGA540-20261028-135440-1` |
+| 17 deregister from the base | **pass, A540 and AS690H** (both switched on): page, TERMINATE-REQUEST, `85 49`, slot cleared, store moved aside, mask `07` -> `06` -> `02`. The A540 shows "MT anmelden" | `vDEREG-20261028-135945`, `vDEREG3-20261028-140255` |
+| 17 lost handset | **defect, the timeout path did not run.** Old AS690H store restored (the handset had forgotten the base). After the third page the C430A happened to connect for a location registration; we took that link for the AS690H and sent the TERMINATE-REQUEST, with the AS690H's IPUI, on the C430A's link. The C430A ignored it; "link went down before it answered: deleted WITHOUT its confirmation". We must wait for the target's {LCE-PAGE-RESPONSE} before sending | `vDEREGLOST-20261028-140403` |
+| 17b / 17c from a handset | **blocked.** The AS690H and C430A only offer a handset reset. The A540's "Mobilteil abmelden" is a list delete of its own Internal Names entry (`c3 0c 81 81`); we answer PIN required (`c3 12 81 0b`), it edits the PIN field of list 07 (`c3 08 82 81 01`) and we refuse it on the unciphered list call (`c3 12 82 07`): "Nicht möglich". List calls must be ciphered for this | `vS17-20261028-141132` |
+
+Lab-script defect found on the way: `others()` in `ringone.sh`, `regall.sh`
+and `ringall.sh` loaded every `/etc/opendectcell-sub.*` file as a store,
+`.deregistered` and `.name` files included, so the A540's re-registration
+was saved under `/etc/opendectcell-sub.a540.deregistered` (renamed by hand).
+Fixed in the scripts: only `/etc/opendectcell-sub.<name>` is loaded.
+
+Box afterwards: all three handsets registered again (A540 slot 1 with a new
+key, C430A slot 2, AS690H slot 3 with a new key, its name back to "DECT 3").
