@@ -345,11 +345,12 @@ ssh root@192.168.1.1 'echo 3 > /tmp/opendectcell-deregister; kill -USR2 $(pidof 
 | the log shows `not reachable (paged 10 times)` after ~30 s | the page did not reach it: the handset kept its registration, the base erased it; the agent reads the page lines |
 | the A540's handset list loses the AS690H (test 16's notice) | the list change notice works |
 
-Then **with the AS690H switched off**, run it again for the C430A's slot is
-**not** wanted -- instead switch the re-registered AS690H off and send the
-deregistration: expect `not reachable ... deleted WITHOUT its confirmation`
-after ~30 s. Last, re-register the AS690H and deregister it **from the
-handset's own menu** (Settings, Registration, De-register): expect
+Second, the lost handset: re-register the AS690H, **switch it off**, and send
+the same deregistration. Expect `not reachable (paged 10 times): deleted
+WITHOUT its confirmation` after about 30 s.
+
+Third, the handset's own menu: re-register the AS690H once more and
+deregister it from the handset (Settings, Registration, De-register). Expect
 `the handset deregistered itself (accepted)`.
 
 Undo at any point: stop the daemon, `mv /etc/opendectcell-sub.as690h.deregistered

@@ -82,7 +82,12 @@ the bridge exists means an internal call from another handset.
   directly (the chip reports the block in `0xF602`, stub-api.md §2.1).
   §7.4.7.1.0 makes a34 mandatory once the FP offers multiple lines (N.14):
   keep it at 0, as stock, while the daemon serves one line, and find the
-  mail that changes byte 3 before the pool offers two.
+  mail that changes byte 3 before the pool offers two. **Decided by the
+  maintainer (2026-10-28):** keep it as stock for now; finding the mail
+  means either one more room question (which chip code builds byte 3 of
+  the Qh-12 message) or an experiment stepping the bring-up mails
+  (`0x0169`, `0x0157`) with the radio on and reading `0xF602` back. Not
+  before the second line exists.
 - Which second-call behaviour the Part 1 Gigasets show in practice when a call
   arrives during a call: nothing (our plan: busy toward SIP), or an in-band
   tone on the active U-plane (A2 K6, a stock capture would tell).
