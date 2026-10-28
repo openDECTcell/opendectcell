@@ -61,6 +61,7 @@ define Package/opendectcell/install
 	$(INSTALL_DATA) ./files/opendectcell.keep $(1)/lib/upgrade/keep.d/opendectcell
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/opendectcell.uci-defaults $(1)/etc/uci-defaults/90-opendectcell
+	$(INSTALL_BIN) ./files/opendectcell.voip-migrate $(1)/etc/uci-defaults/91-opendectcell-voip
 	$(INSTALL_DIR) $(1)/usr/share/opendectcell/boards
 	$(INSTALL_DATA) $(OPENDECTCELL_SRC)/boards/avm,fritzbox-7530 \
 		$(OPENDECTCELL_SRC)/boards/avm,fritz7412 $(1)/usr/share/opendectcell/boards/

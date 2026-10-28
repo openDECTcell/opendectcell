@@ -161,31 +161,77 @@ overrides_write() {
 	mkdir -p "$OVERRIDE_DIR"
 	rm -f "$OVERRIDE_DIR"/handset*.override "$OVERRIDE_DIR"/handset*.lines
 	config_foreach override_write handset
+	lines_resolve
 	config_foreach lines_write handset
 }
 
-# A handset's line names (Handsets, Line 1 / Line 2): "<line> <name>" in
-# /etc/opendectcell/handset<slot>.lines, Line 2 only when its account is on. The
-# handset's Line Settings List shows them.
+# A handset's Line 1 and Line 2 are VoIP profiles ('config voip' sections,
+# Network > DECT, VoIP Profiles), named by its options line1 and line2.
+# Resolved once per start into LINE_<slot>_<n>: a profile serves one line
+# only, so a second assignment is refused here as well as in LuCI.
+lines_resolve_one() {
+	local sec="$1" slot n p t
+	config_get slot "$sec" slot
+	case "$slot" in [1-6]) ;; *) return ;; esac
+	for n in 1 2; do
+		config_get p "$sec" line$n
+		[ -n "$p" ] || continue
+		config_get t "$p" TYPE
+		if [ "$t" != voip ]; then
+			log "DECT $slot line $n: there is no VoIP profile '$p'; line left out"
+			continue
+		fi
+		case "$LINES_USED" in
+		*" $p "*)
+			log "DECT $slot line $n: VoIP profile '$p' already serves another line; left out"
+			continue
+			;;
+		esac
+		LINES_USED="$LINES_USED$p "
+		eval "LINE_${slot}_$n=\$p"
+	done
+}
+
+lines_resolve() {
+	local s
+	LINES_USED=" "
+	for s in 1 2 3 4 5 6; do
+		eval "LINE_${s}_1= LINE_${s}_2="
+	done
+	config_foreach lines_resolve_one handset
+}
+
+# A handset's line names: "<line> <name>" in /etc/opendectcell/handset<slot>.lines,
+# from each assigned profile's line_name, else its name if that fits the
+# list's 15 octets; Line 1 always, Line 2 only with a profile. The handset's
+# Line Settings List shows them.
 line_name() {
-	# printable, at most 15 octets (the list's field)
-	printf '%s' "$1" | tr -d '\000-\037' | cut -b1-15
+	printf '%s' "$1" | tr -d '\000-\037'
 }
 
 lines_write() {
-	local slot n1 n2 e2 f
+	local slot n p v f
 	config_get slot "$1" slot
 	case "$slot" in [1-6]) ;; *) return ;; esac
-	config_get n1 "$1" l1_name 'Line 1'
-	config_get n2 "$1" l2_name 'Line 2'
-	config_get_bool e2 "$1" l2_enabled 0
 	f="$OVERRIDE_DIR/handset$slot.lines"
-	printf '1 %s\n' "$(line_name "$n1")" > "$f"
-	[ "$e2" = 1 ] && printf '2 %s\n' "$(line_name "$n2")" >> "$f"
+	: > "$f"
+	for n in 1 2; do
+		eval "p=\$LINE_${slot}_$n"
+		if [ -z "$p" ]; then
+			[ "$n" = 1 ] && printf '1 Line 1\n' >> "$f"
+			continue
+		fi
+		config_get v "$p" line_name
+		if [ -z "$v" ]; then
+			config_get v "$p" name
+			[ ${#v} -le 15 ] || v="Line $n"
+		fi
+		printf '%s %s\n' "$n" "$(line_name "$v")" >> "$f"
+	done
 	return 0
 }
 
-# The SIP side (Network > DECT, Handsets, Line 1/Line 2, and the VoIP tab):
+# The SIP side (Network > DECT, VoIP Profiles, assigned under Handsets):
 # baresip with the openDECTcell module as the bridge (docs/bridge-interface.md),
 # its config and accounts written here from /etc/config/opendectcell, and the
 # line map /var/run/opendectcell/lines ("<hs> <line> <aor>") the module reads.
@@ -201,84 +247,92 @@ bs_safe() {
 }
 
 bs_line() {
-	local sec="$1" slot="$2" n="$3" p="l${3}_" v en user dom aor line codecs c auto
-	config_get_bool en "$sec" ${p}enabled 0
-	[ "$en" = 1 ] || return 0
-	config_get user "$sec" ${p}user
-	config_get dom "$sec" ${p}domain
+	local slot="$1" n="$2" sec v user dom aor line codecs c auto
+	eval "sec=\$LINE_${slot}_$n"
+	[ -n "$sec" ] || return 0
+	config_get user "$sec" user
+	config_get dom "$sec" domain
 	[ -n "$user" ] && [ -n "$dom" ] && bs_safe "$user" && bs_safe "$dom" || {
-		log "DECT $slot line $n: user name or registrar missing or not usable; line left out"
+		log "DECT $slot line $n: profile '$sec' has no usable user name or registrar; line left out"
 		return 0
 	}
 	aor="sip:$user@$dom"
-	config_get v "$sec" ${p}transport udp
+	# two profiles with the same account would be one baresip account
+	case "$BS_AORS" in
+	*" $aor "*)
+		log "DECT $slot line $n: profile '$sec' has the account $aor of another line; left out"
+		return 0
+		;;
+	esac
+	BS_AORS="$BS_AORS$aor "
+	config_get v "$sec" transport udp
 	line="<$aor"
 	[ "$v" = udp ] || line="$line;transport=$v"
 	line="$line>"
-	config_get v "$sec" ${p}display
+	config_get v "$sec" display
 	v=$(printf '%s' "$v" | tr -d '"<>\\')
 	[ -n "$v" ] && line="\"$v\" $line"
-	config_get v "$sec" ${p}authuser
+	config_get v "$sec" authuser
 	[ -n "$v" ] && bs_safe "$v" && line="$line;auth_user=$v"
-	config_get v "$sec" ${p}password
+	config_get v "$sec" password
 	if [ -n "$v" ]; then
 		bs_safe "$v" && line="$line;auth_pass=$v" ||
 			log "DECT $slot line $n: the password has a character baresip cannot take (; \" < > or a space)"
 	fi
-	config_get v "$sec" ${p}outbound
+	config_get v "$sec" outbound
 	[ -n "$v" ] && bs_safe "$v" && line="$line;outbound=\"sip:$v\""
-	config_get v "$sec" ${p}outbound2
+	config_get v "$sec" outbound2
 	[ -n "$v" ] && bs_safe "$v" && line="$line;outbound2=\"sip:$v\""
-	config_get_bool v "$sec" ${p}register 1
+	config_get_bool v "$sec" register 1
 	if [ "$v" = 1 ]; then
-		config_get v "$sec" ${p}regint 3600
+		config_get v "$sec" regint 3600
 		line="$line;regint=$v"
 	else
 		line="$line;regint=0"
 	fi
-	config_get_bool v "$sec" ${p}sipnat 0
+	config_get_bool v "$sec" sipnat 0
 	[ "$v" = 1 ] && line="$line;sipnat=outbound"
-	config_get v "$sec" ${p}medianat
+	config_get v "$sec" medianat
 	case "$v" in
 	stun|turn|ice)
 		line="$line;medianat=$v"
-		config_get c "$sec" ${p}stunserver
+		config_get c "$sec" stunserver
 		[ -n "$c" ] && bs_safe "$c" && line="$line;stunserver=\"$([ "$v" = turn ] && echo turn || echo stun):$c\""
-		config_get c "$sec" ${p}stunuser
+		config_get c "$sec" stunuser
 		[ -n "$c" ] && bs_safe "$c" && line="$line;stunuser=$c"
-		config_get c "$sec" ${p}stunpass
+		config_get c "$sec" stunpass
 		[ -n "$c" ] && bs_safe "$c" && line="$line;stunpass=$c"
 		;;
 	esac
-	config_get v "$sec" ${p}rtpkeep
+	config_get v "$sec" rtpkeep
 	case "$v" in zero|stun|dyna|rtcp) line="$line;rtpkeep=$v" ;; esac
 	# Media "try to autodetect" (the default): every codec offered, HD
 	# first, and key tones as the other side's offer says
-	config_get_bool auto "$sec" ${p}media_auto 1
+	config_get_bool auto "$sec" media_auto 1
 	if [ "$auto" = 1 ]; then
 		line="$line;audio_codecs=G722/16000/1,PCMA/8000/1,PCMU/8000/1;ptime=20;dtmfmode=auto;100rel=yes"
 	else
-		config_get v "$sec" ${p}codec 'g722 pcma pcmu'
+		config_get v "$sec" codec 'g722 pcma pcmu'
 		codecs=""
 		for c in $v; do
 			case "$c" in g722) c=G722/16000/1 ;; pcma) c=PCMA/8000/1 ;; pcmu) c=PCMU/8000/1 ;; *) continue ;; esac
 			codecs="${codecs:+$codecs,}$c"
 		done
 		[ -n "$codecs" ] && line="$line;audio_codecs=$codecs"
-		config_get v "$sec" ${p}ptime 20
+		config_get v "$sec" ptime 20
 		case "$v" in 10|20|30|40) line="$line;ptime=$v" ;; esac
-		config_get v "$sec" ${p}dtmf rtpevent
+		config_get v "$sec" dtmf rtpevent
 		case "$v" in rtpevent|info|auto) line="$line;dtmfmode=$v" ;; esac
-		config_get v "$sec" ${p}rel100 yes
+		config_get v "$sec" rel100 yes
 		case "$v" in yes|no|required) line="$line;100rel=$v" ;; esac
 	fi
-	config_get_bool v "$sec" ${p}mwi 0
+	config_get_bool v "$sec" mwi 0
 	line="$line;mwi=$([ "$v" = 1 ] && echo yes || echo no)"
-	config_get_bool v "$sec" ${p}transfer 1
+	config_get_bool v "$sec" transfer 1
 	line="$line;call_transfer=$([ "$v" = 1 ] && echo yes || echo no)"
 	# Encryption "try to autodetect" (the default): SRTP offered, plain
 	# RTP when the other side does not take it
-	config_get_bool auto "$sec" ${p}enc_auto 1
+	config_get_bool auto "$sec" enc_auto 1
 	if [ "$auto" = 1 ]; then
 		if [ -f "$BS_MODS/srtp.so" ]; then
 			line="$line;mediaenc=srtp"
@@ -286,11 +340,11 @@ bs_line() {
 			log "DECT $slot line $n: baresip-mod-srtp is not installed; speech goes unencrypted"
 		fi
 	else
-		config_get v "$sec" ${p}mediaenc
+		config_get v "$sec" mediaenc
 		case "$v" in srtp|srtp-mand|srtp-mandf|dtls_srtp|zrtp) line="$line;mediaenc=$v" ;; esac
 	fi
 	line="$line;answermode=manual"
-	config_get v "$sec" ${p}extra
+	config_get v "$sec" extra
 	case "$v" in ";"*) line="$line$v" ;; esac
 	printf '%s\n' "$line" >> "$BS_DIR/accounts"
 	printf '%s %s %s\n' "$slot" "$n" "$aor" >> /var/run/opendectcell/lines
@@ -301,8 +355,8 @@ bs_handset() {
 	local slot
 	config_get slot "$1" slot
 	case "$slot" in [1-6]) ;; *) return ;; esac
-	bs_line "$1" "$slot" 1
-	bs_line "$1" "$slot" 2
+	bs_line "$slot" 1
+	bs_line "$slot" 2
 }
 
 bs_module() {
@@ -320,6 +374,8 @@ baresip_write() {
 	: > "$BS_DIR/accounts"
 	chmod 600 "$BS_DIR/accounts"
 	: > /var/run/opendectcell/lines
+	[ -n "$LINES_USED" ] || lines_resolve
+	BS_AORS=" "
 	config_foreach bs_handset handset
 	[ "$BS_ACCOUNTS" -gt 0 ] || return 1
 	{
@@ -335,7 +391,13 @@ baresip_write() {
 		config_get v main net_interface
 		[ -n "$v" ] && echo "net_interface $v"
 		config_get v main dns_server
-		[ -n "$v" ] && echo "dns_server $v"
+		# baresip wants IP:port; a bare address gets port 53
+		case "$v" in
+		"") ;;
+		*.*.*.*:*|\[*\]:*) echo "dns_server $v" ;;
+		*:*) echo "dns_server [$v]:53" ;;
+		*) echo "dns_server $v:53" ;;
+		esac
 		config_get_bool v main tls_verify 1
 		echo "sip_verify_server $([ "$v" = 1 ] && echo yes || echo no)"
 		config_get v main tls_cafile
@@ -453,7 +515,8 @@ service_triggers() {
 }
 
 # Open the registration window on the running daemon: 'regwindow' seconds,
-# closed again after one handset enrols. The LuCI Monitor's button runs this.
+# closed again after one handset enrols. The command-line way; LuCI uses
+# the control socket (register-window).
 register() {
 	local pid
 	pid=$(pidof dect-stubd) || { log "not running"; return 1; }

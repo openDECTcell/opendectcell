@@ -1,0 +1,45 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Until 0.3.1 a handset's SIP accounts were its own options l1_* and l2_*.
+# Since then they are VoIP profiles ('config voip'), assigned to a handset
+# with option line1 / line2. Each enabled old line becomes one profile, its
+# line name the profile's line_name; the old options go. Run once (a
+# uci-defaults script); does nothing on a config without l1_/l2_ options.
+
+. /lib/functions.sh
+
+OPTS="display user authuser password domain register regint transport
+	outbound outbound2 sipnat medianat stunserver stunuser stunpass
+	rtpkeep media_auto codec ptime dtmf rel100 mwi transfer enc_auto
+	mediaenc extra"
+
+migrate() {
+	local sec="$1" slot n en v o sid
+	config_get slot "$sec" slot
+	for n in 1 2; do
+		config_get en "$sec" l${n}_enabled
+		config_get v "$sec" l${n}_user
+		if [ "$en" = 1 ] && [ -n "$v" ]; then
+			sid="voip_dect${slot}_$n"
+			uci -q set "opendectcell.$sid=voip"
+			uci -q set "opendectcell.$sid.name=DECT $slot, Line $n"
+			for o in $OPTS; do
+				config_get v "$sec" "l${n}_$o"
+				[ -n "$v" ] && uci -q set "opendectcell.$sid.$o=$v"
+			done
+			config_get v "$sec" "l${n}_name"
+			[ -n "$v" ] && uci -q set "opendectcell.$sid.line_name=$v"
+			uci -q set "opendectcell.$sec.line$n=$sid"
+			logger -t opendectcell "DECT $slot line $n is now the VoIP profile '$sid'"
+		fi
+		for o in enabled name $OPTS; do
+			uci -q delete "opendectcell.$sec.l${n}_$o"
+		done
+	done
+}
+
+config_load opendectcell
+config_foreach migrate handset
+uci -q commit opendectcell
+exit 0

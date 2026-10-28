@@ -44,6 +44,32 @@ function readState() {
 	return readJson(STATE);
 }
 
+/*
+ * The model profiles' pretty names, id -> name (the files' name = "..."),
+ * read once: they change only with the package.
+ */
+var PROFILES = '/etc/opendectcell/profiles';
+var modelNames = null;
+
+function readModelNames() {
+	if (modelNames)
+		return Promise.resolve(modelNames);
+	return L.resolveDefault(fs.list(PROFILES), []).then(function(files) {
+		return Promise.all(files.filter(function(f) {
+			return f.type == 'file' && /\.profile$/.test(f.name);
+		}).map(function(f) {
+			return L.resolveDefault(fs.read(PROFILES + '/' + f.name), '').then(function(t) {
+				var m = (t || '').match(/^\s*name\s*=\s*"?([^"#\n]*?)"?\s*(#.*)?$/m);
+				return [ f.name.replace(/\.profile$/, ''), m ? m[1] : null ];
+			});
+		}));
+	}).then(function(list) {
+		modelNames = {};
+		list.forEach(function(x) { if (x[1]) modelNames[x[0]] = x[1]; });
+		return modelNames;
+	});
+}
+
 /* everything one refresh needs: [state, voip, procd's instances] */
 function readAll() {
 	return Promise.all([
@@ -52,7 +78,11 @@ function readAll() {
 		L.resolveDefault(callServices('opendectcell'), {}).then(function(r) {
 			return (r && r.opendectcell && r.opendectcell.instances) || {};
 		}),
-		uci.load('opendectcell').catch(function() {})
+		/* the settings as they are now, not as when the page opened */
+		Promise.resolve(uci.unload('opendectcell')).then(function() {
+			return uci.load('opendectcell');
+		}).catch(function() {}),
+		readModelNames()
 	]);
 }
 
@@ -294,7 +324,7 @@ function renderState(st) {
 			String(h.slot),
 			h.ipei || '-',
 			h.part3 == null ? '-' : h.part3 ? _('CAT-iq') : _('GAP'),
-			h.profile || _('standard'),
+			h.profile ? (modelNames && modelNames[h.profile]) || h.profile : _('standard'),
 			!on ? _('base off') : h.link ? (l ? (CALL[l.call] || l.call) : _('connected')) : _('idle'),
 			h.link ? _('now') : ago(h.seen_ms_ago),
 			r ? _('%d (%s MHz)').format(r.carrier, freq(r.carrier)) : '-',
@@ -322,7 +352,7 @@ function renderState(st) {
 		]),
 		E('div', { 'class': 'cbi-section' }, [
 			E('h3', {}, _('Handsets')),
-			table([ _('Name'), _('No.'), _('IPEI'), _('Type'), _('Profile'), _('State'), _('Last contact'),
+			table([ _('Name'), _('No.'), _('IPEI'), _('Type'), _('Model'), _('State'), _('Last contact'),
 				_('Carrier'), _('Field strength'), _('Quality') ], handsets)
 		])
 	];
@@ -348,7 +378,7 @@ function renderState(st) {
  */
 function anyLine() {
 	return uci.sections('opendectcell', 'handset').some(function(h) {
-		return h.l1_enabled == '1' || h.l2_enabled == '1';
+		return !!(h.line1 || h.line2);
 	});
 }
 
@@ -369,7 +399,7 @@ function serviceRows(inst, st, voip, sip) {
 		rows.push([ _('SIP client (baresip)'),
 			bRun ? E('strong', {}, _('running')) :
 			!dRun ? _('not running: it runs with the DECT service') :
-			!anyLine() ? _('not running: no handset line is switched on (Network > DECT, Handsets)') :
+			!anyLine() ? _('not running: no handset has a VoIP profile as a line (Network > DECT, Handsets)') :
 			b ? _('stopped after repeated failures: see the Log tab') :
 			    _('not running: is the package opendectcell-baresip installed?') ]);
 		if (bRun)
@@ -380,8 +410,10 @@ function serviceRows(inst, st, voip, sip) {
 		E('h3', {}, _('Service')), table(null, rows) ]);
 }
 
+/* Line n of DECT hs, by the VoIP profile it is */
 function lineName(hs, line) {
-	return uci.get('opendectcell', 'dect' + hs, 'l' + line + '_name') || _('Line %d').format(line);
+	var p = uci.get('opendectcell', 'dect' + hs, 'line' + line);
+	return _('Line %d').format(line) + (p ? ' (' + (uci.get('opendectcell', p, 'name') || p) + ')' : '');
 }
 
 function hsName(st, hs) {
@@ -436,7 +468,7 @@ function renderVoip(st, voip, inst) {
 		return E('div', {}, out);
 	out.push(E('div', { 'class': 'cbi-section' }, [
 		E('h3', {}, _('Lines')),
-		(voip.lines || []).length ? table([ _('Handset'), _('Line'), _('Account'),
+		(voip.lines || []).length ? table([ _('Handset'), _('Line (VoIP profile)'), _('Account'),
 			_('Registration'), _('Interval') ], voip.lines.map(function(l) {
 			var r = REG[l.registration] || l.registration;
 
@@ -446,7 +478,7 @@ function renderVoip(st, voip, inst) {
 					l.reason ? _('%s: %s').format(r, l.reason) : r,
 				l.interval_s ? _('%d s').format(l.interval_s) : '-'
 			];
-		})) : E('p', {}, _('No line is switched on.'))
+		})) : E('p', {}, _('No handset has a VoIP profile as a line.'))
 	]));
 	if ((voip.calls || []).length)
 		voip.calls.forEach(function(c) { out.push(voipCall(st, c)); });
@@ -499,8 +531,13 @@ function logText(lines) {
 /* Shown again; scrolled to the end unless the reader has scrolled up. */
 function showLog(area, lines) {
 	var atEnd = area.scrollTop + area.clientHeight >= area.scrollHeight - 20;
+	var text = logText(lines), left = area.scrollLeft;
 
-	area.value = logText(lines);
+	/* unchanged text stays put: a selection for copying survives */
+	if (area.value == text)
+		return;
+	area.value = text;
+	area.scrollLeft = left;
 	if (atEnd)
 		area.scrollTop = area.scrollHeight;
 }
@@ -544,7 +581,7 @@ function fill(node, child) {
 return view.extend({
 	load: function() {
 		return Promise.all([ readAll(), readLog() ]).then(function(r) {
-			return r[0].concat([ r[1] ]);
+			return r[0].concat([ r[1] ]);	/* readAll()'s five, then the log */
 		});
 	},
 
@@ -552,7 +589,7 @@ return view.extend({
 		var dect = E('div', { 'id': 'opendectcell-monitor' }, renderDect(r[0], r[2]));
 		var voip = E('div', { 'id': 'opendectcell-voip' }, renderVoip(r[0], r[1], r[2]));
 		var logs = E('div', { 'data-tab': 'log', 'data-tab-title': _('Log') },
-			[ renderLogTab(r[4]) ]);
+			[ renderLogTab(r[5]) ]);
 		var tabs = E('div', {}, [
 			E('div', { 'data-tab': 'dect', 'data-tab-title': _('DECT') }, [ dect ]),
 			E('div', { 'data-tab': 'voip', 'data-tab-title': _('VoIP') }, [ voip ]),

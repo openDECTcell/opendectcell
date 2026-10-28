@@ -558,8 +558,9 @@ ssh root@192.168.1.1 '/tmp/dect-stubd --bridge-echo'
 
 ### 26. A handset's own line names (2 minutes, any run)
 
-Since round 7 each handset's Line 1 and Line 2 have their own names (Network >
-DECT, Handsets, Edit, Line 1/Line 2, "Line name"). Set Line 1 of DECT 1 to
+Since round 11 a handset's lines are VoIP profiles (Network > DECT, VoIP
+Profiles), each with a "Name on the handset"; assign them under Handsets, Edit,
+General, Line 1 / Line 2. Set Line 1 of DECT 1 to
 "Festnetz" and switch on Line 2 named "Büro", Save & Apply, start the base,
 then on the A540 open the base menu, Verbindungen.
 

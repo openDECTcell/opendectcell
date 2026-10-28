@@ -4,6 +4,7 @@
 'require fs';
 'require ui';
 'require uci';
+'require rpc';
 
 /*
  * Network > DECT: the base's settings and its handsets (/etc/config/opendectcell).
@@ -12,13 +13,21 @@
  *
  * Handsets: one 'config handset dect<N>' section per registered handset,
  * edited in a pop-up as the Wireless page edits an SSID: General (its name
- * and profile, kept where the base keeps them, and its own settings, a
- * 'list override key=value' laid over the profile; the keys come from
- * dect-stubd --profile-keys), Line 1 and Line 2 (its SIP accounts, for the
- * bridge). Renaming and deregistering need the base running; they go to the
- * daemon over its control socket (docs/bridge-interface.md §2).
+ * and model profile, kept where the base keeps them, and its Line 1 and
+ * Line 2, each a VoIP profile), then its own DECT settings in three tabs,
+ * a 'list override key=value' laid over the model profile (the keys come
+ * from dect-stubd --profile-keys). Renaming and deregistering need the
+ * base running; they go to the daemon over its control socket
+ * (docs/bridge-interface.md §2).
+ *
+ * VoIP Profiles: one 'config voip' section per SIP account; a handset's
+ * option line1/line2 names one. A profile serves one line at most: the
+ * Line menus offer only free ones, and the init script refuses a second
+ * assignment too.
  */
 var STATE = '/tmp/opendectcell-state.json';
+var PHANTOM = {};	/* handset sections made on this page, not saved yet */
+var VOIP = '/var/run/opendectcell/voip.json';
 var CTL = '/usr/sbin/dect-stubd';
 var PROFILES = '/etc/opendectcell/profiles';
 
@@ -27,6 +36,19 @@ function readState() {
 		try { return JSON.parse(text); } catch (e) { return null; }
 	}).catch(function() { return null; });
 }
+
+function readVoip() {
+	return L.resolveDefault(fs.read(VOIP), '').then(function(text) {
+		try { return JSON.parse(text); } catch (e) { return null; }
+	});
+}
+
+/* The changes saved but not applied yet, per config. */
+var callChanges = rpc.declare({
+	object: 'uci',
+	method: 'changes',
+	expect: { changes: {} }
+});
 
 function readKeys() {
 	return fs.exec(CTL, [ '--profile-keys' ]).then(function(r) {
@@ -133,7 +155,7 @@ function ago(ms) {
 function deregisterDialog(h) {
 	ui.showModal(_('Deregister DECT %d (%s)?').format(h.slot, h.name), [
 		E('p', {}, _('The base erases this handset\'s registration. The handset is told if it is in range; to use it again it has to be registered anew. A handset that is lost or switched off is erased after about 30 seconds without its confirmation.')),
-		E('p', {}, _('Its settings here go with it, its lines (SIP accounts) too.')),
+		E('p', {}, _('Its settings here go with it; its VoIP profiles stay, free for another handset.')),
 		E('div', { 'class': 'right' }, [
 			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 			E('button', {
@@ -164,7 +186,8 @@ function deregisterDone(h) {
 	]);
 	function gone() {
 		return readState().then(function(st) {
-			var still = st && (st.handsets || []).some(function(x) { return x.slot == h.slot; });
+			/* no state file (being rewritten): not gone yet */
+			var still = !st || (st.handsets || []).some(function(x) { return x.slot == h.slot; });
 
 			if (still && Date.now() - t0 < 40000)
 				return new Promise(function(res) { window.setTimeout(res, 2000); }).then(gone);
@@ -173,9 +196,16 @@ function deregisterDone(h) {
 				ui.addNotification(null, E('p', _('DECT %d is still registered after 40 s; its settings are kept. See Status > DECT, Log.').format(h.slot)), 'warning');
 				return;
 			}
+			var saved = !PHANTOM['dect' + h.slot];
+
 			uci.remove('opendectcell', 'dect' + h.slot);
+			if (!saved) {
+				/* its section existed only on this page: nothing to apply */
+				window.location.reload();
+				return;
+			}
 			return uci.save().then(function() {
-				ui.addNotification(null, E('p', _('DECT %d deregistered; its settings and lines are removed.').format(h.slot)), 'info');
+				ui.addNotification(null, E('p', _('DECT %d deregistered; its settings are removed and its VoIP profiles are free.').format(h.slot)), 'info');
 				return ui.changes.apply(true);
 			});
 		});
@@ -205,38 +235,45 @@ function setOverride(sid, key, value) {
 	uci.set('opendectcell', sid, 'override', list.length ? list : null);
 }
 
+/*
+ * The key groups of the profile format and the pop-up tab each goes to;
+ * the two small ones share a tab, each under its heading.
+ */
 var GROUPS = {
-	call: _('Calls'), link: _('Radio link, registration and lists'),
-	report: _('What the handset reports'), feature: _('Features')
+	call:    [ 'calls', null ],
+	link:    [ 'link', null ],
+	report:  [ 'caps', _('What the handset reports') ],
+	feature: [ 'caps', _('Features') ]
 };
 
-/* The handset's settings, one field per key of the profile format. */
+/* The handset's DECT settings, one field per key of the profile format. */
 function addKeyOptions(ss, keys) {
 	var seen = {};
 
 	keys.forEach(function(k) {
 		var o, name = '_k_' + k.key.replace(/[^a-z0-9]/g, '_');
+		var g = GROUPS[k.group] || [ 'caps', k.group ], t = g[0];
 
-		if (!seen[k.group]) {
+		if (g[1] && !seen[k.group]) {
 			seen[k.group] = true;
-			o = ss.taboption('general', form.DummyValue, '_g_' + k.group);
+			o = ss.taboption(t, form.DummyValue, '_g_' + k.group);
 			o.modalonly = true;
 			o.render = function() {
-				return E('h4', { 'style': 'margin-top:1em' }, GROUPS[k.group] || k.group);
+				return E('h4', { 'style': 'margin-top:1em' }, g[1]);
 			};
 		}
 
 		if (k.type == 'words') {
-			o = ss.taboption('general', form.ListValue, name, k.label);
-			o.value('', _('as the profile says (%s)').format(
+			o = ss.taboption(t, form.ListValue, name, k.label);
+			o.value('', _('as the model says (%s)').format(
 				k['default'] == '-' ? _('from the handset') : k['default']));
 			k.values.forEach(function(v) {
 				if (v != '-')
 					o.value(v, v);
 			});
 		} else {
-			o = ss.taboption('general', form.Value, name, k.label);
-			o.placeholder = k.type == 'int' ? k['default'] : _('as the profile says');
+			o = ss.taboption(t, form.Value, name, k.label);
+			o.placeholder = k.type == 'int' ? k['default'] : _('as the model says');
 			o.validate = function(sid, v) {
 				if (v === '')
 					return true;
@@ -262,132 +299,116 @@ function sipSafe(sid, v) {
 	return /[;"<>\s]/.test(v) ? _('baresip cannot take ; " < > or spaces here') : true;
 }
 
-/*
- * Sub-tabs inside a pop-up tab. LuCI forms have no nested tabs, so each
- * option is noted with its sub-tab here and the rendered pop-up is
- * regrouped (subTabs); LuCI's own tab code then draws and switches them,
- * and hides a sub-tab whose options are all hidden.
- */
-var SUBTAB = {}, SUBTABS = {};
+/* A VoIP profile's name as the menus show it. */
+function profileName(sid) {
+	return sid && uci.get('opendectcell', sid, 'name') || sid || '-';
+}
 
-function subTabs(els) {
-	Array.prototype.forEach.call(els.childNodes, function(pane) {
-		var list = pane.getAttribute && SUBTABS[pane.getAttribute('data-tab')], panes = {}, box;
+/* Where a profile is assigned: [ handset section, line ] or null. */
+function profileUse(psid) {
+	var found = null;
 
-		if (!list)
-			return;
-		box = E('div', { 'class': 'cbi-section-node-tabbed' });
-		/* the first is active from the start: LuCI's tab code fails on a
-		 * group whose panes are all empty, as when the line is off */
-		list.forEach(function(t, i) {
-			panes[t[0]] = E('div', { 'data-tab': t[0], 'data-tab-title': t[1],
-						 'data-tab-active': i == 0 ? 'true' : 'false' });
-			box.appendChild(panes[t[0]]);
+	uci.sections('opendectcell', 'handset').forEach(function(h) {
+		[ 1, 2 ].forEach(function(n) {
+			if (!found && h['line' + n] == psid)
+				found = [ h['.name'], n ];
 		});
-		Array.prototype.slice.call(pane.children).forEach(function(n) {
-			var t = SUBTAB[n.getAttribute('data-name')];
-			if (t)
-				panes[t].appendChild(n);
-		});
-		pane.appendChild(box);
 	});
-	return els;
+	return found;
 }
 
 /*
- * A SIP account on tab t, its options prefixed p ('l1_', 'l2_'): what a
- * baresip account line takes, grouped as the provider's documents group it.
+ * A VoIP profile: what a baresip account line takes, in the pop-up's tabs
+ * Account, Server and NAT, Media, Encryption, Advanced.
  */
-function addLineOptions(ss, t, p, optional, n) {
-	var on = p + 'enabled', sub, o;
+function addProfileOptions(ps) {
+	var o;
 
-	SUBTABS[t] = [];
-	function group(id, title) {
-		sub = p + id;
-		SUBTABS[t].push([ sub, title ]);
-	}
+	function opt(t, type, name, title, descr) {
+		var x = ps.taboption(t, type, name, title, descr);
 
-	function opt(type, name, title, descr) {
-		var x = ss.taboption(t, type, p + name, title, descr);
-
-		SUBTAB[p + name] = sub;
 		x.modalonly = true;
-		x.depends(on, '1');
 		return x;
 	}
 
-	/* shown only when cond holds too (separate depends() calls are ORed) */
-	function only(x, cond) {
-		x.deps = [];
-		x.depends(Object.assign({ [on]: '1' }, cond));
-		return x;
-	}
-
-	o = ss.taboption(t, form.Flag, on, _('Use this line'),
-		optional ? _('An optional second SIP account for this handset.') :
-			   _('The handset\'s SIP account: its calls go out on it and calls to it ring this handset.'));
-	o.modalonly = true;
-
-	group('acct', _('Account'));
-	o = opt(form.Value, 'name', _('Line name'),
-		_('What CAT-iq handsets show for this line, at most 15 characters.'));
-	o.placeholder = _('Line %d').format(n);
+	o = opt('acct', form.Value, 'name', _('Profile name'),
+		_('How the Line menus of the handsets name this profile.'));
+	o.rmempty = false;
+	o.validate = function(sid, v) {
+		if (!v.trim())
+			return _('A name is needed');
+		return uci.sections('opendectcell', 'voip').some(function(p) {
+			return p['.name'] != sid && (p.name || '') == v;
+		}) ? _('Another profile has this name') : true;
+	};
+	o = opt('acct', form.Value, 'line_name', _('Name on the handset'),
+		_('What CAT-iq handsets show for this line, at most 15 characters (fewer with umlauts). Empty: the profile name, if it is that short.'));
 	o.validate = function(sid, v) {
 		return octets(v) <= 15 ? true : _('At most 15 characters');
 	};
-	opt(form.Value, 'display', _('Display name'), _('The name the called party sees.'));
-	o = opt(form.Value, 'user', _('User name'), _('The SIP user, often the phone number.'));
+	opt('acct', form.Value, 'display', _('Display name'), _('The name the called party sees.'));
+	o = opt('acct', form.Value, 'user', _('User name'), _('The SIP user, often the phone number.'));
 	o.rmempty = false;
-	o.validate = sipSafe;
-	o = opt(form.Value, 'authuser', _('Login name'),
+	o.validate = function(sid, v) {
+		return v ? sipSafe(sid, v) : _('A user name is needed');
+	};
+	o = opt('acct', form.Value, 'authuser', _('Login name'),
 		_('When the provider wants a login other than the user name.'));
 	o.optional = true;
 	o.validate = sipSafe;
-	o = opt(form.Value, 'password', _('Password'));
+	o = opt('acct', form.Value, 'password', _('Password'));
 	o.password = true;
 	o.validate = sipSafe;
-	o = opt(form.Value, 'domain', _('Registrar'),
+	o = opt('acct', form.Value, 'domain', _('Registrar'),
 		_('The provider\'s SIP server, host or host:port (e.g. sip.example.net, or 192.168.178.1 for a FRITZ!Box).'));
 	o.datatype = 'or(hostport,host)';
 	o.rmempty = false;
-	o = opt(form.Flag, 'register', _('Register'),
+	/* one SIP account, one profile: the base could not tell two apart */
+	o.validate = function(sid, v) {
+		var u = this.map.lookupOption('user', sid), user = u ? u[0].formvalue(sid) : '';
+
+		return uci.sections('opendectcell', 'voip').some(function(p) {
+			return p['.name'] != sid && p.user == user && p.domain == v;
+		}) ? _('Another profile has this account (%s@%s)').format(user, v) : true;
+	};
+	o = opt('acct', form.Flag, 'register', _('Register'),
 		_('Register with the server. Off for a peer that calls this handset directly by address.'));
 	o.default = '1';
-	o = opt(form.Value, 'regint', _('Registration interval'), _('Seconds between registrations.'));
+	o.rmempty = false;
+	o = opt('acct', form.Value, 'regint', _('Registration interval'), _('Seconds between registrations.'));
 	o.datatype = 'range(60,86400)';
 	o.placeholder = '3600';
-	only(o, { [p + 'register']: '1' });
+	o.depends('register', '1');
 
-	group('net', _('Server and NAT'));
-	o = opt(form.ListValue, 'transport', _('Transport'),
+	o = opt('net', form.ListValue, 'transport', _('Transport'),
 		_('Use TLS if your provider supports it: it encrypts the signalling, so your password and the numbers you call do not cross the internet in the clear (the provider names the port, often 5061). Encrypted speech (Encryption tab) is only private with TLS here.'));
 	o.value('udp', 'UDP');
 	o.value('tcp', 'TCP');
 	o.value('tls', _('TLS (encrypted signalling)'));
 	o.default = 'udp';
-	o = opt(form.Value, 'outbound', _('Outbound proxy'), _('Only when the provider names one.'));
+	o = opt('net', form.Value, 'outbound', _('Outbound proxy'), _('Only when the provider names one.'));
 	o.datatype = 'or(hostport,host)';
 	o.optional = true;
-	o = opt(form.Value, 'outbound2', _('Second outbound proxy'));
+	o = opt('net', form.Value, 'outbound2', _('Second outbound proxy'));
 	o.datatype = 'or(hostport,host)';
 	o.optional = true;
-	o = opt(form.Flag, 'sipnat', _('SIP outbound (RFC 5626)'),
+	o = opt('net', form.Flag, 'sipnat', _('SIP outbound (RFC 5626)'),
 		_('Keep the connection to the server open through NAT, when the provider supports it.'));
-	o = opt(form.ListValue, 'medianat', _('NAT traversal for media'));
+	o = opt('net', form.ListValue, 'medianat', _('NAT traversal for media'));
 	o.value('', _('none'));
 	o.value('stun', 'STUN');
 	o.value('turn', 'TURN');
 	o.value('ice', 'ICE');
-	o = opt(form.Value, 'stunserver', _('STUN/TURN server'), _('host or host:port.'));
+	o = opt('net', form.Value, 'stunserver', _('STUN/TURN server'), _('host or host:port.'));
 	o.datatype = 'or(hostport,host)';
-	only(o, { [p + 'medianat']: /./ });
-	o = opt(form.Value, 'stunuser', _('TURN user'));
-	only(o, { [p + 'medianat']: 'turn' });
-	o = opt(form.Value, 'stunpass', _('TURN password'));
+	o.depends('medianat', /./);
+	o = opt('net', form.Value, 'stunuser', _('TURN user'));
+	o.depends('medianat', 'turn');
+	o = opt('net', form.Value, 'stunpass', _('TURN password'));
 	o.password = true;
 	o.validate = sipSafe;
-	only(o, { [p + 'medianat']: 'turn' });
-	o = opt(form.ListValue, 'rtpkeep', _('Keep media open'),
+	o.depends('medianat', 'turn');
+	o = opt('net', form.ListValue, 'rtpkeep', _('Keep media open'),
 		_('Packets that keep a NAT binding open while one side is silent.'));
 	o.value('', _('off'));
 	o.value('zero', _('empty RTP packets'));
@@ -395,53 +416,53 @@ function addLineOptions(ss, t, p, optional, n) {
 	o.value('dyna', _('dynamic'));
 	o.value('rtcp', 'RTCP');
 
-	group('media', _('Media'));
-	o = opt(form.Flag, 'media_auto', _('Try to autodetect'),
+	o = opt('media', form.Flag, 'media_auto', _('Try to autodetect'),
 		_('Offers every codec, HD first, and sends key tones the way the other side asks. Right for nearly every provider; untick to set them by hand.'));
 	o.default = '1';
 	o.rmempty = false;
-	function manual(x, flag) {
-		return only(x, { [p + flag]: '0' });
-	}
-	o = manual(opt(form.MultiValue, 'codec', _('Codecs'),
-		_('Offered in the order shown. G.722 keeps the handset\'s wideband (HD) audio end to end.')), 'media_auto');
+	o = opt('media', form.MultiValue, 'codec', _('Codecs'),
+		_('Offered in the order shown. G.722 keeps the handset\'s wideband (HD) audio end to end.'));
 	o.value('g722', 'G.722 (HD)');
 	o.value('pcma', 'G.711 A-law');
 	o.value('pcmu', 'G.711 µ-law');
 	o.default = 'g722 pcma pcmu';
-	o = manual(opt(form.ListValue, 'ptime', _('Packet time'), _('Milliseconds of audio per RTP packet.')), 'media_auto');
+	o.depends('media_auto', '0');
+	o = opt('media', form.ListValue, 'ptime', _('Packet time'), _('Milliseconds of audio per RTP packet.'));
 	[ '20', '10', '30', '40' ].forEach(function(v) { o.value(v, v + ' ms'); });
 	o.default = '20';
-	o = manual(opt(form.ListValue, 'dtmf', _('Key tones (DTMF)')), 'media_auto');
+	o.depends('media_auto', '0');
+	o = opt('media', form.ListValue, 'dtmf', _('Key tones (DTMF)'));
 	o.value('rtpevent', _('RTP events (RFC 4733)'));
 	o.value('info', _('SIP INFO'));
 	o.value('auto', _('automatic'));
 	o.default = 'rtpevent';
-	o = manual(opt(form.ListValue, 'rel100', _('Reliable provisional responses (100rel)')), 'media_auto');
+	o.depends('media_auto', '0');
+	o = opt('media', form.ListValue, 'rel100', _('Reliable provisional responses (100rel)'));
 	o.value('yes', _('when the other side supports it'));
 	o.value('no', _('never'));
 	o.value('required', _('required'));
 	o.default = 'yes';
-	o = opt(form.Flag, 'mwi', _('Voicemail notification (MWI)'));
-	o = opt(form.Flag, 'transfer', _('Allow call transfer'));
+	o.depends('media_auto', '0');
+	o = opt('media', form.Flag, 'mwi', _('Voicemail notification (MWI)'));
+	o = opt('media', form.Flag, 'transfer', _('Allow call transfer'));
 	o.default = '1';
+	o.rmempty = false;
 
-	group('enc', _('Encryption'));
-	o = opt(form.Flag, 'enc_auto', _('Try to autodetect'),
+	o = opt('enc', form.Flag, 'enc_auto', _('Try to autodetect'),
 		_('Offers encrypted speech (SRTP) and falls back to plain speech when the other side does not take it. Untick to choose a method, or none.'));
 	o.default = '1';
 	o.rmempty = false;
-	o = manual(opt(form.ListValue, 'mediaenc', _('Media encryption'),
-		_('Encrypts the speech on the internet side. Use TLS as transport too, or the keys travel in the clear.')), 'enc_auto');
+	o = opt('enc', form.ListValue, 'mediaenc', _('Media encryption'),
+		_('Encrypts the speech on the internet side. Use TLS as transport too, or the keys travel in the clear.'));
 	o.value('', _('none'));
 	o.value('srtp', _('SRTP when offered'));
 	o.value('srtp-mand', _('SRTP required'));
 	o.value('srtp-mandf', _('SRTP required (in the offer)'));
 	o.value('dtls_srtp', 'DTLS-SRTP');
 	o.value('zrtp', 'ZRTP');
+	o.depends('enc_auto', '0');
 
-	group('adv', _('Advanced'));
-	o = opt(form.Value, 'extra', _('Further account parameters'),
+	o = opt('adv', form.Value, 'extra', _('Further account parameters'),
 		_('Appended to the account as is, baresip syntax: ;key=value;key=value.'));
 	o.optional = true;
 	o.validate = function(sid, v) {
@@ -450,13 +471,118 @@ function addLineOptions(ss, t, p, optional, n) {
 	};
 }
 
-function lineSummary(sid, p) {
-	var u = uci.get('opendectcell', sid, p + 'user'), d = uci.get('opendectcell', sid, p + 'domain');
+/*
+ * A handset's Line 1 or Line 2: a menu of the VoIP profiles with a search
+ * field above it. It offers only free profiles: none assigned to another
+ * handset's line, nor the one the other Line menu of this pop-up holds.
+ */
+var LineValue = form.ListValue.extend({
+	other: function() { return this.option == 'line1' ? 'line2' : 'line1'; },
 
-	if (uci.get('opendectcell', sid, p + 'enabled') != '1')
-		return '-';
-	return (u || '?') + '@' + (d || '?');
-}
+	/* the profiles other handsets hold */
+	takenElsewhere: function(sid) {
+		var t = {};
+
+		uci.sections('opendectcell', 'handset').forEach(function(h) {
+			if (h['.name'] == sid)
+				return;
+			[ h.line1, h.line2 ].forEach(function(p) { if (p) t[p] = h['.name']; });
+		});
+		return t;
+	},
+
+	otherValue: function(sid) {
+		var o = this.map.lookupOption(this.other(), sid);
+		return o ? o[0].formvalue(sid) : uci.get('opendectcell', sid, this.other());
+	},
+
+	/* hide what is taken or does not match the search; keep the choice shown */
+	/* the <select> itself: LuCI wraps it in a div that carries the cbid */
+	select: function(sid) {
+		var el = this.map.findElement('id', this.cbid(sid));
+
+		return el && (el.tagName == 'SELECT' ? el : el.querySelector('select'));
+	},
+
+	refresh: function(sid) {
+		var sel = this.select(sid), taken, other, q;
+
+		if (!sel)
+			return;
+		taken = this.takenElsewhere(sid);
+		other = this.otherValue(sid);
+		q = sel._query || '';
+		Array.prototype.forEach.call(sel.options, function(op) {
+			var hide = op.value !== '' && (taken[op.value] || op.value == other ||
+				(q && op.text.toLowerCase().indexOf(q) < 0));
+			op.hidden = op.disabled = !!hide && !op.selected;
+		});
+	},
+
+	/*
+	 * The profiles as they are now, not as at page load: one added,
+	 * renamed or deleted in this visit shows at once. A line whose
+	 * profile is gone shows as such, so a Save does not drop it unseen.
+	 */
+	choices: function(cfgvalue) {
+		var list = uci.sections('opendectcell', 'voip').slice().sort(function(a, b) {
+			return (a.name || a['.name']).localeCompare(b.name || b['.name']);
+		});
+
+		this.keylist = [ '' ];
+		this.vallist = [ _('none') ];
+		list.forEach(function(p) {
+			this.keylist.push(p['.name']);
+			this.vallist.push(p.name || p['.name']);
+		}, this);
+		if (cfgvalue && !uci.get('opendectcell', cfgvalue)) {
+			this.keylist.push(cfgvalue);
+			this.vallist.push(_('%s (deleted profile)').format(cfgvalue));
+		}
+	},
+
+	renderWidget: function(sid, idx, cfgvalue) {
+		this.choices(cfgvalue);
+		var self = this, node = form.ListValue.prototype.renderWidget.apply(this, [ sid, idx, cfgvalue ]);
+		var sel = node.tagName == 'SELECT' ? node : node.querySelector('select');
+		var search = E('input', {
+			'type': 'search', 'class': 'cbi-input-text',
+			'placeholder': _('Search the profiles…'),
+			'style': 'display:block;margin-bottom:.3em',
+			'input': function() {
+				if (sel) {
+					sel._query = this.value.trim().toLowerCase();
+					self.refresh(sid);
+				}
+			}
+		});
+
+		window.setTimeout(function() { self.refresh(sid); }, 0);
+		return E('div', {}, [ search, node ]);
+	},
+
+	onchange: function(ev, sid, v) {
+		var o = this.map.lookupOption(this.other(), sid);
+
+		if (o)
+			o[0].refresh(sid);
+	},
+
+	validate: function(sid, v) {
+		var t;
+
+		if (!v)
+			return true;
+		if (!uci.get('opendectcell', v) || uci.get('opendectcell', v, '.type') != 'voip')
+			return _('This profile was deleted; choose another or none');
+		if (this.option == 'line2' && !this.otherValue(sid))
+			return _('Choose Line 1 first: the handset\'s calls go out on Line 1');
+		if (v == this.otherValue(sid))
+			return _('This profile is already the other line');
+		t = this.takenElsewhere(sid)[v];
+		return t ? _('This profile is already a line of DECT %s').format(uci.get('opendectcell', t, 'slot') || '?') : true;
+	}
+});
 
 return view.extend({
 	load: function() {
@@ -464,9 +590,10 @@ return view.extend({
 			uci.load('opendectcell'),
 			readState(),
 			readProfiles(),
-			readKeys()
+			readKeys(),
+			readVoip()
 		]).then(function(r) {
-			var st = r[1], profiles = r[2];
+			var st = r[1], profiles = r[2], voip = r[4];
 
 			/* a section for every registered handset that has none yet */
 			((st && st.handsets) || []).forEach(function(h) {
@@ -475,6 +602,7 @@ return view.extend({
 				if (!uci.get('opendectcell', sid)) {
 					uci.add('opendectcell', 'handset', sid);
 					uci.set('opendectcell', sid, 'slot', String(h.slot));
+					PHANTOM[sid] = true;
 				}
 			});
 
@@ -483,13 +611,13 @@ return view.extend({
 					return (t || '').trim();
 				});
 			})).then(function(choices) {
-				return [ st, profiles, choices, r[3] ];
+				return [ st, profiles, choices, r[3], voip ];
 			});
 		});
 	},
 
 	render: function(data) {
-		var st = data[0], profiles = data[1], choices = data[2], keys = data[3];
+		var st = data[0], profiles = data[1], choices = data[2], keys = data[3], voip = data[4];
 		var running = st && st.radio === 'up';
 		var bySlot = {}, choiceBySlot = {};
 		var m, s, o, ss;
@@ -509,7 +637,7 @@ return view.extend({
 		s.addremove = false;
 		s.tab('general', _('General'));
 		s.tab('handsets', _('Handsets'));
-		s.tab('voip', _('VoIP'));
+		s.tab('voip', _('VoIP Profiles'));
 		s.tab('advanced', _('Advanced'));
 
 		/* General */
@@ -561,18 +689,13 @@ return view.extend({
 				(h && h.name != 'DECT ' + h.slot ? ' (' + h.name + ')' : '');
 		};
 		ss.tab('general', _('General'));
-		ss.tab('line1', _('Line 1'));
-		ss.tab('line2', _('Line 2'));
-		ss.addModalOptions = function(ms) {
-			var render = ms.renderTabContainers;
-			ms.renderTabContainers = function(sid, nodes) {
-				return subTabs(render.call(this, sid, nodes));
-			};
-		};
+		ss.tab('calls', _('Calls'));
+		ss.tab('link', _('Radio link and lists'));
+		ss.tab('caps', _('Capabilities and features'));
 
 		ss.renderRowActions = function(sid) {
 			var td = form.GridSection.prototype.renderRowActions.apply(this, [ sid, _('Edit') ]);
-			var h = hs(sid), box = td.querySelector('.cbi-section-actions') || td;
+			var h = hs(sid), box = td.querySelector('div') || td, self = this;
 
 			if (h)
 				box.appendChild(E('button', {
@@ -581,6 +704,13 @@ return view.extend({
 					'title': running ? null : _('Needs the DECT service running'),
 					'click': function(ev) { ev.preventDefault(); deregisterDialog(h); }
 				}, _('Deregister')));
+			else if (running)
+				/* the base does not hold it (any more): its settings can go */
+				box.appendChild(E('button', {
+					'class': 'btn cbi-button-negative',
+					'title': _('This handset is not registered; remove its settings and free its VoIP profiles'),
+					'click': ui.createHandlerFn(this, function() { return self.handleRemove(sid); })
+				}, _('Remove')));
 			return td;
 		};
 
@@ -598,16 +728,24 @@ return view.extend({
 		o.cfgvalue = function(sid) { var h = hs(sid); return h && h.ipei || '-'; };
 		o = ss.option(form.DummyValue, '_type', _('Type'));
 		o.modalonly = false;
+		var modelName = {};
+		profiles.forEach(function(p) { modelName[p.id] = p.name; });
 		o.cfgvalue = function(sid) {
 			var h = hs(sid);
 			return !h || h.part3 == null ? '-' : h.part3 ? _('CAT-iq') : _('GAP');
 		};
-		o = ss.option(form.DummyValue, '_l1', _('Line 1'));
+		o = ss.option(form.DummyValue, '_model', _('Model'));
 		o.modalonly = false;
-		o.cfgvalue = function(sid) { return lineSummary(sid, 'l1_'); };
-		o = ss.option(form.DummyValue, '_l2', _('Line 2'));
-		o.modalonly = false;
-		o.cfgvalue = function(sid) { return lineSummary(sid, 'l2_'); };
+		o.cfgvalue = function(sid) {
+			var c = choiceBySlot[+uci.get('opendectcell', sid, 'slot')];
+			return !hs(sid) ? '-' : c ? modelName[c] || c : _('standard');
+		};
+
+		[ 1, 2 ].forEach(function(n) {
+			o = ss.option(form.DummyValue, '_l' + n, _('Line %d').format(n));
+			o.modalonly = false;
+			o.cfgvalue = function(sid) { return profileName(uci.get('opendectcell', sid, 'line' + n)); };
+		});
 		o = ss.option(form.DummyValue, '_seen', _('Last contact'));
 		o.modalonly = false;
 		o.cfgvalue = function(sid) {
@@ -618,7 +756,7 @@ return view.extend({
 
 		/* General: name and profile where the base keeps them */
 		o = ss.taboption('general', form.Value, '_rename', _('Name'),
-			running ? _('What every handset shows for this one, at most 15 characters. Empty restores "DECT n".') :
+			running ? _('What every handset shows for this one, at most 15 characters (fewer with umlauts). Empty restores "DECT n". Takes effect when this pop-up is saved.') :
 				  _('Can only be changed while the DECT service is running.'));
 		o.modalonly = true;
 		o.readonly = !running;
@@ -630,13 +768,16 @@ return view.extend({
 			var h = hs(sid);
 			if (!h || v == h.name)
 				return;
-			return ctl('rename hs=' + h.slot + ' name=' + quote(v))
-				.then(function(r) { report(r, _('DECT %d renamed.').format(h.slot)); });
+			return ctl('rename hs=' + h.slot + ' name=' + quote(v)).then(function(r) {
+				if (r.ok)
+					h.name = v || 'DECT ' + h.slot;	/* what the page shows from now on */
+				report(r, _('DECT %d renamed.').format(h.slot));
+			});
 		};
 		o.remove = function(sid) { return this.write(sid, ''); };
 
-		o = ss.taboption('general', form.ListValue, '_profile', _('Profile'),
-			_('Known quirks of this handset model; its own settings below override it.'));
+		o = ss.taboption('general', form.ListValue, '_profile', _('Model'),
+			_('Known quirks of this handset model; its own settings in the other tabs override it. Takes effect when this pop-up is saved.'));
 		o.modalonly = true;
 		o.value('', _('automatic (standard)'));
 		profiles.filter(function(p) { return p.kind == 'manufacturer'; }).forEach(function(mf) {
@@ -655,13 +796,24 @@ return view.extend({
 				return;
 			var w = v ? fs.write(h.store + '.profile', v + '\n')
 				  : fs.remove(h.store + '.profile').catch(function() {});
-			return w.then(function() { return ctl('reload-profiles'); });
+			return w.then(function() {
+				choiceBySlot[h.slot] = v;
+				return ctl('reload-profiles');
+			});
 		};
 		o.remove = function(sid) { return this.write(sid, ''); };
 
+		/* General: its lines, a VoIP profile each */
+
+		[ 1, 2 ].forEach(function(n) {
+			o = ss.taboption('general', LineValue, 'line' + n, _('Line %d').format(n),
+				n == 1 ? _('A VoIP profile (VoIP Profiles tab): the handset\'s calls go out on it, and calls to it ring this handset.') :
+					 _('An optional second VoIP profile, ringing this handset too.'));
+			o.modalonly = true;
+			o.optional = true;
+		});
+
 		addKeyOptions(ss, keys);
-		addLineOptions(ss, 'line1', 'l1_', false, 1);
-		addLineOptions(ss, 'line2', 'l2_', true, 2);
 
 		/*
 		 * Handsets: registering a new one, under the grid. The model
@@ -685,6 +837,13 @@ return view.extend({
 			_('Of the handset you are about to register. A known model gets the settings it needs from the start.')));
 		o.value('', _('Generic DECT GAP/CAT-iq handset'));
 		mfrs.forEach(function(mf) { o.value(mf.id, mf.name); });
+		o.renderWidget = function(sid, idx, cfg) {
+			var w = form.ListValue.prototype.renderWidget.apply(this, [ sid, idx, cfg ]);
+			var sel = w.tagName == 'SELECT' ? w : w.querySelector('select');
+			if (sel)
+				sel.style.minWidth = '20em';	/* the generic entry in full */
+			return w;
+		};
 
 		mfrs.forEach(function(mf) {
 			o = notSaved(s.taboption('handsets', form.ListValue, '_reg_model_' + mf.id, _('Model')));
@@ -744,17 +903,30 @@ return view.extend({
 		o.onclick = function() {
 			var mf = formval('_reg_mfr'), prof = mf ? formval('_reg_model_' + mf) || mf : '';
 
-			/* the base registers with the saved PIN, not one only on the page */
+			/*
+			 * The base registers with the PIN it was started with: not
+			 * one only on the page, nor one saved but not applied.
+			 */
 			if (formval('pin') != uci.get('opendectcell', 'main', 'pin')) {
 				ui.addNotification(null, E('p', _('The PIN shown is not in use yet: press Save & Apply first, then register.')), 'warning');
 				return;
 			}
 
-			return ctl('register-window' + (prof ? ' profile=' + prof : '')).then(function(r) {
-				report(r, _('Registration is open for %s s. Start the registration on the handset now and enter the PIN %s.')
-					.format(uci.get('opendectcell', 'main', 'regwindow') || '120',
-						uci.get('opendectcell', 'main', 'pin') || '-'));
+			return L.resolveDefault(callChanges(), {}).then(function(ch) {
+				if ((ch.opendectcell || []).some(function(c) { return c[1] == 'main' && c[2] == 'pin'; })) {
+					ui.addNotification(null, E('p', _('A new PIN is saved but not in use yet: press Save & Apply first, then register.')), 'warning');
+					return;
+				}
+				return register();
 			});
+
+			function register() {
+				return ctl('register-window' + (prof ? ' profile=' + prof : '')).then(function(r) {
+					report(r, _('Registration is open for %s s. Start the registration on the handset now and enter the PIN %s.')
+						.format(uci.get('opendectcell', 'main', 'regwindow') || '120',
+							uci.get('opendectcell', 'main', 'pin') || '-'));
+				});
+			}
 		};
 
 		o = s.taboption('handsets', form.Value, 'regwindow', _('Registration window'),
@@ -765,7 +937,69 @@ return view.extend({
 		o = s.taboption('handsets', form.Flag, 'registration', _('Keep registration open'),
 			_('Registration stays open while the base runs. Not recommended: anyone nearby who knows the PIN can register a handset.'));
 
-		/* VoIP: what every handset's lines share (baresip's config) */
+		/* VoIP Profiles: the list first, then what all of them share */
+		var regBy = {};
+		((voip && voip.lines) || []).forEach(function(l) { regBy[l.hs + '/' + l.line] = l; });
+
+		o = s.taboption('voip', form.SectionValue, '_voip', form.GridSection, 'voip', null,
+			_('One profile per SIP account; assign them under Handsets (Edit, Line 1 / Line 2). A profile serves one line.'));
+		var ps = o.subsection;
+		ps.anonymous = true;
+		ps.addremove = true;
+		ps.nodescriptions = true;
+		ps.addbtntitle = _('Add a profile');
+		ps.modaltitle = function(sid) {
+			return _('VoIP profile %s').format(uci.get('opendectcell', sid, 'name') || _('(new)'));
+		};
+		ps.tab('acct', _('Account'));
+		ps.tab('net', _('Server and NAT'));
+		ps.tab('media', _('Media'));
+		ps.tab('enc', _('Encryption'));
+		ps.tab('adv', _('Advanced'));
+		/* a named section, so a handset's line1/line2 can point at it for good */
+		ps.handleAdd = function(ev) {
+			var n = 1;
+
+			while (uci.get('opendectcell', 'voip' + n))
+				n++;
+			return form.GridSection.prototype.handleAdd.call(this, ev, 'voip' + n);
+		};
+		/* deleting a profile frees the line that held it */
+		ps.handleRemove = function(sid, ev) {
+			var u = profileUse(sid);
+
+			if (u)
+				uci.unset('opendectcell', u[0], 'line' + u[1]);
+			return form.GridSection.prototype.handleRemove.call(this, sid, ev);
+		};
+
+		o = ps.option(form.DummyValue, 'name', _('Name'));
+		o.modalonly = false;
+		o = ps.option(form.DummyValue, '_account', _('Account'));
+		o.modalonly = false;
+		o.cfgvalue = function(sid) {
+			return (uci.get('opendectcell', sid, 'user') || '?') + '@' + (uci.get('opendectcell', sid, 'domain') || '?');
+		};
+		o = ps.option(form.DummyValue, '_use', _('Line of'));
+		o.modalonly = false;
+		o.cfgvalue = function(sid) {
+			var u = profileUse(sid);
+			return u ? _('DECT %s, Line %d').format(uci.get('opendectcell', u[0], 'slot') || '?', u[1]) : _('free');
+		};
+		o = ps.option(form.DummyValue, '_reg', _('Registration'));
+		o.modalonly = false;
+		o.cfgvalue = function(sid) {
+			var u = profileUse(sid), l = u && regBy[(uci.get('opendectcell', u[0], 'slot') || '') + '/' + u[1]];
+			return !u ? '-' : !l ? _('not in use (yet)') :
+				l.registration + (l.reason ? ': ' + l.reason : '');
+		};
+		addProfileOptions(ps);
+
+		o = s.taboption('voip', form.DummyValue, '_shared');
+		o.render = function() {
+			return E('h3', { 'style': 'margin-top:1.5em' }, _('Settings for all profiles'));
+		};
+
 		o = s.taboption('voip', form.Value, 'sip_port', _('SIP port'),
 			_('The local port for SIP signalling (UDP and TCP; TLS on the next port).'));
 		o.datatype = 'port';
@@ -779,11 +1013,11 @@ return view.extend({
 				_('first-last, 1024 to 65535');
 		};
 		o = s.taboption('voip', form.Value, 'net_interface', _('Network interface'),
-			_('Where SIP and speech go out, e.g. wan or br-lan. Empty: the default route.'));
+			_('The network device SIP and speech go out on, e.g. br-lan or pppoe-wan (not an interface name like wan). Empty: the default route.'));
 		o.placeholder = _('automatic');
 		o = s.taboption('voip', form.Value, 'dns_server', _('DNS server'),
-			_('For the SIP servers\' names. Empty: the system\'s.'));
-		o.datatype = 'or(ipaddr,hostport)';
+			_('An IP address, optionally with :port, for the SIP servers\' names. Empty: the system\'s.'));
+		o.datatype = 'or(ipaddr,ipaddrport(1))';
 		o.optional = true;
 		o = s.taboption('voip', form.ListValue, 'rtp_dscp', _('Speech priority (DSCP)'),
 			_('Marks the speech packets so routers can prefer them.'));
