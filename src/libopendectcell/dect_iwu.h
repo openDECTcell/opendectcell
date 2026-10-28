@@ -114,6 +114,7 @@
 #define DECT_IWU_CONTENT_MAX	(DECT_IWU_DATA_PER_PKT * (DECT_IWU_OUT_MAX - 1u))
 
 #define DECT_IWU_NAME_MAX	16u	/* UTF-8 bytes, NUL-terminated */
+#define DECT_IWU_SAVE_MAX	128u	/* the data of one 'save entry' */
 #define DECT_IWU_HANDSETS	8u	/* Internal Names List capacity */
 #define DECT_IWU_SESSIONS	2u	/* "at least two sessions at a time" */
 
@@ -136,6 +137,7 @@ struct dect_iwu_stats {
 	uint32_t entries_sent;	/* list entries delivered in data packets */
 	uint32_t ignored;	/* records we have no reply for */
 	uint32_t malformed;	/* too short, wrong discriminator, bad coding */
+	uint32_t saved;		/* entries saved by a handset */
 };
 
 /*
@@ -167,10 +169,21 @@ struct dect_iwu {
 	struct {
 		uint8_t list;
 		uint8_t in_use;
+		uint8_t locked;		/* entry an 'edit entry' locked, 0 = none */
 	} sessions[DECT_IWU_SESSIONS];
 	/* A 'save entry' whose data packets are still arriving (7.4.10.4.9). */
 	uint8_t  save_pending;
 	uint8_t  save_session;
+	uint8_t  save_entry;
+	uint8_t  save_overflow;
+	size_t   save_len;
+	uint8_t  save_data[DECT_IWU_SAVE_MAX];
+	/*
+	 * Internal Names entries whose name a handset saved (bit i = handsets[i]),
+	 * for the owner to keep and to show on the other links; it clears it.
+	 * An empty name asks for the owner's default (a field reset, table 52a).
+	 */
+	uint32_t names_changed;
 
 	struct dect_iwu_stats stats;
 };

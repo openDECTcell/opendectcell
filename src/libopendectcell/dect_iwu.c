@@ -347,8 +347,8 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 				  digits, n);
 			break;
 		case 0x02:
-			/* 7.4.10.5.1.3 'Name', UTF-8, not editable here. */
-			put_field(b, field, 0x00, h->name, strlen(h->name));
+			/* 7.4.10.5.1.3 'Name', UTF-8, editable (bit 7, annex H.7) */
+			put_field(b, field, 0x40, h->name, strlen(h->name));
 			break;
 		case 0x03: {
 			/* 7.4.10.5.1.13 'Call interception': 31H = allowed. */
@@ -574,6 +574,7 @@ static void start_session(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	}
 	iwu->sessions[slot].in_use = 1;
 	iwu->sessions[slot].list = list;
+	iwu->sessions[slot].locked = 0;
 	put_ext(&b, slot + 1u);				/* session identifier */
 	put_ext(&b, entry_count(iwu, list));		/* total entries */
 	put(&b, 0x00);					/* undefined: no proprietary extensions */
@@ -651,18 +652,35 @@ static void query_fields(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
 	}
-	/* 7.4.10.4.2.2 table 47: editable fields first, then the rest. We
-	 * take no 'save entry', so nothing is editable. */
+	/* 7.4.10.4.2.2 table 47: editable fields first, then the rest. The
+	 * only editable one is the Internal Names List's name (02H). */
 	f = list_fields((uint8_t)list, &nf);
 	if (reply_begin(out, &b, DECT_LIA_QUERY_FIELDS_CFM))
 		return;
 	put_ext(&b, session);
-	put(&b, 0x00);
-	put(&b, (uint8_t)nf);
-	put_bytes(&b, f, nf);
+	if (list == DECT_LIA_LIST_INTERNAL_NAMES) {
+		size_t i;
+
+		put(&b, 0x01);
+		put(&b, 0x02);
+		put(&b, (uint8_t)(nf - 1u));
+		for (i = 0; i < nf; i++)
+			if (f[i] != 0x02)
+				put(&b, f[i]);
+	} else {
+		put(&b, 0x00);
+		put(&b, (uint8_t)nf);
+		put_bytes(&b, f, nf);
+	}
 	emit(out, &b);
 	iwu->stats.replied++;
 }
+
+static int assemble(const struct dect_iwu *iwu, uint8_t list, unsigned first,
+		    unsigned last, const uint8_t *wanted, size_t nwanted,
+		    struct buf *content, uint8_t *data, size_t cap);
+static void send_data(struct dect_iwu_out *out, unsigned session,
+		      const struct buf *content);
 
 static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 			 struct dect_iwu_out *out)
@@ -670,8 +688,8 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	struct buf b, content;
 	uint8_t data[DECT_IWU_CONTENT_MAX];
 	uint8_t wanted[16];
-	unsigned session, start, count, first, last, idx, total;
-	size_t k, nwanted = 0, i, off;
+	unsigned session, start, count, first, last, total;
+	size_t k, nwanted = 0, i;
 	uint8_t mark;
 	int list, backward;
 
@@ -737,28 +755,8 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	if (!nwanted)
 		first = 1u, last = 0u;
 
-	/* Assemble the data content: entries ascending, each
-	 * [entry id][entry length][fields...] (7.4.10.4.10 table 62). */
-	content.p = data;
-	content.cap = sizeof(data);
-	content.len = 0;
-	content.overflow = 0;
-	for (idx = first; idx <= last && !content.overflow; idx++) {
-		struct buf e;
-		uint8_t ebuf[128];
-
-		e.p = ebuf; e.cap = sizeof(ebuf); e.len = 0; e.overflow = 0;
-		for (i = 0; i < nwanted; i++)
-			put_entry_field(iwu, &e, (uint8_t)list, idx, wanted[i]);
-		if (e.overflow) {
-			content.overflow = 1;
-			break;
-		}
-		put_ext(&content, idx);		/* entry identifier */
-		put_ext(&content, (unsigned)e.len);
-		put_bytes(&content, ebuf, e.len);
-	}
-	if (content.overflow) {
+	if (assemble(iwu, (uint8_t)list, first, last, wanted, nwanted, &content,
+		     data, sizeof(data))) {
 		/* Larger than we can deliver in one go: refuse the range
 		 * rather than truncate an entry (7.4.10.4.3.2). */
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_RANGE);
@@ -773,9 +771,57 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	put(&b, (uint8_t)(last >= first ? last - first + 1u : 0u));
 	emit(out, &b);
 	iwu->stats.replied++;
+	send_data(out, session, &content);
+	if (last >= first)
+		iwu->stats.entries_sent += last - first + 1u;
+	return;
 
-	for (off = 0; off < content.len; off += DECT_IWU_DATA_PER_PKT) {
-		size_t chunk = content.len - off;
+malformed:
+	iwu->stats.malformed++;
+}
+
+/*
+ * The data content of entries first..last, ascending, each [entry id]
+ * [entry length][fields...] (7.4.10.4.10 table 62). -1 if it does not fit.
+ */
+static int assemble(const struct dect_iwu *iwu, uint8_t list, unsigned first,
+		    unsigned last, const uint8_t *wanted, size_t nwanted,
+		    struct buf *content, uint8_t *data, size_t cap)
+{
+	unsigned idx;
+	size_t i;
+
+	content->p = data;
+	content->cap = cap;
+	content->len = 0;
+	content->overflow = 0;
+	for (idx = first; idx <= last && !content->overflow; idx++) {
+		struct buf e;
+		uint8_t ebuf[128];
+
+		e.p = ebuf; e.cap = sizeof(ebuf); e.len = 0; e.overflow = 0;
+		for (i = 0; i < nwanted; i++)
+			put_entry_field(iwu, &e, list, idx, wanted[i]);
+		if (e.overflow) {
+			content->overflow = 1;
+			break;
+		}
+		put_ext(content, idx);		/* entry identifier */
+		put_ext(content, (unsigned)e.len);
+		put_bytes(content, ebuf, e.len);
+	}
+	return content->overflow ? -1 : 0;
+}
+
+/* The data content in data packets of 56 octets, the last one marked. */
+static void send_data(struct dect_iwu_out *out, unsigned session,
+		      const struct buf *content)
+{
+	struct buf b;
+	size_t off;
+
+	for (off = 0; off < content->len; off += DECT_IWU_DATA_PER_PKT) {
+		size_t chunk = content->len - off;
 		int is_last = chunk <= DECT_IWU_DATA_PER_PKT;
 
 		if (!is_last)
@@ -784,15 +830,9 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 						 : DECT_LIA_DATA))
 			return;
 		put_ext(&b, session);
-		put_bytes(&b, data + off, chunk);
+		put_bytes(&b, content->p + off, chunk);
 		emit(out, &b);
 	}
-	if (last >= first)
-		iwu->stats.entries_sent += last - first + 1u;
-	return;
-
-malformed:
-	iwu->stats.malformed++;
 }
 
 /* A command we take the session of but do not perform. */
@@ -808,6 +848,187 @@ static void refuse(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	if (session_list(iwu, session) < 0)
 		reason = DECT_LIA_NACK_INVALID_SESSION;
 	nack(iwu, out, session, reason);
+}
+
+/*
+ * "Edit entry" (7.4.10.4.4): one entry, read like 'read entries' and locked
+ * for this session until its 'save entry' or the session's end. Every list
+ * we serve may be edited except the List of Supported Lists (table 41);
+ * whether a field may then be saved is its 'editable' property. The lock
+ * is per link: another handset's edit of the same entry is not seen here.
+ */
+static void edit_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
+		       struct dect_iwu_out *out)
+{
+	uint8_t data[DECT_IWU_CONTENT_MAX], wanted[16];
+	const uint8_t *known;
+	struct buf b, content;
+	unsigned session, entry;
+	size_t k, nknown, nwanted = 0, i;
+	int list;
+
+	k = get_ext(p, n, &session);
+	if (!k)
+		goto malformed;
+	p += k; n -= k;
+	k = get_ext(p, n, &entry);
+	if (!k)
+		goto malformed;
+	p += k; n -= k;
+	list = session_list(iwu, session);
+	if (list < 0) {
+		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
+		return;
+	}
+	if (list == DECT_LIA_LIST_SUPPORTED) {
+		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+		return;
+	}
+	if (entry < 1u || entry > entry_count(iwu, (uint8_t)list)) {
+		nack(iwu, out, session, DECT_LIA_NACK_NO_ENTRY);
+		return;
+	}
+	/* the fields asked for that we hold, ascending; unknown ones ignored,
+	 * and none known at all is 'procedure not allowed' */
+	known = list_fields((uint8_t)list, &nknown);
+	for (i = 0; i < nknown && nwanted < sizeof(wanted); i++)
+		if (memchr(p, known[i], n))
+			wanted[nwanted++] = known[i];
+	if (!nwanted) {
+		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+		return;
+	}
+	if (assemble(iwu, (uint8_t)list, entry, entry, wanted, nwanted,
+		     &content, data, sizeof(data))) {
+		nack(iwu, out, session, DECT_LIA_NACK_INVALID_RANGE);
+		return;
+	}
+	iwu->sessions[session - 1u].locked = (uint8_t)entry;
+	if (reply_begin(out, &b, DECT_LIA_EDIT_ENTRY_CFM))
+		return;
+	put_ext(&b, session);
+	emit(out, &b);
+	iwu->stats.replied++;
+	send_data(out, session, &content);
+	iwu->stats.entries_sent++;
+	return;
+
+malformed:
+	iwu->stats.malformed++;
+}
+
+/*
+ * The data of a 'save entry' has all arrived (7.4.10.4.5): apply it in best
+ * effort mode and answer once. Only the Internal Names List's name can be
+ * saved; any other field in the data is 'procedure not allowed', applied or
+ * not, and so is a save of an entry not locked by 'edit entry' in this
+ * session or of a new entry (none of our lists takes one). An empty save
+ * ends an edit without change (7.4.10.4.5.1). The lock is released in
+ * every case.
+ */
+static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
+{
+	unsigned session = iwu->save_session, entry, len, fid, flen;
+	const uint8_t *p = iwu->save_data;
+	size_t n = iwu->save_len, k;
+	uint8_t reason = 0, locked;
+	struct buf b;
+	int list = session_list(iwu, session);
+
+	if (list < 0) {
+		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
+		return;
+	}
+	locked = iwu->sessions[session - 1u].locked;
+	iwu->sessions[session - 1u].locked = 0;
+	if (iwu->save_entry && iwu->save_entry > entry_count(iwu, (uint8_t)list)) {
+		nack(iwu, out, session, DECT_LIA_NACK_NO_ENTRY);
+		return;
+	}
+	if (!iwu->save_entry || locked != iwu->save_entry) {
+		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+		return;
+	}
+	if (iwu->save_overflow) {
+		nack(iwu, out, session, DECT_LIA_NACK_FORMAT);
+		return;
+	}
+	if (n) {
+		/* table 62: [entry id][entry length][fields ...] */
+		k = get_ext(p, n, &entry);
+		if (!k || entry != iwu->save_entry)
+			goto format;
+		p += k; n -= k;
+		k = get_ext(p, n, &len);
+		if (!k || len > n - k)
+			goto format;
+		p += k; n = len;
+		while (n) {
+			fid = *p++;
+			n--;
+			k = get_ext(p, n, &flen);
+			if (!k || flen < 1u || flen > n - k)
+				goto format;
+			p += k; n -= k;
+			if (list == DECT_LIA_LIST_INTERNAL_NAMES && fid == 0x02) {
+				/* [properties][UTF-8 name]; length 1 = reset */
+				struct dect_iwu_handset *h =
+					&iwu->handsets[iwu->save_entry - 1u];
+				size_t nl = flen - 1u;
+
+				if (nl > DECT_IWU_NAME_MAX - 1u) {
+					/* truncated (7.4.10.1), never inside a
+					 * UTF-8 sequence */
+					nl = DECT_IWU_NAME_MAX - 1u;
+					while (nl && (p[1 + nl] & 0xC0u) == 0x80u)
+						nl--;
+				}
+				memcpy(h->name, p + 1, nl);
+				h->name[nl] = '\0';
+				iwu->names_changed |= 1u << (iwu->save_entry - 1u);
+			} else {
+				reason = DECT_LIA_NACK_NOT_ALLOWED;
+			}
+			p += flen; n -= flen;
+		}
+	}
+	if (reason) {
+		nack(iwu, out, session, reason);
+		return;
+	}
+	/* table 53: the entry stays where it was (sorted by number) */
+	if (reply_begin(out, &b, DECT_LIA_SAVE_ENTRY_CFM))
+		return;
+	put_ext(&b, session);
+	put_ext(&b, iwu->save_entry);
+	put_ext(&b, iwu->save_entry);
+	put_ext(&b, entry_count(iwu, (uint8_t)list));
+	emit(out, &b);
+	iwu->stats.replied++;
+	iwu->stats.saved++;
+	return;
+
+format:
+	nack(iwu, out, session, DECT_LIA_NACK_FORMAT);
+}
+
+/* One data packet of a 'save entry': [session][content ...] (table 61). */
+static void save_data(struct dect_iwu *iwu, const uint8_t *p, size_t n)
+{
+	unsigned session;
+	size_t k = get_ext(p, n, &session);
+
+	if (!k || session != iwu->save_session) {
+		iwu->stats.malformed++;
+		return;
+	}
+	p += k; n -= k;
+	if (n > sizeof(iwu->save_data) - iwu->save_len) {
+		iwu->save_overflow = 1;
+		return;
+	}
+	memcpy(iwu->save_data + iwu->save_len, p, n);
+	iwu->save_len += n;
 }
 
 void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
@@ -860,6 +1081,8 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		break;
 	}
 	case DECT_LIA_EDIT_ENTRY:
+		edit_entry(iwu, p, n, out);
+		break;
 	case DECT_LIA_DELETE_ENTRY:
 	case DECT_LIA_DELETE_LIST:
 		/* table 41 notes 1 and 4: 'procedure not allowed'. */
@@ -871,25 +1094,31 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		 * command), this implies waiting until the 'data packet last'
 		 * information is received" before the negative acknowledgement.
 		 */
-		unsigned session;
+		unsigned session, entry;
+		size_t k = get_ext(p, n, &session);
 
-		if (!get_ext(p, n, &session)) {
+		if (!k || !get_ext(p + k, n - k, &entry)) {
 			iwu->stats.malformed++;
 			break;
 		}
 		iwu->save_pending = 1;
 		iwu->save_session = (uint8_t)session;
+		iwu->save_entry = (uint8_t)(entry > 127u ? 127u : entry);
+		iwu->save_len = 0;
+		iwu->save_overflow = 0;
 		break;
 	}
 	case DECT_LIA_DATA:
-		break;				/* part of a save: keep waiting */
+		if (iwu->save_pending)
+			save_data(iwu, p, n);	/* part of a save */
+		else
+			iwu->stats.ignored++;
+		break;
 	case DECT_LIA_DATA_LAST:
 		if (iwu->save_pending) {
+			save_data(iwu, p, n);
 			iwu->save_pending = 0;
-			nack(iwu, out, iwu->save_session,
-			     session_list(iwu, iwu->save_session) < 0
-			     ? DECT_LIA_NACK_INVALID_SESSION
-			     : DECT_LIA_NACK_NOT_ALLOWED);
+			finish_save(iwu, out);
 		} else {
 			iwu->stats.ignored++;
 		}

@@ -123,12 +123,12 @@ static void test_read_internal_names(void)
 		/* entry 1 (17 octets): "1" own+internal, "DECT 1", interception allowed */
 		0x81, 0x91,
 		  0x01, 0x82, 0xB0, '1',
-		  0x02, 0x87, 0x80, 'D', 'E', 'C', 'T', ' ', '1',
+		  0x02, 0x87, 0xC0, 'D', 'E', 'C', 'T', ' ', '1',
 		  0x03, 0x82, 0x80, 0x31,
 		/* entry 2 (17 octets): "2" internal only */
 		0x82, 0x91,
 		  0x01, 0x82, 0xA0, '2',
-		  0x02, 0x87, 0x80, 'D', 'E', 'C', 'T', ' ', '2',
+		  0x02, 0x87, 0xC0, 'D', 'E', 'C', 'T', ' ', '2',
 		  0x03, 0x82, 0x80, 0x31,
 	};
 	struct dect_iwu iwu;
@@ -239,9 +239,20 @@ static void test_read_system_settings(void)
 	CHECK_EQ(out.count, 2u);
 	CHECK_EQ(out.len[1], sizeof(data));
 	CHECK_EQ(memcmp(out.msg[1], data, sizeof(data)), 0);
+	/* an edit returns the entry; saving a field that is not editable
+	 * is 'procedure not allowed' (7.4.10.4.5.1) */
 	handle(&iwu, edit, sizeof(edit));
-	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
-	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+	CHECK_EQ(out.msg[0][1], DECT_LIA_EDIT_ENTRY_CFM);
+	{
+		static const uint8_t save[] = { 0xC3, 0x0A, 0x81, 0x81 };
+		static const uint8_t last[] = { 0xC3, 0x14, 0x81, 0x81, 0x84,
+						0x02, 0x82, 0x80, 0x31 };
+
+		handle(&iwu, save, sizeof(save));
+		handle(&iwu, last, sizeof(last));
+		CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
+		CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+	}
 }
 
 /* The bitmap only grows with the highest terminal: terminals 1 and 8. */
@@ -390,7 +401,9 @@ static void test_query_supported_fields(void)
 {
 	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
 	static const uint8_t q[] = { 0xC3, 0x04, 0x81 };
-	static const uint8_t want[] = { 0xC3, 0x05, 0x81, 0x00, 0x03, 0x01, 0x02, 0x03 };
+	/* table 47: editable fields first (the name), then the others */
+	static const uint8_t want[] = { 0xC3, 0x05, 0x81, 0x01, 0x02, 0x02,
+					0x01, 0x03 };
 	struct dect_iwu iwu;
 
 	base_with_two_handsets(&iwu);
@@ -417,15 +430,22 @@ static void test_unsupported_commands_are_refused(void)
 	CHECK_EQ(out.count, 1u);
 	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
 	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_SUPPORTED);
-	handle(&iwu, edit, sizeof(edit));
-	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
-	/* save: the acknowledgement waits for the data packet last */
+	/* a save with no edit before it is 'procedure not allowed' -- and
+	 * the acknowledgement waits for the data packet last */
 	handle(&iwu, save, sizeof(save));
 	CHECK_EQ(out.count, 0u);
 	handle(&iwu, data_last, sizeof(data_last));
 	CHECK_EQ(out.count, 1u);
 	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
 	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+	/* after an edit, the same empty save ends the edit unchanged */
+	handle(&iwu, edit, sizeof(edit));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_EDIT_ENTRY_CFM);
+	handle(&iwu, save, sizeof(save));
+	handle(&iwu, data_last, sizeof(data_last));
+	CHECK_EQ(out.count, 1u);
+	CHECK_EQ(out.msg[0][1], DECT_LIA_SAVE_ENTRY_CFM);
+	CHECK_EQ(iwu.names_changed, 0u);
 }
 
 /*
@@ -460,6 +480,71 @@ static void test_table_41_refusals(void)
 	handle(&iwu, s6, sizeof(s6));		/* session 1: internal names */
 	handle(&iwu, search, sizeof(search));
 	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_SUPPORTED);
+}
+
+/*
+ * Renaming a handset (7.4.10.4.4-5): edit entry 2 with the fields the
+ * A540 asks for (01 02 03, vRINGA540-20261028-072432-1), get them back with
+ * the name editable, save a new name in two data packets, get the save
+ * confirm; the owner sees the change. A length-1 name is a reset.
+ */
+static void test_rename_a_handset(void)
+{
+	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
+	static const uint8_t edit[] = { 0xC3, 0x08, 0x81, 0x82, 0x01, 0x02, 0x03 };
+	static const uint8_t save[] = { 0xC3, 0x0A, 0x81, 0x82 };
+	static const uint8_t data1[] = { 0xC3, 0x13, 0x81, 0x82, 0x89,
+					 0x02, 0x87, 0x80, 'K', 'u' };
+	static const uint8_t data2[] = { 0xC3, 0x14, 0x81, 'e', 'c', 'h', 'e' };
+	static const uint8_t cfm[] = { 0xC3, 0x0B, 0x81, 0x82, 0x82, 0x82 };
+	static const uint8_t reset[] = { 0xC3, 0x14, 0x81, 0x82, 0x83,
+					 0x02, 0x81, 0x80 };
+	struct dect_iwu iwu;
+
+	base_with_two_handsets(&iwu);
+	handle(&iwu, s6, sizeof(s6));
+	handle(&iwu, edit, sizeof(edit));
+	CHECK_EQ(out.count, 2u);
+	CHECK_EQ(out.msg[0][1], DECT_LIA_EDIT_ENTRY_CFM);
+	CHECK_EQ(out.msg[1][1], DECT_LIA_DATA_LAST);
+	CHECK_EQ(out.msg[1][3], 0x82u);			/* entry 2 */
+	handle(&iwu, save, sizeof(save));
+	handle(&iwu, data1, sizeof(data1));
+	CHECK_EQ(out.count, 0u);			/* not yet */
+	handle(&iwu, data2, sizeof(data2));
+	CHECK_EQ(out.count, 1u);
+	CHECK_EQ(out.len[0], sizeof(cfm));
+	CHECK_EQ(memcmp(out.msg[0], cfm, sizeof(cfm)), 0);
+	CHECK(strcmp(iwu.handsets[1].name, "Kueche") == 0);
+	CHECK_EQ(iwu.names_changed, 0x2u);
+	CHECK_EQ(iwu.stats.saved, 1u);
+
+	/* the lock is gone: saving again without an edit is refused */
+	handle(&iwu, save, sizeof(save));
+	handle(&iwu, reset, sizeof(reset));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
+
+	/* edit again and reset the name: empty, for the owner's default */
+	iwu.names_changed = 0;
+	handle(&iwu, edit, sizeof(edit));
+	handle(&iwu, save, sizeof(save));
+	handle(&iwu, reset, sizeof(reset));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_SAVE_ENTRY_CFM);
+	CHECK_EQ(iwu.handsets[1].name[0], '\0');
+	CHECK_EQ(iwu.names_changed, 0x2u);
+
+	/* too long: cut to 15 octets, but not inside the 'ü' at 15-16 */
+	{
+		static const uint8_t lng[] = { 0xC3, 0x14, 0x81, 0x82, 0x93,
+			0x02, 0x91, 0x80, 'W', 'o', 'h', 'n', 'z', 'i', 'm',
+			'm', 'e', 'r', ' ', 'o', 'b', 'e', 0xC3, 0xBC };
+
+		handle(&iwu, edit, sizeof(edit));
+		handle(&iwu, save, sizeof(save));
+		handle(&iwu, lng, sizeof(lng));
+		CHECK_EQ(out.msg[0][1], DECT_LIA_SAVE_ENTRY_CFM);
+		CHECK(strcmp(iwu.handsets[1].name, "Wohnzimmer obe") == 0);
+	}
 }
 
 /* Not list access, a rejection, our own confirms fed back: silence. */
@@ -549,6 +634,7 @@ int main(void)
 	test_query_supported_fields();
 	test_unsupported_commands_are_refused();
 	test_table_41_refusals();
+	test_rename_a_handset();
 	test_other_records_are_ignored_or_flagged();
 	test_reset_sessions();
 	test_long_lists_are_segmented_into_packets();

@@ -514,8 +514,19 @@
  *    master FP, base reset yes, the firmware version, an empty EEPROM
  *    version (TS 102 527-3 §7.4.11.3). Handsets that read list 00H now see
  *    one more list.
+ *
+ * 66: renaming a handset (2026-10-28, spec sweep H20, H10). Layout change:
+ *    the IWU sessions gain a lock, struct dect_iwu the save buffer
+ *    (save_entry, save_len, save_overflow, save_data) and names_changed,
+ *    the stats saved; new DECT_IWU_SAVE_MAX. **Behaviour change:** "edit
+ *    entry" works on every list we serve but the List of Supported Lists
+ *    (it returns the entry and locks it); "save entry" on the Internal
+ *    Names List stores the name, the one editable field (reset with an
+ *    empty one), and sets names_changed for the owner; other fields, new
+ *    entries and saves without an edit are 'procedure not allowed'. The
+ *    name reads as editable, and the field query lists it first.
  */
-#define OPENDECTCELL_API_VERSION 65
+#define OPENDECTCELL_API_VERSION 66
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
