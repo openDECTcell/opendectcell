@@ -44,8 +44,8 @@ handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── opendectc
 
 | message | when | DECT side (already built) |
 |---|---|---|
-| `hello api=77 lines=1 hs=3` | client connects | — |
-| `hs hs=2 state=attached name="Kueche" model=gigaset-c430a part3=0` | a handset locates, is renamed, changes profile | location registration, `names_take()`, profiles |
+| `hello api=79 lines=1 hs=3` | client connects (then an `hs ... state=registered` line per handset) | — |
+| `hs hs=2 state=registered name="Kueche" model=gigaset-c430a part3=0` | on connect, and when a handset is renamed (`model` with a profile, `part3` once its capabilities are known); `state=attached` on location registration comes with step 2 | `names_take()`, profiles |
 | `hs hs=2 state=gone` | deregistered | `dereg_erase()` |
 | `call-out call=5 hs=1 line=1 number=0301234567` | a handset's number is complete (en bloc, `#`, the dial pause, `1C 15`) | `dial_route()`, the line choice (`dect_cc_line()`) |
 | `digit call=5 d=7` | keypad during a connected call (DTMF, TS 102 527-3 §7.4.14) | `learn_keypad()` in ACTIVE |
@@ -71,6 +71,19 @@ Call waiting, hold and toggle (lines-and-calls.md steps 5-6) add
 `call-in` for a busy Part 3 handset (call waiting instead of `busy`),
 `hold`/`resume`/`toggle call=` from the handset's `1C` codes, and their
 answers; they come with those steps.
+
+### 2.3 Answers and the client
+
+Every command is answered on the same connection: `ok verb=deregister hs=3`,
+`ok verb=register-window seconds=120`, or `error verb=X reason=R` with R one
+of `unknown`, `malformed`, `bad-hs`, `no-handset`, `bad-seconds`,
+`not-ready`. A second client gets `error reason=busy` and is closed.
+`register-window` without `seconds` uses `regwindow=` (120 s).
+
+`dect-stubd --ctl LINE...` is a client for scripts and the bench (the box
+has no socat): it prints `hello`, the `hs` lines and the answers.
+`-a ctl=PATH` moves the socket, `-a noctl` leaves it out; it exists only
+while the daemon runs (`-g`) and is removed on exit.
 
 ## 3. Audio
 
@@ -103,8 +116,8 @@ answers; they come with those steps.
 
 ## 5. Order of work
 
-1. The control socket in dect-stubd, `hello`, `hs`, `deregister`,
-   `register-window`: no SIP needed, testable with `socat`.
+1. **Done** (API 79): the control socket in dect-stubd, `hello`, `hs`,
+   `deregister`, `register-window`; checked on the box with `--ctl`.
 2. `call-out`, `released`, `remote-*` against a scripted client (socat or a
    test program): the DECT side of a SIP call without SIP.
 3. The audio socket for one call, narrowband first (the chip's linear PCM),

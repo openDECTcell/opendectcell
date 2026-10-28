@@ -617,8 +617,12 @@
  *    <<TIME-DATE>> (TS 102 527-3 §7.4.2.2) is parsed and handed up, marked
  *    unidentified unless it names the link's identity; it went to MM and
  *    was dropped. dect-stubd logs it and keeps its own clock.
+ *
+ *   79: dect_ctl, the control socket's line format (parse, build;
+ *       docs/bridge-interface.md §2): control characters refused on input
+ *       and replaced on output, so a handset name cannot split a line.
  */
-#define OPENDECTCELL_API_VERSION 78
+#define OPENDECTCELL_API_VERSION 79
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

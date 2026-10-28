@@ -31,6 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/timex.h>
 #include <time.h>
@@ -53,6 +55,7 @@
 #include "dect_profile.h"
 #include "dect_callinfo.h"
 #include "dect_clip.h"
+#include "dect_ctl.h"
 
 /* Longest -a loopdelay ring, in frames (1 s at 8 kHz). */
 /* How long to wait for a lingering link to clear before ringing anyway. */
@@ -188,6 +191,7 @@ static long tz_offset_seconds(time_t t)
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
 #define PROBE_BLOCKS	40u
 #define POLL_MS		100
+#define DECT_CTL_PATH	"/var/run/opendectcell.sock"
 /* End-of-run park: how long to wait for the queue, then for the driver. */
 #define PARK_DRAIN_MS	2000u
 #define PARK_FLUSH_MS	200u
@@ -379,6 +383,17 @@ struct stubd {
 		unsigned queue[DECT_MM_MAX_SLOT];	/* slots asked meanwhile */
 		unsigned nq;
 	} dereg;
+	/*
+	 * The control socket (docs/bridge-interface.md §2): one client at a
+	 * time, one message per line.
+	 */
+	struct {
+		int      lfd, cfd;	/* listening, client; -1 = none */
+		const char *path;
+		char     in[DECT_CTL_LINE_MAX];
+		size_t   in_len;
+		int      discard;	/* an over-long line: drop to its newline */
+	} ctl;
 	/* The registration window: open now, and until when (0 = no limit). */
 	int      reg_open;
 	uint64_t reg_open_until;
@@ -1068,6 +1083,8 @@ struct stubd {
 		uint8_t  signal_value;
 		int      signal_set;	/* -a signal= given: beats a profile */
 		const char *profile_dir;	/* -a profiles=DIR */
+		const char *ctl_path;	/* -a ctl=PATH, the control socket */
+		int      no_ctl;	/* -a noctl */
 		/*
 		 * ti=N: pin the CC transaction identifier of an FP-originated
 		 * SETUP; -1 (the default) uses the lowest free value, 0.
@@ -5691,6 +5708,8 @@ static void profile_resolve(struct stubd *s, unsigned i)
 		       "'today')\n", hs_slot(s, i));
 }
 
+static void ctl_hs(struct stubd *s, unsigned i, const char *state);
+
 static void profiles_resolve_all(struct stubd *s, const char *why)
 {
 	unsigned i;
@@ -5813,6 +5832,7 @@ static void names_take(struct stubd *s, struct dect_link *l)
 		       "back to its default name", h->name[0] ? "\"" : "");
 		names_spread(s, j);
 		names_notify(s);
+		ctl_hs(s, j, "registered");
 	}
 	iwu->names_changed = 0;
 }
@@ -6545,6 +6565,7 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	char from[256], to[288];
 
 	printf("dereg: DECT %u (%s): %s\n", slot, s->hs[i].path, why);
+	ctl_hs(s, (unsigned)i, "gone");
 	if (slot >= 1u && slot <= DECT_MM_MAX_SLOT) {
 		memset(p, 0, sizeof(p));
 		p[0] = (uint8_t)slot;
@@ -6807,6 +6828,265 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 		break;
 	default:
 		break;
+	}
+}
+
+/* -------------------------------------------------------------------------
+ * The control socket: docs/bridge-interface.md §2, step 1 of §5. A Unix
+ * stream socket, root only (0600), one client; `hello` and an `hs` line
+ * per handset when it connects, `hs` again when one is renamed or
+ * deregistered; `deregister` and `register-window` from it, as SIGUSR2
+ * and SIGUSR1 do. Nothing a SIP peer says reaches MM through here except
+ * these two configuration commands (§4).
+ */
+static void ctl_drop(struct stubd *s, const char *why)
+{
+	if (s->ctl.cfd < 0)
+		return;
+	close(s->ctl.cfd);
+	s->ctl.cfd = -1;
+	s->ctl.in_len = 0;
+	s->ctl.discard = 0;
+	printf("ctl: client %s\n", why);
+}
+
+static void ctl_send(struct stubd *s, struct dect_ctl_out *o)
+{
+	int n = dect_ctl_end(o);
+
+	if (s->ctl.cfd < 0)
+		return;
+	if (n < 0) {
+		printf("ctl: a line overflowed %u octets -- not sent\n",
+		       DECT_CTL_LINE_MAX);
+		return;
+	}
+	if (send(s->ctl.cfd, o->buf, (size_t)n, MSG_DONTWAIT | MSG_NOSIGNAL)
+	    != n)
+		ctl_drop(s, "not reading (or gone) -- closed");
+}
+
+/* The handsets the base holds: the ones `hs` lines name. */
+static int ctl_listed(const struct stubd *s, unsigned i)
+{
+	return i < s->n_hs && (i == s->cur || s->hs[i].loaded) &&
+	       !s->hs[i].absent;
+}
+
+static void ctl_hs(struct stubd *s, unsigned i, const char *state)
+{
+	struct dect_ctl_out o;
+	char nm[DECT_IWU_NAME_MAX];
+
+	if (s->ctl.cfd < 0 || i >= s->n_hs)
+		return;
+	dect_ctl_begin(&o, "hs");
+	dect_ctl_add_uint(&o, "hs", hs_slot(s, i));
+	dect_ctl_add(&o, "state", state);
+	if (strcmp(state, "gone")) {
+		hs_name(s, i, nm, sizeof(nm));
+		dect_ctl_add(&o, "name", nm);
+		if (s->hs[i].prof_id[0])
+			dect_ctl_add(&o, "model", s->hs[i].prof_id);
+		if (s->hs[i].cap_known)
+			dect_ctl_add_uint(&o, "part3", s->hs[i].cap_part3 ? 1 : 0);
+	}
+	ctl_send(s, &o);
+}
+
+static void ctl_hello(struct stubd *s)
+{
+	struct dect_ctl_out o;
+	unsigned i, n = 0;
+
+	for (i = 0; i < s->n_hs; i++)
+		n += (unsigned)ctl_listed(s, i);
+	dect_ctl_begin(&o, "hello");
+	dect_ctl_add_uint(&o, "api", OPENDECTCELL_API_VERSION);
+	dect_ctl_add_uint(&o, "lines", 1);
+	dect_ctl_add_uint(&o, "hs", n);
+	ctl_send(s, &o);
+	for (i = 0; i < s->n_hs; i++)
+		if (ctl_listed(s, i))
+			ctl_hs(s, i, "registered");
+}
+
+static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
+		      const char *key, unsigned v)
+{
+	struct dect_ctl_out o;
+
+	dect_ctl_begin(&o, reason ? "error" : "ok");
+	dect_ctl_add(&o, "verb", verb);
+	if (key)
+		dect_ctl_add_uint(&o, key, v);
+	if (reason)
+		dect_ctl_add(&o, "reason", reason);
+	ctl_send(s, &o);
+}
+
+static void ctl_command(struct stubd *s, const char *line, size_t len,
+			uint64_t now)
+{
+	struct dect_ctl_msg m;
+	unsigned v, i;
+
+	if (dect_ctl_parse(line, len, &m)) {
+		printf("ctl: a malformed line -- ignored\n");
+		ctl_reply(s, "?", "malformed", NULL, 0);
+		return;
+	}
+	if (!strcmp(m.verb, "deregister")) {
+		if (dect_ctl_get_uint(&m, "hs", 1, DECT_MM_MAX_SLOT, &v)) {
+			ctl_reply(s, m.verb, "bad-hs", NULL, 0);
+			return;
+		}
+		for (i = 0; i < s->n_hs; i++)
+			if (ctl_listed(s, i) && hs_slot(s, i) == v)
+				break;
+		if (i == s->n_hs) {
+			ctl_reply(s, m.verb, "no-handset", "hs", v);
+			return;
+		}
+		dereg_begin(s, v, now, "the control socket");
+		ctl_reply(s, m.verb, NULL, "hs", v);
+	} else if (!strcmp(m.verb, "register-window")) {
+		v = s->audio.reg_signal_s;
+		if (dect_ctl_get(&m, "seconds") &&
+		    dect_ctl_get_uint(&m, "seconds", 1, 3600, &v)) {
+			ctl_reply(s, m.verb, "bad-seconds", NULL, 0);
+			return;
+		}
+		/* not before the start-up mails, as reg_window_tick() */
+		if (s->sess.state != DECT_SESS_UP || s->tx_slot < 0 ||
+		    s->xmail_idx < s->n_xmail) {
+			ctl_reply(s, m.verb, "not-ready", NULL, 0);
+			return;
+		}
+		reg_window(s, 1, v, now, "the control socket");
+		ctl_reply(s, m.verb, NULL, "seconds", v);
+	} else {
+		printf("ctl: unknown verb \"%s\" -- ignored\n", m.verb);
+		ctl_reply(s, m.verb, "unknown", NULL, 0);
+	}
+}
+
+static void ctl_open(struct stubd *s)
+{
+	struct sockaddr_un a;
+	mode_t old;
+	int fd;
+
+	s->ctl.lfd = s->ctl.cfd = -1;
+	s->ctl.path = s->audio.ctl_path ? s->audio.ctl_path : DECT_CTL_PATH;
+	if (s->audio.no_ctl || !s->do_register)
+		return;
+	memset(&a, 0, sizeof(a));
+	a.sun_family = AF_UNIX;
+	if (strlen(s->ctl.path) >= sizeof(a.sun_path)) {
+		printf("ctl: %s is too long for a socket path -- no control "
+		       "socket\n", s->ctl.path);
+		return;
+	}
+	strcpy(a.sun_path, s->ctl.path);
+	/* a live socket belongs to another dect-stubd: leave it alone */
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd >= 0 && !connect(fd, (struct sockaddr *)&a, sizeof(a))) {
+		close(fd);
+		printf("ctl: %s answers -- another dect-stubd holds it, no "
+		       "control socket here\n", s->ctl.path);
+		return;
+	}
+	if (fd >= 0)
+		close(fd);
+	(void)unlink(s->ctl.path);	/* a stale one from a crash */
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	if (fd < 0) {
+		printf("ctl: socket: %s -- no control socket\n",
+		       strerror(errno));
+		return;
+	}
+	old = umask(077);
+	if (bind(fd, (struct sockaddr *)&a, sizeof(a)) ||
+	    chmod(s->ctl.path, 0600) || listen(fd, 1)) {
+		printf("ctl: %s: %s -- no control socket\n", s->ctl.path,
+		       strerror(errno));
+		umask(old);
+		close(fd);
+		return;
+	}
+	umask(old);
+	s->ctl.lfd = fd;
+	printf("ctl: listening on %s (0600)\n", s->ctl.path);
+}
+
+static void ctl_close(struct stubd *s)
+{
+	ctl_drop(s, "closed (exit)");
+	if (s->ctl.lfd < 0)
+		return;
+	close(s->ctl.lfd);
+	s->ctl.lfd = -1;
+	(void)unlink(s->ctl.path);
+}
+
+static void ctl_tick(struct stubd *s, uint64_t now)
+{
+	char *nl;
+	ssize_t n;
+	int c;
+
+	if (s->ctl.lfd < 0)
+		return;
+	while ((c = accept(s->ctl.lfd, NULL, NULL)) >= 0) {
+		(void)fcntl(c, F_SETFL, fcntl(c, F_GETFL) | O_NONBLOCK);
+		(void)fcntl(c, F_SETFD, FD_CLOEXEC);
+		if (s->ctl.cfd >= 0) {
+			static const char busy[] = "error reason=busy\n";
+
+			(void)send(c, busy, sizeof(busy) - 1,
+				   MSG_DONTWAIT | MSG_NOSIGNAL);
+			close(c);
+			printf("ctl: a second client turned away\n");
+			continue;
+		}
+		s->ctl.cfd = c;
+		s->ctl.in_len = 0;
+		s->ctl.discard = 0;
+		printf("ctl: client connected\n");
+		ctl_hello(s);
+	}
+	while (s->ctl.cfd >= 0) {
+		n = recv(s->ctl.cfd, s->ctl.in + s->ctl.in_len,
+			 sizeof(s->ctl.in) - s->ctl.in_len, MSG_DONTWAIT);
+		if (n == 0) {
+			ctl_drop(s, "left");
+			return;
+		}
+		if (n < 0) {
+			if (errno != EAGAIN && errno != EWOULDBLOCK &&
+			    errno != EINTR)
+				ctl_drop(s, "read failed -- closed");
+			return;
+		}
+		s->ctl.in_len += (size_t)n;
+		while (s->ctl.cfd >= 0 &&
+		       (nl = memchr(s->ctl.in, '\n', s->ctl.in_len)) != NULL) {
+			size_t l = (size_t)(nl - s->ctl.in);
+
+			if (!s->ctl.discard)
+				ctl_command(s, s->ctl.in, l, now);
+			s->ctl.discard = 0;
+			memmove(s->ctl.in, nl + 1, s->ctl.in_len - l - 1);
+			s->ctl.in_len -= l + 1;
+		}
+		if (s->ctl.in_len == sizeof(s->ctl.in)) {
+			if (!s->ctl.discard)
+				printf("ctl: a line over %u octets -- dropped\n",
+				       DECT_CTL_LINE_MAX);
+			s->ctl.discard = 1;
+			s->ctl.in_len = 0;
+		}
 	}
 }
 
@@ -8290,6 +8570,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 
 	s->tx_ring = 1;		/* from here on, mails are paced by tx_block() */
 	g_start = start;
+	ctl_open(s);
 	for (;;) {
 		struct pollfd pfd = { .fd = s->fd, .events = POLLIN };
 		uint64_t now = mono_ms();
@@ -8413,6 +8694,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 					side_call_tick(s, &s->side[k], now);
 			ic_tick(s, now);
 			dereg_tick(s, now);
+			ctl_tick(s, now);
 		}
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
@@ -8548,6 +8830,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			pump_lapc(s);
 		}
 	}
+	ctl_close(s);
 	printf("session: state %d contacts %u answers %u status %u deaths %u\n",
 	       s->sess.state, s->sess.stats.contacts_sent, s->sess.stats.answers,
 	       s->sess.stats.status_mails, s->sess.stats.deaths);
@@ -8620,6 +8903,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 3 && !memcmp(key, "led", 3)) &&
 			    !(klen == 9 && !memcmp(key, "statefile", 9)) &&
 			    !(klen == 8 && !memcmp(key, "profiles", 8)) &&
+			    !(klen == 3 && !memcmp(key, "ctl", 3)) &&
 			    !(klen == 6 && !memcmp(key, "remote", 6)) &&
 			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
@@ -8665,6 +8949,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->locauth = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "nolocauth", 9))
 			a->locauth = 0;
+		else if (!eq && klen == 5 && !memcmp(key, "noctl", 5))
+			a->no_ctl = 1;
 		else if (eq && klen == 5 && (!memcmp(key, "lane2", 5) ||
 					     !memcmp(key, "lane3", 5))) {
 			unsigned ch, w, k = key[4] == '2' ? 0u : 1u;
@@ -8982,6 +9268,15 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if (klen == 6 && !memcmp(key, "remode", 6)) {
 			a->remode_ms = (unsigned)v;
 			a->remode_set = 1;
+		} else if (eq && klen == 3 && !memcmp(key, "ctl", 3)) {
+			size_t n = (size_t)(spec - (eq + 1));
+			char *path = malloc(n + 1);
+
+			if (!path)
+				return -1;
+			memcpy(path, eq + 1, n);
+			path[n] = '\0';
+			a->ctl_path = path;
 		} else if (eq && klen == 8 && !memcmp(key, "profiles", 8)) {
 			size_t n = (size_t)(spec - (eq + 1));
 			char *path = malloc(n + 1);
@@ -9216,6 +9511,8 @@ static void usage(void)
 		"           locauth      authenticate a handset with its UAK inside its\n"
 		"                        location registration (the default;\n"
 		"                        nolocauth switches it off)\n"
+		"           ctl=PATH     the control socket, default\n"
+		"                        " DECT_CTL_PATH " (0600; noctl: none)\n"
 		"           twocalls     a second (third) handset may call while one\n"
 		"           is in a call: side links get their own audio channel\n"
 		"           (2 -> TDM word 3, 3 -> word 2; lane2=CH:WORD to override)\n"
@@ -9389,6 +9686,67 @@ static int profile_load(const char *path, struct dect_profile *p)
  * the radio, and for a device profile its manufacturer layer, looked up
  * beside it as <extends>.profile; print what it resolves to.
  */
+/*
+ * dect-stubd --ctl LINE...: a client for the control socket, for scripts
+ * and the bench (the box has no socat). Sends each LINE, prints what the
+ * daemon writes back for a second after the last one, then exits.
+ * OPENDECTCELL_CTL names another socket path.
+ */
+static int ctl_client(int n, char **lines)
+{
+	const char *path = getenv("OPENDECTCELL_CTL");
+	struct sockaddr_un a;
+	char buf[DECT_CTL_LINE_MAX];
+	uint64_t until;
+	int fd, i;
+
+	if (!path)
+		path = DECT_CTL_PATH;
+	memset(&a, 0, sizeof(a));
+	a.sun_family = AF_UNIX;
+	if (strlen(path) >= sizeof(a.sun_path))
+		return 2;
+	strcpy(a.sun_path, path);
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a))) {
+		fprintf(stderr, "ctl: %s: %s\n", path, strerror(errno));
+		if (fd >= 0)
+			close(fd);
+		return 1;
+	}
+	for (i = 0; i < n; i++) {
+		size_t len = strlen(lines[i]);
+
+		if (len + 1 > sizeof(buf)) {
+			fprintf(stderr, "ctl: line %d too long\n", i + 1);
+			close(fd);
+			return 2;
+		}
+		memcpy(buf, lines[i], len);
+		buf[len++] = '\n';
+		if (write(fd, buf, len) != (ssize_t)len) {
+			fprintf(stderr, "ctl: write: %s\n", strerror(errno));
+			close(fd);
+			return 1;
+		}
+	}
+	until = mono_ms() + 1000u;
+	for (;;) {
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+		uint64_t now = mono_ms();
+		ssize_t r;
+
+		if (now >= until || poll(&pfd, 1, (int)(until - now)) <= 0)
+			break;
+		r = read(fd, buf, sizeof(buf));
+		if (r <= 0)
+			break;
+		fwrite(buf, 1, (size_t)r, stdout);
+	}
+	close(fd);
+	return 0;
+}
+
 static int check_profile(const char *path, const char *fw)
 {
 	static struct dect_profile p, mfr;
@@ -9431,6 +9789,8 @@ static int check_profile(const char *path, const char *fw)
 
 int main(int argc, char **argv)
 {
+	if (argc >= 2 && !strcmp(argv[1], "--ctl"))
+		return ctl_client(argc - 2, argv + 2);
 	if (argc >= 3 && !strcmp(argv[1], "--check-profile"))
 		return check_profile(argv[2], argc >= 4 ? argv[3] : NULL);
 	if (getenv("OPENDECTCELL_SWAP"))
