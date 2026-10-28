@@ -85,6 +85,15 @@ struct dect_link {
 	size_t   held_len[DECT_LINK_HELD];
 	unsigned held_n;
 	uint32_t held_dropped;		/* follow-ups beyond DECT_LINK_HELD */
+	/*
+	 * Optional: may the handset with this IPUI get call status? Asked
+	 * when its {CC-SETUP} arrives, before CC answers it: 1 yes, 0 no, -1
+	 * no opinion (keep the setting). TS 102 527-3 §7.4.6.4.1 allows call
+	 * status to NG-DECT Part 3 handsets only, and only the owner knows
+	 * which handset reported what.
+	 */
+	int    (*call_status_for)(void *ctx, const uint8_t *ipui, size_t len);
+	void    *call_status_ctx;
 	/* One pending LCE message: the {LCE-PAGE-REJECT}, sent first. */
 	uint8_t  lce[DECT_LAPC_MSG_MAX];
 	size_t   lce_len;

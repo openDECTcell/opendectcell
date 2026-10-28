@@ -313,8 +313,13 @@
  *    DECT_IE_TERMINAL_CAPABILITY; the MM entity keeps the handset's
  *    <<TERMINAL-CAPABILITY>> from {LOCATE-REQUEST} and
  *    {ACCESS-RIGHTS-REQUEST}, with the NG-DECT Part 1 / Part 3 bits.
+ *
+ * 35: call status per handset (2026-10-28). Layout change: struct dect_link
+ *    gains call_status_for and call_status_ctx, an optional owner hook
+ *    asked when a handset's {CC-SETUP} arrives, before CC answers it: 1
+ *    call status, 0 none, -1 keep (TS 102 527-3 §7.4.6.4.1).
  */
-#define OPENDECTCELL_API_VERSION 34
+#define OPENDECTCELL_API_VERSION 35
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

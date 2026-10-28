@@ -303,6 +303,15 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 				const uint8_t *pid = dect_nwk_find_ie(
 					ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
 					&pid_len);
+				int cs = (pid && l->call_status_for) ?
+					 l->call_status_for(l->call_status_ctx,
+							    pid, pid_len) : -1;
+
+				/* before anything answers it, held or not */
+				if (cs >= 0 && !dect_cc_busy(&l->cc))
+					dect_cc_set_call_status(
+						&l->cc, cs,
+						l->cc.status_call_id);
 
 				/*
 				 * A roamer that did not locate here (same
