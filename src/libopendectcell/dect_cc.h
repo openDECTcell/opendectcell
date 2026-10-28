@@ -111,6 +111,7 @@ struct dect_cc_stats {
 	uint32_t rejected_identity;
 	/* handset-placed calls that negotiated, but offered no G.726 */
 	uint32_t codec_unmatched;
+	uint32_t ie_missing;	/* SETUPs refused: mandatory IE missing */
 	/* handset-placed calls refused by dect_cc_set_busy() */
 	uint32_t rejected_busy;
 };

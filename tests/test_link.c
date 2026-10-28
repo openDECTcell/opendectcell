@@ -137,6 +137,8 @@ static void test_cc_admits_only_the_handset_mm_holds(void)
 		n = dect_nwk_put_ie(msg, sizeof(msg), n,
 				    DECT_IE_PORTABLE_IDENTITY, c[k].caller,
 				    sizeof(ours));
+		msg[n++] = DECT_IE_BASIC_SERVICE;	/* mandatory */
+		msg[n++] = 0x80;
 		feed_nwk(&l, msg, n, &ind);
 		CHECK_EQ(ind.cc_message, 1u);
 		CHECK_EQ(l.cc.stats.setup, c[k].setup);
@@ -226,6 +228,8 @@ static void test_unknown_setup_is_held_for_a_fetch(void)
 		n = dect_nwk_put_ie(msg, sizeof(msg), n,
 				    DECT_IE_PORTABLE_IDENTITY, roamer,
 				    sizeof(roamer));
+		msg[n++] = DECT_IE_BASIC_SERVICE;	/* mandatory */
+		msg[n++] = 0x80;
 		feed_nwk(&l, msg, n, &ind);
 		CHECK_EQ(ind.cc_message, 1u);
 		CHECK_EQ(l.cc.stats.setup, 0u);			/* held */
@@ -379,6 +383,8 @@ static void test_call_status_is_asked_per_handset(void)
 		n = dect_nwk_put_ie(msg, sizeof(msg), n,
 				    DECT_IE_PORTABLE_IDENTITY, ours,
 				    sizeof(ours));
+		msg[n++] = DECT_IE_BASIC_SERVICE;	/* mandatory */
+		msg[n++] = 0x80;
 		feed_nwk(&l, msg, n, &ind);
 		CHECK(tx_seen_len >= 2u);
 		CHECK_EQ(tx_seen_buf[1], DECT_CC_CALL_PROC);

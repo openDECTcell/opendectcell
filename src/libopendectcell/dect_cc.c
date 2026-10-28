@@ -978,6 +978,22 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 				cc->answered = 0;
 				break;
 			}
+			/*
+			 * <<BASIC-SERVICE>> is mandatory in a {CC-SETUP}
+			 * (EN 300 175-5 §6.3.2.1): without it, {CC-RELEASE-COM}
+			 * "mandatory information element missing" (§17.6.1).
+			 * We accepted and connected such a call (spec sweep,
+			 * C9). A missing FIXED-IDENTITY is still tolerated, as
+			 * §17.6.1 is a "should" and every Gigaset sends it.
+			 */
+			if (dect_nwk_find_fixed_ie(ies, ies_len,
+						   DECT_IE_BASIC_SERVICE) < 0) {
+				queue_release_other(cc, h.ti_flag, h.ti_value,
+					DECT_CC_REASON_MANDATORY_IE_MISSING);
+				cc->stats.ie_missing++;
+				cc->answered = 0;
+				break;
+			}
 			dect_cc_clear_keypad(cc);	/* digits are per call */
 			cc->list_number = 0;
 			cc->ti_value = h.ti_value;

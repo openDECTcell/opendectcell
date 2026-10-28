@@ -323,8 +323,13 @@
  *    DECT_MM_AUTHENTICATION_REJECT. **Behaviour change:** a wrong RES1 is
  *    answered with {AUTHENTICATION-REJECT} (EN 300 175-5 §13.6, EN 300 444
  *    §8.32.2.4), then {ACCESS-RIGHTS-REJECT} as before.
+ *
+ * 37: SETUP validation (2026-10-28). Layout change: struct dect_cc_stats
+ *    gains ie_missing. **Behaviour change:** a {CC-SETUP} without
+ *    <<BASIC-SERVICE>> gets {CC-RELEASE-COM} "mandatory information element
+ *    missing" (EN 300 175-5 §17.6.1) instead of being connected.
  */
-#define OPENDECTCELL_API_VERSION 36
+#define OPENDECTCELL_API_VERSION 37
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

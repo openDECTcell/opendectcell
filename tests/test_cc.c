@@ -154,6 +154,28 @@ static void test_second_call_on_the_same_link(void)
 	CHECK_EQ(cc.ti_value, 1);
 }
 
+/* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
+static void test_setup_without_basic_service_is_refused(void)
+{
+	static const uint8_t pid[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_SETUP);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    pid, sizeof(pid));
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+	CHECK(n >= 4u && out[n - 1] == DECT_CC_REASON_MANDATORY_IE_MISSING);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(cc.stats.ie_missing, 1u);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);	/* no CONNECT */
+}
+
 /* {CC-INFO} with given IEs on the call in progress, and only then. */
 static void test_info_on_the_call(void)
 {
@@ -1013,6 +1035,8 @@ static void test_keypad_in_the_setup_is_collected(void)
 				 DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
 	off = dect_nwk_put_ie(buf, sizeof(buf), off, DECT_IE_PORTABLE_IDENTITY,
 			      pid, sizeof(pid));
+	buf[off++] = DECT_IE_BASIC_SERVICE;	/* mandatory (§17.6.1) */
+	buf[off++] = 0x80;
 	n = dect_nwk_put_ie(buf, sizeof(buf), off, DECT_IE_MULTI_KEYPAD,
 			    (const uint8_t *)"*21#", 4);
 	dect_cc_rx(&cc, buf, n);
@@ -2154,6 +2178,7 @@ int main(void)
 	test_int_key_makes_an_internal_call();
 	test_second_call_on_the_same_link();
 	test_info_on_the_call();
+	test_setup_without_basic_service_is_refused();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();
