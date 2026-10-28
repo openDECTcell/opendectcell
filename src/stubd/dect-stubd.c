@@ -630,6 +630,15 @@ struct stubd {
 		 */
 		uint8_t  codeclist[31];
 		size_t   codeclist_len;
+		/*
+		 * infoie=HEX: information elements, already encoded, sent once
+		 * in a {CC-INFO} when the handset starts ringing on our call.
+		 * A lab tool for the caller-name test (spec sweep S3, A-0125):
+		 * the bytes come from the bench card, so no display framing
+		 * lives in the code.
+		 */
+		uint8_t  info_ie[64];
+		size_t   info_ie_len;
 		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
 		const char *led_path;	/* led=PATH, NULL = the default */
@@ -1176,6 +1185,7 @@ struct stubd {
 		int enrol_routed;	/* this enrolment's store is chosen */
 		int enrol_switched;	/* ... and it moved off store 0 */
 		int ic_tried;		/* this call was checked for internal */
+		int info_sent;		/* infoie= went out on this call */
 		size_t   dial_len;	/* digits seen so far in OVERLAP */
 		uint64_t dial_change_ms;	/* when the last ones arrived */
 		int      connect_staged;	/* alertms/bindfirst: CONNECT due */
@@ -2684,6 +2694,29 @@ static void fetch_tick(struct stubd *s, uint64_t now)
  * controller, which would decide on the number instead.
  */
 static int ic_start(struct stubd *s, int side, uint64_t now);
+
+/* -a infoie=: one {CC-INFO} once our call to the handset rings. */
+static void info_tick(struct stubd *s, uint64_t now)
+{
+	struct dect_cc *cc = &s->reg.link.cc;
+
+	if (!s->reg.active || !dect_cc_busy(cc)) {
+		s->reg.info_sent = 0;
+		return;
+	}
+	if (!s->audio.info_ie_len || s->reg.info_sent || !cc->incoming ||
+	    cc->state != DECT_CC_ST_RINGING)
+		return;
+	s->reg.info_sent = 1;
+	if (dect_cc_info(cc, s->audio.info_ie, s->audio.info_ie_len)) {
+		printf("call: infoie: could not queue the CC-INFO\n");
+		return;
+	}
+	printf("call: infoie: CC-INFO with %zu bytes of IEs sent on ALERTING\n",
+	       s->audio.info_ie_len);
+	dect_link_drain(&s->reg.link, now);
+	pump_lapc(s);
+}
 
 static void dial_tick(struct stubd *s, uint64_t now)
 {
@@ -6752,6 +6785,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		holdback_tick(s, now);
 		fetch_tick(s, now);
 		dial_tick(s, now);
+		info_tick(s, now);
 		connect_tick(s, now);
 		reg_window_tick(s, now);
 		{
@@ -6968,6 +7002,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 8 && !memcmp(key, "timesync", 8)) &&
 			    !(klen == 8 && !memcmp(key, "pagemail", 8)) &&
 			    !(klen == 9 && !memcmp(key, "codeclist", 9)) &&
+			    !(klen == 6 && !memcmp(key, "infoie", 6)) &&
 			    !(klen == 5 && !memcmp(key, "lane2", 5)) &&
 			    !(klen == 5 && !memcmp(key, "lane3", 5)) &&
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
@@ -7044,6 +7079,29 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			if (h != spec || n < 4)
 				return -1;	/* a list needs at least one codec */
 			a->codeclist_len = n;
+		}
+		else if (eq && klen == 6 && !memcmp(key, "infoie", 6)) {
+			const char *h = eq + 1;
+			size_t n = 0;
+
+			while (h < spec && n < sizeof(a->info_ie)) {
+				char buf[3];
+				char *he;
+
+				if (spec - h < 2)
+					return -1;
+				buf[0] = h[0];
+				buf[1] = h[1];
+				buf[2] = 0;
+				a->info_ie[n] = (uint8_t)strtoul(buf, &he, 16);
+				if (*he)
+					return -1;
+				n++;
+				h += 2;
+			}
+			if (h != spec || n < 2)
+				return -1;	/* at least one element */
+			a->info_ie_len = n;
 		}
 		else if (!eq && klen == 9 && !memcmp(key, "noconnect", 9))
 			a->no_connect = 1;
@@ -7502,6 +7560,8 @@ static void usage(void)
 		"           setuptries=N re-offers a refused CC-SETUP N times\n"
 		"           codeclist=HEX <<CODEC-LIST>> value octets for CC-SETUP\n"
 		"           (default none: basic speech means G.726)\n"
+		"           infoie=HEX   encoded IEs sent once in a CC-INFO when the\n"
+		"           handset rings on our call (e.g. <<MULTI-DISPLAY>>)\n"
 		"           earlybind    assign audio on the page response\n"
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
 		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
