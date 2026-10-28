@@ -111,14 +111,6 @@ static int dect_open(struct inode *inode, struct file *file)
 		goto out;
 	}
 	/*
-	 * PCM clock enable (GPIO7, "the PCM clock-enable line"): drive it high now,
-	 * before the chip is reset, or the chip never starts its PCM bit
-	 * clock and the link stays silent.
-	 */
-	dw->clk_en = gpiod_get(dw->misc.this_device, "clk-en", GPIOD_OUT_HIGH);
-	if (IS_ERR(dw->clk_en))
-		dw->clk_en = NULL;	/* optional */
-	/*
 	 * The boot-mode strap ("rd", GPIO8) is claimed lazily, on the first
 	 * DECT_IOC_STRAP: claiming it changes the pin, which the 7412's chip
 	 * does not tolerate at reset, so an unused strap must stay untouched.
@@ -135,11 +127,6 @@ out:
 static void dect_close_locked(struct opendectcell *dw)
 {
 	dect_ssc_teardown(&dw->ssc);
-	if (dw->clk_en) {
-		gpiod_set_value(dw->clk_en, 0);
-		gpiod_put(dw->clk_en);
-		dw->clk_en = NULL;
-	}
 	if (dw->strap) {
 		gpiod_set_value(dw->strap, 0);
 		gpiod_put(dw->strap);
@@ -333,6 +320,21 @@ static int __init dect_init(void)
 		return ret;
 	}
 
+	/*
+	 * PCM clock enable (GPIO7): high from module load to unload. The chip
+	 * only starts its PCM bit clock if the line is high before its reset,
+	 * and the stock firmware never lowers it again [CR A-0001]. Holding it
+	 * per open() dropped it between dect-fwload and dect-stubd, and the
+	 * bus stayed silent (observed on a 7412, 2026-10-28). Optional: another
+	 * driver may already hold the line high.
+	 */
+	dect.clk_en = gpiod_get(dect.misc.this_device, "clk-en", GPIOD_OUT_HIGH);
+	if (IS_ERR(dect.clk_en)) {
+		pr_info("openDECTcell: clock-enable line not claimed: %ld\n",
+			PTR_ERR(dect.clk_en));
+		dect.clk_en = NULL;
+	}
+
 	pr_info("openDECTcell: Lantiq transport loaded for %s\n", board->compatible);
 	return 0;
 }
@@ -343,6 +345,8 @@ static void __exit dect_exit(void)
 	mutex_lock(&dect.lock);
 	dect_close_locked(&dect);
 	mutex_unlock(&dect.lock);
+	if (dect.clk_en)
+		gpiod_put(dect.clk_en);
 	gpiod_remove_lookup_table(dect.board->gpio_lookup);
 	dect_ssc_exit(&dect.ssc);
 	pr_info("openDECTcell: Lantiq transport unloaded\n");
