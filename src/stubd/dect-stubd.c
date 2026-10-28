@@ -2765,6 +2765,43 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
 }
 
 /*
+ * A call id no other live call uses (TS 102 527-3 §7.4.6.1: unique in the
+ * system, never shared by two calls at a time): the lowest of 1..127 not
+ * held by a busy CC entity on another link. 0 when -a callid= pins one, or
+ * when all are taken (keep the current id). Before 2026-10-28 every link
+ * used id 1, so bench test 18's two calls shared it.
+ */
+static uint8_t alloc_call_id(const struct stubd *s, const struct dect_link *me)
+{
+	unsigned id, k;
+
+	if (s->audio.callinfo.has_call_id)
+		return 0;
+	for (id = 1; id <= 127u; id++) {
+		int used = 0;
+
+		if (s->reg.active && &s->reg.link != me &&
+		    dect_cc_busy(&s->reg.link.cc) &&
+		    s->reg.link.cc.status_call_id == id)
+			used = 1;
+		for (k = 0; !used && k < SIDE_MAX; k++)
+			if (s->side[k].active && &s->side[k].link != me &&
+			    dect_cc_busy(&s->side[k].link.cc) &&
+			    s->side[k].link.cc.status_call_id == id)
+				used = 1;
+		if (!used)
+			return (uint8_t)id;
+	}
+	return 0;
+}
+
+/* dect_link's question for a handset's new call: its call id. */
+static uint8_t call_id_for(void *ctx, const struct dect_link *l)
+{
+	return alloc_call_id(ctx, l);
+}
+
+/*
  * dect_link's question when a handset's {CC-SETUP} arrives: call status
  * for it? Only an NG-DECT Part 3 handset gets it (TS 102 527-3 §7.4.6.4.1;
  * stock sends it to the A540 alone, A-0125). Not yet seen: no opinion, so
@@ -4106,12 +4143,13 @@ static void ring_callinfo(struct stubd *s, int on)
 	ci.has_line_type = 1;
 	ci.line_type = DECT_CALLINFO_NDT_DELAY;
 	ci.has_call_id = 1;
-	ci.call_id = 1;
+	ci.call_id = s->reg.link.cc.status_call_id;
 	ci.has_call_status = 1;
 	ci.call_status = DECT_CS_CALL_SETUP;
 	dect_cc_set_callinfo(&s->reg.link.cc, &ci);
 	printf("ring: full call information for a Part 3 handset "
-	       "(line %u, VoIP, call id 1, CS call setup)\n", STUBD_LINE_ID);
+	       "(line %u, VoIP, call id %u, CS call setup)\n", STUBD_LINE_ID,
+	       (unsigned int)ci.call_id);
 }
 
 /*
@@ -4136,7 +4174,7 @@ static void cs_connect_tick(struct stubd *s, uint64_t now)
 	s->reg.cs_connect_sent = 1;
 	dect_callinfo_init(&ci);
 	ci.has_call_id = 1;
-	ci.call_id = 1;
+	ci.call_id = cc->status_call_id;
 	ci.has_call_status = 1;
 	ci.call_status = DECT_CS_CALL_CONNECT;
 	n = dect_callinfo_put(ie, sizeof(ie), 0, &ci);
@@ -4192,6 +4230,13 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 */
 	s->next_ti = s->audio.ti_fixed >= 0 ? (uint8_t)s->audio.ti_fixed : 0u;
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
+	{
+		uint8_t id = alloc_call_id(s, &s->reg.link);
+
+		if (id)
+			dect_cc_set_call_status(&s->reg.link.cc,
+						s->reg.link.cc.call_status, id);
+	}
 	ring_callinfo(s, 1);
 	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
 			      s->cc_fixed_id, s->cc_fixed_id_len,
@@ -5042,6 +5087,7 @@ static void main_cc_setup(struct stubd *s)
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
 	s->reg.link.call_status_for = call_status_for;
+	s->reg.link.call_id_for = call_id_for;
 	s->reg.link.call_status_ctx = s;
 	/* our one line for FP-managed selection ('None', §7.4.5.2.4) */
 	dect_cc_set_default_line(&s->reg.link.cc, STUBD_LINE_ID,
@@ -5259,6 +5305,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
 	sl->link.call_status_for = call_status_for;
+	sl->link.call_id_for = call_id_for;
 	sl->link.call_status_ctx = s;
 	dect_cc_set_default_line(&sl->link.cc, STUBD_LINE_ID,
 				 DECT_CALLINFO_NDT_DELAY);
@@ -5635,6 +5682,9 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 	if (!plen || p == s->ic.caller || dect_cc_busy(&l->cc))
 		return;
 	dect_cc_set_next_ti(&l->cc, 0);
+	/* one call, one id on both handsets (TS 102 527-3 §7.4.6.1 note 2) */
+	dect_cc_set_call_status(&l->cc, l->cc.call_status,
+				ic_cc(s, s->ic.caller)->status_call_id);
 	/*
 	 * EN 300 444 table 23: <<SIGNAL>> 40H for an internal call, 41H for
 	 * an external one, so the handset rings the internal pattern (stock
