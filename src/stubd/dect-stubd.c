@@ -938,8 +938,11 @@ struct stubd {
 		 * nlr: release the link ourselves once its last call or list
 		 * session has ended (EN 300 175-5 §14.2.7), as stock does:
 		 * `0x0202 <link>` ~30 ms after the last {CC-RELEASE-COM}, a
-		 * LAPC DISC first on a list-access link [CR A-0127]. Off by
-		 * default until a bench run shows it is harmless.
+		 * LAPC DISC first on a list-access link [CR A-0127]. On by
+		 * default since bench 2026-10-28 (vNLR: two calls and a list
+		 * session on the A540, chip ack 24 ms later, no handset
+		 * complaint); nonlr turns it off. The list-access DISC branch
+		 * did not run there: the A540 ended its list links itself.
 		 */
 		int      nlr;
 		/*
@@ -7331,6 +7334,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->bind_first = 1;
 		else if (!eq && klen == 3 && !memcmp(key, "nlr", 3))
 			a->nlr = 1;
+		else if (!eq && klen == 5 && !memcmp(key, "nonlr", 5))
+			a->nlr = 0;
 		else if (!eq && klen == 13 && !memcmp(key, "allcallstatus", 13))
 			a->all_call_status = 1;
 		else if (!eq && klen == 12 && !memcmp(key, "nocallstatus", 12))
@@ -7768,8 +7773,9 @@ static void usage(void)
 		"           0x80 with narrowband)\n"
 		"           nocallstatus no <<CALL-INFORMATION>> call status in our\n"
 		"           SETUP-ACK/CALL-PROC/ALERTING/CONNECT to a handset's call\n"
-		"           nlr          release the link after its last call or list\n"
-		"           session (0x0202, a DISC first after list access)\n"
+		"           nonlr        do not release the link after its last call or\n"
+		"           list session (default: release, 0x0202, a DISC first\n"
+		"           after list access, as stock)\n"
 		"           allcallstatus call status to every handset, not only to\n"
 		"           those reporting NG-DECT Part 3 (the default since API 34)\n"
 		"           alertms=N    ALERTING after CALL-PROC, CONNECT N ms later\n"
@@ -7968,6 +7974,7 @@ int main(int argc, char **argv)
 	 */
 	s.audio.signal_on = 1;
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN1;
+	s.audio.nlr = 1;		/* bench 2026-10-28, vNLR: harmless */
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
