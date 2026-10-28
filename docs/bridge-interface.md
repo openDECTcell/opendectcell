@@ -99,7 +99,7 @@ answers; they come with those steps.
 - On the air the protections stay as built: a handset's own deregistration
   needs its key (API 74), deleting another handset needs the base PIN on a
   ciphered link (API 76), a wrong RES ends a call (API 75), and `locauth`
-  (API 77) once the bench has cleared it.
+  (API 77), on by default since the bench cleared it (test 19).
 
 ## 5. Order of work
 

@@ -8568,6 +8568,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->two_calls = 1;
 		else if (!eq && klen == 7 && !memcmp(key, "locauth", 7))
 			a->locauth = 1;
+		else if (!eq && klen == 9 && !memcmp(key, "nolocauth", 9))
+			a->locauth = 0;
 		else if (eq && klen == 5 && (!memcmp(key, "lane2", 5) ||
 					     !memcmp(key, "lane3", 5))) {
 			unsigned ch, w, k = key[4] == '2' ? 0u : 1u;
@@ -9117,7 +9119,8 @@ static void usage(void)
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
 		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
 		"           locauth      authenticate a handset with its UAK inside its\n"
-		"                        location registration (off by default)\n"
+		"                        location registration (the default;\n"
+		"                        nolocauth switches it off)\n"
 		"           twocalls     a second (third) handset may call while one\n"
 		"           is in a call: side links get their own audio channel\n"
 		"           (2 -> TDM word 3, 3 -> word 2; lane2=CH:WORD to override)\n"
@@ -9422,6 +9425,7 @@ int main(int argc, char **argv)
 	s.audio.signal_on = 1;
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN1;
 	s.audio.nlr = 1;		/* bench 2026-10-28, vNLR: harmless */
+	s.audio.locauth = 1;	/* bench 2026-10-28, test 19: all three answer */
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
