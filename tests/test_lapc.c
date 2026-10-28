@@ -319,6 +319,35 @@ static void test_fsm_retransmit(void)
 	CHECK(dect_lapc_poll_tx(&l, tx, sizeof(tx)) > 0);	/* retransmitted */
 }
 
+/* N250 (3) retransmissions, then the link is released, not a fourth. */
+static void test_fsm_n250_releases_the_link(void)
+{
+	struct dect_lapc l;
+	struct dect_lapc_frame f;
+	uint8_t msg[4] = { 1, 2, 3, 4 }, tx[DECT_LC_LAPC_MAX];
+	size_t n;
+	uint64_t t;
+
+	dect_lapc_init(&l, 1000);
+	dect_lapc_send(&l, msg, sizeof(msg), 0);
+	CHECK(dect_lapc_poll_tx(&l, tx, sizeof(tx)) > 0);	/* first send */
+	for (t = 1000; t <= 3000; t += 1000) {
+		dect_lapc_tick(&l, t);
+		CHECK(dect_lapc_poll_tx(&l, tx, sizeof(tx)) > 0);
+	}
+	CHECK_EQ(l.stats.retransmits, 3);
+	CHECK_EQ(l.failed, 0);
+	dect_lapc_tick(&l, 4000);
+	CHECK_EQ(l.stats.retransmits, 3);			/* no fourth */
+	CHECK_EQ(l.failed, 1);
+	CHECK_EQ(l.stats.link_failures, 1);
+	n = dect_lapc_poll_tx(&l, tx, sizeof(tx));
+	CHECK(n > 0 && dect_lapc_parse(tx, n, &f) == 0);
+	CHECK_EQ(f.type, DECT_LAPC_DISC);			/* released */
+	dect_lapc_tick(&l, 9000);
+	CHECK_EQ(dect_lapc_poll_tx(&l, tx, sizeof(tx)), 0u);	/* and quiet */
+}
+
 /* Drain one endpoint's TX queue into the other; return a delivered message len. */
 static int shuttle(struct dect_lapc *from, struct dect_lapc *to, uint64_t t,
 		   uint8_t *out, size_t out_cap)
@@ -379,6 +408,7 @@ int main(void)
 	test_fsm_rx_overlong_message_is_cut_once();
 	test_fsm_tx_short();
 	test_fsm_retransmit();
+	test_fsm_n250_releases_the_link();
 	test_fsm_loopback_segmented();
 	return CHECK_DONE();
 }

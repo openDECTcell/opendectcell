@@ -134,6 +134,7 @@ size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
  * 150 ms -- so this only changes behaviour when something is already wrong.
  */
 #define DEFAULT_RETRY_MS	2000u	/* <DL.04>, EN 300 175-4 A.1 */
+#define LAPC_N250		3u	/* retransmissions, EN 300 175-4 A.3.1 */
 #define CR_CMD			1u	/* FT commands (our I-frames) */
 #define CR_RSP			0u	/* FT responses (our RR/UA) */
 #define SEG_MAX			DECT_LC_INFO_MAX	/* info octets per I-frame */
@@ -249,6 +250,7 @@ static void pump_tx(struct dect_lapc *l, uint64_t now_ms)
 	l->txmsg_off += seg;
 	l->vs = seq_inc(l, l->vs);
 	l->outstanding = 1;
+	l->retry_count = 0;		/* a new frame, a new count */
 	queue_cur_i(l, now_ms);
 }
 
@@ -323,6 +325,8 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	case DECT_LAPC_SABM:
 		l->vs = l->va = l->vr = 0;
 		l->outstanding = 0;
+		l->retry_count = 0;
+		l->failed = 0;		/* re-established */
 		l->rxmsg_len = 0;
 		l->rx_discard = 0;
 		queue_ua(l, f->pf);
@@ -408,12 +412,26 @@ uint64_t dect_lapc_next_deadline(const struct dect_lapc *l)
 	return l->last_tx_ms + l->retry_ms;
 }
 
+/*
+ * <DL.04> expiry (EN 300 175-4 §9.2.3.6): retransmit the outstanding
+ * I-frame, up to N250 times; after that "release the link ... with the
+ * release mode set to abnormal". We used to retransmit for ever, so a
+ * handset gone out of range was never noticed at this layer (spec sweep,
+ * finding 12). The release is a DISC; `failed` tells the owner.
+ */
 void dect_lapc_tick(struct dect_lapc *l, uint64_t now_ms)
 {
-	if (l->outstanding && now_ms - l->last_tx_ms >= l->retry_ms) {
-		l->stats.retransmits++;
-		queue_cur_i(l, now_ms);
+	if (!l->outstanding || now_ms - l->last_tx_ms < l->retry_ms)
+		return;
+	if (l->retry_count >= LAPC_N250) {
+		l->stats.link_failures++;
+		dect_lapc_disconnect(l);
+		l->failed = 1;
+		return;
 	}
+	l->retry_count++;
+	l->stats.retransmits++;
+	queue_cur_i(l, now_ms);
 }
 
 size_t dect_lapc_poll_tx(struct dect_lapc *l, uint8_t *out, size_t out_cap)

@@ -2695,6 +2695,22 @@ static void fetch_tick(struct stubd *s, uint64_t now)
  */
 static int ic_start(struct stubd *s, int side, uint64_t now);
 
+/*
+ * Say so, once, when LAPC gave up after N250 retransmissions and released
+ * the link (EN 300 175-4 §9.2.3.6; new 2026-10-28). Loud on purpose: the
+ * corpus does not count retransmissions, so whether a working link ever
+ * needs more than three is unmeasured, and a false release must show.
+ */
+static void lapc_failed_note(struct dect_link *l, const char *which)
+{
+	if (l->lapc.failed != 1)
+		return;
+	l->lapc.failed = 2;		/* noted */
+	printf("lapc: *** %s link: no acknowledgement after 3 retransmissions "
+	       "-- link released (DISC, abnormal) ***\n", which);
+	fflush(stdout);
+}
+
 /* -a infoie=: one {CC-INFO} once our call to the handset rings. */
 static void info_tick(struct stubd *s, uint64_t now)
 {
@@ -6897,6 +6913,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				if (!s->side[k].active)
 					continue;
 				dect_link_tick(&s->side[k].link, now);
+				lapc_failed_note(&s->side[k].link, "side");
 				side_pump(s, &s->side[k]);
 			}
 		}
@@ -6928,6 +6945,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			 * docs/spec-conformance.md.
 			 */
 			dect_link_tick(&s->reg.link, now);
+			lapc_failed_note(&s->reg.link, "main");
 			/*
 			 * The call has gone away: release the audio channel.
 			 * Without this it stays armed for the life of the link

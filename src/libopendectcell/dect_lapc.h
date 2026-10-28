@@ -110,6 +110,7 @@ struct dect_lapc_stats {
 	uint32_t msgs_tx;		/* NWK messages fully sent and acked */
 	uint32_t rx_bad_sapi;		/* frames on a SAPI other than 0: ignored */
 	uint32_t rx_truncated;		/* messages over DECT_LAPC_MSG_MAX, cut */
+	uint32_t link_failures;		/* N250 retransmissions unanswered */
 };
 
 struct dect_lapc {
@@ -127,6 +128,8 @@ struct dect_lapc {
 	size_t   cur_i_len;
 	uint64_t last_tx_ms;
 	uint32_t retry_ms;
+	uint8_t  retry_count;		/* retransmissions of cur_i so far */
+	uint8_t  failed;		/* N250 reached: link released, abnormal */
 
 	/* Inbound NWK message under reassembly. */
 	uint8_t  rxmsg[DECT_LAPC_MSG_MAX];
