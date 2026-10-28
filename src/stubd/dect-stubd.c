@@ -7025,6 +7025,32 @@ static void drain_nwk(struct stubd *s, uint64_t now)
  * release a queued {CC-SETUP}, and learning the identities an FP-originated
  * call needs.
  */
+
+/*
+ * Challenge the handset with the stored UAK so both sides derive the DCK;
+ * the CIPHER-REQUEST and the chip's key (0x0208) follow once it answers.
+ * Once per connection. -C keeps every call in the clear.
+ */
+static void start_call_cipher(struct stubd *s, uint64_t now)
+{
+	if (s->reg.cipher_started)
+		return;
+	if (s->no_cipher) {
+		s->reg.cipher_started = 1;
+		printf("call: cipher: suppressed (-C), call stays in the clear\n");
+	} else if (s->uak_valid) {
+		uint8_t crand[8], crs[16];
+
+		gen_rand(s, crand, sizeof(crand));
+		gen_rand(s, crs, sizeof(crs));
+		dect_mm_start_cipher(&s->reg.link.mm, s->uak, crand, crs);
+		s->reg.cipher_started = 1;
+		printf("call: cipher: authenticating handset\n");
+		drain_nwk(s, now);
+	} else {
+		printf("call: cipher: no UAK (handset must enrol this session)\n");
+	}
+}
 static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now)
 {
 	uint8_t rand_f[8], rs[16];
@@ -7594,21 +7620,24 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * long enough to work out the sample format, at the price of the
 		 * handset dropping it with its unencrypted-connection complaint.
 		 */
-		if (s->no_cipher && !s->reg.cipher_started) {
-			s->reg.cipher_started = 1;
-			printf("call: cipher: suppressed (-C), call stays in the clear\n");
-		} else if (s->uak_valid && !s->reg.cipher_started) {
-			uint8_t crand[8], crs[16];
+		start_call_cipher(s, now);
+	}
 
-			gen_rand(s, crand, sizeof(crand));
-			gen_rand(s, crs, sizeof(crs));
-			dect_mm_start_cipher(&s->reg.link.mm, s->uak, crand, crs);
-			s->reg.cipher_started = 1;
-			printf("call: cipher: authenticating handset\n");
-			drain_nwk(s, now);
-		} else if (!s->uak_valid) {
-			printf("call: cipher: no UAK (handset must enrol this session)\n");
-		}
+	/*
+	 * A list-access call is ciphered as well. TS 102 527-3 C.7.2 shows the
+	 * FP's {CIPHER-REQUEST} right after the LiA {CC-SETUP}, and the PIN
+	 * fields of the System Settings List travel only on a ciphered link
+	 * (7.4.11.1): without this the PIN, the PIN-guarded delete and the
+	 * A540's "Mobilteil abmelden" were refused with "procedure not
+	 * allowed" (bench, 2026-10-28). The call stays in PROCEEDING (no
+	 * CONNECT on a list call), so this does not wait for the connect.
+	 */
+	if (!s->reg.cipher_started && (s->uak_valid || s->no_cipher) &&
+	    !s->reg.link.cc.incoming && dect_cc_busy(&s->reg.link.cc) &&
+	    (s->reg.link.cc.peer_basic_service >> 4) == 0x2u /* LiA */) {
+		printf("call: list-access call -- ciphering it "
+		       "(TS 102 527-3 C.7.2)\n");
+		start_call_cipher(s, now);
 	}
 
 	/* Never log key material: state only. */
