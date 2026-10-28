@@ -1496,6 +1496,25 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			}
 		}
 		break;
+	case DECT_CC_SERVICE_CHANGE:
+		/*
+		 * The codec change of TS 102 527-1 §7.3.4 (a mandatory NG-DECT
+		 * procedure): "the receiving side shall either accept or
+		 * reject the change". We cannot switch the chip's codec or slot
+		 * type in a call yet, so reject, with no <<CODEC-LIST>> (§7.3.4)
+		 * and no reason (optional, EN 300 175-5 table 18); the call
+		 * goes on with its codec. It fell into the default branch,
+		 * which ignores it on our call -- the handset then waits out
+		 * its <CC_service> -- and on another transaction cleared it,
+		 * where §17.3.2.1 ignores it. Spec sweep B5.
+		 */
+		if (!our_transaction(cc, &h))
+			break;
+		if (dect_cc_busy(cc)) {
+			queue_msg(cc, cc->ti_flag, DECT_CC_SERVICE_REJECT);
+			cc->stats.service_rejected++;
+		}
+		break;
 	case DECT_CC_RELEASE_COM:
 		/*
 		 * The PT releasing OUR unanswered incoming call with

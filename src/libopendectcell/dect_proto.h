@@ -487,8 +487,15 @@
  *    call's status again, "control code not supported" (or CS idle and
  *    "control code failed" for a call id not ours), tone 09H. 1C15H on a
  *    list-access call and 17H before the call connects are unchanged.
+ *
+ * 62: codec change refused (2026-10-28, spec sweep B5). Layout change: the
+ *    stats gain service_rejected; new DECT_CC_SERVICE_CHANGE, _ACCEPT,
+ *    _REJECT. **Behaviour change:** a {CC-SERVICE-CHANGE} on our call gets
+ *    a bare {CC-SERVICE-REJECT} (TS 102 527-1 §7.3.4: accept or reject);
+ *    on a transaction we do not hold it is ignored (EN 300 175-5
+ *    §17.3.2.1), where it was cleared.
  */
-#define OPENDECTCELL_API_VERSION 61
+#define OPENDECTCELL_API_VERSION 62
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

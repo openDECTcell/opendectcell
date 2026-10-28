@@ -500,6 +500,39 @@ static void test_control_codes_get_a_negative_ack(void)
 	}
 }
 
+/*
+ * A codec change (TS 102 527-1 §7.3.4) is refused with a bare
+ * {CC-SERVICE-REJECT} on our call, and ignored on a transaction we do not
+ * hold (EN 300 175-5 §17.3.2.1).
+ */
+static void test_service_change_is_rejected(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_SERVICE_CHANGE);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(n, 2u);
+	CHECK_EQ(out[0], 0x83u);
+	CHECK_EQ(out[1], DECT_CC_SERVICE_REJECT);
+	CHECK_EQ(cc.stats.service_rejected, 1u);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       2, DECT_CC_SERVICE_CHANGE);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	CHECK_EQ(cc.stats.closed_unknown, 0u);
+}
+
 /* A SETUP with TI flag 1 is ignored, idle or in a call (§17.3.2.1). */
 static void test_setup_with_flag_one_is_ignored(void)
 {
@@ -2720,6 +2753,7 @@ int main(void)
 	test_setup_without_basic_service_is_refused();
 	test_setup_with_flag_one_is_ignored();
 	test_control_codes_get_a_negative_ack();
+	test_service_change_is_rejected();
 	test_release_with_a_reason_and_busy_system();
 	test_unserved_call_class_is_refused();
 	test_none_gets_the_selected_line();
