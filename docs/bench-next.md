@@ -452,3 +452,55 @@ Fixed in the scripts: only `/etc/opendectcell-sub.<name>` is loaded.
 
 Box afterwards: all three handsets registered again (A540 slot 1 with a new
 key, C430A slot 2, AS690H slot 3 with a new key, its name back to "DECT 3").
+
+## Next round (written 2026-10-28 late, after round 3 at the desk)
+
+Box at `37d9b22` or later. No park between runs (maintainer, 2026-10-28):
+the lab scripts only stop the daemon, which parks itself; `./park.sh` at the
+end of the session parks and checks. `CIPHER=1` keeps call ciphering on in
+`ringone.sh`, as the service does.
+
+### 20. A ciphered list session and the PIN (5 minutes; **deregisters the A540**)
+
+Since `521682e` a list-access call is ciphered like a speech call
+(TS 102 527-3 C.7.2), so the PIN can travel. Start any run with all three
+stores (e.g. `CIPHER=1 ATTACH=600000 MAXSECS=300 HOLD=200 ./ringone.sh c430a`).
+
+1. On the A540 browse the handset list and the base menu as usual.
+2. Then Einstellungen, Anmeldung, **Mobilteil abmelden**, PIN 0000.
+
+| you see | meaning |
+|---|---|
+| browsing works as before; the log shows `call: list-access call -- ciphering it` and `the chip reports link 1 ciphered (0x0209)` for each list session | ciphered list calls are fine |
+| the A540 says it is no longer registered; the log shows `c3 0c 81 81`, our PIN-required NACK, the PIN save on list 07 accepted, then `dereg: DECT 1, asked by DECT 1's handset list (PIN given)` and the deregistration | the PIN path works end to end; re-register the A540 (`./regall.sh a540`) |
+| "Nicht möglich" again | the agent reads the log: whether the cipher came up before the PIN edit |
+| list sessions now fail or take long | ciphering list calls upsets it: the agent reads the log (`-a` has no switch for it yet) |
+
+### 21. A ring during the A540's list sync (5 minutes, repeat 2-3 times)
+
+Since `d8ead39` a ring lost to the handset's own call is rung again. Recreate
+the evening's loss: the ring 10 s after first contact, which is when the A540
+starts its list sync after the list change notice.
+
+```
+CIPHER=1 ATTACH=10000 HOLD=5 ./ringone.sh a540
+```
+
+Press a key on the A540 (or switch it off and on), let it ring, answer.
+
+| you see | meaning |
+|---|---|
+| it rings every time, perhaps a few seconds late; the log may show `ring: our call was lost to the handset's own call (collision, 9.5.2.3) -- ringing again when the link is free (1 of 2)` | the retry works (when that line is absent, the collision did not happen that time: repeat) |
+| no ring, and `giving up after 2 new attempts` | the A540 keeps crossing us: the agent reads the log |
+
+### 22. Deregistration while another handset connects (5 minutes)
+
+Since `cde5cdb` a deregistration waits for the target's own page response.
+The agent installs an invented handset in slot 4 that nobody answers (as at
+the desk, `vDEREGQ-20261028-142353`) and asks for its deregistration; while
+the base pages it (30 s), **press a key on the C430A** so it connects.
+
+| you see | meaning |
+|---|---|
+| the C430A behaves normally; the log shows no `05 48` on its link, 10 pages, then `not reachable (paged 10 times): deleted WITHOUT its confirmation` | fixed |
+| `05 48` goes out on the C430A's link | not fixed: the agent reads the log |
