@@ -299,6 +299,10 @@ struct side_link {
 	size_t   dial_len;	/* overlap receiving, as on the main link */
 	uint64_t dial_change_ms;
 	int      cipher_done;	/* DCK to the chip, or the failure logged */
+	/* the chip's 0xF625 for this link's call, as the main link's */
+	struct dect_diag_status last_status;
+	struct dect_diag_frames frames;
+	uint64_t status_ms;
 	struct dect_link link;
 };
 
@@ -1085,6 +1089,7 @@ struct stubd {
 		int      signal_set;	/* -a signal= given: beats a profile */
 		const char *profile_dir;	/* -a profiles=DIR */
 		const char *ctl_path;	/* -a ctl=PATH, the control socket */
+		const char *line_name;	/* -a linename=NAME, "Line 1" */
 		int      no_ctl;	/* -a noctl */
 		/*
 		 * ti=N: pin the CC transaction identifier of an FP-originated
@@ -4053,21 +4058,39 @@ static void mem_dump_tick(struct stubd *s, uint64_t now)
 	}
 }
 
+static void send_conn_status_one(struct stubd *s, uint8_t handle);
+
 static void send_conn_status_req(struct stubd *s, uint64_t now)
 {
-	struct dect_mail m;
+	unsigned k;
 
+	/* a side link's speech call too, for the Monitor (round 4, L3) */
+	for (k = 0; s->audio.status_ms && k < SIDE_MAX; k++) {
+		struct side_link *sl = &s->side[k];
+
+		if (!sl->active || sl->lane < 0 ||
+		    (sl->status_ms && now - sl->status_ms < s->audio.status_ms))
+			continue;
+		sl->status_ms = now;
+		send_conn_status_one(s, sl->handle);
+	}
 	if (!s->audio.status_ms || !s->reg.call_bound || !s->reg.active)
 		return;
 	if (s->reg.status_ms && now - s->reg.status_ms < s->audio.status_ms)
 		return;
 	s->reg.status_ms = now;
+	send_conn_status_one(s, s->reg.handle);
+}
+
+static void send_conn_status_one(struct stubd *s, uint8_t handle)
+{
+	struct dect_mail m;
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0xF624u;		/* connection status request */
-	m.param[0] = s->reg.handle;
+	m.param[0] = handle;
 	m.param[1] = 0x0Au;		/* the selector AVM's monitor uses */
 	m.param_len = 2;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
@@ -5174,6 +5197,14 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		fprintf(f, ",\"registration_left_s\":%llu",
 			(unsigned long long)((s->reg_open_until - now + 999) /
 					     1000));
+	/* what the base is set to, for the Monitor's base section */
+	fprintf(f, ",\"api\":%u,\"cipher\":%s,\"locauth\":%s,"
+		"\"wideband\":%s,\"twocalls\":%s,\"line\":",
+		OPENDECTCELL_API_VERSION, s->no_cipher ? "false" : "true",
+		s->audio.locauth ? "true" : "false",
+		s->audio.narrowband ? "false" : "true",
+		s->audio.two_calls ? "true" : "false");
+	json_str(f, s->audio.line_name ? s->audio.line_name : "Line 1");
 	fprintf(f, ",\"handsets\":[");
 	first = 1;
 	for (i = 0; i < s->n_hs; i++) {
@@ -5207,6 +5238,13 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		}
 		json_str(f, s->hs[i].path);
 		fprintf(f, ",\"link\":%s", linked ? "true" : "false");
+		if (s->hs[i].prof_id[0]) {
+			fprintf(f, ",\"profile\":");
+			json_str(f, s->hs[i].prof_id);
+		}
+		if (s->hs[i].cap_known)
+			fprintf(f, ",\"part3\":%s",
+				s->hs[i].cap_part3 ? "true" : "false");
 		/* in contact right now while it holds a link */
 		if (seen || linked)
 			fprintf(f, ",\"seen_ms_ago\":%llu", linked ? 0ull :
@@ -5223,7 +5261,11 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 			   s->reg.frames_total, &first);
 	for (i = 0; radio_on && i < SIDE_MAX; i++)
 		if (s->side[i].active)
-			state_link(s, f, &s->side[i].link, NULL, 0, &first);
+			state_link(s, f, &s->side[i].link,
+				   s->side[i].lane >= 0 &&
+				   s->side[i].last_status.valid
+				   ? &s->side[i].last_status : NULL,
+				   s->side[i].frames.total, &first);
 	fprintf(f, "]}\n");
 	if (fclose(f) == 0)
 		(void)rename(tmp, path);
@@ -5388,7 +5430,9 @@ static void main_cc_setup(struct stubd *s)
 		uint8_t tid = stubd_sub_slot(s) ? stubd_sub_slot(s) : 1u;
 		char hsname[DECT_IWU_NAME_MAX];
 
-		dect_iwu_set_line(&s->reg.link.cc.iwu, STUBD_LINE_ID, "Line 1");
+		dect_iwu_set_line(&s->reg.link.cc.iwu, STUBD_LINE_ID,
+				  s->audio.line_name ? s->audio.line_name
+						     : "Line 1");
 		if (s->n_hs && s->cur < s->n_hs)
 			hs_name(s, s->cur, hsname, sizeof(hsname));
 		else
@@ -6026,7 +6070,8 @@ static int side_start(struct stubd *s, uint8_t handle)
 	dect_link_set_tx_log(&sl->link, log_nwk_out_side, s);
 
 	/* every handset we hold; strangers meet the gates as usual */
-	dect_iwu_set_line(&sl->link.cc.iwu, STUBD_LINE_ID, "Line 1");
+	dect_iwu_set_line(&sl->link.cc.iwu, STUBD_LINE_ID,
+			  s->audio.line_name ? s->audio.line_name : "Line 1");
 	for (i = 0; i < s->n_hs; i++) {
 		size_t len;
 		const uint8_t *id = hs_port_id(s, i, &len);
@@ -6063,6 +6108,9 @@ static int side_start(struct stubd *s, uint8_t handle)
 	sl->handle = handle;
 	sl->adopted = -1;
 	sl->cipher_done = 0;
+	memset(&sl->last_status, 0, sizeof(sl->last_status));
+	memset(&sl->frames, 0, sizeof(sl->frames));
+	sl->status_ms = 0;
 	sl->rejected_seen = 0;
 	s->side_started++;
 	printf("side: connection up (handle %u) -- handle %u is busy, so it "
@@ -6204,6 +6252,10 @@ static void xlane_release(struct stubd *s, struct side_link *sl)
 		send_audio_disconnect(s, sl->handle);
 	memset(&s->xl[sl->lane], 0, sizeof(s->xl[0]));
 	sl->lane = -1;
+	/* the Monitor's figures belong to the call that ended */
+	memset(&sl->last_status, 0, sizeof(sl->last_status));
+	memset(&sl->frames, 0, sizeof(sl->frames));
+	sl->status_ms = 0;
 }
 
 /*
@@ -6938,6 +6990,32 @@ static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
 	ctl_send(s, &o);
 }
 
+/*
+ * A handset name from the socket: at most DECT_IWU_NAME_MAX - 1 octets of
+ * well-formed UTF-8 (it goes on the air in the Internal Names List); the
+ * line format has already refused control characters. Empty resets it.
+ */
+static int ctl_name_ok(const char *nm)
+{
+	const unsigned char *p = (const unsigned char *)nm;
+	size_t n = strlen(nm);
+
+	if (n >= DECT_IWU_NAME_MAX)
+		return 0;
+	while (*p) {
+		unsigned k = *p < 0x80u ? 0 : (*p & 0xE0u) == 0xC0u ? 1
+			     : (*p & 0xF0u) == 0xE0u ? 2
+			     : (*p & 0xF8u) == 0xF0u ? 3 : 4;
+
+		if (k == 4 || (k == 1 && *p < 0xC2u))
+			return 0;
+		for (p++; k; k--, p++)
+			if ((*p & 0xC0u) != 0x80u)
+				return 0;
+	}
+	return 1;
+}
+
 static void ctl_command(struct stubd *s, const char *line, size_t len,
 			uint64_t now)
 {
@@ -6978,6 +7056,37 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 		}
 		reg_window(s, 1, v, now, "the control socket");
 		ctl_reply(s, m.verb, NULL, "seconds", v);
+	} else if (!strcmp(m.verb, "rename")) {
+		const char *nm = dect_ctl_get(&m, "name");
+
+		if (dect_ctl_get_uint(&m, "hs", 1, DECT_MM_MAX_SLOT, &v)) {
+			ctl_reply(s, m.verb, "bad-hs", NULL, 0);
+			return;
+		}
+		for (i = 0; i < s->n_hs; i++)
+			if (ctl_listed(s, i) && hs_slot(s, i) == v)
+				break;
+		if (i == s->n_hs) {
+			ctl_reply(s, m.verb, "no-handset", "hs", v);
+			return;
+		}
+		if (!nm || !ctl_name_ok(nm)) {
+			ctl_reply(s, m.verb, "bad-name", "hs", v);
+			return;
+		}
+		/* as a handset's own save does (names_take()) */
+		snprintf(s->hs[i].name, sizeof(s->hs[i].name), "%s", nm);
+		name_save(s, i);
+		printf("names: DECT %u is now %s%s%s (the control socket)\n", v,
+		       nm[0] ? "\"" : "", nm[0] ? nm : "back to its default name",
+		       nm[0] ? "\"" : "");
+		names_spread(s, i);
+		names_notify(s);
+		ctl_reply(s, m.verb, NULL, "hs", v);
+		ctl_hs(s, i, "registered");
+	} else if (!strcmp(m.verb, "reload-profiles")) {
+		want_profiles = 1;		/* as SIGHUP */
+		ctl_reply(s, m.verb, NULL, NULL, 0);
 	} else {
 		printf("ctl: unknown verb \"%s\" -- ignored\n", m.verb);
 		ctl_reply(s, m.verb, "unknown", NULL, 0);
@@ -8399,6 +8508,22 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		uak_verify_reply(s, m);
 		break;
 	case 0xF625:
+		/* [0] echoes the request's link: the main call or a side one */
+		if (m->param_len >= 1 && s->reg.active &&
+		    m->param[0] != s->reg.handle) {
+			struct side_link *sl = side_find(s, m->param[0]);
+			struct dect_diag_status st;
+
+			if (sl && sl->active &&
+			    !dect_diag_decode_status(m->param, m->param_len,
+						     &st)) {
+				sl->last_status = st;
+				if (st.has_counters)
+					(void)dect_diag_frames_update(
+						&sl->frames, &st);
+			}
+			break;
+		}
 		if (s->reg.call_bound)
 			report_conn_status(s, m);
 		break;
@@ -8958,6 +9083,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 9 && !memcmp(key, "statefile", 9)) &&
 			    !(klen == 8 && !memcmp(key, "profiles", 8)) &&
 			    !(klen == 3 && !memcmp(key, "ctl", 3)) &&
+			    !(klen == 8 && !memcmp(key, "linename", 8)) &&
 			    !(klen == 6 && !memcmp(key, "remote", 6)) &&
 			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
 			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
@@ -9322,6 +9448,15 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if (klen == 6 && !memcmp(key, "remode", 6)) {
 			a->remode_ms = (unsigned)v;
 			a->remode_set = 1;
+		} else if (eq && klen == 8 && !memcmp(key, "linename", 8)) {
+			size_t n = (size_t)(spec - (eq + 1));
+			char *name = malloc(n + 1);
+
+			if (!name)
+				return -1;
+			memcpy(name, eq + 1, n);
+			name[n] = '\0';
+			a->line_name = name;
 		} else if (eq && klen == 3 && !memcmp(key, "ctl", 3)) {
 			size_t n = (size_t)(spec - (eq + 1));
 			char *path = malloc(n + 1);
@@ -9565,6 +9700,8 @@ static void usage(void)
 		"           locauth      authenticate a handset with its UAK inside its\n"
 		"                        location registration (the default;\n"
 		"                        nolocauth switches it off)\n"
+		"           linename=NAME the line's name in the Line Settings\n"
+		"                        List (\"Line 1\"; no commas)\n"
 		"           ctl=PATH     the control socket, default\n"
 		"                        " DECT_CTL_PATH " (0600; noctl: none)\n"
 		"           twocalls     a second (third) handset may call while one\n"
