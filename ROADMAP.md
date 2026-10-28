@@ -36,7 +36,7 @@ history of each item. `[x]` done, `[~]` partly done, `[ ]` open.
 ## M0: Analysis and tooling (mostly done)
 - [x] Extract and document the DECT components of the 7412, 7362 SL and 7520 images
 - [x] Reader for AVM's Lantiq NAND filesystem image (`tools/avm_nand_sqfs.py`)
-- [x] Headless the analysis tooling pipeline for local analysis
+- [x] Local analysis pipeline for the AVM firmware (output never committed)
 - [x] Control-channel framing (0xAA marker, sequence, length, 16-bit sum)
 - [x] 7412 SSC/SPI-TDM register setup, STUB patch mechanism (TLV, tag 1 = RFPI, tag 7 = mode byte)
 - [x] Stock-firmware observation on a 7520 via the FRITZ!OS support data: PCM timing, STUB patching, channel count, chip SC14448 (`docs/models/7520-DECT-analysis.md` §8)

@@ -81,14 +81,14 @@ room.
 |---|---|
 | `docs/models/` | Per-model analyses (image format, components, GPIOs, boot) |
 | `docs/` | Protocol and interface notes (STUB API, control channel, SPI-TDM, …) |
-| `tools/` | Analysis tools (Python stdlib preferred; `the analysis tooling` for headless scripts) |
+| `tools/` | Analysis and release tools (Python standard library preferred) |
 | `kernel/` | Kernel modules, one per OpenWrt target (`kmod-opendectcell-lantiq`, …) with the transport drivers and the board table (GPL-2.0) |
 | `boards/` | Board profiles, one per model, named after OpenWrt's `board_name` (e.g. `avm,fritz7412`); see `docs/hardware-abstraction.md` |
 | `src/` | Userspace C: `libopendectcell` (DECT protocol library), `dect-fwload`, `dect-stubd`, the baresip module, development tools |
 | `profiles/` | Handset profiles (`docs/handset-profiles.md`) |
 | `tests/` | Unit tests, chip/STUB simulator, golden traces |
 | `openwrt/` | OpenWrt feed: package Makefiles, init scripts, UCI defaults |
-| `work/` | **git-ignored**: AVM files, the analysis tooling projects, analyser output, captures |
+| `work/` | **git-ignored**: AVM files, analysis projects and output, captures |
 
 ## 5. Code conventions
 
@@ -118,8 +118,9 @@ room.
 - Keep `ROADMAP.md` checkboxes and GitHub issues in sync. Close issues with a reference to the commit or doc.
 - Write in English, concisely. Prefer tables for register, pin and field layouts.
 
-## 8. Tools available locally (maintainer machine)
+## 8. Tools
 
-- the analysis tooling 12.1.4 at `~/opt/the analysis tooling`, run with `JAVA_HOME=~/opt/jdk-21.0.12.1+1`. Use `the analysis tooling headless analysis script` and keep the output in `work/decomp/`.
-- `tools/avm_nand_sqfs.py`: reads AVM's Lantiq NAND `filesystem.image` (7362 SL, 7412).
-- GitHub CLI at `~/opt/gh_2.102.0_linux_amd64/bin/gh`.
+- `tools/` holds the PC-side tools (see [tools/README.md](tools/README.md));
+  all analysis output stays in the git-ignored `work/`, never committed.
+- `tools/avm_nand_sqfs.py` reads AVM's Lantiq NAND `filesystem.image`
+  (7362 SL, 7412).

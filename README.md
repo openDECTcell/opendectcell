@@ -189,8 +189,6 @@ public work. These sources were read, compared against or used as tools:
   go through.
 - **[FFmpeg](https://ffmpeg.org)**, as the independent reference our G.722
   codec was checked against.
-- **[the analysis tooling](https://github.com/NationalSecurityAgency/the analysis tooling)**, including
-  its CR16C processor module, for the analysis.
 - **Renesas / Dialog Semiconductor** for the public SC14441 product
   documentation.
 - The **[IP Phone Forum](https://www.ip-phone-forum.de)** community, for

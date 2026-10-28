@@ -32,10 +32,8 @@ that `dect-stubd` writes during experiments (`-w FILE`, `-a memdump`, …).
 | [decode-beacon.py](decode-beacon.py), [dect_qh7.py](dect_qh7.py) | Decode the base's broadcast capabilities from a memory dump |
 | [dect_memdump.py](dect_memdump.py), [dect_memcmp.py](dect_memcmp.py) | Reassemble and compare chip memory snapshots |
 | [gpio-activity.c](gpio-activity.c) | Checks whether a fast signal (such as the PCM clock) is toggling |
-| [make-kmod-brief.py](make-kmod-brief.py) | Assembles the kernel driver specification with the current sources, for a reviewer without repository access |
 | [avm_nand_sqfs.py](avm_nand_sqfs.py) | Reads the NAND filesystem image of older FRITZ!Boxes (7362 SL, 7412) |
 | [elfrel.py](elfrel.py) | Lists pointer tables in relocatable ELF files |
-| [the analysis tooling/a headless analysis script](the analysis tooling/a headless analysis script) | Headless the analysis tooling script for local analysis; its output is never committed (see [AGENTS.md](../AGENTS.md), section 2) |
 
 On-box development tools are in [src/tools/](../src/tools/): `dect-pcmcap`
 (PCM bring-up and capture), `dect-maildump` (mails from a capture) and

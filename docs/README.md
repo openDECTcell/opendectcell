@@ -75,13 +75,8 @@ says at the top what it was for.
 | [registration-g6.md](registration-g6.md) | Getting the first handset to register (gate G6) |
 | [call-g7.md](call-g7.md) | Getting a handset to ring and talk (gate G7): the long log of every run |
 | [why-the-handsets-never-rang.md](why-the-handsets-never-rang.md) | The search for why the Gigasets would not ring, and the answer |
-| [review-2026-10-25.md](review-2026-10-25.md) | A step back: where the project stood on 2026-10-25 |
-| [tasks-2026-10-22.md](tasks-2026-10-22.md), [tasks-2026-10-23.md](tasks-2026-10-23.md), [tasks-2026-10-28.md](tasks-2026-10-28.md) | Task lists; the last one is still current for open details |
+| [tasks-2026-10-28.md](tasks-2026-10-28.md) | Task list, still current for some open details |
 | [bench-2026-10-25.md](bench-2026-10-25.md), [bench-next.md](bench-next.md) | Bench test cards and their results; `bench-next.md` holds the open ones |
-| [test-card-2026-10-25.md](test-card-2026-10-25.md), [test-card-F4.md](test-card-F4.md), [test-card-F5.md](test-card-F5.md), [stock-capture-card.md](stock-capture-card.md) | Earlier test cards |
-| [next-steps-after-the-capture.md](next-steps-after-the-capture.md) | Plans after capturing the stock firmware's behaviour |
-| [autonomous-2026-10-23.md](autonomous-2026-10-23.md) | Log of an unattended work session |
-| [briefs/stub-api-catalogue.md](briefs/stub-api-catalogue.md) | The brief from which `stub-api.md` was written |
 
 The project-wide history and hand-over notes are in
 the maintainers' notes; the plan is in [ROADMAP.md](../ROADMAP.md).
