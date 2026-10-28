@@ -437,13 +437,14 @@ struct stubd {
 	unsigned sub_slot;
 	/*
 	 * The call key for the chip (0x0208, stock's call layout [CR A-0126]),
-	 * sent whenever a call is ciphered; -k off withholds it, -k plain
-	 * sends the key bytes unreversed. The byte order is the one open
-	 * variable (docs/stub-api.md §2.1).
+	 * sent whenever a call is ciphered; -k off withholds it, -k reversed
+	 * byte-reverses the key. Plain order is right: measured 2026-10-28,
+	 * the handset's release read through the cipher in plain order and
+	 * arrived garbled reversed (docs/stub-api.md §2.1).
 	 */
 	struct chip_cipher {
 		int     disabled;	/* -k off */
-		int     no_reverse;	/* -k plain */
+		int     reversed;	/* -k reversed (wrong on 07.56) */
 	} chip_cipher;
 	/* Voice-slot probe: which TDM slot carries a call's audio (mapping open). */
 	uint16_t vs_last[8];
@@ -4523,8 +4524,8 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
  * {CIPHER-REQUEST}, as stock does [CR A-0126]; docs/stub-api.md §2.1:
  *
  *   param[0]      the link (connection handle)
- *   param[1..8]   the 8-byte call key: our DCK, byte-reversed as a group
- *                 ([CR A-0028]'s reading; -k plain keeps the order)
+ *   param[1..8]   the 8-byte call key: our DCK in its own byte order
+ *                 (bench 2026-10-28; [CR A-0028]'s reversal is wrong here)
  *   param[9..23]  00
  *   param[24..25] FF FF
  *   param[26..27] 00 00
@@ -4550,8 +4551,8 @@ static void send_chip_cipher(struct stubd *s)
 	m.prim = 0x0208u;		/* call key [CR A-0126] */
 	m.param[n++] = s->reg.handle;
 	for (i = 0; i < DECT_MM_DCK_LEN; i++)
-		m.param[n + i] = s->chip_cipher.no_reverse
-			? dck[i] : dck[DECT_MM_DCK_LEN - 1u - i];
+		m.param[n + i] = s->chip_cipher.reversed
+			? dck[DECT_MM_DCK_LEN - 1u - i] : dck[i];
 	n += DECT_MM_DCK_LEN;
 	n += 15u;			/* param[9..23]: 00 (memset) */
 	m.param[n++] = 0xFFu;
@@ -4565,7 +4566,7 @@ static void send_chip_cipher(struct stubd *s)
 	/* Never log this mail's parameters: they carry the cipher key. */
 	printf("call: cipher: call key to the chip (0x0208, link %u, %u bytes, "
 	       "%s order)\n", (unsigned int)s->reg.handle, (unsigned int)n,
-	       s->chip_cipher.no_reverse ? "plain" : "reversed");
+	       s->chip_cipher.reversed ? "reversed" : "plain");
 }
 
 /* Flush any LAPC frames the FSM wants to transmit. */
@@ -7639,13 +7640,13 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 	return 0;
 }
 
-/* Parse -k off | plain. Returns 0 on success, -1 on a malformed spec. */
+/* Parse -k off | reversed. Returns 0 on success, -1 on a malformed spec. */
 static int parse_chip_cipher(struct chip_cipher *cc, const char *spec)
 {
 	if (!strcmp(spec, "off"))
 		cc->disabled = 1;
-	else if (!strcmp(spec, "plain"))
-		cc->no_reverse = 1;
+	else if (!strcmp(spec, "reversed"))
+		cc->reversed = 1;
 	else
 		return -1;
 	return 0;
@@ -7681,7 +7682,8 @@ static void usage(void)
 		"           and installed in their chip slots; the first is rung\n"
 		"  -k SPEC  the call key for the chip (0x0208, stock's layout,\n"
 		"           [CR A-0126]) goes out before every CIPHER-REQUEST; SPEC\n"
-		"           off withholds it, plain sends the key bytes unreversed\n"
+		"           off withholds it, reversed byte-reverses the key (wrong\n"
+		"           on 07.56, kept for comparison)\n"
 		"  -w FILE  capture the call's voice slot to FILE (raw, 2 bytes per\n"
 		"           frame, while a call is bound) -- holds call audio, keep\n"
 		"           it local\n"
