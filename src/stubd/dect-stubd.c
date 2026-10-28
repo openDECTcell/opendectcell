@@ -2713,8 +2713,10 @@ static void sub_save(struct stubd *s)
 			}
 		}
 		printf("sub: subscription saved to %s\n", s->sub_path);
-		if (s->cur < s->n_hs)
+		if (s->cur < s->n_hs) {
 			s->hs[s->cur].loaded = 1;	/* it exists now */
+			s->hs[s->cur].absent = 0;	/* and is no longer free */
+		}
 	}
 }
 
