@@ -418,18 +418,19 @@ static void test_query_supported_fields(void)
 static void test_unsupported_commands_are_refused(void)
 {
 	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
-	static const uint8_t search[] = { 0xC3, 0x10, 0x81, 0x00, 0x05, 0x31 };
 	static const uint8_t edit[] = { 0xC3, 0x08, 0x81, 0x81, 0x02 };
 	static const uint8_t save[] = { 0xC3, 0x0A, 0x81, 0x81 };
 	static const uint8_t data_last[] = { 0xC3, 0x14, 0x81, 0x81, 0x80 };
+	static const uint8_t del[] = { 0xC3, 0x0C, 0x81, 0x81 };
 	struct dect_iwu iwu;
 
 	base_with_two_handsets(&iwu);
 	handle(&iwu, s6, sizeof(s6));
-	handle(&iwu, search, sizeof(search));
+	/* delete entry (the A540's, vREGA540075823): not built yet */
+	handle(&iwu, del, sizeof(del));
 	CHECK_EQ(out.count, 1u);
 	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
-	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_SUPPORTED);
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
 	/* a save with no edit before it is 'procedure not allowed' -- and
 	 * the acknowledgement waits for the data packet last */
 	handle(&iwu, save, sizeof(save));
@@ -451,7 +452,7 @@ static void test_unsupported_commands_are_refused(void)
 /*
  * Table 41 note 1: a search of the Supported Lists or the Line Settings
  * List, and a field query of the Supported Lists, are 'procedure not
- * allowed'; a search of the Internal Names List is still 'not supported'.
+ * allowed'; the Internal Names List is searched (test_search_internal_names).
  */
 static void test_table_41_refusals(void)
 {
@@ -459,7 +460,8 @@ static void test_table_41_refusals(void)
 	static const uint8_t s8[] = { 0xC3, 0x00, 0x08, 0x00 };
 	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
 	static const uint8_t q[] = { 0xC3, 0x04, 0x81 };
-	uint8_t search[] = { 0xC3, 0x10, 0x81, 0x00, 0x05, 0x31 };
+	uint8_t search[] = { 0xC3, 0x10, 0x81, 0x00, 0x01, 0x31, 0x01, 0x00,
+			     0x01 };
 	struct dect_iwu iwu;
 
 	base_with_two_handsets(&iwu);
@@ -479,7 +481,56 @@ static void test_table_41_refusals(void)
 	base_with_two_handsets(&iwu);
 	handle(&iwu, s6, sizeof(s6));		/* session 1: internal names */
 	handle(&iwu, search, sizeof(search));
-	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_SUPPORTED);
+	CHECK_EQ(out.msg[0][1], DECT_LIA_SEARCH_ENTRIES_CFM);
+}
+
+/*
+ * 7.4.10.4.8: the Internal Names List searched by 'Number'. Handsets 1 and 2
+ * are held. "2" exactly: entry 2. "3" exactly: no match, counter 0, no
+ * data. "3" with option 02H (previous): entry 2. "0" with 01H (next):
+ * entry 1, two entries forward.
+ */
+static void test_search_internal_names(void)
+{
+	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
+	static const uint8_t exact2[] = { 0xC3, 0x10, 0x81, 0x00, 0x01, '2',
+					  0x01, 0x00, 0x01, 0x02 };
+	static const uint8_t exact3[] = { 0xC3, 0x10, 0x81, 0x00, 0x01, '3',
+					  0x01, 0x00, 0x01 };
+	static const uint8_t prev3[] = { 0xC3, 0x10, 0x81, 0x02, 0x01, '3',
+					 0x01, 0x00, 0x01 };
+	static const uint8_t next0[] = { 0xC3, 0x10, 0x81, 0x01, 0x01, '0',
+					 0x02, 0x00, 0x01 };
+	static const uint8_t cfm2[] = { 0xC3, 0x11, 0x81, 0x82, 0x01 };
+	static const uint8_t data2[] = { 0xC3, 0x14, 0x81, 0x82, 0x8D,
+		0x01, 0x82, 0xA0, '2',
+		0x02, 0x87, 0xC0, 'D', 'E', 'C', 'T', ' ', '2' };
+	static const uint8_t none[] = { 0xC3, 0x11, 0x81, 0x81, 0x00 };
+	struct dect_iwu iwu;
+
+	base_with_two_handsets(&iwu);
+	handle(&iwu, s6, sizeof(s6));
+	handle(&iwu, exact2, sizeof(exact2));
+	CHECK_EQ(out.count, 2u);
+	CHECK_EQ(out.len[0], sizeof(cfm2));
+	CHECK_EQ(memcmp(out.msg[0], cfm2, sizeof(cfm2)), 0);
+	CHECK_EQ(out.len[1], sizeof(data2));
+	CHECK_EQ(memcmp(out.msg[1], data2, sizeof(data2)), 0);
+
+	handle(&iwu, exact3, sizeof(exact3));
+	CHECK_EQ(out.count, 1u);
+	CHECK_EQ(out.len[0], sizeof(none));
+	CHECK_EQ(memcmp(out.msg[0], none, sizeof(none)), 0);
+
+	handle(&iwu, prev3, sizeof(prev3));
+	CHECK_EQ(out.count, 2u);
+	CHECK_EQ(out.msg[0][3], 0x82u);			/* start index 2 */
+	CHECK_EQ(out.msg[0][4], 0x01u);
+
+	handle(&iwu, next0, sizeof(next0));
+	CHECK_EQ(out.count, 2u);
+	CHECK_EQ(out.msg[0][3], 0x81u);			/* start index 1 */
+	CHECK_EQ(out.msg[0][4], 0x02u);			/* two delivered */
 }
 
 /*
@@ -635,6 +686,7 @@ int main(void)
 	test_unsupported_commands_are_refused();
 	test_table_41_refusals();
 	test_rename_a_handset();
+	test_search_internal_names();
 	test_other_records_are_ignored_or_flagged();
 	test_reset_sessions();
 	test_long_lists_are_segmented_into_packets();

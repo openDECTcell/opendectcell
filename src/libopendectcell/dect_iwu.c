@@ -1012,6 +1012,92 @@ format:
 	nack(iwu, out, session, DECT_LIA_NACK_FORMAT);
 }
 
+/*
+ * "Search entries" (7.4.10.4.8) on the Internal Names List, sorted by its
+ * 'Number' (the terminal identity number): the searched value is its IA5
+ * decimal form. Matching option 00H wants the exact entry; 01H takes the
+ * next one ("current index") and 02H the one before when there is none;
+ * then entries are delivered as by 'read entries' from there. No match is
+ * a confirm with counter 0 and no data packet.
+ */
+static void search_entries(struct dect_iwu *iwu, unsigned session, int list,
+			   const uint8_t *p, size_t n, struct dect_iwu_out *out)
+{
+	uint8_t data[DECT_IWU_CONTENT_MAX], wanted[16];
+	const uint8_t *known;
+	struct buf b, content;
+	unsigned opt, slen, v = 0, total, cur, start = 0, count, first, last;
+	size_t nknown, nwanted = 0, j;
+	int digits = 1, backward;
+
+	if (n < 2u)
+		goto malformed;
+	opt = p[0];
+	slen = p[1];
+	p += 2; n -= 2;
+	if (slen > n || n - slen < 2u)
+		goto malformed;
+	for (j = 0; j < slen; j++) {
+		if (p[j] < '0' || p[j] > '9' || v > 1000u)
+			digits = 0;
+		else
+			v = v * 10u + (unsigned)(p[j] - '0');
+	}
+	p += slen; n -= slen;
+	backward = (p[0] & 0x80u) != 0;
+	count = p[0] & 0x7Fu;
+	p += 2; n -= 2;				/* counter, mark request */
+	known = list_fields((uint8_t)list, &nknown);
+	for (j = 0; j < nknown && nwanted < sizeof(wanted); j++)
+		if (memchr(p, known[j], n))
+			wanted[nwanted++] = known[j];
+
+	/* the first entry whose number is >= v: the 'current entry' */
+	total = entry_count(iwu, (uint8_t)list);
+	for (cur = 1; cur <= total; cur++)
+		if (iwu->handsets[cur - 1u].terminal_id >= v)
+			break;
+	if (digits && slen && cur <= total &&
+	    iwu->handsets[cur - 1u].terminal_id == v)
+		start = cur;				/* exact */
+	else if (opt == 0x01u && cur <= total)
+		start = cur;
+	else if (opt == 0x02u && cur > 1u)
+		start = cur - 1u;
+	if (!count)
+		count = 1;
+	first = 1u, last = 0u;
+	if (start && nwanted) {
+		if (backward) {
+			first = start + 1u > count ? start + 1u - count : 1u;
+			last = start;
+		} else {
+			first = start;
+			last = start + count - 1u > total ? total
+							  : start + count - 1u;
+		}
+	}
+	if (assemble(iwu, (uint8_t)list, first, last, wanted, nwanted, &content,
+		     data, sizeof(data))) {
+		nack(iwu, out, session, DECT_LIA_NACK_INVALID_RANGE);
+		return;
+	}
+	if (reply_begin(out, &b, DECT_LIA_SEARCH_ENTRIES_CFM))
+		return;
+	put_ext(&b, session);
+	put_ext(&b, start ? first : 1u);
+	put(&b, (uint8_t)(last >= first ? last - first + 1u : 0u));
+	emit(out, &b);
+	iwu->stats.replied++;
+	send_data(out, session, &content);
+	if (last >= first)
+		iwu->stats.entries_sent += last - first + 1u;
+	return;
+
+malformed:
+	iwu->stats.malformed++;
+}
+
 /* One data packet of a 'save entry': [session][content ...] (table 61). */
 static void save_data(struct dect_iwu *iwu, const uint8_t *p, size_t n)
 {
@@ -1065,19 +1151,20 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		break;
 	case DECT_LIA_SEARCH_ENTRIES: {
 		/*
-		 * Table 41: search is "I" on the List of Supported Lists and
-		 * the Line Settings List, answered 'procedure not allowed'
-		 * (note 1); on the Internal Names List it is mandatory and
-		 * not built yet, so 'not supported' stays there. We sent
-		 * 'not supported' for all (spec sweep, H3).
+		 * Table 41: search is mandatory on the Internal Names List,
+		 * and "I" on the List of Supported Lists, the DECT System
+		 * Settings List and the Line Settings List, answered
+		 * 'procedure not allowed' (note 1). We sent 'not supported'
+		 * for all (spec sweep, H3, H12).
 		 */
 		unsigned session;
-		int list = get_ext(p, n, &session) ? session_list(iwu, session)
-						   : -1;
+		size_t k = get_ext(p, n, &session);
+		int list = k ? session_list(iwu, session) : -1;
 
-		refuse(iwu, p, n, out, list == DECT_LIA_LIST_SUPPORTED ||
-		       list == DECT_LIA_LIST_LINE_SETTINGS
-		       ? DECT_LIA_NACK_NOT_ALLOWED : DECT_LIA_NACK_NOT_SUPPORTED);
+		if (list == DECT_LIA_LIST_INTERNAL_NAMES)
+			search_entries(iwu, session, list, p + k, n - k, out);
+		else
+			refuse(iwu, p, n, out, DECT_LIA_NACK_NOT_ALLOWED);
 		break;
 	}
 	case DECT_LIA_EDIT_ENTRY:

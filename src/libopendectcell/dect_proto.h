@@ -525,8 +525,15 @@
  *    empty one), and sets names_changed for the owner; other fields, new
  *    entries and saves without an edit are 'procedure not allowed'. The
  *    name reads as editable, and the field query lists it first.
+ *
+ * 67: search (2026-10-28, spec sweep H12). No layout change. **Behaviour
+ *    change:** "search entries" on the Internal Names List finds by the
+ *    'Number' (IA5 decimal), with matching options 00H-02H, and delivers
+ *    entries like "read entries" (TS 102 527-3 §7.4.10.4.8); no match is
+ *    a confirm with counter 0. On the other lists we serve it is
+ *    'procedure not allowed' (table 41), the System Settings List included.
  */
-#define OPENDECTCELL_API_VERSION 66
+#define OPENDECTCELL_API_VERSION 67
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
