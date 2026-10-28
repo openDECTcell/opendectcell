@@ -184,6 +184,7 @@ static void send_key_allocate(struct dect_mm *mm)
 			      mm->rs, KEY_ALLOC_RS_LEN);
 	txq_commit(mm, idx, off);
 	mm->state = DECT_MM_WAIT_AUTH;
+	mm->key_deadline_ms = 0;		/* <MM_key.1> starts on the tick */
 	mm->stats.key_alloc_sent++;
 }
 
@@ -737,6 +738,19 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 }
 
 /*
+ * A key allocation that fails takes the registration with it: the access
+ * rights it was run for cannot be granted, so reject them, "authentication
+ * failed", rather than leave the handset to its own timer.
+ */
+static void key_allocation_failed(struct dect_mm *mm)
+{
+	mm->stats.key_failed++;
+	mm->key_deadline_ms = 0;
+	mm->pend_id_len = 0;
+	send_access_reject_reason(mm, DECT_MM_REJECT_AUTH_FAILED);
+}
+
+/*
  * The PP's AUTHENTICATION-REQUEST carries RES1 (its response to our KEY-ALLOCATE)
  * and RAND (RAND_P, its challenge to us). Verify RES1, answer RAND_P with RES2,
  * then grant access rights.
@@ -835,6 +849,16 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		    h.ti_flag == DECT_TI_RESPONDER)
 			on_auth_request(mm, ies, ies_len);
 		break;
+	case DECT_MM_AUTHENTICATION_REJECT:
+		/*
+		 * The PT refuses our {KEY-ALLOCATE}, its allocation type
+		 * unacceptable (EN 300 444 §8.32.2.3): the key allocation, and
+		 * with it the registration, has failed. It was ignored.
+		 */
+		if (mm->state == DECT_MM_WAIT_AUTH &&
+		    h.ti_flag == DECT_TI_RESPONDER)
+			key_allocation_failed(mm);
+		break;
 	case DECT_MM_AUTHENTICATION_REPLY:
 		if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY)
 			on_auth_reply_cipher(mm, ies, ies_len);
@@ -887,9 +911,26 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 
 /* <MM_ident.1>: FT value 10 seconds (EN 300 175-5 A.5). */
 #define MM_IDENT1_MS	10000u
+/* <MM_key.1>: FT value 10 seconds (EN 300 175-5 A.5). */
+#define MM_KEY1_MS	10000u
 
 void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 {
+	/*
+	 * <MM_key.1> (EN 300 444 §8.32.1.1): from our {KEY-ALLOCATE} to the
+	 * PT's {AUTHENTICATION-REQUEST}. On expiry the procedure has failed,
+	 * with no retransmission (§8.32.2.1). We waited for as long as the
+	 * link lasted (spec sweep, M3).
+	 */
+	if (mm->state != DECT_MM_WAIT_AUTH) {
+		mm->key_deadline_ms = 0;
+	} else if (!mm->key_deadline_ms) {
+		mm->key_deadline_ms = now_ms + MM_KEY1_MS;
+	} else if (now_ms >= mm->key_deadline_ms) {
+		key_allocation_failed(mm);
+		mm->key_deadline_ms = 0;
+	}
+
 	if (!mm->ident_pending) {
 		mm->ident_deadline_ms = 0;
 		return;
@@ -919,7 +960,12 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 
 uint64_t dect_mm_next_deadline(const struct dect_mm *mm)
 {
-	return mm->ident_deadline_ms ? mm->ident_deadline_ms : UINT64_MAX;
+	uint64_t t = mm->ident_deadline_ms ? mm->ident_deadline_ms : UINT64_MAX;
+
+	if (mm->state == DECT_MM_WAIT_AUTH && mm->key_deadline_ms &&
+	    mm->key_deadline_ms < t)
+		t = mm->key_deadline_ms;
+	return t;
 }
 
 int dect_mm_tpui_confirmed(const struct dect_mm *mm)

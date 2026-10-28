@@ -120,6 +120,51 @@ static void test_access_request_without_identity_is_rejected(void)
 	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
 }
 
+/*
+ * <MM_key.1>: a KEY-ALLOCATE unanswered for 10 s has failed (EN 300 444
+ * §8.32.2.1), and so has one the PT refuses (§8.32.2.3); either way the
+ * access rights are rejected "authentication failed", once.
+ */
+static void test_key_allocation_fails_on_timeout_or_refusal(void)
+{
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1,
+				   .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 1 }, rs16[16] = { 0 };
+	uint8_t buf[64], out[64];
+	size_t n;
+	int k;
+
+	for (k = 0; k < 2; k++) {
+		dect_mm_init(&mm, &cfg);
+		n = pp_access_request(buf, sizeof(buf), 0);
+		dect_mm_rx(&mm, buf, n, rand_f, rs16);
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(msg_type_of(out, n), DECT_MM_KEY_ALLOCATE);
+		dect_mm_tick(&mm, 1000);			/* armed */
+		CHECK_EQ(dect_mm_next_deadline(&mm), 11000u);
+		if (!k) {
+			dect_mm_tick(&mm, 10999);
+			CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+			dect_mm_tick(&mm, 11000);
+		} else {
+			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+					       DECT_TI_RESPONDER, 0,
+					       DECT_MM_AUTHENTICATION_REJECT);
+			dect_mm_rx(&mm, buf, n, rand_f, rs16);
+		}
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_REJECT);
+		CHECK_EQ(out[4], DECT_MM_REJECT_AUTH_FAILED);
+		CHECK_EQ(mm.state, DECT_MM_FAILED);
+		CHECK_EQ(mm.stats.key_failed, 1u);
+		CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+		dect_mm_tick(&mm, 30000);			/* once */
+		CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+		CHECK_EQ(mm.stats.key_failed, 1u);
+	}
+}
+
 /* Full successful key-allocation registration with the correct PIN. */
 static void test_register_ok(void)
 {
@@ -1202,6 +1247,7 @@ int main(void)
 {
 	test_mm_transaction_rules();
 	test_access_request_without_identity_is_rejected();
+	test_key_allocation_fails_on_timeout_or_refusal();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
 	test_a_held_handset_is_accepted_and_adopted();

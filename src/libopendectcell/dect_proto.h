@@ -448,8 +448,16 @@
  *    DECT_MM_TEMP_IDENTITY_ASSIGN_REJ. **Behaviour change:** a
  *    {TEMPORARY-IDENTITY-ASSIGN-REJ} ends a pending assignment as failed
  *    and stops <MM_ident.1> (EN 300 444 §8.28.2.3, EN 300 175-5 §13.2.2).
+ *
+ * 57: <MM_key.1> (2026-10-28, spec sweep M3, N.12). Layout change:
+ *    struct dect_mm gains key_deadline_ms, the stats key_failed.
+ *    **Behaviour change:** a {KEY-ALLOCATE} unanswered for 10 s, or refused
+ *    with the PT's {AUTHENTICATION-REJECT}, fails the registration:
+ *    {ACCESS-RIGHTS-REJECT} "authentication failed" and DECT_MM_FAILED
+ *    (EN 300 444 §8.32.2.1, §8.32.2.3). dect_mm_next_deadline() includes
+ *    the timer.
  */
-#define OPENDECTCELL_API_VERSION 56
+#define OPENDECTCELL_API_VERSION 57
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

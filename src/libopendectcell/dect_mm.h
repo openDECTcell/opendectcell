@@ -158,6 +158,7 @@ struct dect_mm_stats {
 	uint32_t tpui_timeouts;	/* <MM_ident.1> expiries */
 	uint32_t tpui_unsolicited; /* ACKs with no assignment made: ignored */
 	uint32_t tpui_rejected;	   /* {TEMPORARY-IDENTITY-ASSIGN-REJ} received */
+	uint32_t key_failed;	   /* key allocations unanswered or refused */
 	uint32_t locate_deferred;  /* unknown identities held for the owner */
 	uint32_t locate_retrans;   /* the PT repeated a held request */
 	uint32_t bad_ti;	   /* MM messages ignored: TV other than 0 */
@@ -222,6 +223,7 @@ struct dect_mm {
 	 * exactly like a handset that will not answer.
 	 */
 	uint64_t ident_deadline_ms;		/* 0 = not running */
+	uint64_t key_deadline_ms;		/* <MM_key.1>, 0 = not running */
 	unsigned tpui_confirmed : 1;		/* the PT acked the assignment */
 	unsigned tpui_timed_out : 1;		/* <MM_ident.1> expired */
 	unsigned tpui_rejected : 1;		/* the PT refused the TPUI */
