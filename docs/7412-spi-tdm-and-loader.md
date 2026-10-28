@@ -38,11 +38,15 @@ box. Radio never switched on (no radio-on mail was accepted).
 | GPIO7 | Must stay high from before the chip's reset on; dropping it between `dect-fwload` and the next open silenced the bus (fixed in `260be17`). |
 | Bit alignment | The SSC has no frame sync; enabled while the clock runs, its words start at an arbitrary bit offset into the frame (2, 3 and 5 bits seen on different boots, constant within one). Receive and transmit must be aligned in software or the SSC enabled before the chip's clock starts [CR A-0002]. |
 | CPU engine vs rate | An interrupt-driven FIFO engine is loss-free at 4 words/frame and near loss-free at 8, but loses 1–3 % of frames at 18 words (8-word FIFO); the stock driver uses DMA [CR A-0002]. openDECTcell's hrtimer engine reads at most 8 words per 125 µs and aligns on `RX_EOM`, which stock never uses [CR A-0001], so at 18 words/frame it lost over half the data. |
-| 06.88 control channel | In mode 0x105 the chip's slots carry long runs of **0x7E** (HDLC flag?) rather than the 08.25 `0xAA` framing. A contact `0xF600` in 08.25 framing, sent in every slot, bit shift (0–15) and byte order (512 variants), drew no checksum-valid answer. The 06.88 mail framing is asked in the 7412 clean-room record (Q-0004, Q-0005). |
+| 06.88 control channel | **Same framing and primitives as 08.25** [CR A-0004]; **observed answering**: in mode 0x119, with the SSC running before the chip boots, the STUB sends periodic `0xF618` (`23→14`, L 4), `0xF623` (L 16) and `0xFFF1` (`23→22`, L 27) about every 5 s, and answered a contact `0xF600` with **`0xF601`** (`02→14`, L 7). The probe that hit used a transmit bit shift equal to the measured receive lane offset and the **low byte of the 16-bit slot first** (as on the 7520). |
+| Modes without control channel | No mail at all in 0x105, 0x109 or 0x111 (12 s each); in 0x105 the slots carry runs of 0x7E, which belong to the handset-update (UOTA) channel's HDLC framing, not to control [CR A-0005]. The stock 0x119 (18 words/frame) is required. |
 
-Consequence: openDECTcell on the 7412 needs (a) the 06.88 STUB's mail framing, (b)
-bit alignment, and (c) either a slower mode (0x105 gives the 7520's 8-slot,
-1.024 MHz geometry) or a DMA engine for the stock 0x119.
+Consequence: openDECTcell on the 7412 needs (a) the stock mode 0x119 and its
+18-word frame (36 slots), (b) bit alignment (receive and transmit shifted by
+the same lane offset), and (c) a word-loss-free transport at 4.6 Mbit/s —
+the CPU FIFO path loses 1–3 % of frames, each loss moving the control slot
+by a word. (c) is the generic transport's DMA work (`kmod-lantiq-ssc-pcm`,
+clean-room Q-0006). The mail stack itself needs no change.
 
 ## 2. STUB firmware patching (the first-stage loader, `the loader routine`)
 
