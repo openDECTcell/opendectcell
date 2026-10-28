@@ -1254,8 +1254,24 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		break;
 	case DECT_CC_RELEASE:
 		/* EN 300 175-5 §17.3.2.1: unknown transaction, no action. */
-		if (our_transaction(cc, &h))
-			on_release(cc);
+		if (!our_transaction(cc, &h))
+			break;
+		/*
+		 * A release collision: our own {CC-RELEASE} is unanswered
+		 * (RELEASE PENDING) and the peer's crosses it. §9.5.3: stop
+		 * <CC.02> and enter NULL, without the {CC-RELEASE-COM} of the
+		 * normal procedure (GAP §8.7.2.1, figure 23). We answered it
+		 * (spec sweep, C3).
+		 */
+		if (cc->release_armed && cc->state == DECT_CC_ST_RELEASED) {
+			cc->release_armed = 0;
+			cc->release_deadline_ms = 0;
+			cc->state = DECT_CC_ST_NULL;
+			cc->stats.release_collisions++;
+			dect_iwu_reset_sessions(&cc->iwu);
+			break;
+		}
+		on_release(cc);
 		break;
 	case DECT_CC_IWU_INFO: {
 		/*

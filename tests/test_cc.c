@@ -373,6 +373,45 @@ static void test_setup_with_flag_one_is_ignored(void)
 	}
 }
 
+/* Crossing releases: no RELEASE-COM, straight to NULL (§9.5.3). */
+static void test_release_collision(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	CHECK_EQ(dect_cc_release(&cc), 0);
+	(void)dect_cc_poll(&cc, out, sizeof(out));	/* our RELEASE */
+	dect_cc_tick(&cc, 1000);			/* <CC.02> running */
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_RELEASE);
+	dect_cc_rx(&cc, buf, n);			/* the handset's */
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
+	CHECK_EQ(cc.stats.release_collisions, 1u);
+	dect_cc_tick(&cc, 40000);			/* <CC.02> stopped */
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
+	CHECK_EQ(cc.stats.release_timeouts, 0u);
+
+	/* the handset's release alone still gets RELEASE-COM */
+	dect_cc_init(&cc);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR,
+			       0, DECT_CC_RELEASE);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_RELEASE_COM);
+	CHECK_EQ(cc.stats.release_collisions, 0u);
+}
+
 /* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
 static void test_setup_without_basic_service_is_refused(void)
 {
@@ -2403,6 +2442,7 @@ int main(void)
 	test_busy_system_for_a_part3_handset();
 	test_unattached_line_is_refused();
 	test_release_timer();
+	test_release_collision();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();

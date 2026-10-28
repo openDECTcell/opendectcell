@@ -114,6 +114,7 @@ struct dect_cc_stats {
 	uint32_t ie_missing;	/* SETUPs refused: mandatory IE missing */
 	uint32_t line_refused;	/* calls on a line the handset may not use */
 	uint32_t release_timeouts;	/* <CC.02> expired, we completed it */
+	uint32_t release_collisions;	/* both sides released (§9.5.3) */
 	/* handset-placed calls refused by dect_cc_set_busy() */
 	uint32_t rejected_busy;
 };

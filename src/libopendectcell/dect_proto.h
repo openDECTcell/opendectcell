@@ -399,8 +399,13 @@
  *    **Behaviour change:** dect_nwk_parse() fails for TV 7, so CC, MM and
  *    LCE ignore such a message (EN 300 175-5 §17.3.1); before, octet 1a
  *    was read as the message type.
+ *
+ * 49: release collision (2026-10-28, spec sweep C3). Layout change: the
+ *    stats gain release_collisions. **Behaviour change:** a peer
+ *    {CC-RELEASE} while ours is pending stops <CC.02> and enters NULL
+ *    without a {CC-RELEASE-COM} (EN 300 175-5 §9.5.3).
  */
-#define OPENDECTCELL_API_VERSION 48
+#define OPENDECTCELL_API_VERSION 49
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
