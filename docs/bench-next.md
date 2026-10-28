@@ -1,6 +1,6 @@
 # Bench card: the next session (written 2026-10-28)
 
-For the maintainer, with the A540, C430A and AS690H at hand. About 45 minutes.
+For the maintainer, with the A540, C430A and AS690H at hand. Seven tests, about 50 minutes.
 Every test checks one change made at the desk on 2026-10-28, none of which has
 been on air yet. What each result means is written down in advance; the
 technical detail is in `docs/spec-sweep-2026-10-28.md` ("Next bench tests").
