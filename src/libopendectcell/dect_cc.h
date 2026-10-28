@@ -193,6 +193,11 @@ struct dect_cc {
 	uint8_t  keypad[DECT_CC_KEYPAD_MAX];
 	size_t   keypad_len;
 	unsigned keypad_overflow:1;	/* more arrived than we can hold */
+	/*
+	 * The number came complete from a list-access call ("1C15H + number",
+	 * TS 102 527-3 §7.4.10.6.2): the owner routes it as dialled, at once.
+	 */
+	uint8_t  list_number;
 
 	/*
 	 * Optional <<SIGNAL>> for an FP-originated SETUP: the alerting

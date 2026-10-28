@@ -547,6 +547,26 @@ static void learn_int_key(struct dect_cc *cc)
 {
 	unsigned cls = cc->peer_basic_service >> 4;
 
+	/*
+	 * The external counterpart, "1C15H + number" (TS 102 527-3 table 17,
+	 * §7.4.10.6.2): a number picked from a list (contacts, call lists) on
+	 * the list-access call. The call becomes a normal one (class 8, the
+	 * speech service kept) and the prefix is dropped, so the keypad holds
+	 * the number only; it arrives "in a single CC-INFO", so it is complete.
+	 * Elsewhere 1C15H starts a parallel call, which we do not handle yet.
+	 */
+	if (!cc->incoming && cls == 0x2u && cc->keypad_len > 2u &&
+	    cc->keypad[0] == 0x1Cu && cc->keypad[1] == 0x15u &&
+	    cc->peer_basic_service != DECT_CC_SVC_NONE) {
+		memmove(cc->keypad, cc->keypad + 2, cc->keypad_len - 2u);
+		cc->keypad_len -= 2u;
+		if (cc->state == DECT_CC_ST_PROCEEDING)
+			cc->proceeded = 1;
+		cc->peer_basic_service =
+			(uint8_t)(0x80u | (cc->peer_basic_service & 0x0Fu));
+		cc->list_number = 1;
+		return;
+	}
 	if (cc->incoming || !cc->keypad_len || cc->keypad[0] != 0x17u)
 		return;
 	if (cc->peer_basic_service == DECT_CC_SVC_NONE ||
@@ -959,6 +979,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 				break;
 			}
 			dect_cc_clear_keypad(cc);	/* digits are per call */
+			cc->list_number = 0;
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;

@@ -1985,6 +1985,22 @@ static void test_int_key_makes_an_internal_call(void)
 	CHECK_EQ(t[0], DECT_CC_CALL_PROC);		/* not CONNECT */
 	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
 
+	/* 1C15H + number on a list-access call: an external call, complete */
+	dect_cc_init(&cc);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x28);
+	dect_cc_rx(&cc, buf, n);
+	(void)types_of(&cc, t, sizeof(t));		/* CALL-PROC */
+	n = pp_info(buf, sizeof(buf), "\x1c\x15" "0301234567", 0);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.peer_basic_service, 0x88);
+	CHECK_EQ(cc.list_number, 1);
+	CHECK_EQ(cc.keypad_len, 10u);
+	CHECK(memcmp(cc.keypad, "0301234567", 10) == 0);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 0u);	/* the owner routes it */
+	CHECK_EQ(dect_cc_accept(&cc), 0);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);	/* no second CALL-PROC */
+	CHECK_EQ(t[0], DECT_CC_CONNECT);
+
 	/* plain digits leave a list-access call alone */
 	dect_cc_init(&cc);
 	n = pp_setup_svc(buf, sizeof(buf), 0, 0x28);

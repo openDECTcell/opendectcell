@@ -294,8 +294,15 @@
  * 31: dect_cc_info() (2026-10-28). No layout change. New: a {CC-INFO} with
  *    caller-supplied IEs on the call in progress, for information the FT
  *    adds after the SETUP (EN 300 444 §8.41/8.42, <<MULTI-DISPLAY>>).
+ *
+ * 32: dialling from a list (2026-10-28). Layout change: struct dect_cc
+ *    gains list_number. **Behaviour change:** "1C15H + number" in the
+ *    {CC-INFO} of a list-access call (class 2) re-classes it as a normal
+ *    call (class 8, speech service kept), drops the prefix from the keypad
+ *    and sets list_number: the number is complete (TS 102 527-3
+ *    §7.4.10.6.2). Before, the call hung in PROCEEDING.
  */
-#define OPENDECTCELL_API_VERSION 31
+#define OPENDECTCELL_API_VERSION 32
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

@@ -2718,39 +2718,13 @@ static void info_tick(struct stubd *s, uint64_t now)
 	pump_lapc(s);
 }
 
-static void dial_tick(struct stubd *s, uint64_t now)
+/*
+ * Route the main link's handset call once its number is complete: an
+ * internal call if it names a handset, else the routed steps (alertms,
+ * bindfirst) or CONNECT at once.
+ */
+static void dial_route(struct stubd *s, uint64_t now)
 {
-	const uint8_t *k;
-	size_t len;
-
-	/* an internal call that sent its number complete: route it now */
-	if (s->reg.active && s->reg.link.cc.state == DECT_CC_ST_PROCEEDING &&
-	    !s->reg.link.cc.incoming && !s->reg.ic_tried &&
-	    (s->reg.link.cc.peer_basic_service >> 4) == 0x9u) {
-		s->reg.ic_tried = 1;
-		(void)ic_start(s, -1, now);
-		dect_link_drain(&s->reg.link, now);
-		pump_lapc(s);
-	}
-	if (!s->reg.active || !dect_cc_busy(&s->reg.link.cc))
-		s->reg.ic_tried = 0;
-	if (!s->reg.active || s->reg.link.cc.state != DECT_CC_ST_OVERLAP) {
-		s->reg.dial_len = 0;
-		s->reg.dial_change_ms = 0;
-		return;
-	}
-	k = dect_cc_keypad(&s->reg.link.cc, &len);
-	if (!s->reg.dial_change_ms || len != s->reg.dial_len) {
-		s->reg.dial_len = len;
-		s->reg.dial_change_ms = now;
-		return;
-	}
-	if (!len || now - s->reg.dial_change_ms < s->audio.dial_wait_ms)
-		return;		/* no digit yet: F<CC.01> covers it */
-	printf("call: dialled \"%.*s\" -- complete after %u ms without a "
-	       "digit, connecting\n", (int)len, (const char *)k,
-	       s->audio.dial_wait_ms);
-	fflush(stdout);
 	s->reg.ic_tried = 1;
 	if (ic_start(s, -1, now)) {
 		dect_link_drain(&s->reg.link, now);
@@ -2776,6 +2750,52 @@ static void dial_tick(struct stubd *s, uint64_t now)
 		dect_link_drain(&s->reg.link, now);
 		pump_lapc(s);
 	}
+}
+
+static void dial_tick(struct stubd *s, uint64_t now)
+{
+	const uint8_t *k;
+	size_t len;
+
+	/* an internal call that sent its number complete: route it now */
+	if (s->reg.active && s->reg.link.cc.state == DECT_CC_ST_PROCEEDING &&
+	    !s->reg.link.cc.incoming && !s->reg.ic_tried &&
+	    (s->reg.link.cc.peer_basic_service >> 4) == 0x9u) {
+		s->reg.ic_tried = 1;
+		(void)ic_start(s, -1, now);
+		dect_link_drain(&s->reg.link, now);
+		pump_lapc(s);
+	}
+	/* a number picked from a list (1C15H, TS 102 527-3 7.4.10.6.2) */
+	if (s->reg.active && s->reg.link.cc.list_number &&
+	    s->reg.link.cc.state == DECT_CC_ST_PROCEEDING &&
+	    !s->reg.link.cc.incoming && !s->reg.ic_tried) {
+		k = dect_cc_keypad(&s->reg.link.cc, &len);
+		printf("call: dialled \"%.*s\" from a list, connecting\n",
+		       (int)len, (const char *)k);
+		fflush(stdout);
+		dial_route(s, now);
+	}
+	if (!s->reg.active || !dect_cc_busy(&s->reg.link.cc))
+		s->reg.ic_tried = 0;
+	if (!s->reg.active || s->reg.link.cc.state != DECT_CC_ST_OVERLAP) {
+		s->reg.dial_len = 0;
+		s->reg.dial_change_ms = 0;
+		return;
+	}
+	k = dect_cc_keypad(&s->reg.link.cc, &len);
+	if (!s->reg.dial_change_ms || len != s->reg.dial_len) {
+		s->reg.dial_len = len;
+		s->reg.dial_change_ms = now;
+		return;
+	}
+	if (!len || now - s->reg.dial_change_ms < s->audio.dial_wait_ms)
+		return;		/* no digit yet: F<CC.01> covers it */
+	printf("call: dialled \"%.*s\" -- complete after %u ms without a "
+	       "digit, connecting\n", (int)len, (const char *)k,
+	       s->audio.dial_wait_ms);
+	fflush(stdout);
+	dial_route(s, now);
 }
 
 /* alertms / bindfirst: send the CONNECT once its conditions hold. */
