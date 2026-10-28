@@ -47,6 +47,46 @@ static size_t put_sub(uint8_t *b, size_t n, uint8_t type, uint8_t sub,
 	return n;
 }
 
+int dect_callinfo_parse(const uint8_t *v, size_t n, struct dect_callinfo *ci)
+{
+	size_t i = 0;
+
+	dect_callinfo_init(ci);
+	while (i < n) {
+		uint8_t type, sub, val;
+		size_t j;
+
+		if (n - i < 3u)
+			return -1;
+		type = v[i];
+		sub = v[i + 1u];
+		for (j = i + 2u; j < n && !(v[j] & 0x80u); j++)
+			;
+		if (j >= n)
+			return -1;		/* the value never ended */
+		val = (uint8_t)(v[i + 2u] & 0x7Fu);	/* first value octet */
+		if (type == DECT_CALLINFO_TYPE_LINE &&
+		    sub == DECT_CALLINFO_SUB_LINE_EXTERNAL) {
+			ci->has_line = 1;
+			ci->line_id = val;
+		} else if (type == DECT_CALLINFO_TYPE_LINE &&
+			   sub == DECT_CALLINFO_SUB_LINE_TYPE) {
+			ci->has_line_type = 1;
+			ci->line_type = val;
+		} else if (type == DECT_CALLINFO_TYPE_CALL &&
+			   sub == DECT_CALLINFO_SUB_CALL_ID) {
+			ci->has_call_id = 1;
+			ci->call_id = val;
+		} else if (type == DECT_CALLINFO_TYPE_STATUS &&
+			   sub == DECT_CALLINFO_SUB_CALL_STATUS) {
+			ci->has_call_status = 1;
+			ci->call_status = val;
+		}
+		i = j + 1u;
+	}
+	return 0;
+}
+
 size_t dect_callinfo_put(uint8_t *out, size_t cap, size_t off,
 			 const struct dect_callinfo *ci)
 {

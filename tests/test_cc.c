@@ -154,6 +154,60 @@ static void test_second_call_on_the_same_link(void)
 	CHECK_EQ(cc.ti_value, 1);
 }
 
+/*
+ * The A540's FP-managed line selection (TS 102 527-3 §7.4.5.2.4): 'None'
+ * with its digits; our next answer names the selected line and its type,
+ * once; the CONNECT then carries the call status only.
+ */
+static void test_none_gets_the_selected_line(void)
+{
+	static const uint8_t none[] = { 0x7e, 0x06, 0x00, 0x00, 0xff,
+					0x01, 0x00, 0x81 };
+	static const uint8_t want[] = { 0x7e, 0x0c, 0x00, 0x00, 0x81,
+					0x00, 0x05, 0x81, 0x01, 0x00, 0x81,
+					0x02, 0x01, 0x83 };	/* CS call proc */
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	dect_cc_set_call_status(&cc, 1, 1);
+	dect_cc_set_default_line(&cc, 1, DECT_CALLINFO_NDT_DELAY);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_SETUP_ACK);
+	CHECK_EQ(n, 2u + 8u);			/* no line yet: none chosen */
+	n = pp_info(buf, sizeof(buf), "123", 0);
+	memcpy(buf + n, none, sizeof(none));
+	n += sizeof(none);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.peer_line, DECT_CALLINFO_LINE_NONE);
+	CHECK_EQ(dect_cc_line(&cc), 1);
+	CHECK_EQ(dect_cc_accept(&cc), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	CHECK_EQ(n, 2u + sizeof(want));
+	CHECK(memcmp(out + 2, want, sizeof(want)) == 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CONNECT);
+	/* last IE: <<CALL-INFORMATION>> with id + status only, no line */
+	CHECK(n >= 10u && out[n - 8u] == 0x7e && out[n - 7u] == 0x06);
+
+	/* no default line set: nothing to name, as before */
+	dect_cc_init(&cc);
+	dect_cc_set_call_status(&cc, 1, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	memcpy(buf + n, none, sizeof(none));
+	n += sizeof(none);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	CHECK_EQ(n, 2u + 8u);
+}
+
 /* A SETUP without <<BASIC-SERVICE>> is refused, not connected (§17.6.1). */
 static void test_setup_without_basic_service_is_refused(void)
 {
@@ -2179,6 +2233,7 @@ int main(void)
 	test_second_call_on_the_same_link();
 	test_info_on_the_call();
 	test_setup_without_basic_service_is_refused();
+	test_none_gets_the_selected_line();
 	test_wideband_setup_without_a_list_gets_g726();
 	test_basic_speech_connect_names_no_codec();
 	test_offer_without_g726_names_nothing();

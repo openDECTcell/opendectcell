@@ -163,8 +163,34 @@ static void test_no_room(void)
 	CHECK_EQ(dect_callinfo_put(buf, sizeof(buf), OFF0, &ci), 0);
 }
 
+/* What the A540 sends with its dialled digits: line 'None', call id 1. */
+static void test_parse_a540_none(void)
+{
+	static const uint8_t v[] = { 0x00, 0x00, 0xff, 0x01, 0x00, 0x81 };
+	static const uint8_t full[] = { 0x00, 0x00, 0x82, 0x00, 0x05, 0x81,
+					0x01, 0x00, 0x81, 0x02, 0x01, 0x81 };
+	static const uint8_t cut[] = { 0x00, 0x00 };
+	static const uint8_t open_value[] = { 0x00, 0x00, 0x05 };
+	struct dect_callinfo ci;
+
+	CHECK_EQ(dect_callinfo_parse(v, sizeof(v), &ci), 0);
+	CHECK_EQ(ci.has_line, 1);
+	CHECK_EQ(ci.line_id, DECT_CALLINFO_LINE_NONE);
+	CHECK_EQ(ci.has_call_id, 1);
+	CHECK_EQ(ci.call_id, 1);
+	CHECK_EQ(ci.has_call_status, 0);
+	/* stock's SETUP to the A540 (A-0125): line 2, VoIP, id 1, setup */
+	CHECK_EQ(dect_callinfo_parse(full, sizeof(full), &ci), 0);
+	CHECK_EQ(ci.line_id, 2);
+	CHECK_EQ(ci.line_type, DECT_CALLINFO_NDT_DELAY);
+	CHECK_EQ(ci.call_status, DECT_CS_CALL_SETUP);
+	CHECK_EQ(dect_callinfo_parse(cut, sizeof(cut), &ci), -1);
+	CHECK_EQ(dect_callinfo_parse(open_value, sizeof(open_value), &ci), -1);
+}
+
 int main(void)
 {
+	test_parse_a540_none();
 	test_standard_examples();
 	test_line_and_type();
 	test_full_order();

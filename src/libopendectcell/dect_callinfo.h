@@ -82,6 +82,15 @@ struct dect_callinfo {
 void dect_callinfo_init(struct dect_callinfo *ci);
 
 /*
+ * Read a received <<CALL-INFORMATION>> value (without tag and length):
+ * {type, subtype, value...} records, each value ending at the octet with
+ * bit 8 set. Fills the subrecords we know (line id incl. 'None' 7FH, line
+ * type, call id, call status) and skips the rest. 0, or -1 if a record is
+ * cut short (*ci keeps what came before).
+ */
+int dect_callinfo_parse(const uint8_t *v, size_t n, struct dect_callinfo *ci);
+
+/*
  * Non-zero if `ci` can be encoded: every present value is in range, the call
  * status is a defined one, and line type information is only present with a
  * line identifier. An empty structure is valid (it encodes to nothing).

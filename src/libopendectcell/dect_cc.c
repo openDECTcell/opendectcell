@@ -15,6 +15,7 @@ void dect_cc_init(struct dect_cc *cc)
 	memset(cc, 0, sizeof(*cc));
 	cc->state = DECT_CC_ST_NULL;
 	cc->peer_basic_service = DECT_CC_SVC_NONE;
+	cc->peer_line = DECT_CC_LINE_UNSET;
 	cc->ti_flag = DECT_TI_RESPONDER;	/* until a call says otherwise */
 	cc->represent_max = DECT_CC_REPRESENT_MAX;
 	/*
@@ -57,11 +58,13 @@ static void queue_msg(struct dect_cc *cc, uint8_t ti_flag, uint8_t msg_type)
 	txq_commit(cc, idx, off);
 }
 
-size_t dect_cc_put_call_status(const struct dect_cc *cc, uint8_t *b,
+size_t dect_cc_put_call_status(struct dect_cc *cc, uint8_t *b,
 			       size_t cap, size_t off, uint8_t status)
 {
 	struct dect_callinfo ci;
 	size_t next;
+	uint8_t line = dect_cc_line(cc);
+	unsigned cls = cc->peer_basic_service >> 4;
 
 	if (!cc->call_status)
 		return off;
@@ -70,6 +73,20 @@ size_t dect_cc_put_call_status(const struct dect_cc *cc, uint8_t *b,
 	ci.line_id = cc->callinfo.line_id;
 	ci.has_line_type = cc->callinfo.has_line_type;
 	ci.line_type = cc->callinfo.line_type;
+	/*
+	 * §7.4.5.2.1: the FP sends back the selected line and its type, on
+	 * an external handset-placed call (not internal, not list access:
+	 * A2 E13), once.
+	 */
+	if (!ci.has_line && !cc->incoming && !cc->line_confirmed &&
+	    line != DECT_CC_LINE_UNSET && cls != 0x9u && cls != 0x2u &&
+	    cc->default_line_set) {
+		ci.has_line = 1;
+		ci.line_id = line;
+		ci.has_line_type = 1;
+		ci.line_type = cc->default_line_type;
+		cc->line_confirmed = 1;
+	}
 	ci.has_call_id = 1;
 	ci.call_id = cc->status_call_id;
 	ci.has_call_status = 1;
@@ -543,6 +560,38 @@ static void learn_keypad(struct dect_cc *cc, const uint8_t *ies, size_t ies_len)
  * call class 9, keeping the speech service, it takes the internal-call
  * path; a list-access call has had its CALL-PROC already.
  */
+/* The handset's line choice from <<CALL-INFORMATION>>; the first counts. */
+static void learn_peer_line(struct dect_cc *cc, const uint8_t *ies,
+			    size_t ies_len)
+{
+	struct dect_callinfo ci;
+	size_t n;
+	const uint8_t *p = dect_nwk_find_ie(ies, ies_len,
+					    DECT_IE_CALL_INFORMATION, &n);
+
+	if (cc->incoming || cc->peer_line != DECT_CC_LINE_UNSET || !p)
+		return;
+	(void)dect_callinfo_parse(p, n, &ci);
+	if (ci.has_line)
+		cc->peer_line = ci.line_id;
+}
+
+void dect_cc_set_default_line(struct dect_cc *cc, uint8_t line_id,
+			      uint8_t line_type)
+{
+	cc->default_line_set = 1;
+	cc->default_line = (uint8_t)(line_id & 0x7Fu);
+	cc->default_line_type = line_type;
+}
+
+uint8_t dect_cc_line(const struct dect_cc *cc)
+{
+	if (cc->peer_line == DECT_CALLINFO_LINE_NONE)
+		return cc->default_line_set ? cc->default_line
+					    : DECT_CC_LINE_UNSET;
+	return cc->peer_line;
+}
+
 static void learn_int_key(struct dect_cc *cc)
 {
 	unsigned cls = cc->peer_basic_service >> 4;
@@ -996,6 +1045,8 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			}
 			dect_cc_clear_keypad(cc);	/* digits are per call */
 			cc->list_number = 0;
+			cc->peer_line = DECT_CC_LINE_UNSET;
+			cc->line_confirmed = 0;
 			cc->ti_value = h.ti_value;
 			cc->ti_flag = DECT_TI_RESPONDER;
 			cc->incoming = 0;
@@ -1009,6 +1060,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			learn_codec_offer(cc, ies, ies_len);
 			learn_keypad(cc, ies, ies_len);
 			learn_int_key(cc);
+			learn_peer_line(cc, ies, ies_len);	/* incoming = 0 now */
 			on_setup(cc, dect_nwk_find_fixed_ie(ies, ies_len,
 				 DECT_IE_SENDING_COMPLETE) >= 0);
 			if (cc->state != DECT_CC_ST_OVERLAP)
@@ -1121,6 +1173,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 
 			learn_keypad(cc, ies, ies_len);
 			learn_int_key(cc);
+			learn_peer_line(cc, ies, ies_len);
 			if (cc->keypad_len != before)
 				cc->stats.keypad++;
 			if (cc->state == DECT_CC_ST_OVERLAP) {

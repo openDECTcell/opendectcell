@@ -199,6 +199,18 @@ struct dect_cc {
 	 * TS 102 527-3 §7.4.10.6.2): the owner routes it as dialled, at once.
 	 */
 	uint8_t  list_number;
+	/*
+	 * The line of a handset-placed call (TS 102 527-3 §7.4.5.2): what
+	 * the handset chose in <<CALL-INFORMATION>> (DECT_CC_LINE_UNSET if
+	 * nothing yet, DECT_CALLINFO_LINE_NONE for 'None'), and whether our
+	 * answer has named the selected line. The first choice counts.
+	 */
+	uint8_t  peer_line;
+	uint8_t  line_confirmed;
+	/* dect_cc_set_default_line(): the FP-managed line, 0 = none set */
+	uint8_t  default_line_set;
+	uint8_t  default_line;
+	uint8_t  default_line_type;
 
 	/*
 	 * Optional <<SIGNAL>> for an FP-originated SETUP: the alerting
@@ -377,7 +389,7 @@ void dect_cc_set_call_status(struct dect_cc *cc, int on, uint8_t call_id);
 /* Append our <<CALL-INFORMATION>> with call status `status` at b+off, if
  * call status is on; returns the new offset (unchanged when off or it
  * does not fit). For whoever answers a SETUP on CC's behalf (dect_link). */
-size_t dect_cc_put_call_status(const struct dect_cc *cc, uint8_t *b,
+size_t dect_cc_put_call_status(struct dect_cc *cc, uint8_t *b,
 			       size_t cap, size_t off, uint8_t status);
 
 int dect_cc_proceed(struct dect_cc *cc);
@@ -521,6 +533,21 @@ int dect_cc_busy(const struct dect_cc *cc);
  * no call or no room.
  */
 int dect_cc_info(struct dect_cc *cc, const uint8_t *ies, size_t len);
+
+#define DECT_CC_LINE_UNSET	0xFFu
+
+/*
+ * The line the FP picks when a handset sends 'None' (FP-managed selection,
+ * TS 102 527-3 §7.4.5.2.4), and its line type. Once set, our first call
+ * status answer to a handset-placed external call names the selected line
+ * and its type, as the FP "shall" (§7.4.5.2.1); only where call status
+ * goes at all (dect_cc_set_call_status, Part 3 handsets).
+ */
+void dect_cc_set_default_line(struct dect_cc *cc, uint8_t line_id,
+			      uint8_t line_type);
+
+/* The selected line of the call: the handset's, ours for 'None', or UNSET. */
+uint8_t dect_cc_line(const struct dect_cc *cc);
 
 /*
  * Choose the transaction value the next FP-originated SETUP will use. Values

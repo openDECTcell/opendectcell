@@ -341,8 +341,17 @@
  *    dect_iwu_line(). The Line Settings List serves every line, sorted by
  *    line id, each with its own attached handsets. dect_iwu_set_line()
  *    still makes one line with every handset attached.
+ *
+ * 40: the handset's line choice (2026-10-28, lines-and-calls.md step 2).
+ *    Layout change: struct dect_cc gains peer_line, line_confirmed and the
+ *    default line. New: dect_callinfo_parse(), dect_cc_set_default_line(),
+ *    dect_cc_line(), DECT_CC_LINE_UNSET; dect_cc_put_call_status() takes a
+ *    non-const dect_cc. **Behaviour change:** with a default line set, the
+ *    first call-status answer to an external handset-placed call names the
+ *    selected line (the handset's, or ours for 'None') and its line type
+ *    (TS 102 527-3 §7.4.5.2.1, §7.4.5.2.4).
  */
-#define OPENDECTCELL_API_VERSION 39
+#define OPENDECTCELL_API_VERSION 40
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */
