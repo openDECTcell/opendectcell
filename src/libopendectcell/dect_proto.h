@@ -384,8 +384,14 @@
  *    **Behaviour change:** our {CC-RELEASE} unanswered for 36 s is
  *    completed by our own {CC-RELEASE-COM} "timer expiry" and NULL
  *    (EN 300 175-5 §9.5.1, A.1).
+ *
+ * 46: a page response without identity (2026-10-28). No layout change.
+ *    **Behaviour change:** an {LCE-PAGE-RESPONSE} without its mandatory
+ *    <<PORTABLE-IDENTITY>> is cleared with {LCE-PAGE-REJECT} when the link
+ *    knows the handset's IPUI (EN 300 175-5 §17.6.5, table 65), and still
+ *    ignored when it does not.
  */
-#define OPENDECTCELL_API_VERSION 45
+#define OPENDECTCELL_API_VERSION 46
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_UI		0x14u	/* UI task (observed; 7520 analysis) */

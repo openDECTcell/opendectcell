@@ -260,17 +260,28 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			 *
 			 * Only {LCE-PAGE-RESPONSE} counts, and only with its
 			 * mandatory <<PORTABLE-IDENTITY>> (EN 300 175-5 table
-			 * 64; a missing one means ignore, §17.6.5), which is
-			 * handed up so the caller can check who answered. Any
-			 * LCE message used to count, from any handset (external
-			 * review, the clean-room record/an external review-24102026.md,
-			 * finding 10).
+			 * 64), which is handed up so the caller can check who
+			 * answered. Any LCE message used to count, from any
+			 * handset (external review, the clean-room record/
+			 * an external review-24102026.md, finding 10).
+			 *
+			 * Without the identity §17.6.5 wants clearing by
+			 * {LCE-PAGE-REJECT}, whose mandatory identity is "the
+			 * full IPUI of the PT that is rejected" (table 65): we
+			 * can only send it when the link already knows that
+			 * IPUI, and ignore the response otherwise. This comment
+			 * used to quote the "ignore" half alone (spec sweep).
 			 */
 			const uint8_t *pid;
 			size_t pid_len;
 
 			pid = dect_nwk_find_ie(ies, ies_len,
 					       DECT_IE_PORTABLE_IDENTITY, &pid_len);
+			if (h.msg_type == DECT_LCE_PAGE_RESPONSE && !pid &&
+			    l->mm.port_id_len)
+				(void)dect_link_page_reject(l, l->mm.port_id,
+							    l->mm.port_id_len,
+							    h.ti_value);
 			if (h.msg_type == DECT_LCE_PAGE_RESPONSE && pid &&
 			    pid_len <= sizeof(ind->page_id)) {
 				memcpy(ind->page_id, pid, pid_len);

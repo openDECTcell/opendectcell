@@ -165,6 +165,38 @@ static void tx_seen(void *ctx, const uint8_t *msg, size_t len)
  * IPUI (TS 102 527-1 §7.3.8.3.1, table 20). It goes out before anything
  * MM or CC has queued.
  */
+/*
+ * EN 300 175-5 §17.6.5: a page response without its mandatory identity
+ * is cleared with {LCE-PAGE-REJECT}, when the link knows whom to name.
+ */
+static void test_page_response_without_identity_is_rejected(void)
+{
+	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33, 0x44 };
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[32];
+	size_t n;
+
+	init(&l);					/* IPUI unknown */
+	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_LCE, DECT_TI_ORIGINATOR,
+			       2, DECT_LCE_PAGE_RESPONSE);
+	feed_nwk(&l, msg, n, &ind);
+	CHECK_EQ(ind.page_response, 0u);
+	CHECK_EQ(l.lce_len, 0u);			/* nothing to name */
+
+	init(&l);
+	memcpy(l.mm.port_id, ipui, sizeof(ipui));
+	l.mm.port_id_len = sizeof(ipui);
+	tx_seen_len = 0;
+	dect_link_set_tx_log(&l, tx_seen, NULL);
+	feed_nwk(&l, msg, n, &ind);
+	CHECK_EQ(ind.page_response, 0u);
+	CHECK_EQ(tx_seen_len, 2u + 2u + sizeof(ipui));	/* sent at once */
+	CHECK_EQ(tx_seen_buf[0], 0xA0u);		/* F=1, TV=2, PD LCE */
+	CHECK_EQ(tx_seen_buf[1], DECT_LCE_PAGE_REJECT);
+	CHECK(memcmp(&tx_seen_buf[4], ipui, sizeof(ipui)) == 0);
+}
+
 static void test_page_reject_is_built_from_the_response(void)
 {
 	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33, 0x44 };
@@ -645,6 +677,7 @@ static void test_unusable_segment_still_drains_the_queue(void)
 int main(void)
 {
 	test_call_status_is_asked_per_handset();
+	test_page_response_without_identity_is_rejected();
 	test_call_id_is_asked_per_call();
 	test_init_is_quiet();
 	test_page_response_carries_the_identity();
