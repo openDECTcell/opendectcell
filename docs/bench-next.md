@@ -170,3 +170,54 @@ the voice is in `wb16k-voice.pcm`. The 40 s ring delay of `ringone.sh` is now
 **Follow-ups:** send the full call information by default to Part 3 handsets
 on every external incoming call (test 2); a Gigaset display profile for the
 caller name (test 1); internal-call CLIP (the C430A showed no caller on test 5).
+
+## Next round (written 2026-10-28 evening, after more desk work)
+
+Three changes since the bench need a handset. About 15 minutes. Box at `9a13f74`
+or later.
+
+### 8. The A540 rings properly by default (5 minutes)
+
+Since `2c76ace` a Part 3 handset gets the full call information without any
+option. Ring the **A540** with only a number; **answer** it after a few rings,
+then hang up after 10 s.
+
+```
+EXTRA=clip=0301234567 HOLD=10 ./ringone.sh a540
+```
+
+| you see / hear | meaning |
+|---|---|
+| it rings aloud, shows "via Line 1 0301234567", and the timer runs after you answer | the default works; the log should show `ring: full call information for a Part 3 handset` and `call: CS call connect sent in CC-INFO (Part 3)` |
+| it rings silently | the log says why: look for `terminal capability is not known yet` |
+| the call drops when you answer | the CS-call-connect CC-INFO upsets it: the agent reads the log |
+
+### 9. The A540 dials out: line named, timer unchanged (3 minutes)
+
+Since `8d128d1` our answer names the line the A540 is calling on (it asks for
+"None", we answer line 1). On the **A540** dial **123**, keep it 15 s.
+
+```
+MAXSECS=90 HOLD=15 ATTACH=600000 EXTRA=playpcm=/tmp/wb16k.pcm ./ringone.sh a540
+```
+
+| you see | meaning |
+|---|---|
+| the timer at once, as before; maybe "Line 1" on the display | fine; the log's CALL-PROC carries `7e 0c 00 00 81 00 05 81 ...` |
+| no timer, or the call drops | naming the line upset it: the agent reads the log |
+
+### 10. Two calls at once, now with their own call ids (5 minutes)
+
+Test 18 again, since `9a13f74` gave each call its own id.
+
+```
+MAXSECS=200 HOLD=90 CAP=1 EXTRA=playpcm=/tmp/wb16k.pcm,twocalls ./ringone.sh a540
+```
+
+Answer the **A540** when it rings; while that call runs, dial **123** on the
+**C430A**. Both should hear the test sound as on 2026-10-28.
+
+| you see | meaning |
+|---|---|
+| both calls work as before | fine; the log should show call id 1 for the A540 and 2 for the C430A's call (no call status goes to the C430A, so only its log line shows it) |
+| the second call fails | the agent reads the log |
