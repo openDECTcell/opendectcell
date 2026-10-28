@@ -627,25 +627,21 @@ struct stubd {
 		uint8_t  att_cfg;
 		uint8_t  att_flag;
 		/*
-		 * slotmask=N / noslotcfg: the traffic-bearer slot-availability
-		 * mask the chip searches when allocating a bearer for an
-		 * INCOMING call. [CR A-0114] found THE cause of GAP handsets
-		 * refusing with 0x32: the chip inits 0xdb3 = 0x3f (all six slots
-		 * marked in-use) and the CC state machine's free-slot search
-		 * finds nothing, so no bearer slot is allocated and the handset
-		 * releases "insufficient bearers available". Stock sends
-		 * 0x017c 00 09 at attach -> 0xdb3 = 0x09 (keeps slots 0 and 3
-		 * reserved, frees 1,2,4,5). We never sent 0x017c at all.
-		 *
-		 * 0xdb3 is global, so sending it once per subscription load is
-		 * enough. Default 0x09 matches stock exactly; do NOT use 0x00
-		 * (frees the reserved dummy-bearer/scan slots). noslotcfg omits
-		 * the mail entirely (the pre-A-0114 behaviour, as a control).
-		 * The C4 does not depend on it -- CAT-iq opens its own bearer
-		 * PP-side -- which is why it rang without this and the three
-		 * Gigasets did not.
+		 * 0x017c 00 <mask>: the handsets locked in, bit n = chip slot
+		 * n+1 holding a live 0x020A record. [CR A-0129], from AVM's
+		 * symboled driver: stock builds it from its active-handset
+		 * table and sends it after every registration and every
+		 * deregistration (1 handset 01, slots 1-3 07, 1-4 0f). It
+		 * supersedes A-0114, which read it as a bearer-slot mask:
+		 * the `09` A-0114 saw was slots 1 and 4 in that capture. We
+		 * sent a fixed 09 from 2026-10-24 to 2026-10-28; our handsets
+		 * in slots 2 and 3 rang all the same, so whatever the chip
+		 * does with it, paging by TPUI from the host does not depend
+		 * on it. Now computed (live_slot_mask()); slotmask=N pins it,
+		 * noslotcfg omits the mail (controls).
 		 */
 		uint8_t  slot_mask;
+		int      slot_mask_fixed;	/* slotmask=N given */
 		int      no_slot_cfg;
 		/*
 		 * setupdelay=N: wait N ms after the page response before the
@@ -2637,6 +2633,7 @@ static int held_back(const struct stubd *s, unsigned i)
 	return s->audio.holdback_ms && !s->holdback_done && i != 0;
 }
 
+static void send_subscription_tail(struct stubd *s);
 static void install_subscription(struct stubd *s, uint8_t slot,
 				 const uint8_t uak[DECT_MM_UAK_LEN]);
 
@@ -3069,6 +3066,7 @@ static void holdback_tick(struct stubd *s, uint64_t now)
 		       "t=%llu ms\n", s->hs[i].path, hs_slot(s, i),
 		       (unsigned long long)(now - g_start));
 	}
+	send_subscription_tail(s);	/* the mask now includes them */
 	fflush(stdout);
 }
 
@@ -3246,9 +3244,31 @@ static void install_subscription(struct stubd *s, uint8_t slot,
 		log_mail(&m, "tx M", s->show_params);
 }
 
+/*
+ * The slots holding a live 0x020A record, as 0x017c wants them
+ * [CR A-0129]: the same set send_subscription() installs.
+ */
+static uint8_t live_slot_mask(const struct stubd *s)
+{
+	unsigned i, mask = 0;
+
+	for (i = 0; i < s->n_hs; i++) {
+		unsigned sl = hs_slot(s, i);
+		int valid = i == s->cur ? s->uak_valid
+					: s->hs[i].loaded && s->hs[i].uak_valid;
+
+		if (valid && sl >= 1u && sl <= DECT_MM_MAX_SLOT &&
+		    !held_back(s, i))
+			mask |= 1u << (sl - 1u);
+	}
+	return (uint8_t)mask;
+}
+
 static void send_subscription_tail(struct stubd *s)
 {
 	struct dect_mail m;
+	uint8_t mask = s->audio.slot_mask_fixed ? s->audio.slot_mask
+						: live_slot_mask(s);
 
 	/*
 	 * [CR A-0114] 0x017c sets the traffic-bearer slot-availability mask
@@ -3264,14 +3284,14 @@ static void send_subscription_tail(struct stubd *s)
 		m.dst = DECT_TASK_CONTACT_DST;
 		m.prim = 0x017Cu;
 		m.param[0] = 0x00u;		/* unused by the handler */
-		m.param[1] = s->audio.slot_mask;	/* -> 0xdb3; stock 0x09 */
+		m.param[1] = mask;
 		m.param_len = 2;
 		send_mail(s, (unsigned int)s->tx_slot, &m);
 		if (s->verbose)
 			log_mail(&m, "tx M", s->show_params);
-		printf("sub: slot-availability mask 0x017c 00 %02x "
-		       "(0xdb3; frees bearer slots) [CR A-0114]\n",
-		       s->audio.slot_mask);
+		printf("sub: locked-in handset mask 0x017c 00 %02x%s "
+		       "[CR A-0129]\n", mask,
+		       s->audio.slot_mask_fixed ? " (pinned by slotmask=)" : "");
 	}
 }
 
@@ -6167,9 +6187,9 @@ static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
 /*
  * Erase handset i from the base, as stock does after the handset's
  * ACCEPT [CR A-0128]: the slot's 0x0247 entry cleared, its 0x020A record
- * overwritten with zeros. Stock also rewrites 0x017C, which A-0128 reads as
- * a registered-handset mask and A-0114 as the bearer-slot mask the ringing
- * needs; until the room settles which, it is left alone. The store and its
+ * overwritten with zeros, then 0x017C without its bit ([CR A-0129]: the
+ * locked-in handset mask; stock rewrites it on every deregistration).
+ * The store and its
  * .name move aside (<store>.deregistered), so a mistake can be undone by
  * moving them back. Then the lists lose the entry and say so.
  */
@@ -6215,6 +6235,7 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 		if (s->side[k].active)
 			(void)dect_iwu_remove_handset(&s->side[k].link.cc.iwu,
 						      (uint8_t)slot);
+	send_subscription_tail(s);	/* the mask without it */
 	names_notify(s);		/* §7.4.10.2.2: one removed */
 	fflush(stdout);
 }
@@ -8025,8 +8046,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			    !(klen == 4 && !memcmp(key, "cnip", 4)))
 				return -1;
 		}
-		if (eq && klen == 8 && !memcmp(key, "slotmask", 8))
+		if (eq && klen == 8 && !memcmp(key, "slotmask", 8)) {
 			a->slot_mask = (uint8_t)v;
+			a->slot_mask_fixed = 1;
+		}
 		else if (!eq && klen == 9 && !memcmp(key, "noslotcfg", 9))
 			a->no_slot_cfg = 1;
 		else if (eq && klen == 6 && !memcmp(key, "attcfg", 6))
@@ -8557,9 +8580,9 @@ static void usage(void)
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
 		"           txidle=N voiceidle=N set the transmit filler bytes\n"
-		"           slotmask=N 0x017c byte -> 0xdb3 bearer-slot mask (stock\n"
-		"                     0x09; default 0x09; THE incoming-call fix,\n"
-		"                     [CR A-0114]); noslotcfg omits it (control)\n"
+		"           slotmask=N pins the 0x017c byte, the locked-in handset\n"
+		"                     mask (default: computed from the slots with\n"
+		"                     a record, [CR A-0129]); noslotcfg omits it\n"
 		"           attcfg=N  0x020A config byte after the UAK (stock 0x01\n"
 		"                     per Gigaset, 0x02 C4; default 0x00) [CR A-0113]\n"
 		"           attflag=N 0x0247 install flag byte (stock bit0=1,\n"
@@ -8849,7 +8872,7 @@ int main(int argc, char **argv)
 	s.audio.reg_signal_s = 120u;
 	s.audio.lane_ch[0] = 2; s.audio.lane_word[0] = 3;	/* Q-0063 */
 	s.audio.lane_ch[1] = 3; s.audio.lane_word[1] = 2;
-	s.audio.slot_mask = 0x09u;	/* [CR A-0114] stock's 0x017c 00 09 */
+	s.audio.slot_mask = 0x00u;	/* computed unless slotmask= pins it */
 	/*
 	 * -1, not 0: the struct is memset to zero above, and a zero here
 	 * would append a fourth page byte of 0x00 on every run -- changing
