@@ -5043,6 +5043,9 @@ static void main_cc_setup(struct stubd *s)
 				s->audio.callinfo.call_id : 1u);
 	s->reg.link.call_status_for = call_status_for;
 	s->reg.link.call_status_ctx = s;
+	/* our one line for FP-managed selection ('None', §7.4.5.2.4) */
+	dect_cc_set_default_line(&s->reg.link.cc, STUBD_LINE_ID,
+				 DECT_CALLINFO_NDT_DELAY);
 	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
 	/* the lowest free value, 0, unless -a ti= says otherwise */
 	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
@@ -5257,6 +5260,8 @@ static int side_start(struct stubd *s, uint8_t handle)
 				s->audio.callinfo.call_id : 1u);
 	sl->link.call_status_for = call_status_for;
 	sl->link.call_status_ctx = s;
+	dect_cc_set_default_line(&sl->link.cc, STUBD_LINE_ID,
+				 DECT_CALLINFO_NDT_DELAY);
 	sl->lane = -1;
 	sl->ic_tried = 0;
 	sl->dial_len = 0;
