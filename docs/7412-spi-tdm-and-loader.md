@@ -115,7 +115,22 @@ except where noted):
 | `0x0153`/`0x0157`/`0x0169` | latch silently; report only when the broadcast changes | no reply with the radio off, as seen |
 | `0xF625` | 44 octets: 08.25's trailing constant octet dropped | — |
 
-Open, asked as Q-0009: why X2 (configuration, then a real off->on edge)
+**RAM addresses [CR A-0009], checked on the box** (fresh boot, memory sweeps
+every 0.6 s next to `0xF623`): `0x010A` radio switch (`01` from boot, `00`
+after `015B 00`, `01` after radio-on, `00` after the park); `0x010C` and
+`0x010B` equal `0xF623[0]` and `[1]`; `0x0188 + 2n` equals the ten levels
+byte for byte, decay included. After a park, though, `0x010C`/`0x010B` keep
+the carrier and bearer while `0x010A` is 0 and `0xF623` stops, so it is open
+whether the park ends the transmission or the bytes go stale (Q-0010;
+`bench-7412.md` test 3 checks it with a handset). A-0009's
+`(0x0776 & 0x81) == 0x81` did not hold: `0x0776` read `0x80` throughout.
+A-0009 also explains X2: in the boot state (`0x010A` = 1) every
+configuration mail brings the beacon up on a default carrier, after which
+radio-on does not scan. So **any configuration or registration mail in the
+boot state transmits** on 06.88; `dect-stubd` sends `0x015B 00` first, and
+subscription restores wait for it.
+
+Answered by A-0009 (kept for the record): why X2 (configuration, then a real off->on edge)
 stalled while Z1 (radio-off before the configuration) worked; and whether
 `0xF623[0]` changing `ff` -> `05` within 5 s of a lone `0x0169`, with no
 radio-on ever sent, means the chip beacons by itself. With no mail after the

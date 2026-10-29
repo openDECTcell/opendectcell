@@ -56,6 +56,24 @@ the log shows a location registration of slot 1. Note: the 06.88 slot table
 address is unknown [CR A-0007], so the daemon skips its read-back and slot
 audit ("skipped -- STUB ... is loaded") -- that is expected, not a fault.
 
+## 3. Does the park silence the base? (3 minutes)
+
+Only if the handset found the base in test 1 or 2. The park (`0x015B 00`)
+clears the chip's radio switch, but its beacon-carrier byte keeps its value
+afterwards, so the chip alone does not tell us whether it stopped
+transmitting (Q-0010).
+
+```
+/etc/init.d/opendectcell stop     # parks: close registration, radio off
+```
+
+Watch the handset for two minutes, without pressing keys.
+
+| You see | Meaning |
+|---|---|
+| It loses the base ("no base", searching) within about a minute | The park works on the 7412 |
+| It stays in range | The park does not stop the beacon on 06.88; only the chip reset below does. Tell the agent: the service's stop then has to reset the chip on this box |
+
 ## After the tests
 
 ```
