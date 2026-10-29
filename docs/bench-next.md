@@ -630,3 +630,94 @@ the a FRITZ!Box.
 |---|---|
 | 27 | **passed**: A540 -> mobile and mobile -> A540, G.722 both ways, ciphered, hang-up from either side. On the way: the A540's stored key had been wrong since the lab repair of 2026-10-28 14:05 (fixed by re-registering), LuCI's commands were refused while baresip held the control socket (`0bce429`), a deregistered handset stayed listed (`0706e9b`), a new registration was hidden (`ecaaebc`), and an incoming call carried no number and line after a restart (capability now remembered) |
 | 28 | **passed**: the A540 took the 8-digit PIN, and the model picked in LuCI became its profile at enrolment |
+
+## Security round (written 2026-10-29 afternoon)
+
+The fixes of the security audit of 2026-10-29, none on air yet. The biggest
+change: **a handset now proves its key before its call goes anywhere**
+(`acf6b61`, `-a authfirst`, the default). Everything else is hardening that
+should change nothing you see. `-a noauthfirst` (Network > DECT, Extra
+options) restores the old order if a test needs the comparison.
+
+**Before anything:** on the 7520, back up and install the new packages,
+built from `dc28a48` into `build/release/out-audit-ipq40xx/` (unsigned: the
+signing key lives only in GitHub, so `--allow-untrusted`):
+
+```
+ssh root@192.168.1.1 'tar czf /root/opendectcell-backup-1029.tgz /etc/config/opendectcell /etc/opendectcell-sub.* /etc/opendectcell'
+scp -O build/release/out-audit-ipq40xx/*arm_cortex*.apk build/release/out-audit-ipq40xx/kmod-opendectcell-ipq40xx*.apk build/release/out-audit-ipq40xx/luci-app-opendectcell*.apk root@192.168.1.1:/tmp/
+ssh root@192.168.1.1 'cd /tmp && apk add --allow-untrusted ./kmod-opendectcell-*.apk ./opendectcell-[0-9]*.apk ./luci-app-opendectcell-*.apk ./opendectcell-baresip-*.apk && reboot'
+```
+
+If apk calls them already installed (same version 0.3.1), remove first:
+`apk del opendectcell-baresip luci-app-opendectcell opendectcell kmod-opendectcell-ipq40xx`, then
+add; restore the config from the backup if it went with them. After the
+reboot: Network > DECT shows the handsets as before, and `logread -e
+dect-stubd | grep -i "option "` prints nothing (no setting was refused).
+
+### 30. An incoming call from the FRITZ!Box (5 minutes; S1, A1)
+
+Call Line 1 from a mobile. Answer on the A540, talk, hang up.
+
+| you see | meaning |
+|---|---|
+| it rings with number and name, audio both ways | INVITEs from the registrar pass, authentication before the answer works, the caller ID with its new "user provided" mark still shows |
+| no ring; `logread -e baresip` shows "is not from the account's server -- 403" | the FRITZ!Box sends from another address than its REGISTER answers: `uci set opendectcell.main.sip_any_source=1; uci commit; /etc/init.d/opendectcell restart`, call again, and tell the agent the addresses in that line |
+| it rings without the number | the screening mark matters to this handset: tell the agent (one line to revert, `1e2f857`) |
+| answered, but silence for more than a second, or the call drops | the answer waits for the proof: send `logread -e dect-stubd` |
+
+### 31. An outgoing call from each Gigaset (5 minutes; A1)
+
+From the A540, the C430A and the AS690H in turn: dial the mobile.
+
+| you see | meaning |
+|---|---|
+| it rings as before, at most a second later | the challenge runs before routing; the log shows "authenticating the handset before the call goes anywhere", then "dialled ... connecting" |
+| the handset shows an error, the log "authentication FAILED" | that handset's key or reply differs: send the log -- the call was ended, as it now must be |
+| "released -- no key to authenticate this handset with" | its store has no key: re-register that handset |
+
+### 32. Internal call and list access (5 minutes; A1, A4, A5)
+
+1. Internal call A540 -> C430A; answer; talk.
+2. On the A540, open the handset list (Internal Names) and rename the C430A;
+   it shows on all handsets.
+3. System settings: change something that asks for the PIN; enter a wrong
+   PIN three times, then the right one in the same session.
+
+| you see | meaning |
+|---|---|
+| 1 and 2 work as before | gating the callee's answer and the name check are harmless |
+| in 3 the right PIN is refused after three wrong ones; the log counts "wrong PIN entered (3 within the hour)" | the guess limit works; leave the list and come back, the right PIN then works |
+
+### 33. Status > DECT and the files (2 minutes; L1, F1, F2)
+
+| check | expected |
+|---|---|
+| Status > DECT, all tabs | render as before (cells are text now) |
+| `ls -la /var/run/opendectcell/` | `state.json`, `stub.second`, `pin`; the directory `drwx------`, `pin` `-rw-------` |
+| `ls /tmp/opendectcell-state.json /tmp/dect-stub.second` | no such files |
+| `tr '\0' ' ' < /proc/$(pidof dect-stubd)/cmdline` | `-P @/var/run/opendectcell/pin`, not the digits |
+
+### 34. A handset that cannot prove its key (10 minutes; optional, A1)
+
+Simulates an impostor: the base holds a wrong key for one handset. Pick
+the C430A's slot N from Network > DECT, Handsets ("DECT N"); its store is
+`/etc/opendectcell-sub.N`. **Keep the backup from above.**
+
+```
+ssh root@192.168.1.1 'N=2; cp /etc/opendectcell-sub.$N /root/subN.keep; printf "\x00\x01\x02\x03" | dd of=/etc/opendectcell-sub.$N bs=1 seek=8 conv=notrunc; /etc/init.d/opendectcell restart'
+```
+(with your N; bytes 8-11 lie inside the stored key). Then dial the mobile
+from that handset. Afterwards, with the same N: `N=2; cp /root/subN.keep /etc/opendectcell-sub.$N;
+/etc/init.d/opendectcell restart`.
+
+| you see | meaning |
+|---|---|
+| the handset's call ends at once, nothing rings on the mobile, the log "authentication FAILED (WRONG RES)" and "released" | **A1 works**: a key it cannot prove gets no call through |
+| the mobile rings | A1 failed: send the log at once |
+| the handset cannot reach the base at all | the chip refused the wrong key already; inconclusive for A1, restore and say so |
+
+### 35. 7412 (when there is time): `docs/bench-7412.md`
+
+The 7412 card carries the same daemon; its test 3 also shows the verified
+park.

@@ -8,8 +8,8 @@ radio really beacons can only be seen from a handset. The 06.88 STUB needs its
 radio switched off before the bring-up; the daemon does that since `143c5fd`
 (command check, same doc §1b).
 
-**Before anything:** the box runs openDECTcell `539ea43` or later. `md5sum
-/usr/sbin/dect-stubd` should print `3ca219d4b556d9b4fce169cbc0fbbcb7`; the
+**Before anything:** the box runs openDECTcell `dc28a48` or later. `md5sum
+/usr/sbin/dect-stubd` should print `206982939b00b3b54bf0fd9cd6aad2ed`; the
 modules `lantiq_ssc_pcm.ko` and `opendectcell.ko` are in `/lib/modules/6.12.112/`.
 The 0.3.1 files are kept in `/root/dw-orig/`. The chip is held in reset
 through sysfs; release it first:
