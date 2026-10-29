@@ -77,7 +77,7 @@ struct bcall {
 	struct call *call;		/* NULL once the SIP side has ended */
 	struct ua   *ua;
 	int          out;		/* the handset called out */
-	int          rang, hung;	/* remote-ringing sent; we hung up */
+	int          rang;		/* remote-ringing sent */
 	int          answered;		/* the handset took a call-in */
 	int          wait;		/* call-in sent, no answer yet */
 	unsigned     seq;		/* the call-in's place in the order sent */
@@ -92,7 +92,6 @@ struct bcall {
 
 struct ausrc_st {
 	struct bcall    *bc;
-	struct ausrc_prm prm;
 	ausrc_read_h    *rh;
 	void            *arg;
 	uint64_t         ts;
@@ -100,7 +99,6 @@ struct ausrc_st {
 
 struct auplay_st {
 	struct bcall     *bc;
-	struct auplay_prm prm;
 	auplay_write_h   *wh;
 	void             *arg;
 };
@@ -178,14 +176,15 @@ static struct ua *line_ua(unsigned hs, unsigned line)
 	return NULL;
 }
 
-static unsigned ua_hs(const struct ua *ua)
+/* The account's first line (its handset); NULL: none of the handsets'. */
+static struct line *line_of(const struct ua *ua)
 {
 	unsigned i;
 
 	for (i = 0; i < n_lines; i++)
 		if (aor_is(ua, lines[i].aor))
-			return lines[i].hs;
-	return 0;
+			return &lines[i];
+	return NULL;
 }
 
 /* ---- calls --------------------------------------------------------------- */
@@ -247,7 +246,7 @@ static struct bcall *bc_new(void)
 
 			bc->id = bc->hs = 0;
 			bc->ua = NULL;
-			bc->out = bc->rang = bc->hung = bc->answered = 0;
+			bc->out = bc->rang = bc->answered = 0;
 			bc->seq = 0;
 			bc->tok[0] = '\0';
 			return bc;
@@ -299,7 +298,6 @@ static void bc_end(struct bcall *bc, uint16_t scode, const char *reason)
 	struct call *call = bc->call;
 	struct ua *ua = bc->ua;
 
-	bc->hung = 1;
 	bc_free(bc);
 	if (call && !call_has_legs(call))
 		ua_hangup(ua, call, scode, reason);
@@ -312,21 +310,19 @@ static void call_end(struct bcall *bc, uint16_t scode, const char *reason)
 	unsigned i;
 
 	for (i = 0; call && i < MAX_CALLS; i++)
-		if (calls[i].call == call && &calls[i] != bc) {
-			calls[i].hung = 1;
+		if (calls[i].call == call && &calls[i] != bc)
 			bc_free(&calls[i]);
-		}
 	bc_end(bc, scode, reason);
 }
 
 /* ---- the control socket -------------------------------------------------- */
 
-static void ctl_drop(void);
+static void ctl_drop(int reconnect);
 
 static void ctl_lost(void *arg)
 {
 	(void)arg;
-	ctl_drop();
+	ctl_drop(1);
 }
 
 /*
@@ -393,14 +389,15 @@ static void aud_close(struct bcall *bc)
 
 /*
  * One 20 ms frame from the handset: the microphone, then the player's
- * frame back. Frames are split to the codec's packet time if it is not 20.
+ * frame back. Whole frames whatever the packet time: baresip buffers
+ * both ways (an aubuf before the encoder and after the decoder).
  */
 static void aud_read(int flags, void *arg)
 {
 	struct bcall *bc = arg;
 	int16_t up[FRAME], down[FRAME];
+	struct auframe af;
 	ssize_t n;
-	size_t off;
 
 	(void)flags;
 	n = recv(bc->afd, up, sizeof(up), MSG_DONTWAIT);
@@ -412,30 +409,16 @@ static void aud_read(int flags, void *arg)
 		return;
 	if (bc->src) {
 		struct ausrc_st *src = bc->src;
-		size_t sc = src->prm.srate * src->prm.ptime / 1000u;
 
-		for (off = 0; sc && off + sc <= FRAME; off += sc) {
-			struct auframe af;
-
-			auframe_init(&af, AUFMT_S16LE, up + off, sc,
-				     src->prm.srate, 1);
-			af.timestamp = src->ts;
-			src->ts += (uint64_t)sc * 1000000u / src->prm.srate;
-			src->rh(&af, src->arg);
-		}
+		auframe_init(&af, AUFMT_S16LE, up, FRAME, RATE, 1);
+		af.timestamp = src->ts;
+		src->ts += (uint64_t)FRAME * 1000000u / RATE;
+		src->rh(&af, src->arg);
 	}
 	memset(down, 0, sizeof(down));
 	if (bc->play) {
-		struct auplay_st *play = bc->play;
-		size_t sc = play->prm.srate * play->prm.ptime / 1000u;
-
-		for (off = 0; sc && off + sc <= FRAME; off += sc) {
-			struct auframe af;
-
-			auframe_init(&af, AUFMT_S16LE, down + off, sc,
-				     play->prm.srate, 1);
-			play->wh(&af, play->arg);
-		}
+		auframe_init(&af, AUFMT_S16LE, down, FRAME, RATE, 1);
+		bc->play->wh(&af, bc->play->arg);
 	}
 	(void)send(bc->afd, down, sizeof(down), MSG_DONTWAIT | MSG_NOSIGNAL);
 }
@@ -483,7 +466,7 @@ static void call_out(unsigned id, unsigned hs, unsigned line,
 	if (!ua || !number || !*number || !(bc = bc_new())) {
 		warning("openDECTcell: call %u from DECT %u: %s\n", id, hs,
 			!ua ? "no Line 1 account for this handset" :
-			"no number");
+			!number || !*number ? "no number" : "no call free");
 		ctl_call("remote-released", id, "reason", "unreachable");
 		return;
 	}
@@ -573,10 +556,13 @@ static void ctl_line(const char *line, size_t len)
 
 				if (o == bc || o->call != bc->call)
 					continue;
-				if (o->id)
+				if (o->id) {
 					(void)ctl_call("remote-released", o->id,
 						       "reason", "normal");
-				bc_free(o);	/* a waiting one: call-in-ok */
+					bc_free(o);
+				} else {
+					o->call = NULL;	/* call-in-ok releases it */
+				}
 			}
 			bc->answered = 1;
 			tmr_cancel(&bc->ring);
@@ -607,7 +593,8 @@ static void ctl_line(const char *line, size_t len)
 	}
 }
 
-static void ctl_drop(void)
+/* Closes the control socket and ends its calls; reconnect: try again. */
+static void ctl_drop(int reconnect)
 {
 	unsigned i;
 
@@ -623,6 +610,8 @@ static void ctl_drop(void)
 	for (i = 0; i < MAX_CALLS; i++)
 		if (calls[i].call || calls[i].wait)
 			call_end(&calls[i], 503, NULL);
+	if (!reconnect)
+		return;
 	warning("openDECTcell: control socket lost -- reconnecting\n");
 	tmr_start(&ctl.retry, RETRY_MS, ctl_connect, NULL);
 }
@@ -637,7 +626,7 @@ static void ctl_read(int flags, void *arg)
 	n = recv(ctl.fd, ctl.in + ctl.il, sizeof(ctl.in) - ctl.il - 1u,
 		 MSG_DONTWAIT);
 	if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR)) {
-		ctl_drop();
+		ctl_drop(1);
 		return;
 	}
 	if (n < 0)
@@ -781,7 +770,7 @@ static void call_in(struct ua *ua, struct call *call)
 	char num[DECT_CLIP_NUMBER_MAX + 1] = "", name[DECT_CLIP_NAME_MAX + 1] = "";
 	unsigned i, legs = 0;
 
-	if (!ua_hs(ua))
+	if (!line_of(ua))
 		return;			/* not one of the handsets' accounts */
 	if (ctl.fd < 0) {
 		ua_hangup(ua, call, 503, "Service Unavailable");
@@ -814,16 +803,6 @@ static void call_in(struct ua *ua, struct call *call)
 }
 
 /* ---- the VoIP status ----------------------------------------------------- */
-
-static struct line *line_of(const struct ua *ua)
-{
-	unsigned i;
-
-	for (i = 0; i < n_lines; i++)
-		if (aor_is(ua, lines[i].aor))
-			return &lines[i];
-	return NULL;
-}
 
 static void json_str(FILE *f, const char *v)
 {
@@ -951,14 +930,19 @@ static void status_write(void)
 		if (!l)
 			continue;
 		LIST_FOREACH(ua_calls(ua), ce) {
-			/* the handset that talks, else the account's first */
+			/*
+			 * The handset that talks, else one still ringing,
+			 * else the account's first line.
+			 */
 			unsigned hs = l->hs, ln = l->line;
+			int talks = 0;
 
-			for (i = 0; i < MAX_CALLS; i++)
-				if (calls[i].call == ce->data &&
-				    (calls[i].out || calls[i].answered)) {
+			for (i = 0; i < MAX_CALLS && !talks; i++)
+				if (calls[i].call == ce->data) {
 					hs = calls[i].hs;
 					ln = calls[i].line;
+					talks = calls[i].out ||
+						calls[i].answered;
 				}
 			if (!first)
 				fputc(',', f);
@@ -1023,7 +1007,7 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 		const struct sip_msg *msg = bevent_get_msg(event);
 		struct ua *ua = msg ? uag_find_msg(msg) : NULL;
 
-		if (!ua || !ua_hs(ua)) {
+		if (!ua || !line_of(ua)) {
 			if (msg)
 				(void)sip_treply(NULL, uag_sip(), msg, 404,
 						 "Not Found");
@@ -1071,7 +1055,7 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 			bc = &calls[i];
 			if (bc->call != call)
 				continue;
-			if (!bc->hung && bc->id)
+			if (bc->id)
 				(void)ctl_call("remote-released", bc->id,
 					       "reason",
 					       reason_of(call_scode(call)));
@@ -1139,7 +1123,6 @@ static int src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	if (!st)
 		return ENOMEM;
 	st->bc = bc;
-	st->prm = *prm;
 	st->rh = rh;
 	st->arg = arg;
 	bc->src = st;
@@ -1169,7 +1152,6 @@ static int play_alloc(struct auplay_st **stp, const struct auplay *ap,
 	if (!st)
 		return ENOMEM;
 	st->bc = bc;
-	st->prm = *prm;
 	st->wh = wh;
 	st->arg = arg;
 	bc->play = st;
@@ -1212,8 +1194,7 @@ static int module_close(void)
 	tmr_cancel(&status_tmr);
 	(void)unlink(STATUS_PATH);
 	tmr_cancel(&ctl.retry);
-	ctl_drop();
-	tmr_cancel(&ctl.retry);
+	ctl_drop(0);
 	for (i = 0; i < MAX_CALLS; i++) {
 		tmr_cancel(&calls[i].ring);	/* none may fire unloaded */
 		aud_close(&calls[i]);

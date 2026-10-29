@@ -410,6 +410,7 @@ struct ab_lane {
 	unsigned call;		/* announced for this call id, 0 = none */
 	int      wideband;
 	struct dect_g722_state enc, dec;
+	struct dect_g722_state sil;	/* the fill's own: enc codes the speech */
 	struct dect_rs2 rs_up, rs_down;
 	uint8_t  down[8192];
 	size_t   dh, dn;
@@ -781,13 +782,6 @@ struct stubd {
 		uint8_t  mode;		/* 0x0230 master byte (not a mode) */
 		uint8_t  codec;		/* 0x0230 extra byte (not a codec id) */
 		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
-		/*
-		 * nbcodec: advertise only the full-slot codec in <<CODEC-LIST>>,
-		 * dropping the G.722 entry that asks for a long slot. Tests
-		 * whether the A540's RELEASE-REASON 0x32 is a long-slot bearer
-		 * it cannot allocate (docs/tasks-2026-10-22.md T3).
-		 */
-		int      nbcodec;
 		int      nowait;	/* send 0x022D immediately (old behaviour) */
 		/*
 		 * remode=MS: MS ms after 0x022D, send a SECOND 0x0230 for the
@@ -2112,7 +2106,7 @@ static void ab_pop(struct ab_lane *l)
 	if (l->wideband) {
 		static const int16_t z[4];
 
-		(void)dect_g722_encode(&l->enc, z, 4, l->cur);
+		(void)dect_g722_encode(&l->sil, z, 4, l->cur);
 	} else {
 		l->cur[0] = l->cur[1] = 0;
 	}
@@ -6361,7 +6355,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	if (s->pin)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
-	mcfg.narrowband_only = (uint8_t)s->audio.nbcodec;
+	mcfg.narrowband_only = (uint8_t)s->audio.narrowband;
 	if (s->have_rfpi)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
 	/*
@@ -7085,7 +7079,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 	if (s->pin)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
-	mcfg.narrowband_only = (uint8_t)s->audio.nbcodec;
+	mcfg.narrowband_only = (uint8_t)s->audio.narrowband;
 	mcfg.auth_locate = (uint8_t)s->audio.locauth;
 	if (s->have_rfpi)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
@@ -8401,10 +8395,20 @@ static struct bcall *bc_new(struct stubd *s)
 	return NULL;
 }
 
+/*
+ * The call is over for the bridge. On the main link its ring stops too,
+ * whatever state it was in: with ring_ms=0 ring_tick() runs only while
+ * ring_now is set, so a ring left in PAGING would hold the main link
+ * "busy" for good (code review, 2026-10-29).
+ */
 static void bc_clear(struct stubd *s, struct bcall *b)
 {
-	if (b->party == -1)
+	if (b->party == -1) {
 		s->ring_now = 0;
+		s->ring_watch = 0;
+		if (s->ring_state != RING_IDLE)
+			s->ring_state = RING_DONE;
+	}
 	b->id = 0;
 }
 
@@ -8765,10 +8769,10 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		    dect_ctl_get_uint(m, "line", 1, 2, &line))
 			line = STUBD_LINE_ID;
 		b = bc_new(s);
-		if (!b || (s->n_hs && hs_in_call(s, t)))
+		if (s->n_hs && hs_in_call(s, t))
 			why = "in-call";
-		else if (!main_free(s) && (!s->audio.two_calls ||
-			 lanes_available(s, NULL) <= 0))
+		else if (!b || (!main_free(s) && (!s->audio.two_calls ||
+			 lanes_available(s, NULL) <= 0)))
 			why = "channels";
 		if (why) {
 			dect_ctl_begin(&o, "busy");
@@ -8844,8 +8848,6 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		if (ic_active(s, p) && dect_cc_busy(ic_cc(s, p)))
 			(void)dect_cc_release_reason(ic_cc(s, p),
 						     bridge_reason(r));
-		else if (p == -1 && s->ring_state != RING_DONE)
-			s->ring_state = RING_DONE;	/* stop paging */
 	} else if (!b->out || !ic_active(s, p)) {
 		ctl_reply(s, m->verb, "no-call", NULL, 0);
 		return 1;
@@ -8878,13 +8880,23 @@ static void bridge_tick(struct stubd *s, uint64_t now)
 			continue;
 		busy = b->party != BC_PAGING && ic_active(s, b->party) &&
 		       dect_cc_busy(ic_cc(s, b->party));
-		if (busy)
-			b->busy_seen = 1;
 		cc = busy ? ic_cc(s, b->party) : NULL;
+		/*
+		 * A main-link call-in exists once the handset alerts: a SETUP
+		 * lost to the handset's own call before that is rung again
+		 * (ring_watch_tick()), not ended.
+		 */
+		if (cc && (b->out || b->party != -1 ||
+			   (cc->incoming && (cc->state == DECT_CC_ST_RINGING ||
+					     cc->state == DECT_CC_ST_ACTIVE))))
+			b->busy_seen = 1;
 		if (cc && !b->out && cc->incoming) {
-			if (b->party == -1)
-				s->ring_now = 0;
-			else
+			/*
+			 * The main link's ring_now stays set until bc_clear():
+			 * ring_tick() then runs ring_watch_tick(), which rings
+			 * again after a collision with the handset's own call.
+			 */
+			if (b->party >= 0)
 				sr_call_tick(s, b, now);
 			if (!b->rang && (cc->state == DECT_CC_ST_RINGING ||
 					 cc->state == DECT_CC_ST_ACTIVE)) {
@@ -9068,6 +9080,7 @@ static void ab_tick(struct stubd *s, uint64_t now)
 		l->rx_prev = 0xFFFFFFFFu;
 		dect_g722_init(&l->enc);
 		dect_g722_init(&l->dec);
+		dect_g722_init(&l->sil);
 		dect_rs2_init(&l->rs_up);
 		dect_rs2_init(&l->rs_down);
 		dect_ctl_begin(&o, "audio");
@@ -9132,7 +9145,7 @@ static void ab_tick(struct stubd *s, uint64_t now)
 				k = 2u * m;
 			}
 			if (l->dn + k > cap) {
-				l->dropped++;	/* 0.5 s behind: drop this one */
+				l->dropped++;	/* 0.5 s (narrowband) or 1 s behind */
 				continue;
 			}
 			for (j = 0; j < k; j++)
@@ -11472,8 +11485,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->att_flag = (uint8_t)v;
 		else if (!eq && klen == 4 && !memcmp(key, "f626", 4))
 			a->send_f626 = 1;
-		else if (!eq && klen == 7 && !memcmp(key, "nbcodec", 7))
-			a->nbcodec = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "nogain", 6))
 			a->no_gain = 1;
 		else if (!eq && klen == 11 && !memcmp(key, "nocodeclist", 11))
