@@ -130,16 +130,26 @@ received-call entries carry a duration and a timestamp. That is list access
 (TS 102 527-3), which `dect_iwu.c` partly implements, and it is a later
 feature rather than a GAP basic.
 
-### We never send `<<TIME-DATE>>`, so we never set the handset's clock
+### The handset's clock: `<<TIME-DATE>>` (resolved)
 
-Not a GAP requirement either, but **visible to a user**: the handset's clock
-is not set by us, so any timestamp it shows — call lists in particular — is
-whatever the handset itself believes. CAT-iq defines a date/time
-synchronisation feature for this, and the controller's roadmap already carries
-it as a feature module (C10, "date/time module").
+Not a GAP requirement, but **visible to a user**: without it, any timestamp
+a handset shows (call lists in particular) is whatever the handset itself
+believes. CAT-iq's date and time synchronisation (TS 102 527-3 §7.4.2) now
+runs in two places, both behind the same clock gate (no NTP-disciplined
+clock, nothing sent; `-a timesync=`):
 
-Flagged here because "the clock is wrong" reads as a basic defect to anyone
-using the thing, even though no profile mandates it.
+- **After every location registration** (§7.4.20.2), on that link.
+- **Every `time_update` hours** (UCI, default 24; `-a timeupdate=MIN` on the
+  daemon; 2026-10-29): one round over all handsets, one at a time. A
+  handset with a link gets the `{FACILITY}` there; one without is paged
+  first (§7.4.2.1: indirect link establishment, C-plane page), and the link
+  is released once the `{FACILITY}` is acknowledged. A handset that does
+  not answer five pages is skipped until the next round. The round waits
+  while a call, a ring or a deregistration is under way.
+
+A daily round also carries the change to and from summer time, which a
+handset that stays attached would otherwise only learn at its next location
+registration. `[assumed]` until bench card 36 has run.
 
 ## General requirements we broke, found 2026-10-24 night
 

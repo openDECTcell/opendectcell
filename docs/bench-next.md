@@ -721,3 +721,27 @@ from that handset. Afterwards, with the same N: `N=2; cp /root/subN.keep /etc/op
 
 The 7412 card carries the same daemon; its test 3 also shows the verified
 park.
+
+### 36. The periodic date and time (10 minutes; any run)
+
+Pre-committed outcomes (2026-10-29, before the first run). The round
+normally runs every `time_update` hours (default 24); for the bench, a
+minute-scale interval in `options`, which wins over `time_update`. Set the
+handsets' clocks a few minutes wrong first (handset menu), and keep them
+idle and in range.
+
+```
+ssh root@192.168.1.1 'uci set opendectcell.main.options="$(uci get opendectcell.main.options),timeupdate=2"; uci commit opendectcell; /etc/init.d/opendectcell restart; sleep 300; logread -e dect-stubd | grep -E "time:|link released"'
+```
+
+Afterwards remove `,timeupdate=2` from options again (LuCI, Advanced, or
+`uci set` with the old value) and restart.
+
+| you see | meaning |
+|---|---|
+| per handset "has no link -- paging it", "answered the page", "sent the date and time (...)", "link released (0x0202 ...)", then "update round done"; every handset shows the right time | **works**: paging, `{FACILITY}` and release as in §7.4.2.1 |
+| "answered the page" and "sent", but a handset's clock stays wrong | the handset ignores `<<TIME-DATE>>` outside a location registration: note the model; nothing on our side to fix without a profile |
+| "did not answer 5 pages" for a handset that is idle and in range | the C-plane page (`0x0300 08 ..`) does not reach it the way the deregistration's does: send the log |
+| "update round skipped -- the clock is not disciplined" | NTP has not synchronised: check System > Time Synchronization, then repeat |
+| a handset shows "base not available" or loses its link after the round | the link release went wrong: send the log at once |
+| an incoming call during the round rings normally | the round yields to calls, as intended (only if you happen to try it) |
