@@ -95,7 +95,9 @@ function randomPin(n) {
 
 /* A value for the control socket's line format: quoted, \ and " escaped. */
 function quote(v) {
-	return '"' + String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+	/* control characters out: a line break would end the command */
+	return '"' + String(v).replace(/[\x00-\x1f\x7f]/g, '')
+		.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
 /* UTF-8 octets, the unit of the handsets' 15-octet name fields. */

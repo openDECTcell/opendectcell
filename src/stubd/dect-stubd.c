@@ -10010,6 +10010,18 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
  * in frame order, with nothing interpreted. Decoding happens offline -- see
  * tools/voice-decode.py, which tries the candidate formats against the file.
  */
+/*
+ * A lab file that may hold call audio or chip mails: the owner's alone,
+ * and never through a link someone else placed (security audit
+ * 2026-10-29, F5).
+ */
+static FILE *fopen_private(const char *path)
+{
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+
+	return fd < 0 ? NULL : fdopen(fd, "wb");
+}
+
 static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 {
 	unsigned int f;
@@ -10053,14 +10065,31 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 
 	if (s->voice_slot < 0) {
 		size_t n = (size_t)fpb * s->slots * 2u;
+		uint8_t *cp = malloc(n);
 
-		if (fwrite(fr, 1, n, s->voice_fp) != n)
+		if (!cp)
 			goto fail;
+		memcpy(cp, fr, n);
+		/*
+		 * Not the control slot: it carries the chip's mails, and a
+		 * key read back from the chip among them. Idle bytes there.
+		 */
+		if (s->rx_slot >= 0 && (unsigned int)s->rx_slot < s->slots)
+			for (f = 0; f < fpb; f++)
+				memset(cp + (f * s->slots +
+					     (unsigned int)s->rx_slot) * 2u,
+				       0xff, 2);
+		if (fwrite(cp, 1, n, s->voice_fp) != n) {
+			free(cp);
+			goto fail;
+		}
+		free(cp);
 		s->voice_bytes += (uint32_t)n;
 		return;
 	}
 
-	if ((unsigned int)s->voice_slot >= s->slots)
+	if ((unsigned int)s->voice_slot >= s->slots ||
+	    s->voice_slot == s->rx_slot)
 		return;
 	for (f = 0; f < fpb; f++) {
 		if (fwrite(fr + (f * s->slots + (unsigned int)s->voice_slot) * 2u,
@@ -10425,6 +10454,30 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
  * audio_cfg). Bare keys "f626" and "nogain" take no value. Returns 0 on
  * success, -1 on a malformed spec.
  */
+/*
+ * The -a keys whose value is a word, a path or carries a ':', not a
+ * number. Each needs its value: given bare, the parser used to read
+ * through a NULL '=' (security audit 2026-10-29, F5).
+ */
+static const char *const audio_word_keys[] = {
+	"dsp", "dspsweep", "seqstep", "play", "playpcm", "playraw", "led",
+	"statefile", "profiles", "ctl", "linename", "remote", "playlog",
+	"clip", "memdump", "timesync", "pagemail", "codeclist", "infoie",
+	"lane2", "lane3", "cnip",
+};
+
+static int audio_word_key(const char *key, size_t klen)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(audio_word_keys) / sizeof(audio_word_keys[0]);
+	     i++)
+		if (strlen(audio_word_keys[i]) == klen &&
+		    !memcmp(key, audio_word_keys[i], klen))
+			return 1;
+	return 0;
+}
+
 static int parse_audio(struct audio_cfg *a, const char *spec)
 {
 	while (*spec) {
@@ -10437,32 +10490,12 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			spec++;
 		eq = memchr(key, '=', (size_t)(spec - key));
 		klen = eq ? (size_t)(eq - key) : (size_t)(spec - key);
+		if (!eq && audio_word_key(key, klen))
+			return -1;
 		if (eq) {
 			v = strtoul(eq + 1, &end, 0);
 			/* These carry a ':', a path or a word, not a number. */
-			if (end != spec &&
-			    !(klen == 3 && !memcmp(key, "dsp", 3)) &&
-			    !(klen == 8 && !memcmp(key, "dspsweep", 8)) &&
-			    !(klen == 7 && !memcmp(key, "seqstep", 7)) &&
-			    !(klen == 4 && !memcmp(key, "play", 4)) &&
-			    !(klen == 7 && !memcmp(key, "playpcm", 7)) &&
-			    !(klen == 7 && !memcmp(key, "playraw", 7)) &&
-			    !(klen == 3 && !memcmp(key, "led", 3)) &&
-			    !(klen == 9 && !memcmp(key, "statefile", 9)) &&
-			    !(klen == 8 && !memcmp(key, "profiles", 8)) &&
-			    !(klen == 3 && !memcmp(key, "ctl", 3)) &&
-			    !(klen == 8 && !memcmp(key, "linename", 8)) &&
-			    !(klen == 6 && !memcmp(key, "remote", 6)) &&
-			    !(klen == 7 && !memcmp(key, "playlog", 7)) &&
-			    !(klen == 4 && !memcmp(key, "clip", 4)) &&
-			    !(klen == 7 && !memcmp(key, "memdump", 7)) &&
-			    !(klen == 8 && !memcmp(key, "timesync", 8)) &&
-			    !(klen == 8 && !memcmp(key, "pagemail", 8)) &&
-			    !(klen == 9 && !memcmp(key, "codeclist", 9)) &&
-			    !(klen == 6 && !memcmp(key, "infoie", 6)) &&
-			    !(klen == 5 && !memcmp(key, "lane2", 5)) &&
-			    !(klen == 5 && !memcmp(key, "lane3", 5)) &&
-			    !(klen == 4 && !memcmp(key, "cnip", 4)))
+			if (end != spec && !audio_word_key(key, klen))
 				return -1;
 		}
 		if (eq && klen == 8 && !memcmp(key, "slotmask", 8)) {
@@ -11290,6 +11323,14 @@ static int ctl_client(int n, char **lines)
 			close(fd);
 			return 2;
 		}
+		/* one argument, one line: an embedded break would add a
+		 * command (security audit 2026-10-29, F5) */
+		if (strpbrk(lines[i], "\r\n")) {
+			fprintf(stderr, "ctl: line %d holds a line break\n",
+				i + 1);
+			close(fd);
+			return 2;
+		}
 		memcpy(buf, lines[i], len);
 		buf[len++] = '\n';
 		if (write(fd, buf, len) != (ssize_t)len) {
@@ -12038,7 +12079,7 @@ int main(int argc, char **argv)
 		goto out;
 	}
 	if (s.audio.play_log) {
-		s.play_log_fp = fopen(s.audio.play_log, "wb");
+		s.play_log_fp = fopen_private(s.audio.play_log);
 		if (!s.play_log_fp) {
 			fprintf(stderr, "cannot write %s\n", s.audio.play_log);
 			return 1;
@@ -12134,7 +12175,7 @@ int main(int argc, char **argv)
 				(unsigned long long)(need >> 20));
 			goto out;
 		}
-		s.voice_fp = fopen(s.voice_path, "wb");
+		s.voice_fp = fopen_private(s.voice_path);
 		if (!s.voice_fp) {
 			perror(s.voice_path);
 			goto out;

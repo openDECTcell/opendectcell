@@ -17,6 +17,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -221,16 +222,32 @@ static void dev_log(void *ctx, const char *msg)
 	fprintf(stderr, "loader: %s\n", msg);
 }
 
+/* A firmware HEX file is well under this; anything larger is not one. */
+#define SLURP_MAX	(4L << 20)
+
 static char *slurp(const char *path, size_t *len)
 {
-	FILE *f = fopen(path, "rb");
+	struct stat st;
+	FILE *f;
 	char *p;
 	long n;
 
+	/* before opening: opening a FIFO would already block */
+	if (stat(path, &st) || !S_ISREG(st.st_mode))
+		return NULL;
+	f = fopen(path, "rb");
 	if (!f)
 		return NULL;
-	fseek(f, 0, SEEK_END);
-	n = ftell(f);
+	/*
+	 * A regular file of sane size only: a FIFO or a device has no length,
+	 * ftell() gave -1, and malloc(0) was then read into for SIZE_MAX
+	 * bytes (security audit 2026-10-29, F5).
+	 */
+	if (fstat(fileno(f), &st) || !S_ISREG(st.st_mode) ||
+	    fseek(f, 0, SEEK_END) || (n = ftell(f)) < 0 || n > SLURP_MAX) {
+		fclose(f);
+		return NULL;
+	}
 	rewind(f);
 	p = malloc((size_t)n + 1);
 	if (p && fread(p, 1, (size_t)n, f) != (size_t)n) {
