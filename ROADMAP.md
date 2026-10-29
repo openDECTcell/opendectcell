@@ -6,12 +6,16 @@
   ring and talk with HD voice, encrypted; calls go out and come in over SIP
   through baresip; everything is set up in LuCI; signed packages are built
   by GitHub Actions. User-level summary: [docs/status.md](docs/status.md).
-- **Next (M9b):** one SIP line ringing several handsets, outgoing calls on
-  Line 2, narrowband speech to SIP, more than one SIP call at a time, call
-  waiting and hold ([docs/lines-and-calls.md](docs/lines-and-calls.md));
-  the open bench tests in [docs/bench-next.md](docs/bench-next.md).
-- **Then:** the FRITZ!Box 7412 (section Later), phonebook and call lists (M9b,
-  optional), the multi-cell controller (M10, M11).
+- **Next (M9b), built 2026-10-29 and waiting for the bench:** one SIP line
+  ringing several handsets, outgoing calls on Line 2, narrowband speech to
+  SIP with the codecs matched end to end, G.722 passed through, up to three
+  SIP calls at once, call waiting, hold and toggle, DTMF, the voicemail
+  indicator ([docs/lines-and-calls.md](docs/lines-and-calls.md); cards in
+  [docs/bench-7412.md](docs/bench-7412.md) and
+  [docs/bench-next.md](docs/bench-next.md)).
+- **Then:** call lists and the phonebook on the handset (M9b, optional),
+  the FRITZ!Box 7412 as a release target (section Later), the multi-cell
+  controller (M10, M11).
 
 The rest of this file is the detailed plan, milestone by milestone, with the
 history of each item. `[x]` done, `[~]` partly done, `[ ]` open.
@@ -183,10 +187,12 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - **Decided 2026-10-28 (maintainer):** a **direct bridge** between `dect-stubd` and baresip, with an option to use a controller instead; that option is a **dummy** until the cell protocol is finished. The bridge carries the events the cell protocol will carry (call setup, digits, alerting, connect, release, audio, diagnostics), so the controller can replace it later without touching `dect-stubd`.
 - **MVP: two SIP lines per handset**, as a **line pool**: the box holds SIP lines, and each handset is attached to up to two of them; a line may be attached to several handsets and rings on all of them. This is the CAT-iq multiple-line model (TS 102 527-3 §7.4.7, "attached handsets" in the line list). The chip carries at most three calls at once across all handsets (A-0124; two proven on 2026-10-28).
 - **Later, optional:** call lists (outgoing, incoming, missed) and phonebook access from a vCard source over **HTTPS only**, both served through CAT-iq list access. **Contacts are editable on the handset and written back to the remote source** (maintainer, 2026-10-28), as TS 102 527-3 requires for user-defined contacts (spec sweep, §3).
-- [ ] Busy handling: an incoming SIP call when all three audio channels are taken, or when the target handset is already in a call (refuse on the SIP side; CAT-iq call waiting for a handset in a call). Handset-placed and internal calls without a free channel are already refused with "insufficient resources"; the exact clauses come from the spec sweep
+- [~] Busy handling: an incoming SIP call when all three audio channels are taken, or when the target handset is already in a call (refuse on the SIP side; CAT-iq call waiting for a handset in a call). Handset-placed and internal calls without a free channel are already refused with "insufficient resources"; the exact clauses come from the spec sweep
+  - 2026-10-29: built (`87da0f1`, review fixes `45b0264`): a SIP call to a handset in a call waits on a Part 3 handset (TS 102 527-3 §7.4.3.5.2: accept, reject, hold, resume, toggle, release one, a second call out); other handsets, or no free channel, answer 486 Busy Here. **[hw]** Untested; card 9-10 in `docs/bench-7412.md`
 - [~] Prove the whole path, handset ↔ cell ↔ SIP ↔ PBX, on one OpenWrt box before committing to the controller: two SIP lines per handset from a line pool (above), calls in and out, caller ID, wideband, configured in LuCI. Candidate SIP stack: baresip from the OpenWrt telephony feed (BSD), driven by `dect-stubd` through a small bridge. This revisits the controller decision "multi-cell only" (the maintainers' notes) for the single-box case only
   - 2026-10-28: **calls work both ways** (bench card 27): A540 to a mobile phone and back through a FRITZ!Box as SIP registrar, G.722, ciphered, number and line shown; SIP accounts are VoIP profiles assigned as a handset's Line 1/Line 2. Open: one line ringing several handsets, Line 2 for outgoing calls, narrowband over the audio socket, more than one bridged call
   - 2026-10-29: all four built (`07a57dc`, `ead1a36`): up to three SIP calls at once, a VoIP profile shared by several handsets rings them all, a handset's chosen line, narrowband resampled to the bridge's 16 kHz; not yet on air
+  - 2026-10-29 night: codecs matched end to end instead of converted (`760bb12`): narrowband callers ring the handset narrowband, a narrowband handset's INVITE offers G.711 only, G.722 passes through untouched (`371e783`); DTMF to SIP, the voicemail indicator (`58cf49e`). **[hw]** Untested; cards 5-13 in `docs/bench-7412.md`
 
 ## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
 - [x] Architecture, VoIP requirements and DECT feature framework (design docs in opendectcell-controller)
@@ -203,6 +209,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
   - 2026-10-28: **two calls in parallel on our stack** (bench test 18) and internal calls both ways (test 19). Three at once not yet tried. Calls get their own call id since `9a13f74`; the line pool, call waiting and ringing several handsets are designed in `docs/lines-and-calls.md` (steps 1-3 built)
 
 ## Later
-- [ ] Port to the 7412 (VR9 SSC in SPI-slave mode, `kmod-opendectcell-lantiq`) and the 7362 SL (VR9 TDM)
+- [~] Port to the 7412 (VR9 SSC in SPI-slave mode, `kmod-opendectcell-lantiq`) and the 7362 SL (VR9 TDM)
+  - 2026-10-29: the 7412 runs the base over the generic `kmod-lantiq-ssc-pcm` transport (its own repository, not `kmod-opendectcell-lantiq`): handsets register, SIP calls in and out with HD voice, internal calls (`docs/bench-7412.md`). Open: the release packaging of the transport, a chip reset when a park cannot be verified, the 7362 SL
 - [ ] 7412 PCB check: what hangs off GPIO10/12 ("PCM-link flash" lines)
 - [ ] ULE, SUOTA: out of scope for now

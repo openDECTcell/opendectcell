@@ -20,6 +20,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 | Deregistering from the handset's own menu | 🟡 | Only some handsets offer it; not yet working on the Gigaset A540 |
 | Handset names (*DECT 1*, *Kitchen*, …) | ✅ | Set in the web page or renamed on the handset |
 | Fon/DECT LED | ✅ | On while the radio is on, blinks on activity |
+| Date and time on the handsets | ✅ | CAT-iq handsets, from the box's clock once NTP has set it (the A540, on a 7412). GAP handsets such as the C430A don't take it. Set the box's time zone under System > System |
 | Signal strength and link quality per handset | ✅ | Status > DECT |
 | Handset models with their own settings ("profiles") | 🟡 | Profiles for the Gigaset A540, C430A and AS690H; every other handset uses the standard behaviour |
 
@@ -70,7 +71,7 @@ exact kernel on the box.
 | Handset | Standard | Tested with openDECTcell |
 |---|---|---|
 | Gigaset A540 CAT | CAT-iq (NG-DECT Part 3) | Registration, calls in and out, HD voice, encryption, number and line on the display, SIP calls both ways |
-| Gigaset C430A | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number |
+| Gigaset C430A | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number. Shows no date and time from the base |
 | Gigaset AS690H | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number |
 | AVM FRITZ!Fon C4 | CAT-iq | Registered and called during development; not tested with this release |
 
