@@ -383,6 +383,7 @@ struct stubd {
 	int ssc;
 	struct ssc_align ssc_al;	/* lane offset and stream carries */
 	int ssc_aligned;		/* offset measured: fix what we read */
+	struct ssc_lane_delay ssc_ld;	/* receive lanes onto the send numbering */
 	uint64_t ssc_tx_sent_prev, ssc_tx_idle_prev;
 	/*
 	 * The alignment watch (ssc_watch()): the idle lanes' bit offset and
@@ -937,6 +938,7 @@ struct stubd {
 		int      no_connect;
 		unsigned tone_hz;	/* transmit test tone (0 = off); multiple of 125 */
 		uint8_t  tone_word;	/* raw DMA word to write it into (default 0) */
+		int      tone_word_set;	/* toneword= given */
 		/*
 		 * playslot=MS walks the lane across every transmit slot, MS ms
 		 * each, during a call. Which transmit slot the chip reads as the
@@ -1802,10 +1804,11 @@ static void ssc_rx_fix(struct stubd *s, uint8_t *fr, size_t len)
 
 	if (!s->ssc || !s->ssc_aligned || len < 2u)
 		return;
-	t = malloc(len + 2u);
+	t = malloc(len + 2u + 2u * SSC_LANE_DELAY_MAX);
 	if (!t)
 		return;
 	ssc_align_rx(&s->ssc_al, fr, t, len);
+	ssc_lane_delay_apply(&s->ssc_ld, fr, t, len);
 	free(t);
 }
 
@@ -11256,8 +11259,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			if (v % 125u || v > 3875u)
 				return -1;
 			a->tone_hz = (unsigned)v;
-		} else if (klen == 8 && !memcmp(key, "toneword", 8))
+		} else if (klen == 8 && !memcmp(key, "toneword", 8)) {
 			a->tone_word = (uint8_t)v;
+			a->tone_word_set = 1;
+		}
 		else if (klen == 8 && !memcmp(key, "playslot", 8))
 			a->play_slot_ms = (unsigned)v;
 		else if (klen == 7 && !memcmp(key, "xmailms", 7))
@@ -12498,6 +12503,35 @@ int main(int argc, char **argv)
 	if (s.tx_slot >= (int)s.slots || s.rx_slot >= (int)s.slots) {
 		fprintf(stderr, "slot out of range\n");
 		goto out;
+	}
+	if (s.ssc && s.rx_slot != s.tx_slot) {
+		/*
+		 * The SSC has no frame sync: the control lane lands at one
+		 * index in what we receive and at another in what we send.
+		 * Delay the receive side by the difference, so both share
+		 * one numbering as on the 7520 and a lane index means the
+		 * same lane both ways [CR A-0015: a call uses the same lane
+		 * in each direction].
+		 */
+		unsigned int d = ((unsigned int)s.tx_slot + s.slots -
+				  (unsigned int)s.rx_slot) % s.slots;
+
+		ssc_lane_delay_init(&s.ssc_ld, d);
+		dect_rx_init(&s.rx);	/* a mail cut by the switch */
+		printf("ssc: receive delayed by %u lanes: control lane %d "
+		       "both ways\n", d, s.tx_slot);
+		s.rx_slot = s.tx_slot;
+	}
+	if (s.ssc && !s.audio.tone_word_set) {
+		/*
+		 * The 7412's audio lanes follow the control lane, one per
+		 * call, the first call's next to it [CR A-0015]; observed:
+		 * that lane leaves the idle pattern when a call connects.
+		 */
+		s.audio.tone_word = (uint8_t)(((unsigned int)s.tx_slot + 1u) %
+					      s.slots);
+		printf("ssc: speech lane %u (control lane + 1)\n",
+		       (unsigned int)s.audio.tone_word);
 	}
 	if (s.audio.play_log) {
 		s.play_log_fp = fopen_private(s.audio.play_log);

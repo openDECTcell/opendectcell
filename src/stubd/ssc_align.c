@@ -136,3 +136,22 @@ int ssc_lanes_rotation(uint64_t from, uint64_t to, unsigned int slots)
 	}
 	return -1;
 }
+
+void ssc_lane_delay_init(struct ssc_lane_delay *d, unsigned int lanes)
+{
+	d->lanes = lanes > SSC_LANE_DELAY_MAX ? SSC_LANE_DELAY_MAX : lanes;
+	memset(d->carry, 0xff, sizeof(d->carry));
+}
+
+void ssc_lane_delay_apply(struct ssc_lane_delay *d, uint8_t *buf, uint8_t *t,
+			  size_t len)
+{
+	size_t n = 2u * d->lanes;
+
+	if (!n)
+		return;
+	memcpy(t, d->carry, n);
+	memcpy(t + n, buf, len);
+	memcpy(buf, t, len);
+	memcpy(d->carry, t + len, n);
+}

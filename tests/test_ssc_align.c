@@ -262,6 +262,39 @@ static void test_lanes_rotation(void)
 	CHECK_EQ(ssc_lanes_rotation(0, 7ull, 36u), -1);
 }
 
+/*
+ * The lane delay: a stream of numbered lanes fed in uneven pieces comes out
+ * the same stream, k lanes late, with idle lanes in front.
+ */
+static void test_lane_delay(unsigned int k)
+{
+	uint8_t in[2u * 100u], out[2u * 100u], t[2u * 100u + 2u * 64u];
+	struct ssc_lane_delay d;
+	size_t at = 0, piece = 2u, i;
+	int bad = 0;
+
+	for (i = 0; i < 100u; i++) {
+		in[2u * i] = (uint8_t)i;
+		in[2u * i + 1u] = (uint8_t)(0x80u | i);
+	}
+	memcpy(out, in, sizeof(out));
+	ssc_lane_delay_init(&d, k);
+	while (at < sizeof(out)) {
+		size_t n = at + piece > sizeof(out) ? sizeof(out) - at : piece;
+
+		ssc_lane_delay_apply(&d, out + at, t, n);
+		at += n;
+		piece = piece == 2u ? 14u : piece == 14u ? 6u : 2u;
+	}
+	for (i = 0; i < 100u; i++) {
+		if (i < k)
+			bad += out[2u * i] != 0xffu || out[2u * i + 1u] != 0xffu;
+		else
+			bad += memcmp(out + 2u * i, in + 2u * (i - k), 2) != 0;
+	}
+	CHECK_EQ(bad, 0);
+}
+
 static void test_no_idle(void)
 {
 	uint8_t s[256];
@@ -285,6 +318,8 @@ int main(void)
 		test_idle_lanes(off);
 	}
 	test_lanes_rotation();
+	for (off = 0; off <= 40u; off += 5u)
+		test_lane_delay(off);
 	test_no_idle();
 	return CHECK_DONE();
 }

@@ -60,6 +60,27 @@ void ssc_align_tx_commit(struct ssc_align *a, const uint8_t *t, size_t w);
 int ssc_idle_offset(const uint8_t *data, size_t len, unsigned int cnt[16]);
 
 /*
+ * A lane-aligned stream delayed by whole 16-bit lanes, across calls. The
+ * SSC has no frame sync, so the chip's control lane lands at one index in
+ * what we receive and at another in what we send; delaying the receive
+ * side by the difference gives both directions one numbering, as on the
+ * 7520. At most SSC_LANE_DELAY_MAX lanes.
+ */
+#define SSC_LANE_DELAY_MAX	64u
+
+struct ssc_lane_delay {
+	unsigned int lanes;
+	uint8_t carry[2u * SSC_LANE_DELAY_MAX];	/* the last lanes seen */
+};
+
+/* Delay by lanes (0..SSC_LANE_DELAY_MAX), starting with idle (0xFF). */
+void ssc_lane_delay_init(struct ssc_lane_delay *d, unsigned int lanes);
+
+/* In place; t is scratch of len + 2 * lanes bytes. len is even. */
+void ssc_lane_delay_apply(struct ssc_lane_delay *d, uint8_t *buf, uint8_t *t,
+			  size_t len);
+
+/*
  * Where the idle lanes sit in data: returns the bit offset as
  * ssc_idle_offset() finds it (-1: none) and sets *mask to the lane
  * positions within a frame of slots lanes, counted from that offset in
