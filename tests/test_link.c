@@ -604,8 +604,8 @@ static void test_outbound_message_becomes_an_append_mail(void)
 	struct dect_mail m;
 
 	init(&l);
-	CHECK_EQ(dect_cc_setup(&l.cc, port_id, sizeof(port_id), fixed_id,
-			       sizeof(fixed_id), 0x40), 0);
+	CHECK_EQ(dect_cc_setup_id(&l.cc, port_id, sizeof(port_id), fixed_id,
+				  sizeof(fixed_id), 0x40, NULL), 0);
 	dect_link_tick(&l, 0);			/* drains CC into LAPC */
 	CHECK_EQ(dect_link_poll_append_mail(&l, &m), 1);
 	CHECK_EQ(m.prim, 0x0244u);
@@ -626,8 +626,8 @@ static void test_only_one_message_is_outstanding(void)
 	int sent = 0;
 
 	init(&l);
-	dect_cc_setup(&l.cc, port_id, sizeof(port_id), fixed_id,
-		      sizeof(fixed_id), 0x40);
+	dect_cc_setup_id(&l.cc, port_id, sizeof(port_id), fixed_id,
+			 sizeof(fixed_id), 0x40, NULL);
 	dect_cc_release(&l.cc);			/* a second message, queued */
 	dect_link_tick(&l, 0);
 	while (dect_link_poll_append_mail(&l, &m))
@@ -659,8 +659,8 @@ static void test_a_queued_message_needs_a_tick(void)
 	struct dect_mail m;
 
 	init(&l);
-	CHECK_EQ(dect_cc_setup(&l.cc, port_id, sizeof(port_id), fixed_id,
-			       sizeof(fixed_id), 0x40), 0);
+	CHECK_EQ(dect_cc_setup_id(&l.cc, port_id, sizeof(port_id), fixed_id,
+				  sizeof(fixed_id), 0x40, NULL), 0);
 
 	/* Polling alone moves nothing: the message is still in CC. */
 	CHECK_EQ(dect_link_poll_append_mail(&l, &m), 0);
@@ -752,8 +752,8 @@ static void test_unusable_segment_still_drains_the_queue(void)
 	struct dect_link_ind ind;
 
 	init(&l);
-	dect_cc_setup(&l.cc, port_id, sizeof(port_id), fixed_id,
-		      sizeof(fixed_id), 0x40);
+	dect_cc_setup_id(&l.cc, port_id, sizeof(port_id), fixed_id,
+			 sizeof(fixed_id), 0x40, NULL);
 
 	/* A C-plane mail carrying a fragment that cannot complete a frame. */
 	memset(&m, 0, sizeof(m));

@@ -246,15 +246,6 @@ void dect_dsaa_b1(const uint8_t *val, size_t len, uint8_t k[16])
 		k[i] = val[i % len];
 }
 
-void dect_dsaa_b2(const uint8_t *uak, size_t uak_len,
-		  const uint8_t *upi, size_t upi_len, uint8_t k[16])
-{
-	size_t i;
-
-	for (i = 0; i < DECT_AUTH_KEY_LEN; i++)
-		k[i] = (uint8_t)(uak[i % uak_len] ^ upi[i % upi_len]);
-}
-
 void dect_dsaa_a11(const uint8_t k[16], const uint8_t rs[8], uint8_t ks[16])
 {
 	dect_dsaa(rs, k, ks);

@@ -11,12 +11,12 @@
  * frames. Outbound, the host appends a byte stream to the connection's buffer
  * with 0x0244 APPEND_CONNECTION_DATA [CR COMMAND_SET §6.4]; the STUB segments
  * it into Cs and sends it. **Do not follow it with 0x0202 TRIGGER_SIGNALLING.**
- * COMMAND_SET §6.4 describes 0x0202 as the flush, and this header used to
- * recommend it, but on hardware it **drops the connection within ~40 ms**, and
- * AVM's own host sends 0x0244 alone. 0x0244 is sufficient and self-flushing.
+ * COMMAND_SET §6.4 describes 0x0202 as the flush, but on hardware it drops
+ * the connection within ~40 ms, and AVM's own host sends 0x0244 alone.
+ * 0x0244 is sufficient and self-flushing.
  *
- * Pure encode/decode on struct dect_mail. No I/O, no clock. The LAPC/Lc frame
- * format itself lives in dect_dlc (ETSI EN 300 175-4), not here.
+ * Pure encode/decode on struct dect_mail. No I/O, no clock. The Lc and LAPC
+ * frame formats (ETSI EN 300 175-4) live in dect_lc and dect_lapc, not here.
  */
 #ifndef OPENDECTCELL_DECT_CS_H
 #define OPENDECTCELL_DECT_CS_H
@@ -51,20 +51,10 @@ int dect_cs_decode_segment(const struct dect_mail *m, struct dect_cs_seg *seg);
  * Build an APPEND_CONNECTION_DATA (0x0244) mail carrying n bytes of outbound
  * C-plane data for the given connection handle. src is our task (DECT_TASK_PCM),
  * dst is DECT_TASK_CONTACT_DST. Returns 0 on success, -1 if n is 0 or exceeds
- * DECT_APPEND_BUF_MAX. Send it on its own: it needs no flush, and calling
- * dect_cs_trigger_mail() after it will drop the connection.
+ * DECT_APPEND_BUF_MAX. Send it on its own: it needs no flush, and a
+ * TRIGGER_SIGNALLING (0x0202) after it drops the connection.
  */
 int dect_cs_append_mail(struct dect_mail *m, uint8_t src,
 			uint8_t handle, const uint8_t *data, size_t n);
-
-/*
- * Build a TRIGGER_SIGNALLING (0x0202) mail.
- *
- * DEPRECATED, and do not use it on a live connection. It was believed to flush
- * the connection buffer after 0x0244; on hardware it drops the connection
- * within about 40 ms. Kept only so existing callers still compile and so the
- * primitive can be re-tested deliberately. 0x0244 needs no flush.
- */
-void dect_cs_trigger_mail(struct dect_mail *m, uint8_t src, uint8_t handle);
 
 #endif /* OPENDECTCELL_DECT_CS_H */

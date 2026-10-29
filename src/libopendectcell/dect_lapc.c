@@ -128,10 +128,9 @@ size_t dect_lapc_build_rr(uint8_t *out, size_t out_cap, uint8_t cr, uint8_t nlf,
 
 /*
  * ETSI EN 300 175-4 A.1 specifies <DL.04>, the retransmission timer, as 2 s
- * for both FT and PT. We used 1000 ms, which retransmits at twice the
- * permitted rate and risks duplicate I-frames on a slow link. A healthy
- * exchange never reaches either value -- stock is acknowledged in about
- * 150 ms -- so this only changes behaviour when something is already wrong.
+ * for both FT and PT; a shorter one risks duplicate I-frames on a slow link.
+ * A healthy exchange is acknowledged in about 150 ms (observed on hardware),
+ * so the timer only matters when something is already wrong.
  */
 #define DEFAULT_RETRY_MS	2000u	/* <DL.04>, EN 300 175-4 A.1 */
 #define LAPC_N250		3u	/* retransmissions, EN 300 175-4 A.3.1 */
@@ -405,19 +404,11 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	}
 }
 
-uint64_t dect_lapc_next_deadline(const struct dect_lapc *l)
-{
-	if (!l->outstanding)
-		return UINT64_MAX;
-	return l->last_tx_ms + l->retry_ms;
-}
-
 /*
  * <DL.04> expiry (EN 300 175-4 §9.2.3.6): retransmit the outstanding
  * I-frame, up to N250 times; after that "release the link ... with the
- * release mode set to abnormal". We used to retransmit for ever, so a
- * handset gone out of range was never noticed at this layer (spec sweep,
- * finding 12). The release is a DISC; `failed` tells the owner.
+ * release mode set to abnormal", so a handset gone out of range is noticed
+ * at this layer. The release is a DISC; `failed` tells the owner.
  */
 void dect_lapc_tick(struct dect_lapc *l, uint64_t now_ms)
 {

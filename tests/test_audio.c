@@ -67,7 +67,8 @@ static void test_tone_detect(void)
 		double x = 8000.0 * sin(2.0 * M_PI * 1000.0 * i / 8000.0);
 		alaw[i] = dect_alaw_encode((int16_t)x);
 	}
-	dect_alaw_decode_buf(alaw, pcm, N);
+	for (i = 0; i < N; i++)
+		pcm[i] = dect_alaw_decode(alaw[i]);
 	dect_tone_analyze(pcm, N, 8000u, &st);
 	CHECK(st.rms > 1000.0);
 	CHECK(fabs(st.freq_hz - 1000.0) < 50.0);
@@ -83,9 +84,10 @@ static void test_tone_silence(void)
 	struct dect_tone_stats st;
 	int i;
 
-	for (i = 0; i < N; i++)
+	for (i = 0; i < N; i++) {
 		alaw[i] = 0x55;			/* A-law silence */
-	dect_alaw_decode_buf(alaw, pcm, N);
+		pcm[i] = dect_alaw_decode(alaw[i]);
+	}
 	dect_tone_analyze(pcm, N, 8000u, &st);
 	CHECK(st.rms < 16.0);
 	CHECK(st.freq_hz < 1.0);

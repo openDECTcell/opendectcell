@@ -60,14 +60,6 @@ uint8_t dect_alaw_encode(int16_t pcm)
 	return (uint8_t)(aval ^ (unsigned int)mask);
 }
 
-void dect_alaw_decode_buf(const uint8_t *alaw, int16_t *pcm, size_t n)
-{
-	size_t i;
-
-	for (i = 0; i < n; i++)
-		pcm[i] = dect_alaw_decode(alaw[i]);
-}
-
 void dect_tone_analyze(const int16_t *pcm, size_t n, uint32_t rate,
 		       struct dect_tone_stats *s)
 {

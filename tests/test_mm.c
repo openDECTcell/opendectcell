@@ -11,6 +11,34 @@
 
 #include <string.h>
 
+/*
+ * The earliest running MM timer, read from the entity's state, or UINT64_MAX
+ * when none runs. The timers arm on the first tick after their procedure
+ * starts, so this is what the next tick acts on.
+ */
+static uint64_t mm_deadline(const struct dect_mm *mm)
+{
+	uint64_t t = mm->ident_deadline_ms ? mm->ident_deadline_ms : UINT64_MAX;
+
+	if (mm->state == DECT_MM_WAIT_AUTH && mm->key_deadline_ms &&
+	    mm->key_deadline_ms < t)
+		t = mm->key_deadline_ms;
+	if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY &&
+	    mm->auth_deadline_ms && mm->auth_deadline_ms < t)
+		t = mm->auth_deadline_ms;
+	if (mm->term_state == DECT_MM_TERM_PENDING && mm->term_deadline_ms &&
+	    mm->term_deadline_ms < t)
+		t = mm->term_deadline_ms;
+	if (mm->pt_auth && mm->pt_auth_deadline_ms &&
+	    mm->pt_auth_deadline_ms < t)
+		t = mm->pt_auth_deadline_ms;
+	if (mm->cipher_state == DECT_MM_CIPHER_READY && !mm->cipher_on &&
+	    !mm->cipher_rejected && mm->cipher_deadline_ms &&
+	    mm->cipher_deadline_ms < t)
+		t = mm->cipher_deadline_ms;
+	return t;
+}
+
 static uint8_t msg_type_of(const uint8_t *msg, size_t len)
 {
 	struct dect_nwk_hdr h;
@@ -175,7 +203,7 @@ static void test_key_allocation_fails_on_timeout_or_refusal(void)
 		n = dect_mm_poll(&mm, out, sizeof(out));
 		CHECK_EQ(msg_type_of(out, n), DECT_MM_KEY_ALLOCATE);
 		dect_mm_tick(&mm, 1000);			/* armed */
-		CHECK_EQ(dect_mm_next_deadline(&mm), 11000u);
+		CHECK_EQ(mm_deadline(&mm), 11000u);
 		if (!k) {
 			dect_mm_tick(&mm, 10999);
 			CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
@@ -191,7 +219,7 @@ static void test_key_allocation_fails_on_timeout_or_refusal(void)
 		CHECK_EQ(out[4], DECT_MM_REJECT_AUTH_FAILED);
 		CHECK_EQ(mm.state, DECT_MM_FAILED);
 		CHECK_EQ(mm.stats.key_failed, 1u);
-		CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+		CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 		dect_mm_tick(&mm, 30000);			/* once */
 		CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
 		CHECK_EQ(mm.stats.key_failed, 1u);
@@ -276,7 +304,7 @@ static void test_terminate_access_rights(void)
 				DECT_MM_ACCESS_RIGHTS_TERMINATE_ACCEPT);
 			dect_mm_rx(&mm, buf, n, NULL, NULL);
 			CHECK_EQ(mm.term_state, DECT_MM_TERM_ACCEPTED);
-			CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+			CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 		} else {
 			dect_mm_tick(&mm, 11000);		/* retransmit */
 			n = dect_mm_poll(&mm, out, sizeof(out));
@@ -381,7 +409,7 @@ static void test_handset_deregisters_itself(void)
 			CHECK_EQ(mm.stats.term_refused, 1u);
 		}
 		CHECK_EQ(mm.pt_auth, 0u);
-		CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+		CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 	}
 }
 
@@ -837,13 +865,13 @@ static void test_cipher_timer_and_rejects(void)
 	dect_mm_start_cipher(&mm, uak, rand_f, rs);
 	(void)dect_mm_poll(&mm, out, sizeof(out));
 	dect_mm_tick(&mm, 500);
-	CHECK_EQ(dect_mm_next_deadline(&mm), 10500u);
+	CHECK_EQ(mm_deadline(&mm), 10500u);
 	dect_mm_tick(&mm, 10499);
 	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_WAIT_REPLY);
 	dect_mm_tick(&mm, 10500);
 	CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_FAILED);
 	CHECK_EQ(mm.stats.auth_timeouts, 1u);
-	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+	CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 
 	dect_mm_init(&mm, &cfg);
 	dect_mm_start_cipher(&mm, uak, rand_f, rs);
@@ -908,7 +936,7 @@ static void test_cipher_timer_and_rejects(void)
 					    res, 4);
 			dect_mm_rx(&mm, buf, n, rand_f, rs);
 			dect_mm_tick(&mm, 1000);		/* armed */
-			CHECK_EQ(dect_mm_next_deadline(&mm), 11000u);
+			CHECK_EQ(mm_deadline(&mm), 11000u);
 			if (!k)
 				dect_mm_cipher_on(&mm);
 			dect_mm_tick(&mm, 11000);
@@ -916,7 +944,7 @@ static void test_cipher_timer_and_rejects(void)
 			CHECK_EQ(mm.cipher_on, k ? 0u : 1u);
 			CHECK_EQ(mm.stats.cipher_timeouts, k ? 1u : 0u);
 			CHECK_EQ(mm.cipher_state, DECT_MM_CIPHER_READY);
-			CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+			CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 		}
 	}
 }
@@ -1132,7 +1160,7 @@ static void test_tpui_assignment_is_confirmed_by_the_ack(void)
 	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
 
 	dect_mm_tick(&mm, 1000);			/* arms the deadline */
-	CHECK_EQ(dect_mm_next_deadline(&mm), 11000u);	/* 10 s, FT value */
+	CHECK_EQ(mm_deadline(&mm), 11000u);	/* 10 s, FT value */
 
 	dect_mm_rx(&mm, ack, sizeof(ack), NULL, NULL);
 	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 1);
@@ -1140,7 +1168,7 @@ static void test_tpui_assignment_is_confirmed_by_the_ack(void)
 	CHECK_EQ(mm.stats.tpui_timeouts, 0u);
 
 	/* Timer stopped: no deadline, and later ticks change nothing. */
-	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+	CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 	dect_mm_tick(&mm, 999999);
 	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 1);
 	CHECK_EQ(mm.stats.tpui_timeouts, 0u);
@@ -1162,7 +1190,7 @@ static void test_tpui_assignment_times_out_at_ten_seconds(void)
 	CHECK_EQ(mm.stats.tpui_timeouts, 1u);
 	CHECK_EQ(mm.tpui_timed_out, 1u);
 	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
-	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+	CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 
 	/* It fires once, not every tick. */
 	dect_mm_tick(&mm, 30000);
@@ -1183,7 +1211,7 @@ static void test_tpui_reject_ends_the_assignment(void)
 	CHECK_EQ(mm.stats.tpui_rejected, 1u);
 	CHECK_EQ(mm.tpui_rejected, 1u);
 	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);
-	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+	CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 	dect_mm_tick(&mm, 11000);
 	CHECK_EQ(mm.stats.tpui_timeouts, 0u);	/* stopped, not expired */
 	dect_mm_rx(&mm, ack, sizeof(ack), NULL, NULL);
@@ -1234,7 +1262,7 @@ static void test_no_assignment_means_no_timer(void)
 
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tick(&mm, 1000);
-	CHECK_EQ(dect_mm_next_deadline(&mm), UINT64_MAX);
+	CHECK_EQ(mm_deadline(&mm), UINT64_MAX);
 	dect_mm_tick(&mm, 999999);
 	CHECK_EQ(mm.stats.tpui_timeouts, 0u);
 	CHECK_EQ(dect_mm_tpui_confirmed(&mm), 0);

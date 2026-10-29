@@ -151,7 +151,4 @@ int dect_profile_override(const char *text, size_t len,
 			  struct dect_hs_profile *hp,
 			  dect_profile_report report, void *ctx);
 
-/* Dotted version compare, field by field as integers: <0, 0, >0. */
-int dect_profile_version_cmp(const char *a, const char *b);
-
 #endif

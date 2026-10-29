@@ -20,9 +20,8 @@ int dect_cs_decode_segment(const struct dect_mail *m, struct dect_cs_seg *seg)
 		return -1;
 	/*
 	 * The 06.88 STUB (FRITZ!Box 7412) sends only the first seven bytes,
-	 * {handle,01,seg[5]}: the A540's first segment came as
-	 * `00 01 91 00 01 b7 b5`, repeated every 2 s until the handset gave
-	 * up, because we dropped it as too short (2026-10-29).
+	 * {handle,01,seg[5]}, e.g. `00 01 91 00 01 b7 b5` (observed on
+	 * hardware, 7412).
 	 */
 	if (m->param_len == DECT_CS_SHORT_PARAM &&
 	    m->param[SEG_OFF_MARKER] == 0x01u) {
@@ -34,10 +33,9 @@ int dect_cs_decode_segment(const struct dect_mail *m, struct dect_cs_seg *seg)
 	if (m->param_len < DECT_CS_MIN_PARAM)
 		return -1;
 	/*
-	 * The marker and the handle copy are fixed in all 42 252 segments of
-	 * the 2026-10-24 corpus; a segment that breaks either is malformed and
-	 * must not reach DLC reassembly. Found by the second external review,
-	 * the clean-room record/an external review-1-24102026.md, finding 7.
+	 * The marker and the handle copy are fixed in every segment observed
+	 * on hardware (7520, 42 252 segments); a segment that breaks either is
+	 * malformed and must not reach DLC reassembly.
 	 */
 	if (m->param[SEG_OFF_MARKER] != 0x01u ||
 	    m->param[SEG_OFF_HANDLE2] != m->param[SEG_OFF_HANDLE])
@@ -64,14 +62,4 @@ int dect_cs_append_mail(struct dect_mail *m, uint8_t src,
 	memcpy(&m->param[2], data, n);
 	m->param_len = (uint16_t)(2u + n);
 	return 0;
-}
-
-void dect_cs_trigger_mail(struct dect_mail *m, uint8_t src, uint8_t handle)
-{
-	memset(m, 0, sizeof(*m));
-	m->src = src;
-	m->dst = DECT_TASK_CONTACT_DST;
-	m->prim = DECT_PRIM_TRIGGER_SIG;
-	m->param[0] = handle;
-	m->param_len = 1;
 }

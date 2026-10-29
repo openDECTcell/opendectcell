@@ -219,15 +219,6 @@ static void test_errors(void)
 	CHECK_EQ(hp.cc_timer, 0u);
 }
 
-static void test_version_compare(void)
-{
-	CHECK(dect_profile_version_cmp("42.10", "42.9") > 0);
-	CHECK(dect_profile_version_cmp("42.010", "42.10") == 0);
-	CHECK(dect_profile_version_cmp("42", "42.0") == 0);
-	CHECK(dect_profile_version_cmp("1.2.3", "1.3") < 0);
-}
-
-
 /* The settings page's key table and a handset's own choices. */
 static void test_keys_and_override(void)
 {
@@ -277,7 +268,6 @@ int main(void)
 	test_defaults();
 	test_display_expansion();
 	test_errors();
-	test_version_compare();
 	test_keys_and_override();
 	return CHECK_DONE();
 }

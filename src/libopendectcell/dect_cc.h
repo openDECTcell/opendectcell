@@ -486,12 +486,6 @@ const uint8_t *dect_cc_keypad(const struct dect_cc *cc, size_t *len);
 void dect_cc_clear_keypad(struct dect_cc *cc);
 
 /*
- * When dect_cc_tick() next has work, or UINT64_MAX if no CC timer is running.
- * Pair it with dect_lapc_next_deadline() and arm one timer on the minimum.
- */
-uint64_t dect_cc_next_deadline(const struct dect_cc *cc);
-
-/*
  * Start an incoming call: queue an FP-originated CC-SETUP towards the handset,
  * which makes it ring. `port_id` is the PP's PORTABLE-IDENTITY contents as the
  * subscription stored them (`dect_mm.port_id`), `fixed_id` the FIXED-IDENTITY
@@ -505,23 +499,13 @@ uint64_t dect_cc_next_deadline(const struct dect_cc *cc);
  * call is active, at which point the audio bind is the same as for a call the
  * handset places.
  *
- * Returns 0, or -1 if a call is already up or the message would not fit.
- */
-int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len,
-		  const uint8_t *fixed_id, size_t fixed_id_len,
-		  uint8_t basic_service);
-
-/*
- * As dect_cc_setup(), plus caller identity: CALLING-PARTY-NUMBER and
- * CALLING-PARTY-NAME are appended after BASIC-SERVICE when `id` supplies them
- * with presentation allowed. `id` may be NULL, which is exactly
- * dect_cc_setup().
+ * `id`, if not NULL, adds the caller identity: <<CALLING-PARTY-NUMBER>> and
+ * <<CALLING-PARTY-NAME>> when it supplies them with presentation allowed.
+ * Either IE is silently omitted when it has no content, when presentation is
+ * not allowed, or when the message has no room left for it -- a caller's
+ * name is never a reason to fail a call that would otherwise ring.
  *
- * The IEs are appended last so that a SETUP without an identity is
- * byte-identical to the one that was proved at G7. Either IE is silently
- * omitted when it has no content, when presentation is not allowed, or when
- * the message has no room left for it -- a caller's name is never a reason to
- * fail a call that would otherwise ring.
+ * Returns 0, or -1 if a call is already up or the message would not fit.
  */
 int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 		     size_t port_id_len, const uint8_t *fixed_id,

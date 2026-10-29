@@ -11,6 +11,27 @@
 
 #include <string.h>
 
+/*
+ * The earliest running CC timer, read from the entity's state, or UINT64_MAX
+ * when none runs. The timers arm on the first tick after their procedure
+ * starts, so this is what the next tick acts on.
+ */
+static uint64_t cc_deadline(const struct dect_cc *cc)
+{
+	uint64_t a = cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
+	uint64_t b = cc->overlap_deadline_ms ? cc->overlap_deadline_ms
+					     : UINT64_MAX;
+	uint64_t c = cc->busy_deadline_ms ? cc->busy_deadline_ms : UINT64_MAX;
+	uint64_t d = cc->release_deadline_ms ? cc->release_deadline_ms
+					     : UINT64_MAX;
+
+	if (b < a)
+		a = b;
+	if (c < a)
+		a = c;
+	return d < a ? d : a;
+}
+
 static uint8_t msg_type_of(const uint8_t *msg, size_t len)
 {
 	struct dect_nwk_hdr h;
@@ -241,7 +262,7 @@ static void test_busy_system_for_a_part3_handset(void)
 	CHECK_EQ(cc.stats.rejected_busy, 1u);
 
 	dect_cc_tick(&cc, 1000);				/* armed: 6000 */
-	CHECK_EQ(dect_cc_next_deadline(&cc), 6000u);
+	CHECK_EQ(cc_deadline(&cc), 6000u);
 	dect_cc_tick(&cc, 5999);
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
 	dect_cc_tick(&cc, 6000);
@@ -322,7 +343,7 @@ static void test_release_timer(void)
 		CHECK_EQ(dect_cc_release(&cc), 0);
 		(void)dect_cc_poll(&cc, out, sizeof(out));	/* RELEASE */
 		dect_cc_tick(&cc, 1000);			/* armed: 37000 */
-		CHECK_EQ(dect_cc_next_deadline(&cc), 37000u);
+		CHECK_EQ(cc_deadline(&cc), 37000u);
 		if (k) {			/* the handset answers */
 			n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC,
 					       DECT_TI_ORIGINATOR, 0,
@@ -1003,8 +1024,8 @@ static void test_outgoing_call_to_handset(void)
 	size_t n;
 
 	dect_cc_init(&cc);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x88, NULL), 0);
 	CHECK_EQ(cc.state, DECT_CC_ST_CALL_PRESENT);
 
 	/*
@@ -1071,8 +1092,8 @@ static void test_foreign_transaction_does_not_touch_our_call(void)
 	size_t n;
 
 	dect_cc_init(&cc);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x88, NULL), 0);
 	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
 		;					/* our SETUP, F=0, TV 0 */
 
@@ -1128,8 +1149,8 @@ static void test_unhandled_message_on_our_call_is_ignored(void)
 	size_t n, i;
 
 	dect_cc_init(&cc);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x88, NULL), 0);
 	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
 		;
 
@@ -1208,8 +1229,8 @@ static void test_busy_spans_the_whole_call(void)
 	dect_cc_init(&cc);
 	CHECK(!dect_cc_busy(&cc));		/* idle */
 
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x88, NULL), 0);
 	CHECK(dect_cc_busy(&cc));		/* SETUP sent, not yet answered */
 	while (dect_cc_poll(&cc, msg, sizeof(msg)) > 0)
 		;
@@ -1256,8 +1277,8 @@ static void test_transaction_value_is_lowest_free(void)
 
 	dect_cc_init(&cc);
 	for (call = 0; call < 2; call++) {
-		CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-				       fixed_id, sizeof(fixed_id), 0x88), 0);
+		CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+					  fixed_id, sizeof(fixed_id), 0x88, NULL), 0);
 		n = dect_cc_poll(&cc, msg, sizeof(msg));
 		CHECK(n > 0);
 		CHECK_EQ(msg[0], 0x03);		/* TI flag 0, value 0, PD CC */
@@ -1293,8 +1314,8 @@ static void test_transaction_value_rotates(void)
 	for (ti = 0; ti < 8; ti++) {
 		dect_cc_init(&cc);
 		dect_cc_set_next_ti(&cc, (uint8_t)ti);
-		CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-				       fixed_id, sizeof(fixed_id), 0x88), 0);
+		CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+					  fixed_id, sizeof(fixed_id), 0x88, NULL), 0);
 		n = dect_cc_poll(&cc, msg, sizeof(msg));
 		CHECK(n > 0);
 		CHECK_EQ(dect_nwk_parse(msg, n, &h, &ies, &ies_len), 0);
@@ -1348,23 +1369,23 @@ static void test_setup_carries_line_identifier(void)
 
 	/* re-initialised: no IE, the G7 SETUP again */
 	dect_cc_init(&cc);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id), fixed_id,
-			       sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id,
+				  sizeof(fixed_id), 0x88, NULL), 0);
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), plain);
 
 	/* NULL clears; an invalid set is left out, the call still goes */
 	dect_cc_init(&cc);
 	dect_cc_set_callinfo(&cc, &ci);
 	dect_cc_set_callinfo(&cc, NULL);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id), fixed_id,
-			       sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id,
+				  sizeof(fixed_id), 0x88, NULL), 0);
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), plain);
 
 	dect_cc_init(&cc);
 	ci.line_id = DECT_CALLINFO_LINE_NONE;
 	dect_cc_set_callinfo(&cc, &ci);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id), fixed_id,
-			       sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id,
+				  sizeof(fixed_id), 0x88, NULL), 0);
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), plain);
 }
 
@@ -1414,8 +1435,8 @@ static void test_facility_does_not_disturb_a_live_call(void)
 	size_t n;
 
 	dect_cc_init(&cc);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id), fixed_id,
-			       sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id,
+				  sizeof(fixed_id), 0x88, NULL), 0);
 	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
 		;			/* drain the SETUP */
 
@@ -1827,8 +1848,8 @@ static size_t fp_setup(struct dect_cc *cc, uint8_t *out, size_t cap)
 	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
 
 	dect_cc_init(cc);
-	CHECK_EQ(dect_cc_setup(cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	CHECK_EQ(dect_cc_setup_id(cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
 	CHECK_EQ(cc->state, DECT_CC_ST_CALL_PRESENT);
 	return dect_cc_poll(cc, out, cap);	/* drain the SETUP */
 }
@@ -1843,13 +1864,13 @@ static void test_setup_timer_releases_an_unanswered_call(void)
 
 	/*
 	 * The deadline is armed by the first tick in CALL PRESENT, not by
-	 * dect_cc_setup(), so it is 20 s from that tick. A caller that never
+	 * dect_cc_setup_id(), so it is 20 s from that tick. A caller that never
 	 * ticks never arms it -- which is worth stating in a test, because it
 	 * is the one way this timer can silently not exist.
 	 */
-	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+	CHECK_EQ(cc_deadline(&cc), UINT64_MAX);
 	dect_cc_tick(&cc, 1000u);
-	CHECK_EQ(dect_cc_next_deadline(&cc), 21000u);
+	CHECK_EQ(cc_deadline(&cc), 21000u);
 
 	/* One millisecond early: nothing. */
 	dect_cc_tick(&cc, 20999u);
@@ -1861,7 +1882,7 @@ static void test_setup_timer_releases_an_unanswered_call(void)
 	dect_cc_tick(&cc, 21000u);
 	CHECK_EQ(cc.state, DECT_CC_ST_NULL);
 	CHECK_EQ(cc.stats.setup_timeouts, 1u);
-	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+	CHECK_EQ(cc_deadline(&cc), UINT64_MAX);
 
 	n = dect_cc_poll(&cc, out, sizeof(out));
 	CHECK(n >= 4u);
@@ -1890,7 +1911,7 @@ static void test_setup_timer_stops_when_the_handset_answers(void)
 
 	CHECK(fp_setup(&cc, out, sizeof(out)) > 0);
 	dect_cc_tick(&cc, 1000u);
-	CHECK_EQ(dect_cc_next_deadline(&cc), 21000u);
+	CHECK_EQ(cc_deadline(&cc), 21000u);
 
 	/*
 	 * A.1 stops the timer when "a response message has been received",
@@ -1904,7 +1925,7 @@ static void test_setup_timer_stops_when_the_handset_answers(void)
 	CHECK_EQ(cc.state, DECT_CC_ST_RINGING);
 
 	dect_cc_tick(&cc, 21000u);
-	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+	CHECK_EQ(cc_deadline(&cc), UINT64_MAX);
 	CHECK_EQ(cc.state, DECT_CC_ST_RINGING);
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
 	CHECK_EQ(cc.stats.setup_timeouts, 0u);
@@ -1944,7 +1965,7 @@ static void test_setup_timer_does_not_run_for_a_pp_originated_call(void)
 		;
 
 	dect_cc_tick(&cc, 1000u);
-	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+	CHECK_EQ(cc_deadline(&cc), UINT64_MAX);
 	dect_cc_tick(&cc, 300000u);
 	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);
 	CHECK_EQ(cc.stats.setup_timeouts, 0u);
@@ -1968,8 +1989,8 @@ static void test_setup_collision_releases_the_handsets_call(void)
 
 	dect_cc_init(&cc);
 	dect_cc_set_next_ti(&cc, 1);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
 	n = dect_cc_poll(&cc, out, sizeof(out));	/* our SETUP, TV 1 */
 	CHECK_EQ(out[0] >> 4, 0x1u);			/* F=0, TV=1 */
 
@@ -2009,12 +2030,12 @@ static void test_insufficient_resources_represents_the_setup(void)
 
 	dect_cc_init(&cc);
 	dect_cc_set_next_ti(&cc, 1);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
 	first_len = dect_cc_poll(&cc, first, sizeof(first));
 	CHECK(first_len > 0);
 	dect_cc_tick(&cc, 1000);			/* arms F<CC.03> */
-	CHECK_EQ(dect_cc_next_deadline(&cc), 21000u);
+	CHECK_EQ(cc_deadline(&cc), 21000u);
 
 	/* {CC-RELEASE-COM} (1, TV1) <<RELEASE-REASON>> insufficient resources */
 	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER,
@@ -2030,9 +2051,9 @@ static void test_insufficient_resources_represents_the_setup(void)
 		CHECK_EQ(n, first_len);
 		CHECK_EQ(memcmp(out, first, first_len), 0);	/* byte-identical */
 		/* F<CC.03> was restarted: it is armed afresh on the next tick. */
-		CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);
+		CHECK_EQ(cc_deadline(&cc), UINT64_MAX);
 		dect_cc_tick(&cc, 5000 * i);
-		CHECK_EQ(dect_cc_next_deadline(&cc), 5000u * i + 20000u);
+		CHECK_EQ(cc_deadline(&cc), 5000u * i + 20000u);
 	}
 
 	/* The budget is spent: the next one releases the call for real. */
@@ -2055,8 +2076,8 @@ static void test_other_release_reasons_are_not_represented(void)
 	/* "User busy" on our transaction: released, nothing re-sent. */
 	dect_cc_init(&cc);
 	dect_cc_set_next_ti(&cc, 1);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
 	dect_cc_poll(&cc, out, sizeof(out));
 	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER,
 				 1, DECT_CC_RELEASE_COM);
@@ -2070,8 +2091,8 @@ static void test_other_release_reasons_are_not_represented(void)
 	/* A bare {CC-RELEASE-COM} with no reason at all: likewise. */
 	dect_cc_init(&cc);
 	dect_cc_set_next_ti(&cc, 1);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
 	dect_cc_poll(&cc, out, sizeof(out));
 	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER,
 				 1, DECT_CC_RELEASE_COM);
@@ -2481,7 +2502,7 @@ static void test_handset_call_in_steps(void)
 	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
 	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
 	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
-	CHECK_EQ(dect_cc_next_deadline(&cc), UINT64_MAX);	/* F<CC.01> off */
+	CHECK_EQ(cc_deadline(&cc), UINT64_MAX);	/* F<CC.01> off */
 
 	CHECK_EQ(dect_cc_alert(&cc), 0);
 	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);		/* no 2nd PROC */
@@ -2777,7 +2798,7 @@ static void test_overlap_timer(void)
 	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
 		;
 	dect_cc_tick(&cc, 1000);			/* armed: 21000 */
-	CHECK_EQ(dect_cc_next_deadline(&cc), 21000u);
+	CHECK_EQ(cc_deadline(&cc), 21000u);
 	n = pp_info(buf, sizeof(buf), "1", 0);
 	dect_cc_rx(&cc, buf, n);
 	dect_cc_tick(&cc, 11000);			/* re-armed: 31000 */
@@ -2804,8 +2825,8 @@ static void test_handset_choice_is_learned_on_our_call(void)
 	size_t n;
 
 	dect_cc_init(&cc);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x88), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x88, NULL), 0);
 	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
 		;
 	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,
@@ -2818,8 +2839,8 @@ static void test_handset_choice_is_learned_on_our_call(void)
 
 	/* a fresh call forgets it; no list anywhere means basic speech */
 	dect_cc_init(&cc);
-	CHECK_EQ(dect_cc_setup(&cc, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x80), 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
 	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
 		;
 	n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_RESPONDER,

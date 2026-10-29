@@ -45,10 +45,6 @@ int dect_dsaa_pin_check(const char *pin, unsigned min_digits);
 /* B1: derive the 16-byte auth key K by repeating the UAK or AC. */
 void dect_dsaa_b1(const uint8_t *val, size_t len, uint8_t k[DECT_AUTH_KEY_LEN]);
 
-/* B2: derive K from a UAK and a UPI (K[i] = uak[i%] XOR upi[i%]). */
-void dect_dsaa_b2(const uint8_t *uak, size_t uak_len,
-		  const uint8_t *upi, size_t upi_len, uint8_t k[DECT_AUTH_KEY_LEN]);
-
 /* The core 128-bit-key / 64-bit-rand -> 128-bit DSAA function. */
 void dect_dsaa(const uint8_t rand[DECT_AUTH_RAND_LEN],
 	       const uint8_t key[DECT_AUTH_KEY_LEN],

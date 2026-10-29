@@ -234,16 +234,6 @@ static int fields_cmp(const uint32_t *a, uint8_t na, const uint32_t *b,
 	return 0;
 }
 
-int dect_profile_version_cmp(const char *a, const char *b)
-{
-	uint32_t fa[4], fb[4];
-	uint8_t na, nb;
-
-	if (parse_version(a, fa, &na) || parse_version(b, fb, &nb))
-		return strcmp(a, b);
-	return fields_cmp(fa, na, fb, nb);
-}
-
 /* ---- parsing ------------------------------------------------------------ */
 
 static void say(dect_profile_report r, void *ctx, unsigned line,

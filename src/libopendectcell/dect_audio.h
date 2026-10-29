@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * Audio helpers for the voice slots: G.711 A-law conversion and a simple
- * tone analysis. The DECT STUB carries 8-bit A-law samples in the voice
- * slots (observed: the sample is the low byte of the 16-bit slot word).
+ * Audio helpers for the voice slots: G.711 A-law conversion, a simple tone
+ * analysis and the 8 <-> 16 kHz resampler of the audio bridge. The DECT STUB
+ * carries 8-bit A-law samples in the voice slots (observed on hardware: the
+ * sample is the low byte of the 16-bit slot word).
  *
- * Used to verify the STUB test tone received in a voice slot (gate G4) and
- * to generate a tone to transmit for the loopback test. Pure functions,
- * no I/O; unit-tested on the PC.
+ * The tone analysis checks a test tone received in a voice slot
+ * (dect-pcmcap). Pure functions, no I/O; unit-tested on the PC.
  */
 #ifndef OPENDECTCELL_DECT_AUDIO_H
 #define OPENDECTCELL_DECT_AUDIO_H
@@ -37,9 +37,6 @@ struct dect_tone_stats {
  */
 void dect_tone_analyze(const int16_t *pcm, size_t n, uint32_t rate,
 		       struct dect_tone_stats *s);
-
-/* Decode n A-law bytes into pcm[n] in place-friendly form (separate buffers). */
-void dect_alaw_decode_buf(const uint8_t *alaw, int16_t *pcm, size_t n);
 
 /*
  * 8 kHz <-> 16 kHz for a narrowband call's speech on the bridge's 16 kHz

@@ -152,19 +152,6 @@ static void test_append_bounds(void)
 	CHECK_EQ(m.param_len, DECT_APPEND_BUF_MAX + 2u);
 }
 
-/* TRIGGER_SIGNALLING is a one-byte handle command. */
-static void test_trigger_mail(void)
-{
-	struct dect_mail m;
-
-	dect_cs_trigger_mail(&m, DECT_TASK_PCM, 0x04);
-	CHECK_EQ(m.src, DECT_TASK_PCM);
-	CHECK_EQ(m.dst, DECT_TASK_CONTACT_DST);
-	CHECK_EQ(m.prim, DECT_PRIM_TRIGGER_SIG);
-	CHECK_EQ(m.param_len, 1);
-	CHECK_EQ(m.param[0], 0x04);
-}
-
 int main(void)
 {
 	test_decode_segment_13();
@@ -174,6 +161,5 @@ int main(void)
 	test_decode_rejects_bad_marker_or_handle();
 	test_append_mail();
 	test_append_bounds();
-	test_trigger_mail();
 	return CHECK_DONE();
 }

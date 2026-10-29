@@ -1343,29 +1343,6 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 	mm->stats.tpui_timeouts++;
 }
 
-uint64_t dect_mm_next_deadline(const struct dect_mm *mm)
-{
-	uint64_t t = mm->ident_deadline_ms ? mm->ident_deadline_ms : UINT64_MAX;
-
-	if (mm->state == DECT_MM_WAIT_AUTH && mm->key_deadline_ms &&
-	    mm->key_deadline_ms < t)
-		t = mm->key_deadline_ms;
-	if (mm->cipher_state == DECT_MM_CIPHER_WAIT_REPLY &&
-	    mm->auth_deadline_ms && mm->auth_deadline_ms < t)
-		t = mm->auth_deadline_ms;
-	if (mm->term_state == DECT_MM_TERM_PENDING && mm->term_deadline_ms &&
-	    mm->term_deadline_ms < t)
-		t = mm->term_deadline_ms;
-	if (mm->pt_auth && mm->pt_auth_deadline_ms &&
-	    mm->pt_auth_deadline_ms < t)
-		t = mm->pt_auth_deadline_ms;
-	if (mm->cipher_state == DECT_MM_CIPHER_READY && !mm->cipher_on &&
-	    !mm->cipher_rejected && mm->cipher_deadline_ms &&
-	    mm->cipher_deadline_ms < t)
-		t = mm->cipher_deadline_ms;
-	return t;
-}
-
 int dect_mm_tpui_confirmed(const struct dect_mm *mm)
 {
 	return mm->tpui_confirmed;

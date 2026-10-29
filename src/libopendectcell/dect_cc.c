@@ -253,14 +253,6 @@ static size_t put_callinfo(uint8_t *b, size_t off,
 	return next ? next : off;
 }
 
-int dect_cc_setup(struct dect_cc *cc, const uint8_t *port_id, size_t port_id_len,
-		  const uint8_t *fixed_id, size_t fixed_id_len,
-		  uint8_t basic_service)
-{
-	return dect_cc_setup_id(cc, port_id, port_id_len, fixed_id,
-				fixed_id_len, basic_service, NULL);
-}
-
 int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
 		     size_t port_id_len, const uint8_t *fixed_id,
 		     size_t fixed_id_len, uint8_t basic_service,
@@ -1147,22 +1139,6 @@ void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms)
 	queue_release_com(cc, RELEASE_REASON_TIMER_EXPIRY);
 	cc->state = DECT_CC_ST_NULL;
 	cc->stats.setup_timeouts++;
-}
-
-uint64_t dect_cc_next_deadline(const struct dect_cc *cc)
-{
-	uint64_t a = cc->setup_deadline_ms ? cc->setup_deadline_ms : UINT64_MAX;
-	uint64_t b = cc->overlap_deadline_ms ? cc->overlap_deadline_ms
-					     : UINT64_MAX;
-	uint64_t c = cc->busy_deadline_ms ? cc->busy_deadline_ms : UINT64_MAX;
-	uint64_t d = cc->release_deadline_ms ? cc->release_deadline_ms
-					     : UINT64_MAX;
-
-	if (b < a)
-		a = b;
-	if (c < a)
-		a = c;
-	return d < a ? d : a;
 }
 
 void dect_cc_set_busy(struct dect_cc *cc, int busy)

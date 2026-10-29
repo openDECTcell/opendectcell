@@ -346,8 +346,8 @@ static void test_setup_carries_identity(void)
 				    DECT_CLIP_PRES_ALLOWED,
 				    DECT_CLIP_SCR_NETWORK), 0);
 
-	CHECK_EQ(dect_cc_setup(&plain, port_id, sizeof(port_id),
-			       fixed_id, sizeof(fixed_id), 0x08), 0);
+	CHECK_EQ(dect_cc_setup_id(&plain, port_id, sizeof(port_id),
+				  fixed_id, sizeof(fixed_id), 0x08, NULL), 0);
 	CHECK_EQ(dect_cc_setup_id(&with, port_id, sizeof(port_id),
 				  fixed_id, sizeof(fixed_id), 0x08, &id), 0);
 	la = dect_cc_poll(&plain, a, sizeof(a));

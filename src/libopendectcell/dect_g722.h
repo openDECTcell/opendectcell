@@ -22,9 +22,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Wideband sample rate. The octet rate is half this. */
-#define DECT_G722_RATE_HZ	16000u
-
 /* One sub-band's adaptive quantizer and predictor (clause 3, blocks 2-4). */
 struct dect_g722_band {
 	int s;			/* predicted signal */

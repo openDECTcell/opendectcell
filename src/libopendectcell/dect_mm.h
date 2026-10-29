@@ -428,12 +428,11 @@ size_t dect_mm_fixed_identity(const struct dect_mm *mm, uint8_t *out,
 void dect_mm_tpui(const struct dect_mm *mm, uint8_t out[3]);
 
 /*
- * Run the MM timers. Currently only <MM_ident.1>; safe to call every pass.
+ * Run the MM timers: <MM_ident.1>, <MM_key.1>, <MM_auth.1>, <MM_cipher.1>
+ * and <MM_access.2> (EN 300 175-5 A.5). Each starts on the first tick after
+ * its procedure begins, so call it every loop pass.
  */
 void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms);
-
-/* Earliest MM deadline, or UINT64_MAX when no timer is running. */
-uint64_t dect_mm_next_deadline(const struct dect_mm *mm);
 
 /*
  * Has the handset acknowledged the TPUI we assigned it?
