@@ -30,10 +30,10 @@ endef
 define Package/opendectcell
   $(call Package/opendectcell/Default)
   TITLE:=DECT base station for the FRITZ!Box 7520/7530 and 7412
-  DEPENDS:=@(TARGET_ipq40xx||TARGET_lantiq) \
+  DEPENDS:=@(TARGET_ipq40xx||TARGET_lantiq_xrx200) \
 	+TARGET_ipq40xx:kmod-opendectcell-ipq40xx \
-	+TARGET_lantiq:kmod-opendectcell-lantiq \
-	+TARGET_lantiq:kmod-lantiq-ssc-pcm
+	+TARGET_lantiq_xrx200:kmod-opendectcell-lantiq \
+	+TARGET_lantiq_xrx200:kmod-lantiq-ssc-pcm
 endef
 
 define Package/opendectcell/description
@@ -57,9 +57,10 @@ endef
 
 define Package/opendectcell-baresip/description
   The baresip module "opendectcell": the bridge between dect-stubd and SIP.
-  Each handset's Line 1 and Line 2 (Network > DECT, Handsets) become
-  baresip accounts; the DECT service starts baresip with them when at
-  least one line is switched on.
+  Each VoIP profile that is a handset's Line 1 or Line 2 (Network >
+  DECT) becomes one baresip account, shared by every handset that has
+  it as a line; the DECT service starts baresip when at least one
+  handset has a line.
 endef
 
 define KernelPackage/opendectcell-ipq40xx
@@ -80,7 +81,7 @@ define KernelPackage/opendectcell-lantiq
   SUBMENU:=Voice over IP
   TITLE:=FRITZ!Box 7412 DECT chip control
   URL:=https://github.com/openDECTcell/opendectcell
-  DEPENDS:=@TARGET_lantiq
+  DEPENDS:=@TARGET_lantiq_xrx200
   FILES:=$(PKG_BUILD_DIR)/kernel/opendectcell.ko
 endef
 
@@ -90,7 +91,7 @@ define KernelPackage/opendectcell-lantiq/description
   boot; the opendectcell service loads it.
 endef
 
-ifdef CONFIG_TARGET_lantiq
+ifdef CONFIG_TARGET_lantiq_xrx200
   OPENDECTCELL_KMOD_ARGS:=OPENDECTCELL_LANTIQ=1
 endif
 
@@ -112,7 +113,7 @@ define Build/Compile
 		CFLAGS="$(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -std=c11 -Wall -Wextra" \
 		LDFLAGS="$(TARGET_LDFLAGS)" \
 		VERSION="$(PKG_VERSION)" \
-		build/dect-stubd build/dect-fwload build/dect-pcmcap
+		build/dect-stubd build/dect-fwload
 	$(if $(CONFIG_PACKAGE_opendectcell-baresip),$(call Build/Compile/baresip))
 	+$(KERNEL_MAKE) $(PKG_JOBS) M="$(PKG_BUILD_DIR)/kernel" \
 		$(OPENDECTCELL_KMOD_ARGS) modules
@@ -122,7 +123,6 @@ define Package/opendectcell/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/build/dect-stubd $(1)/usr/sbin/
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/build/dect-fwload $(1)/usr/sbin/
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/build/dect-pcmcap $(1)/usr/sbin/
 	$(INSTALL_DIR) $(1)/etc/init.d $(1)/etc/config $(1)/etc/opendectcell/firmware
 	$(INSTALL_BIN) ./files/opendectcell.init $(1)/etc/init.d/opendectcell
 	$(INSTALL_CONF) ./files/opendectcell.config $(1)/etc/config/opendectcell

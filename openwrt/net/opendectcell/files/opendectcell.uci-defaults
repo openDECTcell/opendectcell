@@ -35,6 +35,13 @@ if grep -q "^$tty::" /etc/inittab 2>/dev/null; then
 	sed -i "s|^$tty::|#$tty::|" /etc/inittab
 	logger -t opendectcell "disabled the console getty on $tty, the DECT UART"
 fi
+# Until 0.3.1 the default config carried the service's own dect-stubd
+# options in 'options'; the service passes them itself now. Clear them
+# where they still hold that default, so Extra options shows only the
+# user's.
+[ "$(uci -q get opendectcell.main.options)" = mask=0x0002,codec=3,status=8000 ] &&
+	uci -q set opendectcell.main.options='' && uci -q commit opendectcell
+
 # A random registration PIN unless one is set: pin_length digits, 8 unless
 # chosen otherwise (Network > DECT, Handsets).
 if [ -z "$(uci -q get opendectcell.main.pin)" ]; then

@@ -47,9 +47,9 @@ dect_load_profile
 # otherwise the openDECTcell module's /dev/dect0 and its default frame.
 PCM_ARGS="${pcm_dev:+-d $pcm_dev}${pcm_slots:+ -c $pcm_slots}"
 
-# A random 4-digit registration PIN, saved in the config (also made by the
-# package's uci-defaults script at install).
-# A random PIN of pin_length digits: 8 (the most GAP allows), 6 or 4.
+# A random registration PIN of pin_length digits: 8 (the most GAP allows),
+# 6 or 4. The package's uci-defaults script makes one at install; this is
+# for a PIN emptied since.
 pin_make() {
 	local n
 	config_get n main pin_length 8
@@ -80,7 +80,7 @@ fw_known() {
 # the chip's replies away, and kernel messages land in the upload. Freeze a
 # running getty (until the next reboot: resuming it hangs up the UART; the
 # package's uci-defaults script disables it for good) and quiet the kernel
-# console -- what the lab's fwload.sh has done before every upload.
+# console, so neither gets in the way of the firmware upload.
 console_claim() {
 	local uart="$1" p
 	echo 1 > /proc/sys/kernel/printk
@@ -116,7 +116,7 @@ uci_get() {
 }
 
 load_chip() {
-	local dir first second tty mtd off mode unverified f extra
+	local dir first second tty mtd off mode strapv unverified f extra
 	uci_get dir firmware_dir /etc/opendectcell/firmware 'A-Za-z0-9/._-'
 	uci_get first first "$fw_firstlevel" 'A-Za-z0-9._-'
 	uci_get second second "$fw_secondlevel" 'A-Za-z0-9._-'
@@ -207,9 +207,10 @@ overrides_write() {
 
 # A handset's Line 1 and Line 2 are VoIP profiles ('config voip' sections,
 # Network > DECT, VoIP Profiles), named by its options line1 and line2.
-# Resolved once per start into LINE_<slot>_<n>. A profile may be a line of
-# several handsets (a call to it rings them all), but not both lines of
-# one handset.
+# Resolved once per start (overrides_write) into LINE_<slot>_<n>, which
+# lines_write and baresip_write read. A profile may be a line of several
+# handsets (a call to it rings them all), but not both lines of one
+# handset.
 lines_resolve_one() {
 	local sec="$1" slot n p t first=
 	config_get slot "$sec" slot
@@ -227,14 +228,12 @@ lines_resolve_one() {
 			continue
 		fi
 		first=$p
-		LINES_USED="$LINES_USED$p "
 		eval "LINE_${slot}_$n=\$p"
 	done
 }
 
 lines_resolve() {
 	local s
-	LINES_USED=" "
 	for s in 1 2 3 4 5 6; do
 		eval "LINE_${s}_1= LINE_${s}_2="
 	done
@@ -412,7 +411,8 @@ bs_module() {
 	return 0
 }
 
-# Write baresip's files; 0 when at least one line is on.
+# Write baresip's files from the lines lines_resolve found; 0 when at
+# least one handset has a usable line.
 baresip_write() {
 	local v lo hi
 	BS_ACCOUNTS=0
@@ -422,7 +422,6 @@ baresip_write() {
 	: > "$BS_DIR/accounts"
 	chmod 600 "$BS_DIR/accounts"
 	: > /var/run/opendectcell/lines
-	[ -n "$LINES_USED" ] || lines_resolve
 	BS_AORS=" "
 	BS_SECS=" "
 	config_foreach bs_handset handset
@@ -495,7 +494,12 @@ start_service() {
 		log "made a registration PIN (Network > DECT, Handsets shows it)"
 	fi
 	uci_get stores stores '/etc/opendectcell-sub.*' 'A-Za-z0-9/._*-'
+	# The audio bind (TDM slot mask 0x0002, narrowband bind byte 3) and
+	# the 8 s connection-status poll that Status > DECT's radio figures
+	# come from: the daemon has no defaults for them. The user's options
+	# follow, so a key set there again wins (the daemon takes the last).
 	config_get options main options ''
+	options="mask=0x0002,codec=3,status=8000${options:+,$options}"
 	config_get_bool reg main registration 0
 	[ "$reg" = 1 ] && options="${options:+$options,}regopen"
 	config_get_bool wb main wideband 1
@@ -507,7 +511,7 @@ start_service() {
 	else
 		options="${options:+$options,}nooverlap"
 	fi
-	# On unless turned off: ciphered calls work since 2026-10-28
+	# ciphered calls unless turned off (-C: the link in the clear)
 	config_get_bool ci main cipher 1
 	[ "$ci" = 1 ] || nocipher="-C"
 	uci_get rw regwindow 120 '0-9'
@@ -518,8 +522,8 @@ start_service() {
 	config_get_bool tc main twocalls 1
 	[ "$tc" = 1 ] && options="${options:+$options,}twocalls"
 	# Hours between date and time updates to every handset (0: only when
-	# one reports in); the daemon counts minutes. A timeupdate= in
-	# options wins, for a bench run in minutes.
+	# one reports in); the daemon counts minutes. A timeupdate= (minutes)
+	# in options wins.
 	uci_get tu time_update 24 '0-9'
 	tu=${tu#"${tu%%[!0]*}"}
 	{ [ ${#tu} -le 3 ] && [ "${tu:-0}" -le 720 ]; } || tu=24
