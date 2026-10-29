@@ -631,6 +631,11 @@ struct stubd {
 	int         parked;		/* run_loop() drained the park mails */
 	uint64_t    park_check_at;	/* 06.88: park read-back sent at */
 	int         park_radio, park_timer;	/* its answers, -1 = none yet */
+	int         uak_0688;		/* 06.88: UAK table at 0x067F */
+	/* 06.88: read-back and slot audit held back until this time */
+	uint64_t    sub_check_at;
+	int         sub_check_uak, sub_check_audit, sub_check_firing;
+	uint8_t     sub_check_slot, sub_check_mine;
 	uint8_t     tx_idle;		/* filler for unmapped slots (-a txidle) */
 	uint8_t     tx_voice_idle;	/* filler for the voice lanes */
 	uint32_t    tx_blocks;
@@ -1382,11 +1387,16 @@ struct stubd {
 
 /*
  * The chip's UAK table [CR A-0085]: six 17-byte records, 16 key bytes and a
- * config byte each. The address is the 08.25 STUB build's, which is the one
- * A-0085 was read from. On 07.56 this range holds something else and the
- * table's address is not known yet (Q-0059).
+ * config byte each. The address is per STUB build: 0x9518 on 08.25, the one
+ * A-0085 was read from; 0x067F on the 7412's 06.88, where a marker record
+ * written with 0x020A was found [CR A-0007, A-0011] (observed 2026-10-29).
+ * On 07.56 0x9518 holds something else and the table's address is not known
+ * yet (Q-0059). main() picks the address once the build is known.
  */
-#define SUB_UAK_BASE	0x9518u
+#define SUB_UAK_BASE_0825	0x9518u
+#define SUB_UAK_BASE_0688	0x067Fu
+static uint32_t sub_uak_base = SUB_UAK_BASE_0825;
+#define SUB_UAK_BASE	sub_uak_base
 #define SUB_UAK_STRIDE	0x11u
 #define SUB_UAK_END	(SUB_UAK_BASE + DECT_MM_MAX_SLOT * SUB_UAK_STRIDE)
 
@@ -1604,7 +1614,7 @@ static void verify_report(const struct stubd *s)
 			break;
 		case VERIFY_READBACK:
 			changes += s->verify_n[i];
-			if (s->stub_build == STUB_0825)
+			if (s->stub_build == STUB_0825 || s->uak_0688)
 				verified += s->verify_n[i];
 			break;
 		default:
@@ -1622,7 +1632,7 @@ static void verify_report(const struct stubd *s)
 			continue;
 		int ok = verify_tbl[i].cls == VERIFY_QUERY ||
 			 (verify_tbl[i].cls == VERIFY_READBACK &&
-			  s->stub_build == STUB_0825);
+			  (s->stub_build == STUB_0825 || s->uak_0688));
 
 		printf("chip:   0x%04X x%-5u %-22s %s (%s)\n",
 		       verify_tbl[i].prim, s->verify_n[i], verify_tbl[i].what,
@@ -3846,6 +3856,22 @@ static void send_subscription_tail(struct stubd *s)
  * The UAK is key material. We compare it and report the verdict; the bytes
  * are never printed, not even under -p.
  */
+/*
+ * On the 7412's 06.88 STUB a memory read (task 0x23) sent right behind
+ * 0x020A/0x0247 (task 0x02) is answered before they take effect: the read 40
+ * ms after a 0x020A found the record missing, a sweep 1 s later found it in
+ * place (observed 2026-10-29). There, the read-back and the slot audit wait.
+ */
+#define SUB_CHECK_DELAY_0688_MS	1000u
+
+static int sub_check_defer(struct stubd *s)
+{
+	if (!s->uak_0688 || s->sub_check_firing)
+		return 0;
+	s->sub_check_at = mono_ms() + SUB_CHECK_DELAY_0688_MS;
+	return 1;
+}
+
 static void uak_verify_send(struct stubd *s, uint8_t slot)
 {
 	struct dect_mail m;
@@ -3853,7 +3879,12 @@ static void uak_verify_send(struct stubd *s, uint8_t slot)
 
 	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
 		return;
-	if (s->stub_build == STUB_OTHER) {
+	if (sub_check_defer(s)) {
+		s->sub_check_uak = 1;
+		s->sub_check_slot = slot;
+		return;
+	}
+	if (s->stub_build == STUB_OTHER && !s->uak_0688) {
 		printf("sub: UAK read-back skipped -- STUB %s is loaded, and the "
 		       "table address we hold is the 08.25 build's [CR A-0085, "
 		       "Q-0059]\n", s->stub_name);
@@ -4022,10 +4053,15 @@ static void sub_audit_send(struct stubd *s, uint8_t mine)
 {
 	uint8_t slot;
 
+	if (sub_check_defer(s)) {
+		s->sub_check_audit = 1;
+		s->sub_check_mine = mine;
+		return;
+	}
 	s->sub_audit_pending = 0;
 	s->sub_audit_occupied = 0;
 	s->sub_audit_mine = mine;
-	if (s->stub_build == STUB_OTHER) {
+	if (s->stub_build == STUB_OTHER && !s->uak_0688) {
 		printf("sub: slot audit skipped -- STUB %s is loaded, and the "
 		       "table address we hold is the 08.25 build's\n",
 		       s->stub_name);
@@ -9877,6 +9913,21 @@ fail:
 }
 
 /* Main loop: decode mails, drive the session, (re)send the contact. */
+/* The 06.88 read-back and slot audit, once their delay is up. */
+static void sub_check_tick(struct stubd *s, uint64_t now)
+{
+	if (!s->sub_check_at || now < s->sub_check_at)
+		return;
+	s->sub_check_at = 0;
+	s->sub_check_firing = 1;
+	if (s->sub_check_audit)
+		sub_audit_send(s, s->sub_check_mine);
+	if (s->sub_check_uak)
+		uak_verify_send(s, s->sub_check_slot);
+	s->sub_check_audit = s->sub_check_uak = 0;
+	s->sub_check_firing = 0;
+}
+
 static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 {
 	size_t block = s->slots * 2u * fpb;
@@ -10009,6 +10060,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		state_write(s, now, s->do_register &&
 			    s->sess.state == DECT_SESS_UP, 0);
 		holdback_tick(s, now);
+		sub_check_tick(s, now);
 		fetch_tick(s, now);
 		dial_tick(s, now);
 		info_tick(s, now);
@@ -11561,6 +11613,10 @@ int main(int argc, char **argv)
 	 * Whether the levels are our beacon or a neighbour the scan only sees
 	 * while it runs is open; a handset decides (docs/bench-7412.md).
 	 */
+	if (!strcmp(s.stub_name, DECT_STUB_0688)) {
+		sub_uak_base = SUB_UAK_BASE_0688;
+		s.uak_0688 = 1;
+	}
 	if (auto_bringup && !strcmp(s.stub_name, DECT_STUB_0688)) {
 		memmove(&s.xmail[1], &s.xmail[0],
 			s.n_xmail * sizeof(s.xmail[0]));
