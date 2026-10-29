@@ -7,8 +7,11 @@ name="FRITZ!Box 7412"
 transport=lantiq-ssc
 
 fw_family=441
-fw_firstlevel=dectfw_firstlevel_441.hex
-fw_secondlevel=dectfw_secondlevel_441.hex
+# The 7412's own 06.88 build: the only one that clocks its PCM bus (observed
+# 2026-10-28). Named apart from the 7520's 08.25 blob, which shares the
+# in-image name: dect-stubd picks chip RAM addresses by this name.
+fw_firstlevel=dectfw_firstlevel_441-06.88-7412.hex
+fw_secondlevel=dectfw_secondlevel_441-06.88-7412.hex
 fw_firstlevel_sha256=72f8e27a0d01c301a05a8b373a71887af882a6cebcb1a30bd4a435580e1045f2
 fw_secondlevel_sha256=4fabee65d07a3214f9083de81ae54089f01bbfccb4cdbb672f37487a09cdfaa6
 
