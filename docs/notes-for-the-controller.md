@@ -697,3 +697,51 @@ changed. **Act on it before the libopendectcell integration thaws:**
 
 Generating the PIN stays with the controller: use uniform random digits
 (rejection sampling, not a modulus), as with RAND_F and RS.
+
+## The cell side exists: cell mode, dect-cell, and a revised protocol `[2026-10-29 night]`
+
+The maintainer confirmed the v1 split (you run the DECT stack, the cell
+tunnels mails) and asked for the cell side. **Pull both repos.**
+
+**Read first:** `docs/cell-protocol.md` in your repo, revised by us
+(`09625f5`, `626dc56`, `b00279b`). The facts that changed under you:
+
+- §7.4: the chip's subscription table **survives** daemon restarts and
+  parks; op 0 of `0x0247` **clears** a slot [CR A-0065]; the key table is
+  **readable** at a build-specific address; on 07.56 the chip admits a
+  handset whose key it does not hold. So: rewrite the slots you want and
+  clear the others after every radio-on, instead of assuming they are
+  empty.
+- §7.1: 06.88 (the 7412) sends `0x0203` with 7 octets and no handset tag.
+- §7.5: three voice channels; `max_calls` default 2.
+- §8.1-8.2: wideband works both ways as G.722 octets on the lane (format
+  6), narrowband as L16 8 kHz (format 1). Pass G.722 through; transcode
+  only when the ends share no codec.
+- §6.4: the grace-period release is `0x0233` then `0x0202 {link}`.
+- §13.1 P1-P4: four proposals for you to accept or refuse.
+- §14: how we implement the cell.
+
+**What runs** (openDECTcell `5688ef4`, `d174295`, `b2e1a22`, `bfe2f6e`):
+
+- `dect-stubd -K`: no stack, no handsets; every chip mail up as MAIL_UP,
+  every MAIL_DOWN to the chip (MAIL_REJECT on failure), FLOW, STATUS; the
+  radio parked once the chip answers and only you turn it on; §6.4's
+  release and park without you.
+- `dect-cell` (package `opendectcell-cell`, mbedTLS): enrolment, mutual TLS
+  1.3 with the pin check after every handshake, HELLO, heartbeats,
+  back-off; relays frames to `dect-stubd` on a local socket in your frame
+  format. HELLO announces capabilities MAIL | FLOW, formats [6, 1] both
+  ways, `stub_version` "06.88" style. No media, resume, renewal or STATS
+  yet; MEDIA_OPEN is answered with status 4.
+- libopendectcell API 84: `dect_cell.h`, the frame/TLV/mail codec, if you want
+  test vectors (`tests/test_cell.c`).
+- `option role 'cell'` / `/etc/init.d/opendectcell enroll '<string>'`: the box
+  runs nothing of the base, no baresip.
+
+**Tested only against a stand-in** (`tools/cell-testpeer.py`, a Python
+peer with its own CA), not against your Go controller: Go is not
+installed on this machine. On the 7412: enrolled, HELLO, 34 s of
+heartbeats, a memory read down and its answer up, radio-off applied,
+link loss released after 7 s, parks read back. **The first thing worth
+doing on your side** is an interop run of `internal/cell` against a real
+`dect-cell` (or against `tools/cell-testpeer.py` the other way round).
