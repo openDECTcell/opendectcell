@@ -4441,14 +4441,17 @@ static void sub_audit_reply(struct stubd *s, uint32_t addr,
 		uint8_t mine_bit = s->sub_audit_mine >= 1u &&
 				   s->sub_audit_mine <= DECT_MM_MAX_SLOT
 			? (uint8_t)(1u << (s->sub_audit_mine - 1u)) : 0u;
-		uint8_t foreign = (uint8_t)(s->sub_audit_occupied & ~mine_bit);
+		/* our other handsets' slots are kept, not foreign */
+		uint8_t kept = (uint8_t)(live_slot_mask(s) & ~mine_bit);
+		uint8_t foreign = (uint8_t)(s->sub_audit_occupied &
+					    ~(mine_bit | kept));
 
 		printf("sub: chip slot audit:");
 		for (i = 1u; i <= DECT_MM_MAX_SLOT; i++)
 			printf(" %u=%s", i,
-			       (s->sub_audit_occupied & (1u << (i - 1u)))
-				       ? (i == s->sub_audit_mine ? "OURS" : "held")
-				       : "-");
+			       !(s->sub_audit_occupied & (1u << (i - 1u))) ? "-" :
+			       i == s->sub_audit_mine ? "OURS" :
+			       kept & (1u << (i - 1u)) ? "ours" : "held");
 		printf("\n");
 		if (mine_bit && !(s->sub_audit_occupied & mine_bit))
 			printf("sub: *** OUR OWN SLOT %u IS EMPTY *** the "
