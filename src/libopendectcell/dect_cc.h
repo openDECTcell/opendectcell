@@ -358,6 +358,14 @@ void dect_cc_set_wideband(struct dect_cc *cc, int on);
 uint8_t dect_cc_codec(const struct dect_cc *cc);
 
 /*
+ * The handset's call goes narrowband after all: G.726 instead of G.722,
+ * when the handset offered both, for an owner that learns before its
+ * CONNECT that the far end speaks narrowband only (the box then codes
+ * nothing). Returns 1 when the choice changed.
+ */
+int dect_cc_prefer_narrowband(struct dect_cc *cc);
+
+/*
  * Overlap receiving (EN 300 444 §8.3, EN 300 175-5 §9.3.1.4/5). With it on,
  * a handset-placed speech call whose {CC-SETUP} lacks <<SENDING-COMPLETE>>
  * gets {CC-SETUP-ACK} and waits in DECT_CC_ST_OVERLAP while the digits

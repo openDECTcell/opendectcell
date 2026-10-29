@@ -722,6 +722,14 @@ uint8_t dect_cc_codec(const struct dect_cc *cc)
 	return cc->chosen_codec;
 }
 
+int dect_cc_prefer_narrowband(struct dect_cc *cc)
+{
+	if (cc->chosen_codec != CODEC_ID_G722 || !cc->peer_has_g726)
+		return 0;
+	cc->chosen_codec = CODEC_ID_G726;
+	return 1;
+}
+
 static void accept_now(struct dect_cc *cc);
 static void proceed(struct dect_cc *cc);
 

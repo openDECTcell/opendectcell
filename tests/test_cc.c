@@ -2291,6 +2291,34 @@ static void test_connect_names_the_chosen_codec(void)
 	}
 }
 
+/*
+ * The far end is narrowband: the owner turns the handset's call to G.726
+ * before its CONNECT, which then names G.726.
+ */
+static void test_prefer_narrowband(void)
+{
+	static const uint8_t a540[] = { 0x90, 0x03, 0x00, 0x01,
+					0x02, 0x00, 0x84 };
+	static const uint8_t g726[] = { 0x7C, 0x04, 0x90, 0x02, 0x00, 0x84 };
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_wideband(&cc, 1);
+	dect_cc_set_route_complete(&cc, 1);
+	n = pp_setup_codecs(buf, sizeof(buf), 0x88, a540, sizeof(a540));
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_codec(&cc), DECT_CC_CODEC_G722);
+	CHECK_EQ(dect_cc_prefer_narrowband(&cc), 1);
+	CHECK_EQ(dect_cc_codec(&cc), DECT_CC_CODEC_G726);
+	CHECK_EQ(dect_cc_prefer_narrowband(&cc), 0);	/* once */
+	CHECK_EQ(dect_cc_connect(&cc), 0);
+	n = connect_of(&cc, out, sizeof(out));
+	CHECK(n >= 2u + sizeof(g726) && memcmp(&out[2], g726, sizeof(g726)) == 0);
+}
+
 /* Wideband service without a list: G.726 from the registration list. */
 static void test_wideband_setup_without_a_list_gets_g726(void)
 {
@@ -2926,6 +2954,7 @@ int main(void)
 	test_internal_call_waits_for_the_owner();
 	test_internal_call_names_a_line();
 	test_route_complete();
+	test_prefer_narrowband();
 	test_int_key_makes_an_internal_call();
 	test_second_call_on_the_same_link();
 	test_info_on_the_call();
