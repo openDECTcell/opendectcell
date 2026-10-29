@@ -99,6 +99,29 @@ about 15 s while the header stayed `04 02`. Whether the levels are our own
 beacon or a neighbour that the scan sees only while it runs is **open**
 (asked as Q-0008); a handset decides (`bench-7412.md`).
 
+**Field meanings [CR A-0008]** (the room's 08.25 model; our runs fit it
+except where noted):
+
+| Field | Meaning | Our runs |
+|---|---|---|
+| `0xF602` byte 2 | radio state, `01` on, `02` off; `01` from boot | fits |
+| `0xF602` byte 1 bit 3 | a44, registration open | fits (`022B`/`022C`) |
+| `0xF623[0]` | carrier of the beacon, `0xFF` none | `ff` from boot until a mail; see below |
+| `0xF623[1]` | beacon bearer, nonzero = present | `02`, `04` after a park |
+| `0xF623[2..11]` | receive peak-hold level per carrier; decays once the beacon has settled | explains the fall to the floor after ~15 s |
+| `0xF623[12]` | temperature, as `0xF618` | `22`-`26`, rising with run time |
+| `0xF623[13]` bit 6 | no emission | always `00` here |
+| `0x015B` | acts only on a change of the radio state | the edge alone did not help (X2) |
+| `0x0153`/`0x0157`/`0x0169` | latch silently; report only when the broadcast changes | no reply with the radio off, as seen |
+| `0xF625` | 44 octets: 08.25's trailing constant octet dropped | — |
+
+Open, asked as Q-0009: why X2 (configuration, then a real off->on edge)
+stalled while Z1 (radio-off before the configuration) worked; and whether
+`0xF623[0]` changing `ff` -> `05` within 5 s of a lone `0x0169`, with no
+radio-on ever sent, means the chip beacons by itself. With no mail after the
+boot it stays `ff`. Since `143c5fd` the 7412 bring-up begins with radio-off,
+and every run ends parked, so this does not change what the service sends.
+
 The daemon's log masks key bytes of memory reads in the 08.25 table range
 (`0x9518`) whatever the build; on 06.88 the table is at `0x067F` and is not
 masked, so do not memory-dump that range with `-p` once handsets are
