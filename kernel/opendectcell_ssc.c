@@ -145,14 +145,19 @@ static int ssc_step_clock(struct dect_ssc *s)
 	 * clkdev as "1e100800.spi"; mainline adds it powered down
 	 * (clkdev_add_pmu(..., deactivate = 1)), so enabling it here is what
 	 * actually brings the block up. Where the lookup fails, fall back to
-	 * clearing the PMU SPI gate bit directly.
+	 * clearing the PMU SPI gate bit directly. The clock is taken once, on
+	 * the first step 1, and held until module unload (dect_ssc_exit()).
 	 */
+	if (s->clk)
+		goto enabled;
 	clk = clk_get_sys("1e100800.spi", NULL);
 	if (!IS_ERR(clk)) {
-		if (clk_prepare_enable(clk))
+		if (clk_prepare_enable(clk)) {
 			pr_warn("openDECTcell: cannot enable the SSC clock\n");
-		else
+			clk_put(clk);
+		} else {
 			s->clk = clk;
+		}
 	} else {
 		pmu = ioremap(DECT_PMU_BASE, 0x1000);
 		if (pmu) {
@@ -162,6 +167,7 @@ static int ssc_step_clock(struct dect_ssc *s)
 		}
 	}
 
+enabled:
 	ssc_wr(s, SSC_CLC, 1 << SSC_CLC_RMC_S);
 	id = ssc_rd(s, SSC_ID);
 	pr_info("opendectcell: SSC id=0x%08x (rx_fifo=%u tx_fifo=%u)\n", id,
@@ -353,40 +359,6 @@ static void ssc_engine_stop(struct dect_ssc *s)
 /* ------------------------------------------------------------------ */
 /* Lifecycle                                                          */
 /* ------------------------------------------------------------------ */
-/* Temporary, read-only bring-up dump (2026-10-26 session). */
-static void dect_ssc_dump_regs(struct dect_ssc *s)
-{
-	void __iomem *pmu, *cgu, *ebu;
-
-	pr_info("opendectcell: SSC CLC=%08x ID=%08x CON=%08x STAT=%08x WHB=%08x RXFCON=%08x TXFCON=%08x FSTAT=%08x BR=%08x SFCON=%08x\n",
-		__raw_readl(s->base + 0x00), __raw_readl(s->base + 0x08),
-		__raw_readl(s->base + 0x10), __raw_readl(s->base + 0x14),
-		__raw_readl(s->base + 0x18), __raw_readl(s->base + 0x30),
-		__raw_readl(s->base + 0x34), __raw_readl(s->base + 0x38),
-		__raw_readl(s->base + 0x40), __raw_readl(s->base + 0x60));
-
-	pmu = ioremap(0x1f102000, 0x1000);
-	if (pmu) {
-		pr_info("opendectcell: PMU PWDCR=%08x PWDSR=%08x PWDCR1=%08x PWDSR1=%08x\n",
-			__raw_readl(pmu + 0x1c), __raw_readl(pmu + 0x20),
-			__raw_readl(pmu + 0x24), __raw_readl(pmu + 0x28));
-		iounmap(pmu);
-	}
-	cgu = ioremap(0x1f103000, 0x1000);
-	if (cgu) {
-		pr_info("opendectcell: CGU SYS=%08x CLKFSR=%08x IF_CLK=%08x PLL0=%08x PLL1=%08x PLL2=%08x\n",
-			__raw_readl(cgu + 0x0c), __raw_readl(cgu + 0x10), __raw_readl(cgu + 0x24),
-			__raw_readl(cgu + 0x04), __raw_readl(cgu + 0x08), __raw_readl(cgu + 0x60));
-		iounmap(cgu);
-	}
-	ebu = ioremap(0x1e105300, 0x100);
-	if (ebu) {
-		pr_info("opendectcell: EBU BUSCON0=%08x BUSCON1=%08x\n",
-			__raw_readl(ebu + 0x60), __raw_readl(ebu + 0x64));
-		iounmap(ebu);
-	}
-}
-
 int dect_ssc_init(struct dect_ssc *p, const struct dect_ssc_board *board,
 		  struct mutex *lock)
 {
@@ -405,10 +377,26 @@ int dect_ssc_init(struct dect_ssc *p, const struct dect_ssc_board *board,
 		return -ENOMEM;
 	}
 	spin_lock_init(&p->ring_lock);
+	mutex_init(&p->read_lock);
+	mutex_init(&p->write_lock);
 	init_waitqueue_head(&p->wq);
 	init_waitqueue_head(&p->tx_wq);
-	dect_ssc_dump_regs(p);
 	return 0;
+}
+
+/* Called with read_lock and write_lock held, the engine stopped. */
+static void ssc_free_buffers(struct dect_ssc *p)
+{
+	kfree(p->block_buf);
+	p->block_buf = NULL;
+	kfree(p->ring);
+	p->ring = NULL;
+	kfree(p->tx_idle);
+	p->tx_idle = NULL;
+	if (p->tx_q_ready)
+		kfifo_free(&p->tx_q);
+	p->tx_q_ready = false;
+	p->head = p->tail = 0;
 }
 
 void dect_ssc_teardown(struct dect_ssc *p)
@@ -422,12 +410,19 @@ void dect_ssc_teardown(struct dect_ssc *p)
 	 */
 	if (p->base && p->step != DECT_PCM_STEP_OFF)
 		ssc_set_run(p, false, 20000);
-	kfree(p->block_buf);
-	p->block_buf = NULL;
-	kfree(p->ring);
-	p->ring = NULL;
-	p->head = p->tail = 0;
+	/*
+	 * read() and write() run without *p->lock: wake the sleepers, which
+	 * see step 0 and leave, and wait for a copy in progress before the
+	 * buffers go (security audit 2026-10-29).
+	 */
 	p->step = DECT_PCM_STEP_OFF;
+	wake_up_interruptible(&p->wq);
+	wake_up_interruptible(&p->tx_wq);
+	mutex_lock(&p->read_lock);
+	mutex_lock(&p->write_lock);
+	ssc_free_buffers(p);
+	mutex_unlock(&p->write_lock);
+	mutex_unlock(&p->read_lock);
 }
 
 void dect_ssc_exit(struct dect_ssc *p)
@@ -473,6 +468,13 @@ static int ssc_config(struct dect_ssc *s, struct dect_pcm_config *c)
 	s->frame_bytes = s->frame_words * 4;
 	s->block_bytes = fpb * s->frame_bytes;
 
+	/* A second CONFIG replaces the buffers of the first. */
+	mutex_lock(&s->read_lock);
+	mutex_lock(&s->write_lock);
+	ssc_free_buffers(s);
+	mutex_unlock(&s->write_lock);
+	mutex_unlock(&s->read_lock);
+
 	s->ring = kzalloc((size_t)s->n_desc * s->block_bytes, GFP_KERNEL);
 	s->block_buf = kzalloc(s->block_bytes, GFP_KERNEL);
 	s->tx_idle = kmalloc(s->slots * 2, GFP_KERNEL);
@@ -489,12 +491,11 @@ static int ssc_config(struct dect_ssc *s, struct dect_pcm_config *c)
 	c->n_desc = ndesc;
 	return 0;
 err:
-	kfree(s->ring);
-	kfree(s->block_buf);
-	kfree(s->tx_idle);
-	s->ring = NULL;
-	s->block_buf = NULL;
-	s->tx_idle = NULL;
+	mutex_lock(&s->read_lock);
+	mutex_lock(&s->write_lock);
+	ssc_free_buffers(s);
+	mutex_unlock(&s->write_lock);
+	mutex_unlock(&s->read_lock);
 	return -ENOMEM;
 }
 
@@ -538,6 +539,9 @@ static int ssc_step(struct dect_ssc *s, unsigned int n)
 
 static int ssc_regs(struct dect_ssc *s, struct dect_pcm_regs *r)
 {
+	/* At step 0 the SSC clock may be gated: do not touch the block. */
+	if (s->step == DECT_PCM_STEP_OFF)
+		return -ENODATA;
 	memset(r, 0, sizeof(*r));
 	r->step = s->step;
 	r->valid = DECT_PCM_REGS_GLB;
@@ -597,24 +601,36 @@ ssize_t dect_ssc_read(struct dect_ssc *p, char __user *buf, size_t count,
 	struct dect_pcm_block hdr;
 	unsigned long flags;
 	size_t need;
-	int ret;
+	ssize_t ret;
 
-	if (p->step != DECT_PCM_STEP_DMA || !p->ring)
-		return -ENODATA;
-	need = sizeof(hdr) + p->block_bytes;
-	if (count < need)
-		return -EINVAL;
-
+	if (mutex_lock_interruptible(&p->read_lock))
+		return -ERESTARTSYS;
 	for (;;) {
+		/* Under read_lock: teardown may have run while asleep. */
+		if (p->step != DECT_PCM_STEP_DMA || !p->ring) {
+			ret = -ENODATA;
+			goto out;
+		}
+		need = sizeof(hdr) + p->block_bytes;
+		if (count < need) {
+			ret = -EINVAL;
+			goto out;
+		}
 		spin_lock_irqsave(&p->ring_lock, flags);
 		if (p->tail != p->head)
 			break;
 		spin_unlock_irqrestore(&p->ring_lock, flags);
-		if (nonblock)
-			return -EAGAIN;
-		ret = wait_event_interruptible(p->wq, p->tail != p->head);
+		if (nonblock) {
+			ret = -EAGAIN;
+			goto out;
+		}
+		mutex_unlock(&p->read_lock);
+		ret = wait_event_interruptible(p->wq, p->tail != p->head ||
+					       p->step != DECT_PCM_STEP_DMA);
 		if (ret)
 			return ret;
+		if (mutex_lock_interruptible(&p->read_lock))
+			return -ERESTARTSYS;
 	}
 
 	memset(&hdr, 0, sizeof(hdr));
@@ -628,62 +644,95 @@ ssize_t dect_ssc_read(struct dect_ssc *p, char __user *buf, size_t count,
 	}
 	spin_unlock_irqrestore(&p->ring_lock, flags);
 
-	if (copy_to_user(buf, &hdr, sizeof(hdr)))
-		return -EFAULT;
-	if (copy_to_user(buf + sizeof(hdr),
+	/* read_lock keeps the ring allocated across the copy. */
+	if (copy_to_user(buf, &hdr, sizeof(hdr)) ||
+	    copy_to_user(buf + sizeof(hdr),
 			 p->ring + (size_t)p->tail * p->block_bytes,
-			 p->block_bytes))
-		return -EFAULT;
+			 p->block_bytes)) {
+		ret = -EFAULT;
+		goto out;
+	}
 
 	spin_lock_irqsave(&p->ring_lock, flags);
 	p->tail = (p->tail + 1) % p->n_desc;
 	spin_unlock_irqrestore(&p->ring_lock, flags);
-	return need;
+	ret = need;
+out:
+	mutex_unlock(&p->read_lock);
+	return ret;
+}
+
+/* Room for a frame, or the engine was torn down. */
+static bool ssc_tx_room(struct dect_ssc *p, unsigned int frame)
+{
+	return kfifo_avail(&p->tx_q) >= frame ||
+	       p->step != DECT_PCM_STEP_DMA;
 }
 
 ssize_t dect_ssc_write(struct dect_ssc *p, const char __user *buf,
 		       size_t count, bool nonblock)
 {
-	unsigned int frame = p->slots * 2;
+	unsigned int frame;
 	size_t done = 0;
+	ssize_t ret;
 
-	if (p->step != DECT_PCM_STEP_DMA || !p->tx_q_ready) {
-		pr_info("opendectcell: write ENODATA step=%u txq=%d\n",
-			p->step, p->tx_q_ready);
-		return -ENODATA;
-	}
-	if (!count || count % frame) {
-		pr_info("opendectcell: write EINVAL count=%zu frame=%u\n",
-			count, frame);
-		return -EINVAL;
-	}
-
-	while (done < count) {
+	if (mutex_lock_interruptible(&p->write_lock))
+		return -ERESTARTSYS;
+	for (;;) {
 		unsigned int avail;
 		size_t n;
 		u8 tmp[256];
 		unsigned long flags;
+
+		/* Under write_lock: teardown may have run while asleep. */
+		if (p->step != DECT_PCM_STEP_DMA || !p->tx_q_ready) {
+			if (!done)
+				pr_info("opendectcell: write ENODATA step=%u txq=%d\n",
+					p->step, p->tx_q_ready);
+			ret = done ? done : -ENODATA;
+			goto out;
+		}
+		frame = p->slots * 2;
+		if (!count || (count - done) % frame) {
+			if (!done)
+				pr_info("opendectcell: write EINVAL count=%zu frame=%u\n",
+					count, frame);
+			ret = done ? done : -EINVAL;
+			goto out;
+		}
+		if (done >= count)
+			break;
 
 		avail = kfifo_avail(&p->tx_q);
 		n = min_t(size_t, count - done, avail);
 		n = min_t(size_t, n, sizeof(tmp) / frame * frame);
 		n -= n % frame;
 		if (!n) {
-			if (nonblock)
-				return done ? done : -EAGAIN;
+			if (nonblock) {
+				ret = done ? done : -EAGAIN;
+				goto out;
+			}
+			mutex_unlock(&p->write_lock);
 			if (wait_event_interruptible(p->tx_wq,
-						     kfifo_avail(&p->tx_q) >= frame))
+						     ssc_tx_room(p, frame)))
+				return done ? done : -ERESTARTSYS;
+			if (mutex_lock_interruptible(&p->write_lock))
 				return done ? done : -ERESTARTSYS;
 			continue;
 		}
-		if (copy_from_user(tmp, buf + done, n))
-			return done ? done : -EFAULT;
+		if (copy_from_user(tmp, buf + done, n)) {
+			ret = done ? done : -EFAULT;
+			goto out;
+		}
 		spin_lock_irqsave(&p->ring_lock, flags);
 		kfifo_in(&p->tx_q, tmp, n);
 		spin_unlock_irqrestore(&p->ring_lock, flags);
 		done += n;
 	}
-	return done;
+	ret = done;
+out:
+	mutex_unlock(&p->write_lock);
+	return ret;
 }
 
 int dect_ssc_set_tx_frame(struct dect_ssc *p, const struct dect_pcm_tx_frame *f)

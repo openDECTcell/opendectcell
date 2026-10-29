@@ -51,6 +51,8 @@ struct dect_ssc {
 
 	/* Blocks for read(), filled by the receive engine */
 	spinlock_t ring_lock;
+	struct mutex read_lock;		/* held across a read()'s copy */
+	struct mutex write_lock;	/* held across a write()'s copy */
 	wait_queue_head_t wq;
 	u8 *ring;
 	unsigned int head, tail;
@@ -80,7 +82,10 @@ void dect_ssc_teardown(struct dect_ssc *p);
 long dect_ssc_ioctl(struct dect_ssc *p, unsigned int cmd, void __user *argp);
 int dect_ssc_set_tx_frame(struct dect_ssc *p, const struct dect_pcm_tx_frame *f);
 
-/* Take *p->lock themselves. */
+/*
+ * Never take *p->lock: they hold read_lock/write_lock instead, which
+ * dect_ssc_teardown() takes before it frees the buffers.
+ */
 ssize_t dect_ssc_read(struct dect_ssc *p, char __user *buf, size_t count,
 		      bool nonblock);
 ssize_t dect_ssc_write(struct dect_ssc *p, const char __user *buf,
