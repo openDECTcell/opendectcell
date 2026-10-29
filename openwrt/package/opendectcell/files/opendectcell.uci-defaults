@@ -1,14 +1,34 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# The FRITZ!Box 7520/7530 has one usable UART, and it belongs to the DECT
-# chip: the firmware upload and the chip's boot replies run over it. A
-# login getty on it reads those bytes away. Disable it (from the next boot
-# on); /etc/init.d/opendectcell freezes a running one until then. Kept as
+# The box's board profile (docs/hardware-abstraction.md); UCI overrides it.
+b=$(cat /tmp/sysinfo/board_name 2>/dev/null)
+[ -n "$b" ] && [ -r "/usr/share/opendectcell/boards/$b" ] &&
+	. "/usr/share/opendectcell/boards/$b"
+
+# Until 0.3.1 the default config named the 7520's chip settings, and UCI
+# overrides the profile, so every other box ran with the 7520's UART,
+# factory block, firmware and mode. Drop them where they still hold those
+# defaults on a box that is not a 7520/7530.
+if [ -n "$b" ] && [ "$b" != avm,fritzbox-7530 ]; then
+	for kv in first=dectfw_firstlevel_441_slow.hex \
+		  second=dectfw_secondlevel_441-07.56.hex \
+		  uart=/dev/ttyMSM0 factory_mtd=/dev/mtd5 \
+		  factory_offset=0x3d000 mode=0x105; do
+		[ "$(uci -q get "opendectcell.main.${kv%%=*}")" = "${kv#*=}" ] &&
+			uci -q delete "opendectcell.main.${kv%%=*}"
+	done
+	uci -q commit opendectcell
+fi
+
+# The FRITZ!Box 7520/7530 and 7412 have one usable UART, and it belongs to
+# the DECT chip: the firmware upload and the chip's boot replies run over
+# it. A login getty on it reads those bytes away. Disable it (from the next
+# boot on); /etc/init.d/opendectcell freezes a running one until then. Kept as
 # /etc/inittab.opendectcell-orig.
 
-uart=$(uci -q get opendectcell.main.uart)
-uart=${uart:-/dev/ttyMSM0}
+u=$(uci -q get opendectcell.main.uart)
+uart=${u:-${uart:-/dev/ttyMSM0}}
 tty=${uart##*/}
 if grep -q "^$tty::" /etc/inittab 2>/dev/null; then
 	[ -e /etc/inittab.opendectcell-orig ] || cp /etc/inittab /etc/inittab.opendectcell-orig
