@@ -19,6 +19,14 @@ fw_secondlevel_sha256=4fabee65d07a3214f9083de81ae54089f01bbfccb4cdbb672f37487a09
 # boot flag (see docs/7412-spi-tdm-and-loader.md section 2).
 dect_mode=0x119
 
+# The PCM bus: the generic Lantiq SSC PCM transport (kmod-lantiq-ssc-pcm,
+# DMA) carries it, 36 16-bit slots per frame in mode 0x119 (observed
+# 2026-10-28); openDECTcell's own SSC engine cannot keep up with that rate.
+# The module is loaded before the chip boots: it holds the clock enable.
+pcm_kmod=lantiq_ssc_pcm
+pcm_dev=/dev/ssc-pcm0
+pcm_slots=36
+
 # The DECT UART is the SoC console UART on this box.
 uart=/dev/ttyLTQ0
 uart_is_console=1

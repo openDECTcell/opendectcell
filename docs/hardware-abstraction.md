@@ -74,6 +74,9 @@ Two facts drive the design:
 | `uart` | Firmware-load UART device | `/dev/ttyLTQ0` (*assumed*) |
 | `uart_is_console` | The UART is also the serial console (console must be released) | `1` |
 | `uart_baud_rom`, `uart_baud_stub` | Baud rates for the ROM and the first-level stage | *open* |
+| `pcm_kmod` | Transport module loaded before the chip boots, where another module than openDECTcell's carries the bus (it holds the PCM clock enable); empty: none | `lantiq_ssc_pcm` |
+| `pcm_dev` | PCM device `dect-stubd` opens (`-d`); empty: `/dev/dect0` | `/dev/ssc-pcm0` |
+| `pcm_slots` | 16-bit slots per frame (`-c`); empty: the module's default | `36` (mode 0x119, *observed* 2026-10-28) |
 | `pcm_words_per_frame`, `pcm_ctrl_slot`, `pcm_voice_slots` | Frame layout | *open* (M3, gate G2) |
 | `factory_cfg` | Where the factory DECT config block is stored | *open* (M1) |
 | `rfpi_fallback` | Source for the RFPI if the factory block holds the placeholder | *open* (M1) |

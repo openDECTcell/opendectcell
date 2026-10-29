@@ -43,6 +43,10 @@ dect_load_profile() {
 }
 dect_load_profile
 
+# The daemon's PCM device and frame size, where the profile names them;
+# otherwise the openDECTcell module's /dev/dect0 and its default frame.
+PCM_ARGS="${pcm_dev:+-d $pcm_dev}${pcm_slots:+ -c $pcm_slots}"
+
 # A random 4-digit registration PIN, saved in the config (also made by the
 # package's uci-defaults script at install).
 # A random PIN of pin_length digits: 8 (the most GAP allows), 6 or 4.
@@ -114,6 +118,15 @@ load_chip() {
 			return 1
 		fi
 	done
+	# A bus carried by another transport module (pcm_kmod, the 7412's SSC)
+	# needs it loaded first: it holds the PCM clock enable, which must be
+	# high before the chip leaves reset.
+	if [ -n "${pcm_kmod:-}" ]; then
+		grep -q "^$pcm_kmod " /proc/modules || insmod "$pcm_kmod" || {
+			log "insmod $pcm_kmod failed"
+			return 1
+		}
+	fi
 	grep -q '^opendectcell ' /proc/modules || insmod opendectcell || {
 		log "insmod opendectcell failed"
 		return 1
@@ -490,7 +503,7 @@ start_service() {
 	done
 
 	procd_open_instance
-	procd_set_param command $PROG -g -P "$pin" $nocipher $args \
+	procd_set_param command $PROG $PCM_ARGS -g -P "$pin" $nocipher $args \
 		${options:+-a "$options"}
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -553,5 +566,5 @@ stop_service() {
 	# procd has sent SIGTERM and dect-stubd parked on the way out; make
 	# sure, since a radio left on transmits by itself.
 	sleep 1
-	pgrep -x dect-stubd >/dev/null || $PROG $PARK >/dev/null 2>&1
+	pgrep -x dect-stubd >/dev/null || $PROG $PCM_ARGS $PARK >/dev/null 2>&1
 }
