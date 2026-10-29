@@ -207,3 +207,18 @@ installed. What tests 5 and 7 should now show in the log (`logread`):
 Anything "resampled here" or "decoded and resampled" in tests 5 and 7
 means the codecs were not matched.
 
+
+## Card: pass-through, call waiting, DTMF, voicemail, date (for 2026-10-30)
+
+Box at `87da0f1` (dect-stubd md5 `8612b939`, `opendectcell.so` md5 `8f35b80f`;
+`baresip-mod-mwi` installed, `/etc/hotplug.d/ntp/25-opendectcell` in place).
+Outcomes written before the run:
+
+| test | pass | fail and what it means |
+|---|---|---|
+| 8. Any HD call over SIP (the A540, G.722 at the far end) | clean audio both ways; log `connected for call N (G.722) -- G.722 passed as it is` | noise or silence: the octet carrier in the bridge (two samples per octet) or the gap marker; `G.722 decoded here` means baresip did not pick our codec |
+| 9. A540 in a SIP call, call the number again | the A540 shows the second caller with the waiting tone; accept: the first goes on hold (log `on hold`), talk to the second; toggle back and forth; end one, the other stays | the second caller gets busy: `waiting_party()` (the call must be bridged and connected, Part 3); the A540 shows nothing: our call waiting {CC-INFO} |
+| 10. A540 in a call: second call out (the handset's "external call" / R key, then a number) | the first goes on hold, the second rings and connects | a negative tone: the 1CH 15H path, `par_control()` |
+| 11. Call a voicemail or any IVR, press keys | the menu reacts | nothing: `digit` events in the log? if yes, the profile's DTMF mode |
+| 12. Voicemail notification on in the profile, leave a message | the A540 shows the message indicator (count); after listening it goes | nothing: `mwi:` lines in the log? the provider must send message-summary NOTIFYs |
+| 13. Switch the A540 and the C430A off and on | both show the date and time | `the clock is not known to be right`: /var/run/opendectcell/time-valid missing or stale |
