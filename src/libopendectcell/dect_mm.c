@@ -1097,6 +1097,11 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 	switch (h.msg_type) {
 	case DECT_MM_ACCESS_RIGHTS_REQUEST:
 		mm->ti_value = h.ti_value;
+		/* no fresh randoms from the caller: no registration */
+		if (!rand_f || !rs) {
+			send_access_reject(mm);
+			break;
+		}
 		memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
 		/* RS is a fresh 16-byte random seed supplied by the caller; a zero
 		 * seed is not AVM-equivalent and the C4 may reject it [CR A-0022]. */
