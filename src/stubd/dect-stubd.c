@@ -631,6 +631,7 @@ struct stubd {
 	int         parked;		/* run_loop() drained the park mails */
 	uint64_t    park_check_at;	/* 06.88: park read-back sent at */
 	int         park_radio, park_timer;	/* its answers, -1 = none yet */
+	int         park_check_retried;
 	int         uak_0688;		/* 06.88: UAK table at 0x067F */
 	/* 06.88: read-back and slot audit held back until this time */
 	uint64_t    sub_check_at;
@@ -3962,12 +3963,28 @@ static void park_check_reply(struct stubd *s, uint32_t addr, uint8_t v)
 		s->park_timer = v;
 }
 
-/* Both answers in, or given up: say what the chip holds. Returns 1 then. */
+/*
+ * Both answers in, or given up: say what the chip holds. Returns 1 then.
+ * A missing answer is asked for once more: one service stop of six on
+ * 2026-10-29 got none within 1 s, for no reason we could find.
+ */
 static int park_check_done(struct stubd *s, uint64_t now)
 {
 	if ((s->park_radio < 0 || s->park_timer < 0) &&
 	    now - s->park_check_at < PARK_CHECK_MS)
 		return 0;
+	if ((s->park_radio < 0 || s->park_timer < 0) &&
+	    !s->park_check_retried) {
+		s->park_check_retried = 1;
+		s->park_check_at = now;
+		printf("reg: park read-back: no answer within %u ms, asking "
+		       "again\n", PARK_CHECK_MS);
+		if (s->park_radio < 0)
+			park_read(s, PARK_0688_RADIO);
+		if (s->park_timer < 0)
+			park_read(s, PARK_0688_TIMER);
+		return 0;
+	}
 	if (s->park_radio == 0 && s->park_timer == 0)
 		printf("reg: park verified on the chip: radio switch "
 		       "0x%04X = 00, beacon timer cancelled (0x%04X = 00)\n",
