@@ -6,6 +6,7 @@
 #include "dect_audio.h"
 
 #include <math.h>
+#include <string.h>
 
 #define ALAW_SIGN	0x80
 #define ALAW_QUANT	0x0f
@@ -106,4 +107,66 @@ void dect_tone_analyze(const int16_t *pcm, size_t n, uint32_t rate,
 	s->crossings = crossings;
 	/* Two mean-crossings per period: freq = crossings/2 * rate / n. */
 	s->freq_hz = (double)crossings * (double)rate / (2.0 * (double)n);
+}
+
+/*
+ * The half-band filter's taps at odd distances 1, 3, ..., 19 from the
+ * centre, Q15 (Blackman-windowed sinc); the even ones are zero and the
+ * centre is one half.
+ */
+static const int16_t rs2_tap[10] = {
+	10325, -3173, 1614, -894, 489, -252, 117, -46, 13, -1,
+};
+
+void dect_rs2_init(struct dect_rs2 *r)
+{
+	memset(r, 0, sizeof(*r));
+}
+
+static void rs2_push(struct dect_rs2 *r, int16_t v)
+{
+	memmove(r->x, r->x + 1, (DECT_RS2_TAPS - 1u) * sizeof(r->x[0]));
+	r->x[DECT_RS2_TAPS - 1u] = v;
+}
+
+/* The filter at the history's centre, times gain (1 or 2), saturated. */
+static int16_t rs2_out(const struct dect_rs2 *r, int gain)
+{
+	const unsigned c = DECT_RS2_TAPS / 2u;
+	int32_t acc = 16384 * (int32_t)r->x[c];
+	unsigned k;
+
+	for (k = 0; k < 10u; k++)
+		acc += rs2_tap[k] * ((int32_t)r->x[c - 2u * k - 1u] +
+				     (int32_t)r->x[c + 2u * k + 1u]);
+	acc = (acc * gain) >> 15;
+	return (int16_t)(acc > 32767 ? 32767 : acc < -32768 ? -32768 : acc);
+}
+
+size_t dect_rs2_down(struct dect_rs2 *r, const int16_t *in, size_t n,
+		     int16_t *out)
+{
+	size_t i;
+
+	for (i = 0; i + 1u < n; i += 2u) {
+		rs2_push(r, in[i]);
+		rs2_push(r, in[i + 1u]);
+		out[i / 2u] = rs2_out(r, 1);
+	}
+	return n / 2u;
+}
+
+/* Zeros between the samples, then the low-pass at twice the gain. */
+size_t dect_rs2_up(struct dect_rs2 *r, const int16_t *in, size_t n,
+		   int16_t *out)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		rs2_push(r, in[i]);
+		out[2u * i] = rs2_out(r, 2);
+		rs2_push(r, 0);
+		out[2u * i + 1u] = rs2_out(r, 2);
+	}
+	return 2u * n;
 }

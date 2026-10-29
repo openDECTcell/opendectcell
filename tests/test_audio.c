@@ -91,6 +91,43 @@ static void test_tone_silence(void)
 	CHECK(st.freq_hz < 1.0);
 }
 
+/* RMS of a tone through the resampler, after the filter has filled. */
+static double rs2_rms(int up, double hz)
+{
+	enum { N = 1600 };
+	static int16_t in[N], out[2 * N];
+	struct dect_rs2 r;
+	double rate = up ? 8000.0 : 16000.0, sum = 0.0;
+	size_t i, n;
+
+	for (i = 0; i < N; i++)
+		in[i] = (int16_t)(10000.0 * sin(2.0 * M_PI * hz * (double)i /
+						rate));
+	dect_rs2_init(&r);
+	n = up ? dect_rs2_up(&r, in, N, out) : dect_rs2_down(&r, in, N, out);
+	CHECK_EQ(n, up ? 2u * N : N / 2u);
+	for (i = n / 4u; i < n; i++)
+		sum += (double)out[i] * (double)out[i];
+	return sqrt(sum / (double)(n - n / 4u));
+}
+
+/*
+ * The 2:1 resampler keeps speech (1 kHz, 3.4 kHz) at its level both ways
+ * and removes what does not fit at 8 kHz (6 kHz going down) and the image
+ * the zeros make going up (a 1 kHz tone's 7 kHz image: the level stays
+ * the tone's alone).
+ */
+static void test_rs2(void)
+{
+	double ref = 10000.0 / sqrt(2.0);
+
+	CHECK(fabs(rs2_rms(0, 1000.0) / ref - 1.0) < 0.02);
+	CHECK(fabs(rs2_rms(0, 3400.0) / ref - 1.0) < 0.06);
+	CHECK(rs2_rms(0, 6000.0) / ref < 0.002);
+	CHECK(fabs(rs2_rms(1, 1000.0) / ref - 1.0) < 0.02);
+	CHECK(fabs(rs2_rms(1, 3400.0) / ref - 1.0) < 0.06);
+}
+
 int main(void)
 {
 	test_alaw_silence();
@@ -98,5 +135,6 @@ int main(void)
 	test_alaw_quantisation();
 	test_tone_detect();
 	test_tone_silence();
+	test_rs2();
 	return CHECK_DONE();
 }

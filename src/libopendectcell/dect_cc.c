@@ -927,6 +927,10 @@ static void on_setup(struct dect_cc *cc, int sending_complete)
 		proceed(cc);	/* with or without overlap receiving */
 		return;
 	}
+	if (sending_complete && cc->route_complete) {
+		proceed(cc);	/* the owner routes it */
+		return;
+	}
 	if (cc->overlap && !sending_complete) {
 		if (cc->answered != DECT_CC_SETUP_ACK)
 			queue_with_status(cc, DECT_CC_SETUP_ACK,
@@ -1017,6 +1021,11 @@ int dect_cc_connect(struct dect_cc *cc)
 void dect_cc_set_overlap(struct dect_cc *cc, int on)
 {
 	cc->overlap = on ? 1u : 0u;
+}
+
+void dect_cc_set_route_complete(struct dect_cc *cc, int on)
+{
+	cc->route_complete = on ? 1u : 0u;
 }
 
 void dect_cc_note_answered(struct dect_cc *cc, uint8_t msg_type)
@@ -1507,8 +1516,9 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 				if (dect_nwk_find_fixed_ie(ies, ies_len,
 				    DECT_IE_SENDING_COMPLETE) < 0)
 					;
-				else if ((cc->peer_basic_service >> 4) == 0x9u)
-					proceed(cc);	/* internal: see on_setup */
+				else if ((cc->peer_basic_service >> 4) == 0x9u ||
+					 cc->route_complete)
+					proceed(cc);	/* see on_setup */
 				else
 					accept_now(cc);
 			}

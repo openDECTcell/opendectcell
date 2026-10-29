@@ -41,4 +41,23 @@ void dect_tone_analyze(const int16_t *pcm, size_t n, uint32_t rate,
 /* Decode n A-law bytes into pcm[n] in place-friendly form (separate buffers). */
 void dect_alaw_decode_buf(const uint8_t *alaw, int16_t *pcm, size_t n);
 
+/*
+ * 8 kHz <-> 16 kHz for a narrowband call's speech on the bridge's 16 kHz
+ * audio socket: a 39-tap half-band low-pass (4 kHz; -0.4 dB at 3.4 kHz,
+ * below -60 dB from 5 kHz), one state per direction and call.
+ */
+#define DECT_RS2_TAPS	39u
+
+struct dect_rs2 {
+	int16_t x[DECT_RS2_TAPS];	/* the last inputs at 16 kHz, newest last */
+};
+
+void dect_rs2_init(struct dect_rs2 *r);
+/* n samples at 16 kHz (n even) to n / 2 at 8 kHz; returns n / 2. */
+size_t dect_rs2_down(struct dect_rs2 *r, const int16_t *in, size_t n,
+		     int16_t *out);
+/* n samples at 8 kHz to 2 n at 16 kHz; returns 2 n. */
+size_t dect_rs2_up(struct dect_rs2 *r, const int16_t *in, size_t n,
+		   int16_t *out);
+
 #endif /* OPENDECTCELL_DECT_AUDIO_H */

@@ -2608,6 +2608,51 @@ static void test_internal_call_waits_for_the_owner(void)
 }
 
 /*
+ * route_complete: a complete external number is the owner's to route
+ * (redial and phonebook calls went out with <<SENDING-COMPLETE>> and were
+ * connected locally, never reaching SIP).
+ */
+static void test_route_complete(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], t[8];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	dect_cc_set_route_complete(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);		/* no CONNECT */
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
+	CHECK_EQ(dect_cc_connect(&cc), 0);		/* the owner's step */
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+
+	/* overlap, the number completed in a CC-INFO */
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	dect_cc_set_route_complete(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	dect_cc_rx(&cc, buf, n);
+	(void)types_of(&cc, t, sizeof(t));		/* SETUP-ACK */
+	n = pp_info(buf, sizeof(buf), "0301234567", 1);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(types_of(&cc, t, sizeof(t)), 1u);
+	CHECK_EQ(t[0], DECT_CC_CALL_PROC);
+	CHECK_EQ(cc.state, DECT_CC_ST_PROCEEDING);
+
+	/* off: connected at once, as before */
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(cc.state, DECT_CC_ST_ACTIVE);
+}
+
+/*
  * An internal call names a line as stock does, from CALL-PROC on in every
  * status message, so the A540 starts its call timer [CR 7412 A-0016]:
  * 7e 0c 00 00 81 00 05 81 01 00 81 02 01 85 in the CONNECT.
@@ -2859,6 +2904,7 @@ int main(void)
 	test_call_status_in_our_answers();
 	test_internal_call_waits_for_the_owner();
 	test_internal_call_names_a_line();
+	test_route_complete();
 	test_int_key_makes_an_internal_call();
 	test_second_call_on_the_same_link();
 	test_info_on_the_call();

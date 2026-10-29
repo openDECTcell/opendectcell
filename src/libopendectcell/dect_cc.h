@@ -263,6 +263,7 @@ struct dect_cc {
 	 */
 	uint64_t setup_deadline_ms;
 	uint8_t  overlap;		/* dect_cc_set_overlap() */
+	uint8_t  route_complete;	/* dect_cc_set_route_complete() */
 	uint8_t  answered;		/* dect_cc_note_answered() */
 	uint8_t  proceeded;		/* {CC-CALL-PROC} sent on this call */
 	uint8_t  call_status;		/* dect_cc_set_call_status() */
@@ -384,6 +385,15 @@ uint8_t dect_cc_codec(const struct dect_cc *cc);
  * owner has reached the other handset (dect_cc_alert/connect()).
  */
 void dect_cc_set_overlap(struct dect_cc *cc, int on);
+
+/*
+ * On: an external call whose number arrives complete (<<SENDING-COMPLETE>>
+ * in the SETUP or a {CC-INFO}: redial, a number from the phonebook) is
+ * handled as an internal one -- {CC-CALL-PROC}, then PROCEEDING until the
+ * owner routes it. Off (the default): CC connects it at once, as before,
+ * for an owner with nowhere to send it.
+ */
+void dect_cc_set_route_complete(struct dect_cc *cc, int on);
 
 /*
  * The steps of a handset-placed call, for an owner that has somewhere to
