@@ -60,11 +60,6 @@
 #include "dect_ctl.h"
 #include "opendectcell_version.h"
 
-/* Longest -a loopdelay ring, in frames (1 s at 8 kHz). */
-/* How long to wait for a lingering link to clear before ringing anyway. */
-
-#define LOOP_DELAY_MAX 8000u
-
 /* Headroom left for the log and anything else sharing the filesystem. */
 #define CAPTURE_HEADROOM	(16u * 1024u * 1024u)
 /* Stop capturing rather than fill the filesystem completely. */
@@ -363,9 +358,6 @@ struct xlane {
 	size_t   pos;		/* in the test file */
 	int      phase, locked;	/* the G.722 two-frame lock */
 	uint32_t rx_prev;
-	uint8_t  ring[LOOP_DELAY_MAX * 2u];
-	unsigned wr;
-	int      primed;
 };
 
 /*
@@ -1021,17 +1013,6 @@ struct stubd {
 		int      bind_early;
 		int      loopback;	/* echo the received bearer word back */
 		/*
-		 * loopdelay=N: echo the lane through an N-frame ring instead
-		 * of in the same frame. The cadence stays locked to the
-		 * chip's own pair boundaries -- each transmitted word still
-		 * changes exactly when a received one does -- but the content
-		 * is N frames old, so the handset cannot be hearing a live
-		 * side-tone. Every downlink source that worked so far was
-		 * live-derived, and every one that failed was free-running
-		 * from a file; this separates the cadence from the source.
-		 */
-		unsigned loop_delay;
-		/*
 		 * playsync: advance the coded stream when the *received* lane
 		 * word changes, instead of free-running a two-frame cadence
 		 * of our own. v31 showed why this matters: a loopback delayed
@@ -1316,10 +1297,6 @@ struct stubd {
 		uint8_t  *play;
 		size_t    play_len;
 	} audio;
-	/* Ring for -a loopdelay=N, two bytes per frame. */
-	uint8_t     loop_ring[LOOP_DELAY_MAX * 2u];
-	unsigned    loop_wr;
-	int         loop_primed;
 	uint32_t    rx_word_prev;	/* last received lane word, for playsync */
 	unsigned    md_idx;		/* memdump: range being swept */
 	uint32_t    md_off;		/* memdump: offset within that range */
@@ -2053,12 +2030,6 @@ static void ab_frame(struct ab_lane *l, uint8_t *fr, unsigned int w,
 	fr[w * 2u + 1u] = l->cur[1];
 }
 
-/*
- * The extra lanes' downlink for frame f (-a twocalls). The G.722 file
- * phase-locked to the chip's two-frame words as lane 0's playsync does; a
- * raw (linear) file two bytes a frame; the loop-back's delay ring; else
- * silence. Their own positions, so two calls each hear the whole file.
- */
 static int ic_word(const struct stubd *s, int side);
 
 /* An internal call's other party's word for lane x, or -1. */
@@ -2075,6 +2046,13 @@ static int ic_peer_word(const struct stubd *s, const struct xlane *x)
 	return -1;
 }
 
+/*
+ * The extra lanes' downlink for frame f (-a twocalls): the bridge's speech;
+ * an internal call's other party; the G.722 file phase-locked to the chip's
+ * two-frame words as on lane 0; a raw (linear) file two bytes a frame; the
+ * loop-back; else silence. Each lane keeps its own file position, so two
+ * calls each hear the whole file.
+ */
 static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
 		     unsigned int f)
 {
@@ -2132,24 +2110,8 @@ static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
 			fr[w * 2u + 1u] = s->audio.play[x->pos + 1u];
 			x->pos += 2u;
 		} else if (s->audio.loopback && src) {
-			unsigned d = s->audio.loop_delay;
-
-			if (d) {
-				unsigned rd = (x->wr + 1u) % d;
-
-				x->ring[x->wr * 2u] = src[0];
-				x->ring[x->wr * 2u + 1u] = src[1];
-				x->wr = rd;
-				if (!x->primed && rd == 0u)
-					x->primed = 1;
-				if (x->primed) {
-					fr[w * 2u] = x->ring[rd * 2u];
-					fr[w * 2u + 1u] = x->ring[rd * 2u + 1u];
-				}
-			} else {
-				fr[w * 2u] = src[0];
-				fr[w * 2u + 1u] = src[1];
-			}
+			fr[w * 2u] = src[0];
+			fr[w * 2u + 1u] = src[1];
 		}
 	}
 }
@@ -2334,21 +2296,7 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 				 * coded words from the start, worked. Until there
 				 * is something real to send, send the filler.
 				 */
-				if (s->audio.loop_delay) {
-					unsigned rd = (s->loop_wr + 1u)
-						    % s->audio.loop_delay;
-
-					s->loop_ring[s->loop_wr * 2u] = src[0];
-					s->loop_ring[s->loop_wr * 2u + 1u] = src[1];
-					s->loop_wr = rd;
-					if (!s->loop_primed && rd == 0u)
-						s->loop_primed = 1;
-					if (s->loop_primed) {
-						fr[w * 2u] = s->loop_ring[rd * 2u];
-						fr[w * 2u + 1u] =
-							s->loop_ring[rd * 2u + 1u];
-					}
-				} else if (v != 0x0000u && v != 0xFEFEu) {
+				if (v != 0x0000u && v != 0xFEFEu) {
 					fr[w * 2u] = src[0];
 					fr[w * 2u + 1u] = src[1];
 				}
@@ -11281,12 +11229,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->cap_all = 1;
 		else if (!eq && klen == 8 && !memcmp(key, "loopback", 8))
 			a->loopback = 1;
-		else if (klen == 9 && !memcmp(key, "loopdelay", 9)) {
-			if (v < 2u || v > LOOP_DELAY_MAX)
-				return -1;
-			a->loop_delay = (unsigned)v;
-			a->loopback = 1;
-		}
 		else if (!eq && klen == 9 && !memcmp(key, "bindearly", 9))
 			a->bind_early = 1;
 		else if (klen == 8 && !memcmp(key, "handover", 8))
@@ -11855,8 +11797,6 @@ static void usage(void)
 		"           accompanied every run where audio flowed\n"
 		"           bindearly assigns the audio channel when the chip reports a\n"
 		"           connection, not when a call connects\n"
-		"           loopdelay=N echoes it through an N-frame ring (2..%u)\n"
-		"           instead: same cadence, older content\n"
 		"           loopback echoes the received bearer word (toneword)\n"
 		"           straight back to the handset, byte for byte -- the\n"
 		"           lane carries coded G.722, so this needs no encoder\n"
@@ -11870,7 +11810,7 @@ static void usage(void)
 		"           prints the MAC slot, carrier and bearer slot type\n"
 		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0\n"
 		"           (flags=0x41 is the wideband bind used at G7),\n"
-		"           txidle=0xff,voiceidle=0xff\n", LOOP_DELAY_MAX);
+		"           txidle=0xff,voiceidle=0xff\n");
 }
 
 /* ---- handset profiles (docs/handset-profiles.md) ----------------------- */
