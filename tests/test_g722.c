@@ -284,6 +284,83 @@ static void test_golden_bitstream(void)
 	CHECK(memcmp(code, want, sizeof(want)) == 0);
 }
 
+/* FNV-1a over a byte buffer, continuing from h. */
+static uint32_t fnv1a(uint32_t h, const uint8_t *p, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		h ^= p[i];
+		h *= 16777619u;
+	}
+	return h;
+}
+
+/*
+ * A long stress signal, 2^17 samples: full-scale square waves, full-range
+ * noise, a full-scale chirp, silence and steps between the rails. It drives
+ * both scale factors to their limits and every quantizer decision. Integer
+ * arithmetic only, so it is the same on every host.
+ */
+static int16_t stress_sample(size_t i, uint32_t *rng)
+{
+	uint32_t seg = (uint32_t)(i >> 14), k = (uint32_t)(i & 0x3FFFu);
+
+	*rng = *rng * 1664525u + 1013904223u;
+	switch (seg & 7u) {
+	case 0:	/* 500 Hz square, full scale */
+		return (k % 32u) < 16u ? 32767 : -32768;
+	case 1:	/* white noise over the whole range */
+		return (int16_t)(*rng >> 16);
+	case 2:	/* full-scale sawtooth, its frequency rising */
+		return (int16_t)((k * (k + 64u) * 4096u) >> 16);
+	case 3:	/* silence after the loud part: the scale factors decay */
+		return 0;
+	case 4:	/* rail to rail every sample: the highest frequency */
+		return (k & 1u) ? 32767 : -32768;
+	case 5:	/* noise at -40 dB */
+		return (int16_t)((int32_t)(*rng >> 16) / 100 - 164);
+	case 6:	/* random steps between the rails */
+		return (k % 97u) ? (int16_t)0x7FFF : (int16_t)(*rng >> 16);
+	default:	/* one square wave in each sub-band */
+		return (int16_t)(((k / 11u) & 1u ? 12000 : -12000) +
+				 ((k / 2u) & 1u ? 6000 : -6000));
+	}
+}
+
+/*
+ * A regression fence for the arithmetic: the hashes of what the encoder
+ * and decoder make of the stress signal, taken from the straightforward
+ * implementation of QUANTL and of the predictor's products. Any rewrite
+ * for speed must leave both bit-identical.
+ */
+static void test_stress_fingerprint(void)
+{
+	enum { N = 1 << 17 };
+	static int16_t pcm[N], back[N];
+	static uint8_t code[N / 2];
+	struct dect_g722_state enc, dec;
+	uint32_t rng = 1, hc, hp;
+	size_t i;
+
+	for (i = 0; i < N; i++)
+		pcm[i] = stress_sample(i, &rng);
+	dect_g722_init(&enc);
+	dect_g722_init(&dec);
+	CHECK_EQ(dect_g722_encode(&enc, pcm, N, code), (size_t)N / 2);
+	CHECK_EQ(dect_g722_decode(&dec, code, N / 2, back), (size_t)N);
+	hc = fnv1a(2166136261u, code, sizeof(code));
+	hp = 2166136261u;
+	for (i = 0; i < N; i++) {	/* little-endian, whatever the host */
+		uint8_t le[2] = { (uint8_t)back[i],
+				  (uint8_t)((uint16_t)back[i] >> 8) };
+
+		hp = fnv1a(hp, le, 2);
+	}
+	CHECK_EQ(hc, 0x7d60dfa2u);
+	CHECK_EQ(hp, 0xf8e65226u);
+}
+
 int main(void)
 {
 	test_init();
@@ -295,5 +372,6 @@ int main(void)
 	test_deterministic();
 	test_streaming();
 	test_golden_bitstream();
+	test_stress_fingerprint();
 	return CHECK_DONE();
 }
