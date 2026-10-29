@@ -56,7 +56,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 |---|---|---|
 | FRITZ!Box 7520 | ✅ | The development box |
 | FRITZ!Box 7530 | 🟡 | Same hardware as the 7520 and the same OpenWrt image, but not tested on one yet |
-| FRITZ!Box 7412 | 🟡 | Packages are built, the chip interface is analysed, but nobody has run them on a 7412 yet |
+| FRITZ!Box 7412 | 🟡 | The service runs on a 7412 with the `kmod-lantiq-ssc-pcm` transport: chip upload, control channel, radio on and park (2026-10-29). No handset has registered yet |
 | FRITZ!Box 7362 SL | ❌ | Analysed only |
 | Other FRITZ!Boxes | ❌ | Many use the same DECT chip; see [hardware-abstraction.md](hardware-abstraction.md) for what a new model needs |
 

@@ -45,7 +45,7 @@ in the [roadmap](ROADMAP.md).
 |---|---|
 | **FRITZ!Box 7520** | ✅ works: the development box |
 | **FRITZ!Box 7530** | 🟡 same hardware as the 7520, not yet tested |
-| FRITZ!Box 7412 | 🟡 packages built, not yet tested on a box |
+| FRITZ!Box 7412 | 🟡 base runs on a 7412 (needs `kmod-lantiq-ssc-pcm`); no handset registered yet |
 | FRITZ!Box 7362 SL | analysed only |
 
 **Tested handsets:** Gigaset A540 CAT, Gigaset C430A, Gigaset AS690H and AVM

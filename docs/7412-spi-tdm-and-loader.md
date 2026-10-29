@@ -71,6 +71,16 @@ Same box and software as §1a, 06.88 STUB, mode 0x119.
 | Byte order | `read()` delivers bus order. Each slot's two bytes are swapped against the 7520's DMA buffer layout, in which an element's first byte is a slot's first byte. |
 | `dect-stubd` | `-d /dev/ssc-pcm0 -c 36`: measures the offset, aligns both directions, swaps each slot, and probes the control slot as on the 7520. First run: offset 3, control slot TX 32 / RX 13, contact answered, periodic `0xFFF1`/`0xF618`/`0xF623` every 5 s for 20 s, 0 sequence gaps and 0 checksum errors (`5667930`). |
 | STUB name | The profile now names the 7412's stages `*-06.88-7412.hex`. Under the old names, `dect-stubd` would have taken 06.88 for 08.25 and read the 08.25 UAK table address (`05c903d`). |
+| Service run (R1) | `/etc/init.d/opendectcell start` with the 7412 profile (`56a2d33`): `lantiq_ssc_pcm` and `opendectcell` loaded, 06.88 uploaded, `dect-stubd -d /dev/ssc-pcm0 -c 36 -g` started. Control slot found on the third pass, 6 s after the upload, as on the 7520 ("the chip may still be starting"). Bring-up mails `0x0153`, `0x0169`, `0x0157` (src 0x14), `0x015B 01`, `0x022C 01` sent. Session up for 39 s, 0 deaths, 0 sequence gaps or checksum errors; stop parked the radio (`0x022C 01`, `0x015B 00`, on the wire within 6 ms). |
+| Radio run (R2) | The same by hand with `-v`, 30 s: after the bring-up mails one `0xF602` (23 octets), and one after each park mail; periodic reports throughout. The chip then went back into reset. **Not verified:** that the radio beacons. `0xF602` carries the beacon content, not the radio state (docs/mac-bringup.md), and no handset was at hand. |
+
+### 06.88 against 08.25 [CR A-0007]
+
+*Derived statically* from both STUB blobs' mail dispatch tables:
+
+- Every bring-up, registration and subscription mail `dect-stubd` sends has a 06.88 handler with the same dispatch flags. Dispatch is by primitive, not by source task. The `0x020A` record handler is the same routine (16-byte record plus flag, stride 0x11, six slots).
+- The UAK record table is **not** at 0x9518 on 06.88; the address is not known. `dect-stubd` treats 06.88 as an unknown build and skips its table reads.
+- Missing on 06.88: `0x0251` (channel parameter, sent at call set-up, presumably ignored), `0x015E` and `0x015F` (sent only by the optional paging sequence or not at all), `0x0159`, `0x015C`.
 
 ## 2. STUB firmware patching (the first-stage loader, `the loader routine`)
 
