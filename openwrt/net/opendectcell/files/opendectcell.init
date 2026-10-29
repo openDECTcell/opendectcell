@@ -389,7 +389,7 @@ bs_line() {
 		fi
 	else
 		config_get v "$sec" mediaenc
-		case "$v" in srtp|srtp-mand|srtp-mandf|dtls_srtp|zrtp) line="$line;mediaenc=$v" ;; esac
+		case "$v" in srtp|srtp-mand|srtp-mandf|dtls_srtp) line="$line;mediaenc=$v" ;; esac
 	fi
 	line="$line;answermode=manual"
 	config_get v "$sec" extra

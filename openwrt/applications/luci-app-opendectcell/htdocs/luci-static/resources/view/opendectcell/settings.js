@@ -303,14 +303,14 @@ function profileName(sid) {
 	return sid && uci.get('opendectcell', sid, 'name') || sid || '-';
 }
 
-/* Where a profile is assigned: [ handset section, line ] or null. */
+/* Where a profile is assigned: a list of [ handset section, line ]. */
 function profileUse(psid) {
-	var found = null;
+	var found = [];
 
 	uci.sections('opendectcell', 'handset').forEach(function(h) {
 		[ 1, 2 ].forEach(function(n) {
-			if (!found && h['line' + n] == psid)
-				found = [ h['.name'], n ];
+			if (h['line' + n] == psid)
+				found.push([ h['.name'], n ]);
 		});
 	});
 	return found;
@@ -458,7 +458,6 @@ function addProfileOptions(ps) {
 	o.value('srtp-mand', _('SRTP required'));
 	o.value('srtp-mandf', _('SRTP required (in the offer)'));
 	o.value('dtls_srtp', 'DTLS-SRTP');
-	o.value('zrtp', 'ZRTP');
 	o.depends('enc_auto', '0');
 
 	o = opt('adv', form.Value, 'extra', _('Further account parameters'),
@@ -560,7 +559,7 @@ var LineValue = form.ListValue.extend({
 		if (!uci.get('opendectcell', v) || uci.get('opendectcell', v, '.type') != 'voip')
 			return _('This profile was deleted; choose another or none');
 		if (this.option == 'line2' && !this.otherValue(sid))
-			return _('Choose Line 1 first: the handset\'s calls go out on Line 1');
+			return _('Choose Line 1 first: it is the line the handset\'s calls go out on unless it picks Line 2');
 		return v == this.otherValue(sid) ? _('This profile is already the other line') : true;
 	}
 });
@@ -793,7 +792,7 @@ return view.extend({
 
 		[ 1, 2 ].forEach(function(n) {
 			o = ss.taboption('general', LineValue, 'line' + n, _('Line %d').format(n),
-				n == 1 ? _('A VoIP profile (VoIP Profiles tab): the handset\'s calls go out on it, and calls to it ring this handset.') :
+				n == 1 ? _('A VoIP profile (VoIP Profiles tab): calls to it ring this handset, and the handset\'s calls go out on it unless the handset picks Line 2.') :
 					 _('An optional second VoIP profile, ringing this handset too.'));
 			o.modalonly = true;
 			o.optional = true;
@@ -950,12 +949,11 @@ return view.extend({
 				n++;
 			return form.GridSection.prototype.handleAdd.call(this, ev, 'voip' + n);
 		};
-		/* deleting a profile frees the line that held it */
+		/* deleting a profile frees every line that held it */
 		ps.handleRemove = function(sid, ev) {
-			var u = profileUse(sid);
-
-			if (u)
+			profileUse(sid).forEach(function(u) {
 				uci.unset('opendectcell', u[0], 'line' + u[1]);
+			});
 			return form.GridSection.prototype.handleRemove.call(this, sid, ev);
 		};
 
@@ -970,13 +968,16 @@ return view.extend({
 		o.modalonly = false;
 		o.cfgvalue = function(sid) {
 			var u = profileUse(sid);
-			return u ? _('DECT %s, Line %d').format(uci.get('opendectcell', u[0], 'slot') || '?', u[1]) : _('free');
+			return u.length ? u.map(function(x) {
+				return _('DECT %s, Line %d').format(uci.get('opendectcell', x[0], 'slot') || '?', x[1]);
+			}).join(', ') : _('free');
 		};
 		o = ps.option(form.DummyValue, '_reg', _('Registration'));
 		o.modalonly = false;
 		o.cfgvalue = function(sid) {
-			var u = profileUse(sid), l = u && regBy[(uci.get('opendectcell', u[0], 'slot') || '') + '/' + u[1]];
-			return !u ? '-' : !l ? _('not in use (yet)') :
+			/* one account: every line it is reports the same */
+			var u = profileUse(sid), l = u.length && regBy[(uci.get('opendectcell', u[0][0], 'slot') || '') + '/' + u[0][1]];
+			return !u.length ? '-' : !l ? _('not in use (yet)') :
 				l.registration + (l.reason ? ': ' + l.reason : '');
 		};
 		addProfileOptions(ps);
