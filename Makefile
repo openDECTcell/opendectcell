@@ -11,7 +11,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 LIBDECT_SRC := src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c src/libopendectcell/dect_audio.c \
 	src/libopendectcell/dect_g722.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c
@@ -23,7 +23,7 @@ XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 
 # dect-stubd: framing, session, the C-plane stack, and the A-law codec for the
 # transmit test tone (dect_audio.c pulls in libm).
-STUBD_SRC := src/stubd/dect-stubd.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
+STUBD_SRC := src/stubd/dect-stubd.c src/stubd/ssc_align.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
 	src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c \
 	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c \
 	src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_audio.c \
@@ -50,7 +50,7 @@ $(BUILD)/dect-maildump: src/tools/dect-maildump.c src/libopendectcell/dect_mail.
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc/libopendectcell -o $@ src/tools/dect-maildump.c src/libopendectcell/dect_mail.c
 
-$(BUILD)/dect-stubd: $(STUBD_SRC) src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
+$(BUILD)/dect-stubd: $(STUBD_SRC) src/stubd/ssc_align.h src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC) -lm
 
@@ -127,6 +127,10 @@ $(BUILD)/test_clip: tests/test_clip.c src/libopendectcell/dect_clip.c src/libope
 $(BUILD)/test_time: tests/test_time.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_time.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_time.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c
+
+$(BUILD)/test_ssc_align: tests/test_ssc_align.c src/stubd/ssc_align.c src/stubd/ssc_align.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_ssc_align.c src/stubd/ssc_align.c
 
 $(BUILD)/test_callinfo: tests/test_callinfo.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_callinfo.h tests/check.h
 	@mkdir -p $(BUILD)

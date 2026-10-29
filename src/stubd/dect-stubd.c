@@ -40,6 +40,7 @@
 
 #include "opendectcell.h"
 #include "ssc_pcm.h"
+#include "ssc_align.h"
 #include "dect_mail.h"
 #include "dect_session.h"
 #include "dect_proto.h"
@@ -353,9 +354,8 @@ struct stubd {
 	 * into the 7520's layout, so nothing above them differs.
 	 */
 	int ssc;
-	unsigned int ssc_off;		/* bit offset of the chip's 16-bit lanes */
-	int ssc_aligned;		/* ssc_off is measured: fix what we read */
-	uint8_t ssc_rx_carry[2], ssc_tx_carry[2];
+	struct ssc_align ssc_al;	/* lane offset and stream carries */
+	int ssc_aligned;		/* offset measured: fix what we read */
 	uint64_t ssc_tx_sent_prev, ssc_tx_idle_prev;
 	/*
 	 * Downlink starvation, sampled once a second. The driver refills a
@@ -1678,38 +1678,10 @@ static int pcm_block_ok(const struct stubd *s, const void *hdr)
 	return h->magic == (s->ssc ? SSC_PCM_BLOCK_MAGIC : DECT_PCM_BLOCK_MAGIC);
 }
 
-static void swap_pairs(uint8_t *p, size_t len)
-{
-	size_t i;
-
-	for (i = 0; i + 1u < len; i += 2u) {
-		uint8_t t = p[i];
-
-		p[i] = p[i + 1u];
-		p[i + 1u] = t;
-	}
-}
-
-/* dst[i] = the 8 bits of src starting at bit 8 * i + bit (MSB first). */
-static void bit_window(uint8_t *dst, const uint8_t *src, size_t len,
-		       unsigned int bit)
-{
-	unsigned int by = bit / 8u, bi = bit % 8u;
-	size_t i;
-
-	for (i = 0; i < len; i++)
-		dst[i] = bi ? (uint8_t)(src[i + by] << bi |
-					src[i + by + 1u] >> (8u - bi))
-			    : src[i + by];
-}
-
 /*
- * Receive, in place: advance the stream by ssc_off bits so the chip's
- * 16-bit lanes start on slot boundaries, then swap each slot's two bytes.
- * The SSC delivers bus order, high byte first; the 7520's DMA buffers, and
- * everything in this file, hold a slot as a little-endian 16-bit sample.
- * The head comes from the last two bytes of the previous block, which
- * delays the stream by one slot; slot probing does not mind.
+ * Receive, in place: the chip's lanes onto slot boundaries, each slot a
+ * little-endian sample as in the 7520's DMA buffers (ssc_align.h). The
+ * stream comes out one slot late; slot probing does not mind.
  */
 static void ssc_rx_fix(struct stubd *s, uint8_t *fr, size_t len)
 {
@@ -1720,24 +1692,16 @@ static void ssc_rx_fix(struct stubd *s, uint8_t *fr, size_t len)
 	t = malloc(len + 2u);
 	if (!t)
 		return;
-	t[0] = s->ssc_rx_carry[0];
-	t[1] = s->ssc_rx_carry[1];
-	memcpy(t + 2, fr, len);
-	s->ssc_rx_carry[0] = fr[len - 2u];
-	s->ssc_rx_carry[1] = fr[len - 1u];
-	bit_window(fr, t, len, s->ssc_off);
-	swap_pairs(fr, len);
+	ssc_align_rx(&s->ssc_al, fr, t, len);
 	free(t);
 }
 
 /*
- * Write whole frames. On the SSC transport, the inverse of ssc_rx_fix():
- * swap each slot's bytes, then delay the stream by ssc_off bits, its head
- * taken from the last two bytes sent before. burst: a one-off write between
- * the driver's idle frames (probing, before the block loop runs); its head
- * then comes from the idle frame, and one idle frame is appended so the
- * bits the shift pushes past the end are idle bits too. Returns the bytes
- * of frames taken, as write() would.
+ * Write whole frames. On the SSC transport, the inverse of ssc_rx_fix().
+ * burst: a one-off write between the driver's idle frames (probing, before
+ * the block loop runs); its head then comes from the idle frame, and one
+ * idle frame is appended so the bits the shift pushes past the end are idle
+ * bits too. Returns the bytes of frames taken, as write() would.
  */
 static ssize_t pcm_write(struct stubd *s, const uint8_t *frames, size_t len,
 			 int burst)
@@ -1756,19 +1720,10 @@ static ssize_t pcm_write(struct stubd *s, const uint8_t *frames, size_t len,
 		errno = ENOMEM;
 		return -1;
 	}
-	if (burst)
-		memset(s->ssc_tx_carry, 0xff, sizeof(s->ssc_tx_carry));
-	t[0] = s->ssc_tx_carry[0];
-	t[1] = s->ssc_tx_carry[1];
-	memcpy(t + 2, frames, len);
-	memset(t + 2 + len, 0xff, tail);
-	swap_pairs(t + 2, len);
-	bit_window(out, t, n, 16u - s->ssc_off);
+	ssc_align_tx(&s->ssc_al, out, t, frames, len, tail, burst);
 	w = write(s->fd, out, n);
-	if (w >= 2) {
-		s->ssc_tx_carry[0] = t[w];
-		s->ssc_tx_carry[1] = t[w + 1];
-	}
+	if (w > 0)
+		ssc_align_tx_commit(&s->ssc_al, t, (size_t)w);
 	free(t);
 	free(out);
 	if (w > (ssize_t)len)
@@ -2587,11 +2542,11 @@ out:
  */
 static int ssc_measure(struct stubd *s)
 {
-	size_t block = s->slots * 2u * s->fpb, cap = block * 16u, nb, b;
+	size_t block = s->slots * 2u * s->fpb, cap = block * 16u;
 	uint8_t *d = malloc(cap);
-	unsigned int cnt[16], o, best = 0;
+	unsigned int cnt[16], best;
 	ssize_t n = 0;
-	int tries;
+	int tries, o;
 
 	if (!d)
 		return -1;
@@ -2604,29 +2559,16 @@ static int ssc_measure(struct stubd *s)
 		free(d);
 		return -1;
 	}
-	memset(cnt, 0, sizeof(cnt));
-	nb = (size_t)n * 8u;
-	for (o = 0; o < 16u; o++)
-		for (b = o; b + 24u <= nb; b += 16u) {
-			const uint8_t *p = d + b / 8u;
-			uint32_t v = (uint32_t)p[0] << 16 |
-				     (uint32_t)p[1] << 8 | p[2];
-
-			cnt[o] += ((v >> (8u - b % 8u)) & 0xffffu) == 0xfefeu;
-		}
+	o = ssc_idle_offset(d, (size_t)n, cnt);
 	free(d);
-	for (o = 1; o < 16u; o++)
-		if (cnt[o] > cnt[best])
-			best = o;
-	if (!cnt[best]) {
+	if (o < 0) {
 		fprintf(stderr, "ssc: no idle lane (0xFEFE) in %zd bytes -- "
 			"is the STUB running?\n", n);
 		return -1;
 	}
-	s->ssc_off = best;
+	best = (unsigned int)o;
+	ssc_align_init(&s->ssc_al, best);
 	s->ssc_aligned = 1;
-	memset(s->ssc_rx_carry, 0xff, sizeof(s->ssc_rx_carry));
-	memset(s->ssc_tx_carry, 0xff, sizeof(s->ssc_tx_carry));
 	printf("ssc: lane bit offset %u (%u idle lanes; %u at offset %u)\n",
 	       best, cnt[best], cnt[(best + 8u) % 16u], (best + 8u) % 16u);
 	return 0;
@@ -2635,10 +2577,8 @@ static int ssc_measure(struct stubd *s)
 /* The other offset at which the idle pattern reads (see ssc_measure()). */
 static void ssc_flip(struct stubd *s)
 {
-	s->ssc_off = (s->ssc_off + 8u) % 16u;
-	memset(s->ssc_rx_carry, 0xff, sizeof(s->ssc_rx_carry));
-	memset(s->ssc_tx_carry, 0xff, sizeof(s->ssc_tx_carry));
-	printf("ssc: trying lane bit offset %u\n", s->ssc_off);
+	ssc_align_init(&s->ssc_al, s->ssc_al.off + 8u);
+	printf("ssc: trying lane bit offset %u\n", s->ssc_al.off);
 }
 
 #define SSC_N_DESC	16u	/* 64 ms of blocks queued for read() */
