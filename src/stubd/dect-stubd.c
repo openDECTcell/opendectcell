@@ -872,6 +872,7 @@ struct stubd {
 		int      locauth;	/* locauth: authenticate on locating */
 		int      auth_first;	/* authfirst: no service before proof */
 		uint8_t  lane_ch[XLANE_MAX], lane_word[XLANE_MAX];
+		uint8_t  lane_set[XLANE_MAX];	/* lane2=/lane3= given */
 		unsigned reg_signal_s;	/* regwindow=SECS for SIGUSR1, 120 */
 		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
 		int      no_chip_keys;	/* nochipkeys, multi-cell test M2 */
@@ -10951,10 +10952,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 
 			/* channel 1..3 (A-0124: three voice channels) */
 			if (sscanf(eq + 1, "%u:%u", &ch, &w) != 2 || !ch ||
-			    ch > 3 || w > 31)
+			    ch > 3 || w > 63)
 				return -1;
 			a->lane_ch[k] = (uint8_t)ch;
 			a->lane_word[k] = (uint8_t)w;
+			a->lane_set[k] = 1;
 		}
 		else if (!eq && klen == 10 && !memcmp(key, "nostockcfg", 10))
 			a->no_stock_cfg = 1;
@@ -12532,6 +12534,20 @@ int main(int argc, char **argv)
 					      s.slots);
 		printf("ssc: speech lane %u (control lane + 1)\n",
 		       (unsigned int)s.audio.tone_word);
+	}
+	if (s.ssc) {
+		/* call n's speech in control lane + n [CR A-0015] */
+		unsigned int k;
+
+		for (k = 0; k < XLANE_MAX; k++)
+			if (!s.audio.lane_set[k])
+				s.audio.lane_word[k] = (uint8_t)
+					(((unsigned int)s.tx_slot +
+					  s.audio.lane_ch[k]) % s.slots);
+		printf("ssc: side lanes: channel %u -> lane %u, channel %u "
+		       "-> lane %u\n", s.audio.lane_ch[0],
+		       s.audio.lane_word[0], s.audio.lane_ch[1],
+		       s.audio.lane_word[1]);
 	}
 	if (s.audio.play_log) {
 		s.play_log_fp = fopen_private(s.audio.play_log);
