@@ -354,7 +354,7 @@ function renderState(st) {
 				[ _('Encryption'), yesno(st.cipher) ],
 				[ _('Handset check on reporting in'), yesno(st.locauth) ],
 				[ _('Wideband audio'), yesno(st.wideband) ],
-				[ _('Second call'), yesno(st.twocalls) ],
+				[ _('Several calls'), yesno(st.twocalls) ],
 				[ _('Chip firmware'), st.stub || '-' ],
 				[ _('Running for'), st.uptime_ms != null ? duration(st.uptime_ms / 1000) : '-' ],
 				[ _('openDECTcell interface'), st.api != null ? _('API %d').format(st.api) : '-' ]

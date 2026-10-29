@@ -313,7 +313,7 @@ msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:357
 #: htdocs/luci-static/resources/view/opendectcell/settings.js:662
-msgid "Second call"
+msgid "Several calls"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:358
@@ -1082,7 +1082,7 @@ msgid "G.722 when the handset offers it; off keeps every call narrowband."
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/settings.js:663
-msgid "A second handset may call while another is in a call."
+msgid "Up to three calls at once: other handsets may call and be called while one is in a call."
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/settings.js:666

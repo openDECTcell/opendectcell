@@ -21,9 +21,8 @@
  * (docs/bridge-interface.md §2).
  *
  * VoIP Profiles: one 'config voip' section per SIP account; a handset's
- * option line1/line2 names one. A profile serves one line at most: the
- * Line menus offer only free ones, and the init script refuses a second
- * assignment too.
+ * option line1/line2 names one. A profile may be a line of several
+ * handsets -- a call to it rings them all -- but not both lines of one.
  */
 var STATE = '/var/run/opendectcell/state.json';
 var VOIP = '/var/run/opendectcell/voip.json';
@@ -473,30 +472,18 @@ function addProfileOptions(ps) {
 
 /*
  * A handset's Line 1 or Line 2: a menu of the VoIP profiles with a search
- * field above it. It offers only free profiles: none assigned to another
- * handset's line, nor the one the other Line menu of this pop-up holds.
+ * field above it. It offers every profile but the one the other Line menu
+ * of this pop-up holds; handsets may share a profile.
  */
 var LineValue = form.ListValue.extend({
 	other: function() { return this.option == 'line1' ? 'line2' : 'line1'; },
-
-	/* the profiles other handsets hold */
-	takenElsewhere: function(sid) {
-		var t = {};
-
-		uci.sections('opendectcell', 'handset').forEach(function(h) {
-			if (h['.name'] == sid)
-				return;
-			[ h.line1, h.line2 ].forEach(function(p) { if (p) t[p] = h['.name']; });
-		});
-		return t;
-	},
 
 	otherValue: function(sid) {
 		var o = this.map.lookupOption(this.other(), sid);
 		return o ? o[0].formvalue(sid) : uci.get('opendectcell', sid, this.other());
 	},
 
-	/* hide what is taken or does not match the search; keep the choice shown */
+	/* hide the other line and what does not match the search; keep the choice shown */
 	/* the <select> itself: LuCI wraps it in a div that carries the cbid */
 	select: function(sid) {
 		var el = this.map.findElement('id', this.cbid(sid));
@@ -505,15 +492,14 @@ var LineValue = form.ListValue.extend({
 	},
 
 	refresh: function(sid) {
-		var sel = this.select(sid), taken, other, q;
+		var sel = this.select(sid), other, q;
 
 		if (!sel)
 			return;
-		taken = this.takenElsewhere(sid);
 		other = this.otherValue(sid);
 		q = sel._query || '';
 		Array.prototype.forEach.call(sel.options, function(op) {
-			var hide = op.value !== '' && (taken[op.value] || op.value == other ||
+			var hide = op.value !== '' && (op.value == other ||
 				(q && op.text.toLowerCase().indexOf(q) < 0));
 			op.hidden = op.disabled = !!hide && !op.selected;
 		});
@@ -569,18 +555,13 @@ var LineValue = form.ListValue.extend({
 	},
 
 	validate: function(sid, v) {
-		var t;
-
 		if (!v)
 			return true;
 		if (!uci.get('opendectcell', v) || uci.get('opendectcell', v, '.type') != 'voip')
 			return _('This profile was deleted; choose another or none');
 		if (this.option == 'line2' && !this.otherValue(sid))
 			return _('Choose Line 1 first: the handset\'s calls go out on Line 1');
-		if (v == this.otherValue(sid))
-			return _('This profile is already the other line');
-		t = this.takenElsewhere(sid)[v];
-		return t ? _('This profile is already a line of DECT %s').format(uci.get('opendectcell', t, 'slot') || '?') : true;
+		return v == this.otherValue(sid) ? _('This profile is already the other line') : true;
 	}
 });
 
@@ -659,8 +640,9 @@ return view.extend({
 		o.default = '1';
 		o.rmempty = false;
 
-		o = s.taboption('general', form.Flag, 'twocalls', _('Second call'),
-			_('A second handset may call while another is in a call.'));
+		o = s.taboption('general', form.Flag, 'twocalls', _('Several calls'),
+			_('Up to three calls at once: other handsets may call and be called while one is in a call.'));
+		o.default = '1';
 		o.rmempty = false;
 
 		o = s.taboption('general', form.Flag, 'overlap', _('Collect dialled digits'),
@@ -946,7 +928,7 @@ return view.extend({
 		((voip && voip.lines) || []).forEach(function(l) { regBy[l.hs + '/' + l.line] = l; });
 
 		o = s.taboption('voip', form.SectionValue, '_voip', form.GridSection, 'voip', null,
-			_('One profile per SIP account; assign them under Handsets (Edit, Line 1 / Line 2). A profile serves one line.'));
+			_('One profile per SIP account; assign them under Handsets (Edit, Line 1 / Line 2). A profile may be a line of several handsets: a call to it rings them all.'));
 		var ps = o.subsection;
 		ps.anonymous = true;
 		ps.addremove = true;

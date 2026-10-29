@@ -207,10 +207,11 @@ overrides_write() {
 
 # A handset's Line 1 and Line 2 are VoIP profiles ('config voip' sections,
 # Network > DECT, VoIP Profiles), named by its options line1 and line2.
-# Resolved once per start into LINE_<slot>_<n>: a profile serves one line
-# only, so a second assignment is refused here as well as in LuCI.
+# Resolved once per start into LINE_<slot>_<n>. A profile may be a line of
+# several handsets (a call to it rings them all), but not both lines of
+# one handset.
 lines_resolve_one() {
-	local sec="$1" slot n p t
+	local sec="$1" slot n p t first=
 	config_get slot "$sec" slot
 	case "$slot" in [1-6]) ;; *) return ;; esac
 	for n in 1 2; do
@@ -221,12 +222,11 @@ lines_resolve_one() {
 			log "DECT $slot line $n: there is no VoIP profile '$p'; line left out"
 			continue
 		fi
-		case "$LINES_USED" in
-		*" $p "*)
-			log "DECT $slot line $n: VoIP profile '$p' already serves another line; left out"
+		if [ "$p" = "$first" ]; then
+			log "DECT $slot line $n: VoIP profile '$p' is already its Line 1; left out"
 			continue
-			;;
-		esac
+		fi
+		first=$p
 		LINES_USED="$LINES_USED$p "
 		eval "LINE_${slot}_$n=\$p"
 	done
@@ -297,6 +297,13 @@ bs_line() {
 		return 0
 	}
 	aor="sip:$user@$dom"
+	# a profile shared by handsets is one baresip account, written once
+	case "$BS_SECS" in
+	*" $sec "*)
+		printf '%s %s %s\n' "$slot" "$n" "$aor" >> /var/run/opendectcell/lines
+		return 0
+		;;
+	esac
 	# two profiles with the same account would be one baresip account
 	case "$BS_AORS" in
 	*" $aor "*)
@@ -305,6 +312,7 @@ bs_line() {
 		;;
 	esac
 	BS_AORS="$BS_AORS$aor "
+	BS_SECS="$BS_SECS$sec "
 	config_get v "$sec" transport udp
 	line="<$aor"
 	[ "$v" = udp ] || line="$line;transport=$v"
@@ -416,6 +424,7 @@ baresip_write() {
 	: > /var/run/opendectcell/lines
 	[ -n "$LINES_USED" ] || lines_resolve
 	BS_AORS=" "
+	BS_SECS=" "
 	config_foreach bs_handset handset
 	[ "$BS_ACCOUNTS" -gt 0 ] || return 1
 	{
@@ -504,7 +513,7 @@ start_service() {
 	# authentication on location registration: the daemon's default
 	config_get_bool la main locauth 1
 	[ "$la" = 1 ] || options="${options:+$options,}nolocauth"
-	config_get_bool tc main twocalls 0
+	config_get_bool tc main twocalls 1
 	[ "$tc" = 1 ] && options="${options:+$options,}twocalls"
 	# Hours between date and time updates to every handset (0: only when
 	# one reports in); the daemon counts minutes. A timeupdate= in
