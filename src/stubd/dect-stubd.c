@@ -368,6 +368,60 @@ struct xlane {
 	int      primed;
 };
 
+/*
+ * A call the bridge carries (docs/bridge-interface.md §2): its id, the link
+ * it is on and the events already sent.
+ */
+#define BC_MAX		3u	/* the chip's audio channels */
+#define BC_PAGING	(-3)	/* a side ring paging its handset, no link yet */
+
+struct bcall {
+	unsigned id;		/* 0 = free */
+	int      party;		/* -1 the main link, else a side index */
+	unsigned line;		/* the pool line, 1 or 2 */
+	int      out;		/* 1: the handset called out, 0: call-in */
+	int      busy_seen;	/* the CC call existed */
+	int      rang, answered;	/* events sent */
+	uint64_t since;
+	/*
+	 * A call-in rung on a side link (a side ring): its handset (table
+	 * index), paged while BC_PAGING, and the caller it is shown.
+	 */
+	int      target;
+	uint8_t  tpui[3];
+	unsigned pages;
+	uint64_t page_at;
+	struct dect_clip clip;
+	int      info_sent;	/* its display text sent */
+	int      cs_sent;	/* ... and its CS call connect */
+};
+
+/*
+ * One lane's speech on the audio socket: lane 0 is the main link's, 1 + i
+ * extra lane i's. Wideband: G.722 octets, a word held two frames, coded
+ * here. Narrowband: one 16-bit linear sample per frame (8 kHz), resampled
+ * here, so the socket is 16 kHz either way. down[] holds what goes to the
+ * handset in the lane's own format.
+ */
+#define AB_LANES	(1u + XLANE_MAX)
+
+struct ab_lane {
+	int      cfd;		/* the bridge's connection, -1 = none */
+	unsigned call;		/* announced for this call id, 0 = none */
+	int      wideband;
+	struct dect_g722_state enc, dec;
+	struct dect_rs2 rs_up, rs_down;
+	uint8_t  down[8192];
+	size_t   dh, dn;
+	uint8_t  up[320];	/* from the handset: 20 ms in the lane's format */
+	size_t   un;
+	uint8_t  cur[2];	/* the word on the lane now */
+	uint32_t rx_prev;
+	unsigned rx_run;
+	int      phase, locked, primed;
+	uint32_t underruns, dropped, frames_up, frames_down;
+};
+
 struct stubd {
 	int fd;
 	unsigned int slots;
@@ -490,35 +544,23 @@ struct stubd {
 		unsigned next_call;	/* call ids, 1..127 */
 	} ctl;
 	/*
-	 * The main link's call while a bridge carries it (docs/bridge-
-	 * interface.md §2): one at a time for now.
+	 * The external calls the bridge carries (docs/bridge-interface.md
+	 * §2), one per audio channel: on the main link (party -1), on a side
+	 * link (its index), or paging its handset for a side ring (BC_PAGING).
 	 */
-	struct {
-		unsigned id;		/* 0 = none */
-		int      out;		/* 1: the handset called out, 0: call-in */
-		int      busy_seen;	/* the CC call existed */
-		int      rang, answered;	/* events sent */
-		uint64_t since;
-	} bc;
+	struct bcall bc[BC_MAX];
 	/*
-	 * The bridged call's speech (docs/bridge-interface.md §3): one
-	 * SOCK_SEQPACKET socket, 20 ms frames of 16 kHz linear PCM both ways,
-	 * coded to and from the wideband call's G.722 lane here.
+	 * The bridged calls' speech (docs/bridge-interface.md §3): one
+	 * listening SOCK_SEQPACKET socket, a connection per call, 20 ms
+	 * frames of 16 kHz linear PCM both ways; per lane the coding to and
+	 * from the call's G.722 or narrowband linear lane. New connections
+	 * wait in pend[] until they name their call.
 	 */
 	struct {
-		int      lfd, cfd;
-		unsigned call;		/* announced for this call id, 0 none */
-		int      nb_noted;	/* "narrowband: no audio socket" said */
-		struct dect_g722_state enc, dec;
-		uint8_t  down[4096];	/* G.722 octets towards the handset */
-		size_t   dh, dn;
-		uint8_t  up[160];	/* from the handset: 20 ms */
-		size_t   un;
-		uint8_t  cur[2];	/* the word on the lane now */
-		uint32_t rx_prev;
-		unsigned rx_run;
-		int      phase, locked, primed;
-		uint32_t underruns, dropped, frames_up, frames_down;
+		int      lfd;
+		int      pend[AB_LANES];	/* -1 = free */
+		uint64_t pend_since[AB_LANES];
+		struct ab_lane l[AB_LANES];
 	} ab;
 	/* The registration window: open now, and until when (0 = no limit). */
 	int      reg_open;
@@ -2039,6 +2081,111 @@ static int lane_word_live(uint32_t v)
 	return v <= 0xFFFFu && v != 0x0000u && v != 0xFEFEu && v != 0xFFFFu;
 }
 
+/* -------------------------------------------------------------------------
+ * A bridged call's speech on its lane, frame by frame. Wideband, down: two
+ * G.722 octets per two frames from the socket's FIFO, locked to the
+ * handset's word changes as playsync locks the test file. Up: each of the
+ * handset's coded words once -- a word is held two frames, a longer hold
+ * is a chip underrun whose repeats would make the decoder re-adapt
+ * (tools/dect_g722_extract.py) -- decoded per 20 ms and sent. Narrowband:
+ * one linear sample per frame each way (clean room A-0042, 7412 A-0015).
+ * Silence when the FIFO runs dry.
+ */
+#define AB_PATH		"/var/run/opendectcell-audio.sock"
+#define AB_FRAME	640u	/* octets: 20 ms of 16 kHz 16-bit PCM */
+#define AB_PRIME_MS	40u	/* buffered towards the handset before the first */
+#define AB_HELLO_MS	2000u	/* a new connection names its call within */
+
+static void ab_pop(struct ab_lane *l)
+{
+	size_t cap = sizeof(l->down);
+	size_t prime = AB_PRIME_MS * (l->wideband ? 8u : 16u);
+
+	if (l->dn >= 2 && (l->primed || l->dn >= prime)) {
+		l->primed = 1;
+		l->cur[0] = l->down[l->dh];
+		l->cur[1] = l->down[(l->dh + 1u) % cap];
+		l->dh = (l->dh + 2u) % cap;
+		l->dn -= 2u;
+		return;
+	}
+	if (l->wideband) {
+		static const int16_t z[4];
+
+		(void)dect_g722_encode(&l->enc, z, 4, l->cur);
+	} else {
+		l->cur[0] = l->cur[1] = 0;
+	}
+	if (l->primed)
+		l->underruns++;
+}
+
+/* One word from the handset; every 20 ms a frame to the bridge. */
+static void ab_up(struct ab_lane *l, const uint8_t *w)
+{
+	int16_t pcm[AB_FRAME / 2u];
+	size_t full = l->wideband ? 160u : 320u;
+
+	l->up[l->un++] = w[0];
+	l->up[l->un++] = w[1];
+	if (l->un < full)
+		return;
+	l->un = 0;
+	if (l->wideband) {
+		(void)dect_g722_decode(&l->dec, l->up, full, pcm);
+	} else {
+		int16_t nb[160];
+		unsigned i;
+
+		for (i = 0; i < 160u; i++)
+			nb[i] = (int16_t)(l->up[2u * i] |
+					  (l->up[2u * i + 1u] << 8));
+		(void)dect_rs2_up(&l->rs_up, nb, 160u, pcm);
+	}
+	if (l->cfd < 0)
+		return;
+	if (send(l->cfd, pcm, sizeof(pcm), MSG_DONTWAIT | MSG_NOSIGNAL) ==
+	    (ssize_t)sizeof(pcm))
+		l->frames_up++;
+	else
+		l->dropped++;
+}
+
+/* One frame of lane l, TDM word w: src is the handset's word, or NULL. */
+static void ab_frame(struct ab_lane *l, uint8_t *fr, unsigned int w,
+		     const uint8_t *src)
+{
+	if (!l->wideband) {
+		if (src)
+			ab_up(l, src);
+		ab_pop(l);
+	} else {
+		if (src) {
+			uint32_t v = (uint32_t)src[0] |
+				     ((uint32_t)src[1] << 8);
+
+			if (v == l->rx_prev) {
+				if (++l->rx_run == 2u && lane_word_live(v))
+					ab_up(l, src);
+			} else {
+				l->rx_run = 1;
+				/* the first change between live words: lock */
+				if (!l->locked && lane_word_live(v) &&
+				    lane_word_live(l->rx_prev)) {
+					l->locked = 1;
+					l->phase = 0;
+				}
+			}
+			l->rx_prev = v;
+		}
+		if (!l->phase)
+			ab_pop(l);
+		l->phase ^= 1;
+	}
+	fr[w * 2u] = l->cur[0];
+	fr[w * 2u + 1u] = l->cur[1];
+}
+
 /*
  * The extra lanes' downlink for frame f (-a twocalls). The G.722 file
  * phase-locked to the chip's two-frame words as lane 0's playsync does; a
@@ -2075,6 +2222,10 @@ static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
 		    w == (unsigned)s->tx_slot)
 			continue;
 		src = rx ? rx + (f * s->slots + w) * 2u : NULL;
+		if (s->ab.l[1u + i].cfd >= 0 && s->ab.l[1u + i].call) {
+			ab_frame(&s->ab.l[1u + i], fr, w, src);
+			continue;
+		}
 		fr[w * 2u] = s->tx_voice_idle;
 		fr[w * 2u + 1u] = s->tx_voice_idle;
 		if (ic_peer_word(s, x) >= 0 && rx) {
@@ -2144,87 +2295,6 @@ static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
  * cadence A-0030 §2 Q1 describes ("refills occur per buffer, not per
  * individual 8-kHz frame").
  */
-/* -------------------------------------------------------------------------
- * The bridged call's speech on the main lane, frame by frame (wideband).
- * Down: two G.722 octets per two frames from the socket's FIFO, locked to
- * the handset's word changes as playsync locks the test file; silence
- * when the FIFO runs dry. Up: each of the handset's coded words once --
- * a word is held two frames, a longer hold is a chip underrun whose
- * repeats would make the decoder re-adapt (tools/dect_g722_extract.py) --
- * decoded per 20 ms and sent.
- */
-#define AB_PATH		"/var/run/opendectcell-audio.sock"
-#define AB_FRAME	640u	/* octets: 20 ms of 16 kHz 16-bit PCM */
-#define AB_PRIME	320u	/* G.722 octets before the first: 40 ms */
-
-static void ab_pop(struct stubd *s)
-{
-	size_t cap = sizeof(s->ab.down);
-
-	if (s->ab.dn >= 2 && (s->ab.primed || s->ab.dn >= AB_PRIME)) {
-		s->ab.primed = 1;
-		s->ab.cur[0] = s->ab.down[s->ab.dh];
-		s->ab.cur[1] = s->ab.down[(s->ab.dh + 1u) % cap];
-		s->ab.dh = (s->ab.dh + 2u) % cap;
-		s->ab.dn -= 2u;
-		return;
-	}
-	{
-		static const int16_t z[4];
-
-		(void)dect_g722_encode(&s->ab.enc, z, 4, s->ab.cur);
-	}
-	if (s->ab.primed)
-		s->ab.underruns++;
-}
-
-static void ab_up(struct stubd *s, const uint8_t *w)
-{
-	int16_t pcm[320];
-
-	s->ab.up[s->ab.un++] = w[0];
-	s->ab.up[s->ab.un++] = w[1];
-	if (s->ab.un < sizeof(s->ab.up))
-		return;
-	s->ab.un = 0;
-	(void)dect_g722_decode(&s->ab.dec, s->ab.up, sizeof(s->ab.up), pcm);
-	if (s->ab.cfd < 0)
-		return;
-	if (send(s->ab.cfd, pcm, sizeof(pcm), MSG_DONTWAIT | MSG_NOSIGNAL) ==
-	    (ssize_t)sizeof(pcm))
-		s->ab.frames_up++;
-	else
-		s->ab.dropped++;
-}
-
-/* One frame of the main lane while the bridge carries the call. */
-static void ab_frame(struct stubd *s, uint8_t *fr, const uint8_t *src)
-{
-	unsigned int w = s->audio.tone_word;
-
-	if (src) {
-		uint32_t v = (uint32_t)src[0] | ((uint32_t)src[1] << 8);
-
-		if (v == s->ab.rx_prev) {
-			if (++s->ab.rx_run == 2u && lane_word_live(v))
-				ab_up(s, src);
-		} else {
-			s->ab.rx_run = 1;
-			if (!s->ab.locked && lane_word_live(v) &&
-			    lane_word_live(s->ab.rx_prev)) {
-				s->ab.locked = 1;
-				s->ab.phase = 0;
-			}
-		}
-		s->ab.rx_prev = v;
-	}
-	if (!s->ab.phase)
-		ab_pop(s);
-	s->ab.phase ^= 1;
-	fr[w * 2u] = s->ab.cur[0];
-	fr[w * 2u + 1u] = s->ab.cur[1];
-}
-
 static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		     const uint8_t *rx)
 {
@@ -2293,11 +2363,14 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		 * and visible in vF411 as dir1 8001 -> 0000 one second in).
 		 * There is nothing useful to send in that window.
 		 */
-		if (s->ab.cfd >= 0 && s->ab.call && s->reg.call_bound &&
-		    s->reg.call_wideband && s->audio.tone_word < s->slots &&
-		    s->audio.tone_word != (unsigned int)s->tx_slot) {
+		if (s->ab.l[0].cfd >= 0 && s->ab.l[0].call &&
+		    s->reg.call_bound && s->audio.tone_word < s->slots &&
+		    s->audio.tone_word != (unsigned int)s->tx_slot &&
+		    (s->reg.call_wideband || !s->audio.remode_ms ||
+		     s->reg.remode_done)) {
 			/* the bridge's speech (docs/bridge-interface.md §3) */
-			ab_frame(s, fr, rx ? rx + (f * s->slots +
+			ab_frame(&s->ab.l[0], fr, s->audio.tone_word,
+				 rx ? rx + (f * s->slots +
 					    s->audio.tone_word) * 2u : NULL);
 		} else if (s->ic.st == IC_UP && rx && s->reg.call_bound &&
 		    ic_word(s, s->ic.caller == -1 ? s->ic.tside :
@@ -3623,9 +3696,37 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 }
 
 /* -a infoie=: one {CC-INFO} once our call to the handset rings. */
+/*
+ * The caller's name, else number, as the handset's profile's display text
+ * (name method 1 or 2) in {CC-INFO}, for handset hs ringing on cc. 1 sent,
+ * -1 could not queue it, 0 nothing to send.
+ */
+static int name_display_info(struct stubd *s, struct dect_cc *cc, unsigned hs,
+			     const struct dect_clip *clip)
+{
+	const struct dect_hs_profile *hp = &s->hs[hs].prof;
+	uint8_t ie[96];
+	size_t n;
+
+	if (s->audio.info_ie_len ||
+	    (hp->cc_name_method != 1 && hp->cc_name_method != 2) ||
+	    (!clip->name[0] && !clip->number[0]))
+		return 0;
+	n = dect_profile_display(hp, clip->name[0] ? clip->name : clip->number,
+				 ie, sizeof(ie));
+	if (!n || dect_cc_info(cc, ie, n)) {
+		printf("call: profile display text: could not queue it\n");
+		return -1;
+	}
+	printf("call: profile display text sent in CC-INFO (%zu octets) on "
+	       "ALERTING\n", n);
+	return 1;
+}
+
 static void info_tick(struct stubd *s, uint64_t now)
 {
 	struct dect_cc *cc = &s->reg.link.cc;
+	int r;
 
 	if (!s->reg.active || !dect_cc_busy(cc)) {
 		s->reg.info_sent = 0;
@@ -3634,26 +3735,13 @@ static void info_tick(struct stubd *s, uint64_t now)
 	if (s->reg.info_sent || !cc->incoming ||
 	    cc->state != DECT_CC_ST_RINGING)
 		return;
-	if (!s->audio.info_ie_len && s->n_hs &&
-	    (s->hs[s->ring_hs].prof.cc_name_method == 1 ||
-	     s->hs[s->ring_hs].prof.cc_name_method == 2) &&
-	    (s->clip.name[0] || s->clip.number[0])) {
-		/* the profile's display text: the name, else the number */
-		uint8_t ie[96];
-		size_t n = dect_profile_display(&s->hs[s->ring_hs].prof,
-						s->clip.name[0] ? s->clip.name
-								: s->clip.number,
-						ie, sizeof(ie));
-
+	r = s->n_hs ? name_display_info(s, cc, s->ring_hs, &s->clip) : 0;
+	if (r) {
 		s->reg.info_sent = 1;
-		if (!n || dect_cc_info(cc, ie, n)) {
-			printf("call: profile display text: could not queue it\n");
-			return;
+		if (r > 0) {
+			dect_link_drain(&s->reg.link, now);
+			pump_lapc(s);
 		}
-		printf("call: profile display text sent in CC-INFO (%zu "
-		       "octets) on ALERTING\n", n);
-		dect_link_drain(&s->reg.link, now);
-		pump_lapc(s);
 		return;
 	}
 	if (!s->audio.info_ie_len)
@@ -3674,7 +3762,7 @@ static void info_tick(struct stubd *s, uint64_t now)
  * internal call if it names a handset, else the routed steps (alertms,
  * bindfirst) or CONNECT at once.
  */
-static int bridge_call_out(struct stubd *s, uint64_t now);
+static int bridge_call_out(struct stubd *s, int p, uint64_t now);
 
 static void dial_route(struct stubd *s, uint64_t now)
 {
@@ -3684,7 +3772,7 @@ static void dial_route(struct stubd *s, uint64_t now)
 		pump_lapc(s);
 		return;
 	}
-	if (bridge_call_out(s, now))
+	if (bridge_call_out(s, -1, now))
 		return;
 	if (s->audio.alert_ms || s->audio.bind_first) {
 		/* the steps a routed call takes; connect_tick() finishes */
@@ -3721,29 +3809,30 @@ static int call_auth_ok(const struct stubd *s, const struct dect_link *l)
 	return !s->audio.auth_first || s->no_cipher || l->mm.authenticated;
 }
 
+/*
+ * A handset's call whose number came complete and waits in PROCEEDING to be
+ * routed: an internal call, a number picked from a list (1C15H, TS 102
+ * 527-3 7.4.10.6.2), or one sent with <<SENDING-COMPLETE>> (redial, the
+ * phonebook: dect_cc_set_route_complete()).
+ */
+static int number_complete(const struct dect_cc *cc)
+{
+	unsigned cls = cc->peer_basic_service >> 4;
+
+	return cc->state == DECT_CC_ST_PROCEEDING && !cc->incoming &&
+	       !cc->busy_notified &&	/* §7.4.8.3: the busy tone */
+	       (cls == 0x8u || cls == 0x9u || cc->list_number);
+}
+
 static void dial_tick(struct stubd *s, uint64_t now)
 {
 	const uint8_t *k;
 	size_t len;
 
-	/* an internal call that sent its number complete: route it now */
-	if (s->reg.active && s->reg.link.cc.state == DECT_CC_ST_PROCEEDING &&
-	    !s->reg.link.cc.incoming && !s->reg.ic_tried &&
-	    !s->reg.link.cc.busy_notified &&	/* §7.4.8.3: busy tone */
-	    (s->reg.link.cc.peer_basic_service >> 4) == 0x9u &&
-	    call_auth_ok(s, &s->reg.link)) {
-		s->reg.ic_tried = 1;
-		(void)ic_start(s, -1, now);
-		dect_link_drain(&s->reg.link, now);
-		pump_lapc(s);
-	}
-	/* a number picked from a list (1C15H, TS 102 527-3 7.4.10.6.2) */
-	if (s->reg.active && s->reg.link.cc.list_number &&
-	    s->reg.link.cc.state == DECT_CC_ST_PROCEEDING &&
-	    !s->reg.link.cc.incoming && !s->reg.ic_tried &&
-	    call_auth_ok(s, &s->reg.link)) {
+	if (s->reg.active && !s->reg.ic_tried &&
+	    number_complete(&s->reg.link.cc) && call_auth_ok(s, &s->reg.link)) {
 		k = dect_cc_keypad(&s->reg.link.cc, &len);
-		printf("call: dialled \"%.*s\" from a list, connecting\n",
+		printf("call: dialled \"%.*s\", complete -- connecting\n",
 		       (int)len, (const char *)k);
 		fflush(stdout);
 		dial_route(s, now);
@@ -5117,6 +5206,7 @@ static int ring_target_part3(const struct stubd *s)
 static void ring_callinfo(struct stubd *s, int on)
 {
 	struct dect_callinfo ci;
+	unsigned i;
 
 	if (!on || !ring_target_part3(s)) {
 		dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
@@ -5129,6 +5219,9 @@ static void ring_callinfo(struct stubd *s, int on)
 	dect_callinfo_init(&ci);
 	ci.has_line = 1;
 	ci.line_id = STUBD_LINE_ID;
+	for (i = 0; i < BC_MAX; i++)
+		if (s->bc[i].id && s->bc[i].party == -1)
+			ci.line_id = (uint8_t)s->bc[i].line;	/* the called one */
 	ci.has_line_type = 1;
 	ci.line_type = DECT_CALLINFO_NDT_DELAY;
 	ci.has_call_id = 1;
@@ -5137,8 +5230,8 @@ static void ring_callinfo(struct stubd *s, int on)
 	ci.call_status = DECT_CS_CALL_SETUP;
 	dect_cc_set_callinfo(&s->reg.link.cc, &ci);
 	printf("ring: full call information for a Part 3 handset "
-	       "(line %u, VoIP, call id %u, CS call setup)\n", STUBD_LINE_ID,
-	       (unsigned int)ci.call_id);
+	       "(line %u, VoIP, call id %u, CS call setup)\n",
+	       (unsigned int)ci.line_id, (unsigned int)ci.call_id);
 }
 
 /*
@@ -6225,6 +6318,7 @@ static void main_cc_setup(struct stubd *s)
 			   s->audio.signal_value);
 	dect_cc_set_wideband(&s->reg.link.cc, !s->audio.narrowband);
 	dect_cc_set_overlap(&s->reg.link.cc, !s->audio.no_overlap);
+	dect_cc_set_route_complete(&s->reg.link.cc, 1);
 	dect_cc_set_call_status(&s->reg.link.cc, !s->audio.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
@@ -7019,6 +7113,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 	dect_cc_set_busy(&sl->link.cc, !s->audio.two_calls);
 	dect_cc_set_wideband(&sl->link.cc, !s->audio.narrowband);
 	dect_cc_set_overlap(&sl->link.cc, !s->audio.no_overlap);
+	dect_cc_set_route_complete(&sl->link.cc, 1);
 	dect_cc_set_call_status(&sl->link.cc, !s->audio.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
@@ -7062,7 +7157,8 @@ static int xlane_free(const struct stubd *s)
 /*
  * Lanes a new side call can still count on: free ones, less those that
  * side calls accepted but not yet connected will take (review, finding 6:
- * one free lane used to admit any number of calls).
+ * one free lane used to admit any number of calls), and those of side
+ * rings still paging their handsets.
  */
 static int lanes_available(const struct stubd *s, const struct side_link *me)
 {
@@ -7072,6 +7168,9 @@ static int lanes_available(const struct stubd *s, const struct side_link *me)
 	for (i = 0; i < XLANE_MAX; i++)
 		if (!s->xl[i].used)
 			n++;
+	for (i = 0; i < BC_MAX; i++)
+		if (s->bc[i].id && s->bc[i].party == BC_PAGING)
+			n--;
 	for (i = 0; i < SIDE_MAX; i++) {
 		const struct side_link *o = &s->side[i];
 
@@ -7186,13 +7285,26 @@ static void xlane_release(struct stubd *s, struct side_link *sl)
 	sl->status_ms = 0;
 }
 
-/*
- * -a twocalls on a side link: take speech while a lane is free (else the
- * busy refusal stays), accept a dialled call after dialwait as the main
- * link does, bind once it is connected, release when it ends.
- */
 static int ic_start(struct stubd *s, int side, uint64_t now);
 
+/* A side link's number is complete: internal, to the bridge, or local. */
+static void side_route(struct stubd *s, struct side_link *sl, uint64_t now)
+{
+	int p = (int)(sl - s->side);
+
+	sl->ic_tried = 1;
+	if (ic_start(s, p, now) || bridge_call_out(s, p, now) ||
+	    dect_cc_accept(&sl->link.cc) == 0) {
+		dect_link_drain(&sl->link, now);
+		side_pump(s, sl);
+	}
+}
+
+/*
+ * -a twocalls on a side link: take speech while a lane is free (else the
+ * busy refusal stays), route a dialled call after dialwait as the main
+ * link does, bind once it is connected, release when it ends.
+ */
 static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 {
 	struct dect_cc *cc = &sl->link.cc;
@@ -7202,15 +7314,8 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 	if (!dect_cc_busy(cc))	/* decided for the next SETUP only */
 		dect_cc_set_busy(cc, sl->lane < 0 &&
 				 lanes_available(s, sl) <= 0);
-	if (cc->state == DECT_CC_ST_PROCEEDING && !cc->incoming &&
-	    !sl->ic_tried && !cc->busy_notified &&
-	    (cc->peer_basic_service >> 4) == 0x9u &&
-	    call_auth_ok(s, &sl->link)) {
-		sl->ic_tried = 1;	/* sent complete: route it now */
-		(void)ic_start(s, (int)(sl - s->side), now);
-		dect_link_drain(&sl->link, now);
-		side_pump(s, sl);
-	}
+	if (!sl->ic_tried && number_complete(cc) && call_auth_ok(s, &sl->link))
+		side_route(s, sl, now);
 	if (!dect_cc_busy(cc))
 		sl->ic_tried = 0;
 	if (cc->state == DECT_CC_ST_OVERLAP) {
@@ -7224,12 +7329,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 			   s->audio.dial_wait_ms && call_auth_ok(s, &sl->link)) {
 			printf("side: dialled on handle %u -- connecting\n",
 			       sl->handle);
-			sl->ic_tried = 1;
-			if (ic_start(s, (int)(sl - s->side), now) ||
-			    dect_cc_accept(cc) == 0) {
-				dect_link_drain(&sl->link, now);
-				side_pump(s, sl);
-			}
+			side_route(s, sl, now);
 		}
 	} else {
 		sl->dial_len = 0;
@@ -8081,6 +8181,8 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
  * and SIGUSR1 do. Nothing a SIP peer says reaches MM through here except
  * these two configuration commands (§4).
  */
+static void bc_clear(struct stubd *s, struct bcall *b);
+
 static void ctl_drop(struct stubd *s, int c, const char *why)
 {
 	if (c < 0 || s->ctl.cl[c].fd < 0)
@@ -8090,15 +8192,22 @@ static void ctl_drop(struct stubd *s, int c, const char *why)
 	s->ctl.cl[c].in_len = 0;
 	s->ctl.cl[c].discard = 0;
 	if (c == s->ctl.bridge) {
+		unsigned i;
+
 		s->ctl.bridge = -1;
-		if (s->bc.id) {
+		for (i = 0; i < BC_MAX; i++) {
+			struct bcall *b = &s->bc[i];
+			int p = b->party;
+
+			if (!b->id)
+				continue;
 			/* the far end went with the bridge */
 			printf("bridge: call %u released -- the bridge left\n",
-			       s->bc.id);
-			if (s->reg.active && dect_cc_busy(&s->reg.link.cc))
-				(void)dect_cc_release(&s->reg.link.cc);
-			s->bc.id = 0;
-			s->ring_now = 0;
+			       b->id);
+			bc_clear(s, b);
+			if (p != BC_PAGING && ic_active(s, p) &&
+			    dect_cc_busy(ic_cc(s, p)))
+				(void)dect_cc_release(ic_cc(s, p));
 		}
 	}
 	printf("ctl: client %d %s\n", c + 1, why);
@@ -8217,7 +8326,14 @@ static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
  */
 static unsigned bridge_new_id(struct stubd *s)
 {
-	s->ctl.next_call = s->ctl.next_call % 127u + 1u;
+	unsigned i;
+
+	do {
+		s->ctl.next_call = s->ctl.next_call % 127u + 1u;
+		for (i = 0; i < BC_MAX; i++)
+			if (s->bc[i].id == s->ctl.next_call)
+				break;
+	} while (i < BC_MAX);
 	return s->ctl.next_call;
 }
 
@@ -8228,57 +8344,126 @@ static unsigned main_hs_slot(struct stubd *s)
 	return hs_slot(s, a >= 0 ? (unsigned)a : s->cur);
 }
 
-static void bridge_event(struct stubd *s, const char *verb, const char *k2,
-			 const char *v2)
+/* The handset a call's party serves, as its slot; 0 = nobody yet. */
+static unsigned party_hs_slot(struct stubd *s, int p)
+{
+	if (p == -1)
+		return main_hs_slot(s);
+	if (p >= 0 && s->side[p].adopted >= 0)
+		return hs_slot(s, (unsigned)s->side[p].adopted);
+	return 0;
+}
+
+/* The handset on link p has a Line 2 (an account for it). */
+static int party_has_line2(const struct stubd *s, int p)
+{
+	int a = p == -1 ? (s->reg.link.mm.adopted >= 0 ?
+			   s->reg.link.mm.adopted : (int)s->cur)
+			: p >= 0 ? s->side[p].adopted : -1;
+
+	return a >= 0 && (unsigned)a < s->n_hs && s->hs[a].line2;
+}
+
+static struct bcall *bc_by_id(struct stubd *s, unsigned id)
+{
+	unsigned i;
+
+	for (i = 0; id && i < BC_MAX; i++)
+		if (s->bc[i].id == id)
+			return &s->bc[i];
+	return NULL;
+}
+
+/* The bridged call on link p (-1 the main link), or NULL. */
+static struct bcall *bc_on(struct stubd *s, int p)
+{
+	unsigned i;
+
+	for (i = 0; i < BC_MAX; i++)
+		if (s->bc[i].id && s->bc[i].party == p)
+			return &s->bc[i];
+	return NULL;
+}
+
+/* A free entry, zeroed; it is taken once its id is set. NULL: all taken. */
+static struct bcall *bc_new(struct stubd *s)
+{
+	unsigned i;
+
+	for (i = 0; i < BC_MAX; i++)
+		if (!s->bc[i].id) {
+			memset(&s->bc[i], 0, sizeof(s->bc[i]));
+			return &s->bc[i];
+		}
+	return NULL;
+}
+
+static void bc_clear(struct stubd *s, struct bcall *b)
+{
+	if (b->party == -1)
+		s->ring_now = 0;
+	b->id = 0;
+}
+
+static void bridge_event(struct stubd *s, const struct bcall *b,
+			 const char *verb, const char *k2, const char *v2)
 {
 	struct dect_ctl_out o;
+	unsigned hs = b->party == BC_PAGING ? hs_slot(s, (unsigned)b->target)
+					    : party_hs_slot(s, b->party);
 
 	dect_ctl_begin(&o, verb);
-	dect_ctl_add_uint(&o, "call", s->bc.id);
-	dect_ctl_add_uint(&o, "hs", main_hs_slot(s));
+	dect_ctl_add_uint(&o, "call", b->id);
+	if (hs)
+		dect_ctl_add_uint(&o, "hs", hs);
 	if (k2)
 		dect_ctl_add(&o, k2, v2);
 	ctl_send_bridge(s, &o);
 }
 
-static int bridge_call_out(struct stubd *s, uint64_t now)
+/* The handset on link p dialled a number: hand it to the bridge. */
+static int bridge_call_out(struct stubd *s, int p, uint64_t now)
 {
+	struct dect_cc *cc = ic_cc(s, p);
 	struct dect_ctl_out o;
+	struct bcall *b;
 	const uint8_t *k;
 	size_t len;
 	char num[DECT_CTL_VAL_MAX];
 
 	if (s->ctl.bridge < 0)
 		return 0;
-	k = dect_cc_keypad(&s->reg.link.cc, &len);
+	k = dect_cc_keypad(cc, &len);
 	if (len >= sizeof(num))
 		len = sizeof(num) - 1;
 	memcpy(num, k, len);
 	num[len] = '\0';
-	if (s->bc.id) {
-		/* one bridged call at a time for now */
-		(void)dect_cc_busy_system(&s->reg.link.cc);
-		printf("bridge: a second call -- busy\n");
-		dect_link_drain(&s->reg.link, now);
-		pump_lapc(s);
+	b = bc_new(s);
+	if (!b) {
+		(void)dect_cc_busy_system(cc);
+		printf("bridge: %u calls already -- busy\n", BC_MAX);
+		ic_drain(s, p, now);
 		return 1;
 	}
-	if (dect_cc_proceed(&s->reg.link.cc))
+	if (dect_cc_proceed(cc))
 		return 0;
-	memset(&s->bc, 0, sizeof(s->bc));
-	s->bc.id = bridge_new_id(s);
-	s->bc.out = 1;
-	s->bc.since = now;
+	b->id = bridge_new_id(s);
+	b->party = p;
+	b->out = 1;
+	b->since = now;
+	/* the line the handset chose (§7.4.5.2), if it has it; else Line 1 */
+	b->line = dect_cc_line(cc);
+	if (b->line != STUBD_LINE_ID + 1u || !party_has_line2(s, p))
+		b->line = STUBD_LINE_ID;
 	dect_ctl_begin(&o, "call-out");
-	dect_ctl_add_uint(&o, "call", s->bc.id);
-	dect_ctl_add_uint(&o, "hs", main_hs_slot(s));
-	dect_ctl_add_uint(&o, "line", STUBD_LINE_ID);
+	dect_ctl_add_uint(&o, "call", b->id);
+	dect_ctl_add_uint(&o, "hs", party_hs_slot(s, p));
+	dect_ctl_add_uint(&o, "line", b->line);
 	dect_ctl_add(&o, "number", num);
 	ctl_send_bridge(s, &o);
-	printf("bridge: call %u out to \"%s\" -- waiting for the far end\n",
-	       s->bc.id, num);
-	dect_link_drain(&s->reg.link, now);
-	pump_lapc(s);
+	printf("bridge: call %u out from DECT %u to \"%s\" -- waiting for the "
+	       "far end\n", b->id, party_hs_slot(s, p), num);
+	ic_drain(s, p, now);
 	return 1;
 }
 
@@ -8296,13 +8481,244 @@ static uint8_t bridge_reason(const char *r)
 	return DECT_CC_REASON_NONE;
 }
 
+/* Handset t is in a call, or being rung for one. */
+static int hs_in_call(const struct stubd *s, unsigned t)
+{
+	unsigned k;
+	int a = s->reg.link.mm.adopted;
+
+	if (s->reg.active && dect_cc_busy(&s->reg.link.cc) &&
+	    (a >= 0 ? (unsigned)a : s->cur) == t)
+		return 1;
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active && s->side[k].adopted == (int)t &&
+		    dect_cc_busy(&s->side[k].link.cc))
+			return 1;
+	for (k = 0; k < BC_MAX; k++)
+		if (s->bc[k].id && !s->bc[k].out &&
+		    ((s->bc[k].party == -1 && s->ring_hs == t) ||
+		     (s->bc[k].party == BC_PAGING && s->bc[k].target == (int)t)))
+			return 1;
+	return 0;
+}
+
+/* The main link can ring: no call, no ring of its own. */
+static int main_free(struct stubd *s)
+{
+	return !bc_on(s, -1) &&
+	       !(s->reg.active && dect_cc_busy(&s->reg.link.cc)) &&
+	       (s->ring_state == RING_IDLE || s->ring_state == RING_DONE);
+}
+
+/* Ring handset t on the main link for b; ring_tick() pages it. */
+static void ring_main(struct stubd *s, struct bcall *b, unsigned t)
+{
+	b->party = -1;
+	s->ring_hs = t;
+	s->ring_state = RING_IDLE;
+	s->ring_now = 1;
+	s->ring_requeues = 0;
+	s->ring_setup_tries = 0;
+	s->ring_pages = 0;
+	s->ring_wait_since = 0;
+}
+
+/* -------------------------------------------------------------------------
+ * A side ring: a call-in for a handset while the main link is in another
+ * call or ringing. The handset is paged as an internal call's target is
+ * (ic_page()) and rung on the side link it comes up on, with what
+ * ring_queue_setup() gives the main link's: its profile's alerting pattern
+ * and name method, and to a Part 3 handset the line, call id and CS call
+ * setup [CR A-0125]. Each call pages its own handset.
+ */
+static void sr_page(struct stubd *s, struct bcall *b)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0300u;
+	m.param[0] = ring_page_info(s);
+	m.param[1] = b->tpui[1];
+	m.param[2] = b->tpui[2];
+	m.param_len = 3;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+	b->pages++;
+	printf("bridge: paged DECT %u for call %u, attempt %u of %u\n",
+	       hs_slot(s, (unsigned)b->target), b->id, b->pages, IC_PAGES);
+}
+
+static void sr_start(struct stubd *s, struct bcall *b, unsigned t,
+		     uint64_t now)
+{
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.sub_slot = (uint8_t)hs_slot(s, t);
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tpui(&mm, b->tpui);
+	b->party = BC_PAGING;
+	b->target = (int)t;
+	b->pages = 0;
+	b->page_at = now;
+}
+
+static int sr_part3(const struct stubd *s, unsigned t)
+{
+	const struct dect_callinfo *o = &s->audio.callinfo;
+
+	return !o->has_line && !o->has_call_id && !o->has_call_status &&
+	       !s->audio.no_call_status && s->hs[t].cap_known &&
+	       s->hs[t].cap_part3;
+}
+
+/* Side ring b's SETUP to its handset, on side link k. */
+static void sr_setup(struct stubd *s, struct bcall *b, unsigned k,
+		     uint64_t now, const char *how)
+{
+	struct dect_link *l = &s->side[k].link;
+	unsigned t = (unsigned)b->target;
+	const struct dect_hs_profile *hp = &s->hs[t].prof;
+	struct dect_callinfo prev = l->cc.callinfo, ci;
+	struct dect_clip clip = b->clip;
+	const uint8_t *port, *fixed;
+	size_t plen, flen;
+	uint8_t id;
+	int r;
+
+	hs_cc_ids(s, t, &port, &plen, &fixed, &flen);
+	if (!plen || dect_cc_busy(&l->cc))
+		return;
+	dect_cc_set_next_ti(&l->cc, 0);
+	id = alloc_call_id(s, l);
+	if (id)
+		dect_cc_set_call_status(&l->cc, l->cc.call_status, id);
+	dect_callinfo_init(&ci);
+	if (sr_part3(s, t)) {
+		ci.has_line = 1;
+		ci.line_id = (uint8_t)b->line;
+		ci.has_line_type = 1;
+		ci.line_type = DECT_CALLINFO_NDT_DELAY;
+		ci.has_call_id = 1;
+		ci.call_id = l->cc.status_call_id;
+		ci.has_call_status = 1;
+		ci.call_status = DECT_CS_CALL_SETUP;
+	}
+	dect_cc_set_callinfo(&l->cc, &ci);
+	if (!s->audio.signal_set &&
+	    hp->cc_signal_external != DECT_SIGNAL_ALERT_PATTERN1)
+		dect_cc_set_signal(&l->cc, 1, hp->cc_signal_external);
+	if (hp->cc_name_method == 1 || hp->cc_name_method == 3)
+		clip.name[0] = '\0';		/* display text or none */
+	r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
+			     target_svc(s, (int)t, s->audio.basic_svc), &clip);
+	dect_cc_set_callinfo(&l->cc, &prev);
+	dect_cc_set_signal(&l->cc, s->audio.signal_on, s->audio.signal_value);
+	if (r) {
+		printf("bridge: could not queue the SETUP to DECT %u -- "
+		       "trying again\n", hs_slot(s, t));
+		return;
+	}
+	b->party = (int)k;
+	printf("bridge: call %u: DECT %u %s on side link %u -- SETUP sent%s\n",
+	       b->id, hs_slot(s, t), how, s->side[k].handle,
+	       ci.has_call_status ? " (full call information, Part 3)" : "");
+	ic_drain(s, (int)k, now);
+}
+
+/* A page response on side link sl: the handset a side ring pages? */
+static int sr_target_link(struct stubd *s, struct side_link *sl,
+			  const struct dect_link_ind *ind, uint64_t now)
+{
+	unsigned i;
+
+	for (i = 0; i < BC_MAX; i++) {
+		struct bcall *b = &s->bc[i];
+
+		if (!b->id || b->party != BC_PAGING ||
+		    !page_adopt(s, sl, ind, b->target, " (external call)"))
+			continue;
+		sr_setup(s, b, (unsigned)(sl - s->side), now,
+			 "answered the page");
+		return 1;
+	}
+	return 0;
+}
+
+static void sr_tick(struct stubd *s, struct bcall *b, uint64_t now)
+{
+	unsigned k;
+
+	/* the main link's call ended meanwhile: ring there, as usual */
+	if (main_free(s)) {
+		printf("bridge: call %u: the main link is free -- ringing DECT "
+		       "%u there\n", b->id, hs_slot(s, (unsigned)b->target));
+		s->clip = b->clip;
+		ring_main(s, b, (unsigned)b->target);
+		return;
+	}
+	for (k = 0; k < SIDE_MAX && b->party == BC_PAGING; k++)
+		if (s->side[k].active && s->side[k].adopted == b->target &&
+		    !dect_cc_busy(&s->side[k].link.cc))
+			sr_setup(s, b, k, now, "came up (adopted, no page "
+				 "response)");
+	if (b->party != BC_PAGING || now < b->page_at)
+		return;
+	if (b->pages >= IC_PAGES) {
+		printf("bridge: call %u in -- DECT %u did not answer the "
+		       "page\n", b->id, hs_slot(s, (unsigned)b->target));
+		bridge_event(s, b, "released", "by", "base");
+		bc_clear(s, b);
+		return;
+	}
+	sr_page(s, b);
+	b->page_at = now + IC_PAGE_MS;
+}
+
+/*
+ * A side ring's call on its link: the profile's display text once it rings
+ * (info_tick() for the main link), CS call connect to a Part 3 handset
+ * once it answered (cs_connect_tick()).
+ */
+static void sr_call_tick(struct stubd *s, struct bcall *b, uint64_t now)
+{
+	struct dect_cc *cc = ic_cc(s, b->party);
+	unsigned t = (unsigned)b->target;
+
+	if (!b->info_sent && cc->state == DECT_CC_ST_RINGING) {
+		b->info_sent = 1;
+		if (name_display_info(s, cc, t, &b->clip) > 0)
+			ic_drain(s, b->party, now);
+	}
+	if (!b->cs_sent && cc->state == DECT_CC_ST_ACTIVE && sr_part3(s, t)) {
+		struct dect_callinfo ci;
+		uint8_t ie[16];
+		size_t n;
+
+		b->cs_sent = 1;
+		dect_callinfo_init(&ci);
+		ci.has_call_id = 1;
+		ci.call_id = cc->status_call_id;
+		ci.has_call_status = 1;
+		ci.call_status = DECT_CS_CALL_CONNECT;
+		n = dect_callinfo_put(ie, sizeof(ie), 0, &ci);
+		if (n && !dect_cc_info(cc, ie, n))
+			ic_drain(s, b->party, now);
+	}
+}
+
 /* A bridge command about a call. Returns 1 when the verb was one of ours. */
 static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			  uint64_t now)
 {
-	struct dect_cc *cc = &s->reg.link.cc;
 	struct dect_ctl_out o;
+	struct bcall *b;
 	unsigned id;
+	int p;
 
 	if (!strcmp(m->verb, "bridge")) {
 		if (s->ctl.bridge >= 0 && s->ctl.bridge != s->ctl.cur) {
@@ -8319,7 +8735,9 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		const char *num = dect_ctl_get(m, "number");
 		const char *name = dect_ctl_get(m, "name");
 		const char *sip = dect_ctl_get(m, "sip");
-		unsigned want = 0, t = 0;
+		const char *why = NULL;
+		struct dect_clip clip;
+		unsigned want = 0, t = 0, line = STUBD_LINE_ID;
 
 		/* hs=N: the handset whose line was called (its own account) */
 		if (dect_ctl_get(m, "hs")) {
@@ -8339,12 +8757,21 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
 			return 1;
 		}
-		if (s->bc.id || (s->reg.active && dect_cc_busy(cc)) ||
-		    (s->ring_state != RING_IDLE && s->ring_state != RING_DONE)) {
+		/* line=N: which of the handset's lines was called */
+		if (dect_ctl_get(m, "line") &&
+		    dect_ctl_get_uint(m, "line", 1, 2, &line))
+			line = STUBD_LINE_ID;
+		b = bc_new(s);
+		if (!b || (s->n_hs && hs_in_call(s, t)))
+			why = "in-call";
+		else if (!main_free(s) && (!s->audio.two_calls ||
+			 lanes_available(s, NULL) <= 0))
+			why = "channels";
+		if (why) {
 			dect_ctl_begin(&o, "busy");
 			if (sip)
 				dect_ctl_add(&o, "sip", sip);
-			dect_ctl_add(&o, "why", "in-call");
+			dect_ctl_add(&o, "why", why);
 			ctl_send_bridge(s, &o);
 			return 1;
 		}
@@ -8353,32 +8780,35 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		 * screened -- "network provided" told the handset the
 		 * network vouched for it (security audit 2026-10-29, S1).
 		 */
-		dect_clip_init(&s->clip);
+		dect_clip_init(&clip);
 		if (num && *num)
-			(void)dect_clip_set_number(&s->clip, num,
+			(void)dect_clip_set_number(&clip, num,
 					DECT_CLIP_TON_UNKNOWN,
 					DECT_CLIP_NPI_UNKNOWN,
 					DECT_CLIP_PRES_ALLOWED,
 					DECT_CLIP_SCR_USER_UNSCREENED);
 		if (name && *name)
-			(void)dect_clip_set_name(&s->clip, name,
+			(void)dect_clip_set_name(&clip, name,
 					DECT_CLIP_ALPHABET_UTF8,
 					DECT_CLIP_PRES_ALLOWED,
 					DECT_CLIP_SCR_USER_UNSCREENED);
-		memset(&s->bc, 0, sizeof(s->bc));
-		s->bc.id = bridge_new_id(s);
-		s->bc.since = now;
-		s->ring_hs = t;
-		s->ring_state = RING_IDLE;
-		s->ring_now = 1;
-		s->ring_requeues = 0;
-		s->ring_setup_tries = 0;
-		s->ring_pages = 0;
-		s->ring_wait_since = 0;
-		printf("bridge: call %u in from \"%s\" -- ringing DECT %u\n",
-		       s->bc.id, num ? num : "", hs_slot(s, t));
+		b->id = bridge_new_id(s);
+		b->line = line;
+		b->since = now;
+		b->target = (int)t;
+		b->clip = clip;
+		if (main_free(s)) {
+			s->clip = clip;
+			ring_main(s, b, t);
+		} else {
+			sr_start(s, b, t, now);
+		}
+		printf("bridge: call %u in from \"%s\" -- ringing DECT %u%s\n",
+		       b->id, num ? num : "", hs_slot(s, t),
+		       b->party == BC_PAGING ? " on a side link (the main "
+		       "link is in a call)" : "");
 		dect_ctl_begin(&o, "call-in-ok");
-		dect_ctl_add_uint(&o, "call", s->bc.id);
+		dect_ctl_add_uint(&o, "call", b->id);
 		if (sip)
 			dect_ctl_add(&o, "sip", sip);
 		ctl_send_bridge(s, &o);
@@ -8392,89 +8822,120 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		ctl_reply(s, m->verb, "not-bridge", NULL, 0);
 		return 1;
 	}
-	if (dect_ctl_get_uint(m, "call", 1, 127, &id) || id != s->bc.id) {
+	if (dect_ctl_get_uint(m, "call", 1, 127, &id) ||
+	    !(b = bc_by_id(s, id))) {
 		ctl_reply(s, m->verb, "no-call", NULL, 0);
 		return 1;
 	}
+	p = b->party;
 	if (!strcmp(m->verb, "remote-released")) {
 		const char *r = dect_ctl_get(m, "reason");
 
 		printf("bridge: call %u released by the far end (%s)\n", id,
 		       r ? r : "normal");
-		s->bc.id = 0;			/* no "released" back */
-		s->ring_now = 0;
-		if (s->reg.active && dect_cc_busy(cc))
-			(void)dect_cc_release_reason(cc, bridge_reason(r));
-		else if (s->ring_state != RING_DONE)
+		bc_clear(s, b);			/* no "released" back */
+		if (p == BC_PAGING) {
+			ctl_reply(s, m->verb, NULL, "call", id);
+			return 1;		/* paging stops */
+		}
+		if (ic_active(s, p) && dect_cc_busy(ic_cc(s, p)))
+			(void)dect_cc_release_reason(ic_cc(s, p),
+						     bridge_reason(r));
+		else if (p == -1 && s->ring_state != RING_DONE)
 			s->ring_state = RING_DONE;	/* stop paging */
-	} else if (!s->bc.out || !s->reg.active) {
+	} else if (!b->out || !ic_active(s, p)) {
 		ctl_reply(s, m->verb, "no-call", NULL, 0);
 		return 1;
 	} else if (!strcmp(m->verb, "remote-ringing")) {
-		if (cc->state == DECT_CC_ST_PROCEEDING)
-			(void)dect_cc_alert(cc);
+		if (ic_cc(s, p)->state == DECT_CC_ST_PROCEEDING)
+			(void)dect_cc_alert(ic_cc(s, p));
 	} else {
 		printf("bridge: call %u answered by the far end\n", id);
-		(void)dect_cc_connect(cc);
+		(void)dect_cc_connect(ic_cc(s, p));
 	}
-	dect_link_drain(&s->reg.link, now);
-	pump_lapc(s);
+	if (ic_active(s, p))
+		ic_drain(s, p, now);
 	ctl_reply(s, m->verb, NULL, "call", id);
 	return 1;
 }
 
-/* The bridged call's progress, as events. */
+/* The bridged calls' progress, as events. */
 static void bridge_tick(struct stubd *s, uint64_t now)
 {
-	const struct dect_cc *cc = &s->reg.link.cc;
-	int busy = s->reg.active && dect_cc_busy(cc);
+	unsigned i;
 
-	if (!s->bc.id)
-		return;
-	if (busy)
-		s->bc.busy_seen = 1;
-	if (busy && !s->bc.out && cc->incoming) {
-		s->ring_now = 0;
-		if (!s->bc.rang && (cc->state == DECT_CC_ST_RINGING ||
-				    cc->state == DECT_CC_ST_ACTIVE)) {
-			s->bc.rang = 1;
-			bridge_event(s, "ringing", NULL, NULL);
+	for (i = 0; i < BC_MAX; i++) {
+		struct bcall *b = &s->bc[i];
+		struct dect_cc *cc;
+		int busy;
+
+		if (b->id && b->party == BC_PAGING)
+			sr_tick(s, b, now);
+		if (!b->id)
+			continue;
+		busy = b->party != BC_PAGING && ic_active(s, b->party) &&
+		       dect_cc_busy(ic_cc(s, b->party));
+		if (busy)
+			b->busy_seen = 1;
+		cc = busy ? ic_cc(s, b->party) : NULL;
+		if (cc && !b->out && cc->incoming) {
+			if (b->party == -1)
+				s->ring_now = 0;
+			else
+				sr_call_tick(s, b, now);
+			if (!b->rang && (cc->state == DECT_CC_ST_RINGING ||
+					 cc->state == DECT_CC_ST_ACTIVE)) {
+				b->rang = 1;
+				bridge_event(s, b, "ringing", NULL, NULL);
+			}
+			if (!b->answered && cc->state == DECT_CC_ST_ACTIVE &&
+			    call_auth_ok(s, ic_link(s, b->party))) {
+				b->answered = 1;
+				printf("bridge: call %u answered on DECT %u\n",
+				       b->id, party_hs_slot(s, b->party));
+				bridge_event(s, b, "answered", NULL, NULL);
+			}
 		}
-		if (!s->bc.answered && cc->state == DECT_CC_ST_ACTIVE &&
-		    call_auth_ok(s, &s->reg.link)) {
-			s->bc.answered = 1;
-			printf("bridge: call %u answered on DECT %u\n",
-			       s->bc.id, main_hs_slot(s));
-			bridge_event(s, "answered", NULL, NULL);
+		if (b->busy_seen && !busy) {
+			printf("bridge: call %u ended on the handset\n", b->id);
+			bridge_event(s, b, "released", "by", "hs");
+			bc_clear(s, b);
+			continue;
 		}
-	}
-	if (s->bc.busy_seen && !busy) {
-		printf("bridge: call %u ended on the handset\n", s->bc.id);
-		bridge_event(s, "released", "by", "hs");
-		s->bc.id = 0;
-		return;
-	}
-	/* a call-in that never got a handset: the ring gave up */
-	if (!s->bc.out && !s->bc.busy_seen &&
-	    (now - s->bc.since > 75000u ||
-	     (s->ring_state == RING_DONE && !s->ring_watch &&
-	      now - s->bc.since > 5000u))) {
-		printf("bridge: call %u in -- no handset answered the page\n",
-		       s->bc.id);
-		bridge_event(s, "released", "by", "base");
-		s->bc.id = 0;
-		s->ring_now = 0;
+		/* a call-in that never got a handset: the ring gave up */
+		if (!b->out && !b->busy_seen &&
+		    (now - b->since > 75000u ||
+		     (b->party == -1 && s->ring_state == RING_DONE &&
+		      !s->ring_watch && now - b->since > 5000u))) {
+			printf("bridge: call %u in -- no handset answered the "
+			       "page\n", b->id);
+			bridge_event(s, b, "released", "by", "base");
+			bc_clear(s, b);
+		}
 	}
 }
 
-/* The audio socket: listening while the control socket is, one client. */
+/*
+ * The audio socket: listening while the control socket is. A connection
+ * names its call in its first message, "call=N"; the lane that call is
+ * bound to takes it.
+ */
+static void ab_init(struct stubd *s)
+{
+	unsigned i;
+
+	s->ab.lfd = -1;
+	for (i = 0; i < AB_LANES; i++)
+		s->ab.pend[i] = s->ab.l[i].cfd = -1;
+}
+
 static void ab_open(struct stubd *s)
 {
 	struct sockaddr_un a;
 	mode_t old;
 	int fd;
 
-	s->ab.lfd = s->ab.cfd = -1;
+	ab_init(s);
 	if (s->ctl.lfd < 0)
 		return;
 	memset(&a, 0, sizeof(a));
@@ -8486,7 +8947,7 @@ static void ab_open(struct stubd *s)
 		return;
 	old = umask(077);
 	if (bind(fd, (struct sockaddr *)&a, sizeof(a)) ||
-	    chmod(AB_PATH, 0600) || listen(fd, 1)) {
+	    chmod(AB_PATH, 0600) || listen(fd, (int)AB_LANES)) {
 		printf("ctl: %s: %s -- no audio socket\n", AB_PATH,
 		       strerror(errno));
 		umask(old);
@@ -8497,20 +8958,27 @@ static void ab_open(struct stubd *s)
 	s->ab.lfd = fd;
 }
 
-static void ab_end(struct stubd *s, const char *why)
+static void ab_end(struct ab_lane *l, const char *why)
 {
-	if (s->ab.cfd < 0)
+	if (l->cfd < 0)
 		return;
-	close(s->ab.cfd);
-	s->ab.cfd = -1;
-	printf("audio: socket closed (%s): %u frames up, %u down, %u "
-	       "underruns, %u dropped\n", why, s->ab.frames_up,
-	       s->ab.frames_down, s->ab.underruns, s->ab.dropped);
+	close(l->cfd);
+	l->cfd = -1;
+	printf("audio: call %u's socket closed (%s): %u frames up, %u down, "
+	       "%u underruns, %u dropped\n", l->call, why, l->frames_up,
+	       l->frames_down, l->underruns, l->dropped);
 }
 
 static void ab_close(struct stubd *s)
 {
-	ab_end(s, "exit");
+	unsigned i;
+
+	for (i = 0; i < AB_LANES; i++) {
+		ab_end(&s->ab.l[i], "exit");
+		if (s->ab.pend[i] >= 0)
+			close(s->ab.pend[i]);
+		s->ab.pend[i] = -1;
+	}
 	if (s->ab.lfd < 0)
 		return;
 	close(s->ab.lfd);
@@ -8518,81 +8986,157 @@ static void ab_close(struct stubd *s)
 	(void)unlink(AB_PATH);
 }
 
-static void ab_tick(struct stubd *s)
+/* The bridged call whose speech lane i carries now, or NULL. */
+static const struct bcall *ab_call_of(struct stubd *s, unsigned i, int *wb)
 {
-	int bound = s->bc.id && s->reg.active && s->reg.call_bound;
+	const struct xlane *x;
+	unsigned k;
+
+	if (i == 0) {
+		*wb = s->reg.call_wideband;
+		return s->reg.active && s->reg.call_bound ? bc_on(s, -1) : NULL;
+	}
+	x = &s->xl[i - 1u];
+	*wb = x->wideband;
+	if (!x->used || !x->connected)
+		return NULL;
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active && s->side[k].lane == (int)(i - 1u))
+			return bc_on(s, (int)k);
+	return NULL;
+}
+
+/* A pending connection's first message: "call=N" names its lane. */
+static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
+{
+	char buf[32];
+	unsigned i, id = 0;
+	ssize_t n = recv(s->ab.pend[j], buf, sizeof(buf) - 1u, MSG_DONTWAIT);
+
+	if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+		      errno == EINTR) && now - s->ab.pend_since[j] < AB_HELLO_MS)
+		return;
+	if (n > 0) {
+		buf[n] = '\0';
+		if (sscanf(buf, "call=%u", &id) != 1)
+			id = 0;
+	}
+	for (i = 0; id && i < AB_LANES; i++) {
+		struct ab_lane *l = &s->ab.l[i];
+
+		if (l->call != id || l->cfd >= 0)
+			continue;
+		l->cfd = s->ab.pend[j];
+		s->ab.pend[j] = -1;
+		printf("audio: the bridge connected for call %u\n", id);
+		return;
+	}
+	close(s->ab.pend[j]);
+	s->ab.pend[j] = -1;
+	printf("audio: a connection named no call waiting for one -- "
+	       "closed\n");
+}
+
+static void ab_tick(struct stubd *s, uint64_t now)
+{
+	unsigned i;
 	int c;
 
 	if (s->ab.lfd < 0)
 		return;
-	/* the call is up: say where its speech is */
-	if (bound && s->reg.call_wideband && s->ab.call != s->bc.id) {
+	/* each lane: the call on it, announced once its speech is bound */
+	for (i = 0; i < AB_LANES; i++) {
+		struct ab_lane *l = &s->ab.l[i];
+		const struct bcall *b;
 		struct dect_ctl_out o;
+		int wb;
 
-		s->ab.call = s->bc.id;
+		b = ab_call_of(s, i, &wb);
+		if (l->call && (!b || l->call != b->id)) {
+			ab_end(l, "the call ended");
+			l->call = 0;
+		}
+		if (!b || l->call == b->id)
+			continue;
+		memset(l, 0, sizeof(*l));
+		l->cfd = -1;
+		l->call = b->id;
+		l->wideband = wb;
+		l->rx_prev = 0xFFFFFFFFu;
+		dect_g722_init(&l->enc);
+		dect_g722_init(&l->dec);
+		dect_rs2_init(&l->rs_up);
+		dect_rs2_init(&l->rs_down);
 		dect_ctl_begin(&o, "audio");
-		dect_ctl_add_uint(&o, "call", s->bc.id);
+		dect_ctl_add_uint(&o, "call", b->id);
 		dect_ctl_add(&o, "path", AB_PATH);
 		dect_ctl_add_uint(&o, "rate", 16000);
 		dect_ctl_add_uint(&o, "frame", AB_FRAME);
 		ctl_send_bridge(s, &o);
-		printf("audio: call %u's speech on %s (16 kHz, 20 ms)\n",
-		       s->bc.id, AB_PATH);
-	} else if (bound && !s->reg.call_wideband && !s->ab.nb_noted) {
-		s->ab.nb_noted = 1;
-		printf("audio: call %u is narrowband -- no audio socket yet "
-		       "(wideband only)\n", s->bc.id);
-	}
-	if (!bound) {
-		s->ab.nb_noted = 0;
-		if (s->ab.call) {
-			s->ab.call = 0;
-			ab_end(s, "the call ended");
-		}
+		printf("audio: call %u's speech on %s (lane %u, %s; 16 kHz, "
+		       "20 ms)\n", b->id, AB_PATH, i,
+		       wb ? "wideband" : "narrowband");
 	}
 	while ((c = accept(s->ab.lfd, NULL, NULL)) >= 0) {
-		if (s->ab.cfd >= 0 || !s->ab.call) {
+		for (i = 0; i < AB_LANES && s->ab.pend[i] >= 0; i++)
+			;
+		if (i == AB_LANES) {
 			close(c);
 			continue;
 		}
 		(void)fcntl(c, F_SETFL, fcntl(c, F_GETFL) | O_NONBLOCK);
 		(void)fcntl(c, F_SETFD, FD_CLOEXEC);
-		s->ab.cfd = c;
-		dect_g722_init(&s->ab.enc);
-		dect_g722_init(&s->ab.dec);
-		s->ab.dh = s->ab.dn = s->ab.un = 0;
-		s->ab.rx_prev = 0xFFFFFFFFu;
-		s->ab.rx_run = 0;
-		s->ab.phase = s->ab.locked = s->ab.primed = 0;
-		s->ab.underruns = s->ab.dropped = 0;
-		s->ab.frames_up = s->ab.frames_down = 0;
-		printf("audio: the bridge connected for call %u\n", s->ab.call);
+		s->ab.pend[i] = c;
+		s->ab.pend_since[i] = now;
 	}
-	while (s->ab.cfd >= 0) {
-		int16_t pcm[AB_FRAME / 2u];
-		uint8_t g[AB_FRAME / 4u];
-		ssize_t n = recv(s->ab.cfd, pcm, sizeof(pcm), MSG_DONTWAIT);
-		size_t k, i, cap = sizeof(s->ab.down);
+	for (i = 0; i < AB_LANES; i++)
+		if (s->ab.pend[i] >= 0)
+			ab_hello(s, i, now);
+	for (i = 0; i < AB_LANES; i++) {
+		struct ab_lane *l = &s->ab.l[i];
 
-		if (n == 0) {
-			ab_end(s, "the bridge closed it");
-			return;
+		while (l->cfd >= 0) {
+			int16_t pcm[AB_FRAME / 2u];
+			uint8_t d[AB_FRAME / 2u];
+			ssize_t n = recv(l->cfd, pcm, sizeof(pcm),
+					 MSG_DONTWAIT);
+			size_t k, j, cap = sizeof(l->down);
+
+			if (n == 0) {
+				ab_end(l, "the bridge closed it");
+				break;
+			}
+			if (n < 0) {
+				if (errno != EAGAIN && errno != EWOULDBLOCK &&
+				    errno != EINTR)
+					ab_end(l, "read failed");
+				break;
+			}
+			if (l->wideband) {
+				k = dect_g722_encode(&l->enc, pcm,
+						     (size_t)n / 4u * 2u, d);
+			} else {
+				int16_t nb[AB_FRAME / 4u];
+				size_t m = dect_rs2_down(&l->rs_down, pcm,
+							 (size_t)n / 4u * 2u,
+							 nb);
+
+				for (j = 0; j < m; j++) {
+					d[2u * j] = (uint8_t)(nb[j] & 0xFF);
+					d[2u * j + 1u] =
+						(uint8_t)((uint16_t)nb[j] >> 8);
+				}
+				k = 2u * m;
+			}
+			if (l->dn + k > cap) {
+				l->dropped++;	/* 0.5 s behind: drop this one */
+				continue;
+			}
+			for (j = 0; j < k; j++)
+				l->down[(l->dh + l->dn + j) % cap] = d[j];
+			l->dn += k;
+			l->frames_down++;
 		}
-		if (n < 0) {
-			if (errno != EAGAIN && errno != EWOULDBLOCK &&
-			    errno != EINTR)
-				ab_end(s, "read failed");
-			return;
-		}
-		k = dect_g722_encode(&s->ab.enc, pcm, (size_t)n / 4u * 2u, g);
-		if (s->ab.dn + k > cap) {
-			s->ab.dropped++;	/* 0.5 s behind: drop this one */
-			continue;
-		}
-		for (i = 0; i < k; i++)
-			s->ab.down[(s->ab.dh + s->ab.dn + i) % cap] = g[i];
-		s->ab.dn += k;
-		s->ab.frames_down++;
 	}
 }
 
@@ -8723,7 +9267,7 @@ static void ctl_open(struct stubd *s)
 	for (fd = 0; fd < (int)CTL_CLIENTS; fd++)
 		s->ctl.cl[fd].fd = -1;
 	s->ctl.cur = s->ctl.bridge = -1;
-	s->ab.lfd = s->ab.cfd = -1;	/* ab_open() only after a ctl socket */
+	ab_init(s);		/* ab_open() only after a ctl socket */
 	s->ctl.path = s->audio.ctl_path ? s->audio.ctl_path : DECT_CTL_PATH;
 	if (s->audio.no_ctl || !s->do_register)
 		return;
@@ -9246,6 +9790,8 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 		if (s->ic.st == IC_SETUP)
 			return;
 	}
+	if (ind.page_response && sr_target_link(s, sl, &ind, now))
+		return;
 	if (ind.page_response && side_promote(s, sl, &ind, now))
 		return;
 	if (ind.page_response)
@@ -10671,7 +11217,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				  s->sess.state == DECT_SESS_UP);
 			ctl_tick(s, now);
 			bridge_tick(s, now);
-			ab_tick(s);
+			ab_tick(s, now);
 		}
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
@@ -11894,9 +12440,14 @@ static int bridge_echo(int argc, char **argv)
 							 dect_ctl_get(&m, "path"));
 						afd = socket(AF_UNIX,
 							     SOCK_SEQPACKET, 0);
+						/* the connection names its call */
+						n = snprintf(line, sizeof(line),
+							     "call=%u", id);
 						if (afd >= 0 &&
-						    connect(afd, (struct sockaddr *)&aa,
-							    sizeof(aa))) {
+						    (connect(afd, (struct sockaddr *)&aa,
+							     sizeof(aa)) ||
+						     send(afd, line, (size_t)n,
+							  MSG_NOSIGNAL) != n)) {
 							close(afd);
 							afd = -1;
 						}
@@ -12036,6 +12587,7 @@ int main(int argc, char **argv)
 	 */
 	s.audio.page_hdr = -1;
 	s.audio.ti_fixed = -1;
+	ab_init(&s);
 	s.audio.remode_codec = -1;	/* keep the bind's codec byte unless asked */
 	/*
 	 * The mode-2 re-assign. Since 2026-10-25 it is sent only when the

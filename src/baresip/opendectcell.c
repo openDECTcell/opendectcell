@@ -7,20 +7,26 @@
  *     says "bridge", and from then on dect-stubd hands it the handsets'
  *     external calls;
  *   - the audio source and player "openDECTcell", fed through dect-stubd's
- *     audio socket: 20 ms frames of 16 kHz linear PCM both ways. The DECT
- *     side sets the pace -- each frame from the handset is handed to
- *     baresip as the microphone, and in the same breath one frame is
- *     pulled from baresip's player and sent to the handset;
+ *     audio socket, one connection per call: 20 ms frames of 16 kHz
+ *     linear PCM both ways (a narrowband call is resampled by
+ *     dect-stubd). The DECT side sets the pace -- each frame from the
+ *     handset is handed to baresip as the microphone, and in the same
+ *     breath one frame is pulled from baresip's player and sent to the
+ *     handset. Each call's audio device is named after its slot here
+ *     (audio_set_devicename()), so its source and player find it;
  *   - the line map /var/run/opendectcell/lines ("<hs> <line> <aor>" per line,
- *     written by the init script from /etc/config/opendectcell): which account
- *     belongs to which handset. A call to an account rings its handset; a
- *     handset's calls go out on its Line 1;
+ *     written by the init script from /etc/config/opendectcell): which accounts
+ *     belong to which handsets. An account may be the line of several
+ *     handsets: a call to it rings all of them, one leg each, and the
+ *     first to answer takes it. A handset's calls go out on the line it
+ *     chose, else its Line 1;
  *   - the VoIP status /var/run/opendectcell/voip.json for the Monitor (Status >
  *     DECT, tab VoIP), rewritten every 2 s and on every registration
  *     event: each line's registration, and each call's codec, endpoints,
  *     data rates, loss, jitter and encryption.
  *
- * One bridged call at a time, as dect-stubd's bridge is today.
+ * Up to MAX_CALLS calls at once; dect-stubd takes as many as the DECT
+ * chip has audio channels (three).
  */
 #include <errno.h>
 #include <stdio.h>
@@ -44,7 +50,7 @@
 #define RATE		16000u
 #define RETRY_MS	2000u
 #define MAX_LINES	12u
-#define MAX_CALLS	4u
+#define MAX_CALLS	8u	/* DECT calls: legs ringing, and talking */
 #define RING_MS		90000u	/* a call-in's limit, above dect-stubd's 75 s */
 
 struct line {
@@ -56,14 +62,18 @@ struct line {
 };
 
 /*
- * A slot is taken while it has a SIP call or waits for dect-stubd's answer
- * to its call-in: a caller who gives up before call-in-ok leaves the slot
- * waiting (call NULL), so that call can still be released when the answer
- * comes.
+ * A slot is one DECT call: a handset's call out, or one leg of a call in
+ * (one per handset the account rings; the legs share the SIP call). It is
+ * taken while it has a SIP call or waits for dect-stubd's answer to its
+ * call-in: a caller who gives up before call-in-ok leaves the slot waiting
+ * (call NULL), so that call can still be released when the answer comes.
  */
+struct ausrc_st;
+struct auplay_st;
+
 struct bcall {
 	unsigned     id;		/* dect-stubd's call id, 0 = not yet */
-	unsigned     hs;
+	unsigned     hs, line;
 	struct call *call;		/* NULL once the SIP side has ended */
 	struct ua   *ua;
 	int          out;		/* the handset called out */
@@ -73,9 +83,15 @@ struct bcall {
 	unsigned     seq;		/* the call-in's place in the order sent */
 	char         tok[16];		/* our sip= token for a call-in */
 	struct tmr   ring;		/* a call-in's RING_MS limit */
+	/* its speech: the audio socket connection, baresip's two ends */
+	int              afd;		/* -1 = none */
+	struct re_fhs   *afhs;
+	struct ausrc_st *src;
+	struct auplay_st *play;
 };
 
 struct ausrc_st {
+	struct bcall    *bc;
 	struct ausrc_prm prm;
 	ausrc_read_h    *rh;
 	void            *arg;
@@ -83,6 +99,7 @@ struct ausrc_st {
 };
 
 struct auplay_st {
+	struct bcall     *bc;
 	struct auplay_prm prm;
 	auplay_write_h   *wh;
 	void             *arg;
@@ -104,16 +121,8 @@ static struct {
 	int            broken;		/* half a line went out */
 } ctl = { .fd = -1 };
 
-static struct {
-	int            fd;
-	struct re_fhs *fhs;
-	unsigned       call;
-} aud = { .fd = -1 };
-
 static struct ausrc *ausrc;
 static struct auplay *auplay;
-static struct ausrc_st *src;		/* the call's, while it exists */
-static struct auplay_st *play;
 static struct tmr status_tmr;
 
 static void ctl_connect(void *arg);
@@ -225,14 +234,23 @@ static struct bcall *bc_oldest_wait(void)
 	return bc;
 }
 
+static void aud_close(struct bcall *bc);
+
+/* A free slot; its source and player, if baresip still holds them, stay. */
 static struct bcall *bc_new(void)
 {
 	unsigned i;
 
 	for (i = 0; i < MAX_CALLS; i++)
 		if (!calls[i].call && !calls[i].wait) {
-			memset(&calls[i], 0, sizeof(calls[i]));
-			return &calls[i];
+			struct bcall *bc = &calls[i];
+
+			bc->id = bc->hs = 0;
+			bc->ua = NULL;
+			bc->out = bc->rang = bc->hung = bc->answered = 0;
+			bc->seq = 0;
+			bc->tok[0] = '\0';
+			return bc;
 		}
 	return NULL;
 }
@@ -240,13 +258,40 @@ static struct bcall *bc_new(void)
 static void bc_free(struct bcall *bc)
 {
 	tmr_cancel(&bc->ring);
+	aud_close(bc);
 	bc->call = NULL;
 	bc->wait = 0;
 }
 
 /*
- * Ends the SIP side, if there still is one, and frees the slot, telling
- * dect-stubd nothing. The slot goes first, so the CALL_CLOSED that
+ * The call's audio device: its slot's number, which src_alloc() and
+ * play_alloc() read back. Set before its audio starts (the answer, or
+ * the far end's SDP).
+ */
+static void bc_device(struct bcall *bc)
+{
+	char dev[8];
+
+	re_snprintf(dev, sizeof(dev), "%u", (unsigned)(bc - calls));
+	if (audio_set_devicename(call_audio(bc->call), dev, dev))
+		warning("openDECTcell: could not name call %u's audio device\n",
+			bc->id);
+}
+
+/* Another slot still holds this SIP call: one of its legs. */
+static int call_has_legs(const struct call *call)
+{
+	unsigned i;
+
+	for (i = 0; call && i < MAX_CALLS; i++)
+		if (calls[i].call == call)
+			return 1;
+	return 0;
+}
+
+/*
+ * Frees the slot, telling dect-stubd nothing, and ends the SIP side if
+ * this was its last leg. The slot goes first, so the CALL_CLOSED that
  * ua_hangup() emits at once no longer finds it.
  */
 static void bc_end(struct bcall *bc, uint16_t scode, const char *reason)
@@ -256,8 +301,22 @@ static void bc_end(struct bcall *bc, uint16_t scode, const char *reason)
 
 	bc->hung = 1;
 	bc_free(bc);
-	if (call)
+	if (call && !call_has_legs(call))
 		ua_hangup(ua, call, scode, reason);
+}
+
+/* Frees every leg of the slot's SIP call, then ends that call once. */
+static void call_end(struct bcall *bc, uint16_t scode, const char *reason)
+{
+	struct call *call = bc->call;
+	unsigned i;
+
+	for (i = 0; call && i < MAX_CALLS; i++)
+		if (calls[i].call == call && &calls[i] != bc) {
+			calls[i].hung = 1;
+			bc_free(&calls[i]);
+		}
+	bc_end(bc, scode, reason);
 }
 
 /* ---- the control socket -------------------------------------------------- */
@@ -322,15 +381,14 @@ static const char *reason_of(uint16_t scode)
 	}
 }
 
-static void aud_close(void)
+static void aud_close(struct bcall *bc)
 {
-	if (aud.fd < 0)
+	if (bc->afd < 0)
 		return;
-	aud.fhs = fd_close(aud.fhs);
-	close(aud.fd);
-	aud.fd = -1;
-	aud.call = 0;
-	info("openDECTcell: audio socket closed\n");
+	bc->afhs = fd_close(bc->afhs);
+	close(bc->afd);
+	bc->afd = -1;
+	info("openDECTcell: call %u's audio closed\n", bc->id);
 }
 
 /*
@@ -339,20 +397,21 @@ static void aud_close(void)
  */
 static void aud_read(int flags, void *arg)
 {
+	struct bcall *bc = arg;
 	int16_t up[FRAME], down[FRAME];
 	ssize_t n;
 	size_t off;
 
 	(void)flags;
-	(void)arg;
-	n = recv(aud.fd, up, sizeof(up), MSG_DONTWAIT);
+	n = recv(bc->afd, up, sizeof(up), MSG_DONTWAIT);
 	if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR)) {
-		aud_close();
+		aud_close(bc);
 		return;
 	}
 	if (n != (ssize_t)sizeof(up))
 		return;
-	if (src) {
+	if (bc->src) {
+		struct ausrc_st *src = bc->src;
 		size_t sc = src->prm.srate * src->prm.ptime / 1000u;
 
 		for (off = 0; sc && off + sc <= FRAME; off += sc) {
@@ -366,7 +425,8 @@ static void aud_read(int flags, void *arg)
 		}
 	}
 	memset(down, 0, sizeof(down));
-	if (play) {
+	if (bc->play) {
+		struct auplay_st *play = bc->play;
 		size_t sc = play->prm.srate * play->prm.ptime / 1000u;
 
 		for (off = 0; sc && off + sc <= FRAME; off += sc) {
@@ -377,43 +437,49 @@ static void aud_read(int flags, void *arg)
 			play->wh(&af, play->arg);
 		}
 	}
-	(void)send(aud.fd, down, sizeof(down), MSG_DONTWAIT | MSG_NOSIGNAL);
+	(void)send(bc->afd, down, sizeof(down), MSG_DONTWAIT | MSG_NOSIGNAL);
 }
 
-static void aud_open(unsigned id, const char *path)
+/* Connect to the audio socket and name the call (its first message). */
+static void aud_open(struct bcall *bc, const char *path)
 {
 	struct sockaddr_un a;
-	int fd;
+	char hello[16];
+	int fd, n;
 
-	aud_close();
+	aud_close(bc);
 	memset(&a, 0, sizeof(a));
 	a.sun_family = AF_UNIX;
 	str_ncpy(a.sun_path, path, sizeof(a.sun_path));
+	n = re_snprintf(hello, sizeof(hello), "call=%u", bc->id);
 	fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
-	if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a))) {
+	if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a)) ||
+	    send(fd, hello, (size_t)n, MSG_NOSIGNAL) != n) {
 		warning("openDECTcell: audio socket %s: %m\n", path, errno);
 		if (fd >= 0)
 			close(fd);
 		return;
 	}
 	(void)fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-	if (fd_listen(&aud.fhs, fd, FD_READ, aud_read, NULL)) {
+	if (fd_listen(&bc->afhs, fd, FD_READ, aud_read, bc)) {
 		close(fd);
 		return;
 	}
-	aud.fd = fd;
-	aud.call = id;
-	info("openDECTcell: call %u's audio connected\n", id);
+	bc->afd = fd;
+	info("openDECTcell: call %u's audio connected\n", bc->id);
 }
 
-static void call_out(unsigned id, unsigned hs, const char *number)
+static void call_out(unsigned id, unsigned hs, unsigned line,
+		     const char *number)
 {
-	struct ua *ua = line_ua(hs, 1);
+	struct ua *ua = line_ua(hs, line);
 	struct bcall *bc;
 	struct pl pl;
 	char *uri = NULL;
 	int err;
 
+	if (!ua && line != 1)
+		ua = line_ua(hs, line = 1);
 	if (!ua || !number || !*number || !(bc = bc_new())) {
 		warning("openDECTcell: call %u from DECT %u: %s\n", id, hs,
 			!ua ? "no Line 1 account for this handset" :
@@ -434,24 +500,28 @@ static void call_out(unsigned id, unsigned hs, const char *number)
 	}
 	bc->id = id;
 	bc->hs = hs;
+	bc->line = line;
 	bc->ua = ua;
 	bc->out = 1;
-	info("openDECTcell: call %u: DECT %u calls %s\n", id, hs, number);
+	bc_device(bc);
+	info("openDECTcell: call %u: DECT %u calls %s on Line %u\n", id, hs,
+	     number, line);
 }
 
 static void ctl_line(const char *line, size_t len)
 {
 	struct dect_ctl_msg m;
 	struct bcall *bc;
-	unsigned id = 0, hs = 0;
+	unsigned id = 0, hs = 0, ln = 1;
 
 	if (dect_ctl_parse(line, len, &m))
 		return;
 	(void)dect_ctl_get_uint(&m, "call", 1, 127, &id);
 	(void)dect_ctl_get_uint(&m, "hs", 1, 6, &hs);
+	(void)dect_ctl_get_uint(&m, "line", 1, 2, &ln);
 
 	if (!strcmp(m.verb, "call-out")) {
-		call_out(id, hs, dect_ctl_get(&m, "number"));
+		call_out(id, hs, ln, dect_ctl_get(&m, "number"));
 	} else if (!strcmp(m.verb, "call-in-ok")) {
 		bc = bc_by_tok(dect_ctl_get(&m, "sip"));
 		if (bc && bc->call) {
@@ -494,9 +564,23 @@ static void ctl_line(const char *line, size_t len)
 		}
 	} else if (!strcmp(m.verb, "answered")) {
 		bc = bc_by_id(id);
-		if (bc && !bc->out) {
+		if (bc && !bc->out && !bc->answered) {
+			unsigned i;
+
+			/* the first to answer takes it; the other legs stop */
+			for (i = 0; i < MAX_CALLS; i++) {
+				struct bcall *o = &calls[i];
+
+				if (o == bc || o->call != bc->call)
+					continue;
+				if (o->id)
+					(void)ctl_call("remote-released", o->id,
+						       "reason", "normal");
+				bc_free(o);	/* a waiting one: call-in-ok */
+			}
 			bc->answered = 1;
 			tmr_cancel(&bc->ring);
+			bc_device(bc);
 			(void)ua_answer(bc->ua, bc->call, VIDMODE_OFF);
 		}
 	} else if (!strcmp(m.verb, "released")) {
@@ -512,14 +596,14 @@ static void ctl_line(const char *line, size_t len)
 			uint16_t sc = bc->out || bc->answered ? 0 :
 				      by && !strcmp(by, "base") ? 480 : 486;
 
+			/* an unanswered leg: the others may still ring */
 			bc_end(bc, sc, sc == 480 ? "Temporarily Unavailable" :
 				       sc == 486 ? "Busy Here" : NULL);
 		}
-		if (aud.call == id)
-			aud_close();
 	} else if (!strcmp(m.verb, "audio")) {
-		if (bc_by_id(id) && dect_ctl_get(&m, "path"))
-			aud_open(id, dect_ctl_get(&m, "path"));
+		bc = bc_by_id(id);
+		if (bc && dect_ctl_get(&m, "path"))
+			aud_open(bc, dect_ctl_get(&m, "path"));
 	}
 }
 
@@ -535,11 +619,10 @@ static void ctl_drop(void)
 	ctl.fd = -1;
 	ctl.il = 0;
 	ctl.broken = 0;
-	aud_close();
 	/* the handsets' side is gone: so are their calls */
 	for (i = 0; i < MAX_CALLS; i++)
 		if (calls[i].call || calls[i].wait)
-			bc_end(&calls[i], 503, NULL);
+			call_end(&calls[i], 503, NULL);
 	warning("openDECTcell: control socket lost -- reconnecting\n");
 	tmr_start(&ctl.retry, RETRY_MS, ctl_connect, NULL);
 }
@@ -654,27 +737,54 @@ static void ring_timeout(void *arg)
 
 	warning("openDECTcell: call %u for DECT %u: no answer in %u s -- ended\n",
 		bc->id, bc->hs, RING_MS / 1000u);
-	if (bc->id) {
+	if (bc->id)
 		(void)ctl_call("remote-released", bc->id, "reason", "normal");
-		if (aud.call == bc->id)
-			aud_close();
-	}
 	bc_end(bc, 480, "Temporarily Unavailable");
 }
 
-static void call_in(struct ua *ua, struct call *call)
+/* One leg of a call in: hand it to dect-stubd for line l's handset. */
+static int call_in_leg(struct ua *ua, struct call *call, const struct line *l,
+		       const char *num, const char *name)
 {
 	struct dect_ctl_out o;
-	struct bcall *bc;
-	unsigned hs = ua_hs(ua);
+	struct bcall *bc = bc_new();
+
+	if (!bc)
+		return -1;
+	bc->call = call;
+	bc->ua = ua;
+	bc->hs = l->hs;
+	bc->line = l->line;
+	bc->seq = ++next_tok;
+	re_snprintf(bc->tok, sizeof(bc->tok), "b%u", bc->seq);
+	dect_ctl_begin(&o, "call-in");
+	dect_ctl_add_uint(&o, "line", l->line);
+	dect_ctl_add_uint(&o, "hs", l->hs);
+	dect_ctl_add(&o, "number", num);
+	if (name[0])
+		dect_ctl_add(&o, "name", name);
+	dect_ctl_add(&o, "sip", bc->tok);
+	if (ctl_send(&o)) {
+		bc->call = NULL;
+		return -1;
+	}
+	bc->wait = 1;
+	tmr_start(&bc->ring, RING_MS, ring_timeout, bc);
+	return 0;
+}
+
+/* A call to an account: every handset it is the line of rings. */
+static void call_in(struct ua *ua, struct call *call)
+{
 	const char *peer = call_peeruri(call), *at, *colon;
 	/* what dect-stubd puts into the CLIP: longer, it drops the field */
-	char num[DECT_CLIP_NUMBER_MAX + 1] = "", name[DECT_CLIP_NAME_MAX + 1];
+	char num[DECT_CLIP_NUMBER_MAX + 1] = "", name[DECT_CLIP_NAME_MAX + 1] = "";
+	unsigned i, legs = 0;
 
-	if (!hs)
+	if (!ua_hs(ua))
 		return;			/* not one of the handsets' accounts */
-	if (ctl.fd < 0 || !(bc = bc_new())) {
-		ua_hangup(ua, call, 486, "Busy Here");
+	if (ctl.fd < 0) {
+		ua_hangup(ua, call, 503, "Service Unavailable");
 		return;
 	}
 	/* the caller's number: the user part of the peer's URI */
@@ -682,34 +792,25 @@ static void call_in(struct ua *ua, struct call *call)
 	    at > colon + 1)
 		str_ncpy(num, colon + 1, (size_t)(at - colon) <= sizeof(num)
 			 ? (size_t)(at - colon) : sizeof(num));
-	bc->call = call;
-	bc->ua = ua;
-	bc->hs = hs;
-	bc->seq = ++next_tok;
-	re_snprintf(bc->tok, sizeof(bc->tok), "b%u", bc->seq);
-	dect_ctl_begin(&o, "call-in");
-	dect_ctl_add_uint(&o, "line", 1);
-	dect_ctl_add_uint(&o, "hs", hs);
-	dect_ctl_add(&o, "number", num);
-	if (call_peername(call)) {
-		/*
-		 * The caller's display name, at most the CLIP's 64 octets:
-		 * longer, the value would be over DECT_CTL_VAL_MAX or the
-		 * line over DECT_CTL_LINE_MAX, and the call-in refused.
-		 */
+	/*
+	 * The caller's display name, at most the CLIP's 64 octets: longer,
+	 * the value would be over DECT_CTL_VAL_MAX or the line over
+	 * DECT_CTL_LINE_MAX, and the call-in refused.
+	 */
+	if (call_peername(call))
 		utf8_cut(name, call_peername(call), DECT_CLIP_NAME_MAX);
-		dect_ctl_add(&o, "name", name);
-	}
-	dect_ctl_add(&o, "sip", bc->tok);
-	if (ctl_send(&o)) {
-		warning("openDECTcell: call from %s for DECT %u: not handed to the "
-			"base\n", peer ? peer : "?", hs);
-		bc_end(bc, 503, "Service Unavailable");
+	for (i = 0; i < n_lines; i++)
+		if (aor_is(ua, lines[i].aor) &&
+		    call_in_leg(ua, call, &lines[i], num, name) == 0)
+			legs++;
+	if (!legs) {
+		warning("openDECTcell: call from %s: not handed to the base\n",
+			peer ? peer : "?");
+		ua_hangup(ua, call, 503, "Service Unavailable");
 		return;
 	}
-	bc->wait = 1;
-	tmr_start(&bc->ring, RING_MS, ring_timeout, bc);
-	info("openDECTcell: call from %s for DECT %u\n", peer ? peer : "?", hs);
+	info("openDECTcell: call from %s rings %u handset(s)\n", peer ? peer : "?",
+	     legs);
 }
 
 /* ---- the VoIP status ----------------------------------------------------- */
@@ -763,7 +864,8 @@ static const char *state_name(enum call_state st)
 	}
 }
 
-static void status_call(FILE *f, const struct line *l, struct call *call)
+static void status_call(FILE *f, unsigned hs, unsigned line,
+			struct call *call)
 {
 	struct audio *au = call_audio(call);
 	struct stream *strm = au ? audio_strm(au) : NULL;
@@ -774,7 +876,7 @@ static void status_call(FILE *f, const struct line *l, struct call *call)
 	const char *enc = account_mediaenc(call_account(call));
 
 	fprintf(f, "{\"hs\":%u,\"line\":%u,\"direction\":\"%s\",\"state\":\"%s\","
-		"\"duration_s\":%u,\"peer\":", l->hs, l->line,
+		"\"duration_s\":%u,\"peer\":", hs, line,
 		call_is_outgoing(call) ? "out" : "in",
 		state_name(call_state(call)), call_duration(call));
 	json_str(f, call_peeruri(call));
@@ -849,9 +951,18 @@ static void status_write(void)
 		if (!l)
 			continue;
 		LIST_FOREACH(ua_calls(ua), ce) {
+			/* the handset that talks, else the account's first */
+			unsigned hs = l->hs, ln = l->line;
+
+			for (i = 0; i < MAX_CALLS; i++)
+				if (calls[i].call == ce->data &&
+				    (calls[i].out || calls[i].answered)) {
+					hs = calls[i].hs;
+					ln = calls[i].line;
+				}
 			if (!first)
 				fputc(',', f);
-			status_call(f, l, ce->data);
+			status_call(f, hs, ln, ce->data);
 			first = 0;
 		}
 	}
@@ -867,15 +978,20 @@ static void status_tick(void *arg)
 	tmr_start(&status_tmr, STATUS_MS, status_tick, NULL);
 }
 
-/* A registration event: remembered for the status, written at once. */
+/*
+ * A registration event: remembered for the status of every line the
+ * account is, written at once.
+ */
 static void status_reg(struct ua *ua, const char *state, const char *why)
 {
-	struct line *l = line_of(ua);
+	unsigned i;
 
-	if (!l)
-		return;
-	l->reg = state;
-	str_ncpy(l->why, why ? why : "", sizeof(l->why));
+	for (i = 0; i < n_lines; i++) {
+		if (!aor_is(ua, lines[i].aor))
+			continue;
+		lines[i].reg = state;
+		str_ncpy(lines[i].why, why ? why : "", sizeof(lines[i].why));
+	}
 	status_write();
 }
 
@@ -947,19 +1063,26 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 		if (bc && bc->out)
 			(void)ctl_call("remote-answered", bc->id, NULL, NULL);
 		break;
-	case UA_EVENT_CALL_CLOSED:
-		if (!bc)
-			break;
-		if (!bc->hung && bc->id)
-			(void)ctl_call("remote-released", bc->id, "reason",
-				       reason_of(call_scode(call)));
-		if (aud.call && aud.call == bc->id)
-			aud_close();
-		if (bc->wait)
-			bc->call = NULL;	/* call-in-ok will release it */
-		else
-			bc_free(bc);
+	case UA_EVENT_CALL_CLOSED: {
+		unsigned i;
+
+		/* every leg of it: the handsets ringing, or the one talking */
+		for (i = 0; call && i < MAX_CALLS; i++) {
+			bc = &calls[i];
+			if (bc->call != call)
+				continue;
+			if (!bc->hung && bc->id)
+				(void)ctl_call("remote-released", bc->id,
+					       "reason",
+					       reason_of(call_scode(call)));
+			aud_close(bc);
+			if (bc->wait)
+				bc->call = NULL;  /* call-in-ok releases it */
+			else
+				bc_free(bc);
+		}
 		break;
+	}
 	default:
 		break;
 	}
@@ -969,25 +1092,44 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 
 static void src_destructor(void *arg)
 {
-	if (src == arg)
-		src = NULL;
+	struct ausrc_st *st = arg;
+
+	if (st->bc && st->bc->src == st)
+		st->bc->src = NULL;
 }
 
 static void play_destructor(void *arg)
 {
-	if (play == arg)
-		play = NULL;
+	struct auplay_st *st = arg;
+
+	if (st->bc && st->bc->play == st)
+		st->bc->play = NULL;
+}
+
+/* The call slot an audio device names (bc_device()), or NULL. */
+static struct bcall *device_bc(const char *device)
+{
+	unsigned i;
+
+	if (!device || sscanf(device, "%u", &i) != 1 || i >= MAX_CALLS)
+		return NULL;
+	return &calls[i];
 }
 
 static int src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 		     struct ausrc_prm *prm, const char *device,
 		     ausrc_read_h *rh, ausrc_error_h *errh, void *arg)
 {
+	struct bcall *bc = device_bc(device);
 	struct ausrc_st *st;
 
 	(void)as;
-	(void)device;
 	(void)errh;
+	if (!bc) {
+		warning("openDECTcell: audio source \"%s\" is no call of ours\n",
+			device ? device : "");
+		return ENODEV;
+	}
 	if (prm->fmt != AUFMT_S16LE || prm->ch != 1 || prm->srate != RATE) {
 		warning("openDECTcell: the source needs 16 kHz mono S16LE "
 			"(ausrc_srate 16000, ausrc_channels 1)\n");
@@ -996,10 +1138,11 @@ static int src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 	st = mem_zalloc(sizeof(*st), src_destructor);
 	if (!st)
 		return ENOMEM;
+	st->bc = bc;
 	st->prm = *prm;
 	st->rh = rh;
 	st->arg = arg;
-	src = st;
+	bc->src = st;
 	*stp = st;
 	return 0;
 }
@@ -1008,10 +1151,15 @@ static int play_alloc(struct auplay_st **stp, const struct auplay *ap,
 		      struct auplay_prm *prm, const char *device,
 		      auplay_write_h *wh, void *arg)
 {
+	struct bcall *bc = device_bc(device);
 	struct auplay_st *st;
 
 	(void)ap;
-	(void)device;
+	if (!bc) {
+		warning("openDECTcell: audio player \"%s\" is no call of ours\n",
+			device ? device : "");
+		return ENODEV;
+	}
 	if (prm->fmt != AUFMT_S16LE || prm->ch != 1 || prm->srate != RATE) {
 		warning("openDECTcell: the player needs 16 kHz mono S16LE "
 			"(auplay_srate 16000, auplay_channels 1)\n");
@@ -1020,10 +1168,11 @@ static int play_alloc(struct auplay_st **stp, const struct auplay *ap,
 	st = mem_zalloc(sizeof(*st), play_destructor);
 	if (!st)
 		return ENOMEM;
+	st->bc = bc;
 	st->prm = *prm;
 	st->wh = wh;
 	st->arg = arg;
-	play = st;
+	bc->play = st;
 	*stp = st;
 	return 0;
 }
@@ -1032,6 +1181,7 @@ static int play_alloc(struct auplay_st **stp, const struct auplay *ap,
 
 static int module_init(void)
 {
+	unsigned i;
 	int err;
 
 	err  = ausrc_register(&ausrc, baresip_ausrcl(), "opendectcell", src_alloc);
@@ -1040,6 +1190,8 @@ static int module_init(void)
 	err |= bevent_register(event_handler, NULL);
 	if (err)
 		return err;
+	for (i = 0; i < MAX_CALLS; i++)
+		calls[i].afd = -1;
 	(void)conf_get_bool(conf_cur(), "opendectcell_any_source", &any_source);
 	if (any_source)
 		warning("openDECTcell: opendectcell_any_source -- INVITEs taken from "
@@ -1062,8 +1214,10 @@ static int module_close(void)
 	tmr_cancel(&ctl.retry);
 	ctl_drop();
 	tmr_cancel(&ctl.retry);
-	for (i = 0; i < MAX_CALLS; i++)
+	for (i = 0; i < MAX_CALLS; i++) {
 		tmr_cancel(&calls[i].ring);	/* none may fire unloaded */
+		aud_close(&calls[i]);
+	}
 	bevent_unregister(event_handler);
 	ausrc = mem_deref(ausrc);
 	auplay = mem_deref(auplay);
