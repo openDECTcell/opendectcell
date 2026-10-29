@@ -112,7 +112,18 @@ silent on the SSC link after 23 to 60 s (once before any handset link),
 the session died, and the stop's park could not be verified. The radio
 kept running (the A540 showed signal, "Synchronisiere"), and restarting
 the daemon alone, with no upload, found the control slot again at once:
-the chip is alive and the PCM/TDM alignment was lost. Until the daemon
+the chip is alive and the PCM/TDM alignment was lost.
+
+Measured the same evening with the alignment watch (`563b080`): the chip
+moves its PCM frame by whole 16-bit lanes against a steady bit clock --
+by 8 lanes about 10 s after radio-on, which is when the control channel
+stopped, and by -2 lanes two minutes later. The driver lost nothing
+(overruns, dropped blocks and TX underruns all stayed at 0) and the frame
+rate held at 8000/s, so it is not the box losing data and not a clock
+change. This fits the clean room's account [CR A-0012] that the chip owns
+both the bit clock and a frame sync (FSC, gpio9) and that AVM's host
+re-locks to the chip continuously, but not its guess of a single
+half-word step. What moves the frame is asked in Q-0013. Until the daemon
 re-hunts the slot on silence, a 7412 whose session died must be put in
 reset by hand after the stop (the "After the tests" block above); the
 service's stop does not reset the chip.
