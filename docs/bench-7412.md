@@ -189,4 +189,9 @@ DECT 1 (A540) and DECT 2 (C430A). Outcomes written before the run:
 | 4. An internal call A540 -> C430A | the A540 shows its call timer | no timer: the line in CONNECT (`7e 0c ... 02 01 85` with `-p`) |
 | 5. Wideband off (Network > DECT, Wideband audio), one call out | a clear narrowband call both ways | silence or noise: the linear lane's format on the 7412 (A-0015 says 16-bit linear, one sample a frame) |
 | 6. Redial from the A540's list | the call goes out over SIP | a silent local call: `number_complete()` |
+| 7. A G.711 call: G.722 off in the VoIP profile's codecs (Media), or a far end without G.722; one call each way | audio both ways | silence: baresip dropping 16 kHz frames for an 8 kHz codec ("Use module auresamp!" in the log); fixed in `2b8e268`, every earlier SIP test negotiated G.722 |
+
+Since the card was written: the code review's fixes are on the box
+(`3a012fa`, `ee452cf`, `87eb3c7`; dect-stubd md5 `62958b3e`, `opendectcell.so`
+md5 `fc260df6`), and `baresip-mod-auresamp` is installed.
 
