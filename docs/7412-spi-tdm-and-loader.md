@@ -162,7 +162,10 @@ missing 40 ms after the write and in place 1 s later), so both checks wait
 MATCHES", audit `1=OURS`, the other slots empty. **Since `9ee12a4`** the park
 is read back on 06.88 as well (`0x010A` and `0x08B0`, both `00`: "park
 verified on the chip"); in the same run both read `01`/`09` while the radio
-was on.
+was on. The full service (`/etc/init.d/opendectcell start`, 75 s, `stop`) parked
+with "park verified" in one run; in the other the read-back got no answer
+within 1 s ("PARK NOT VERIFIED -- no read-back"), which five further parks
+did not reproduce. Since `539ea43` a missing answer is asked for once more.
 
 ### 06.88 against 08.25 [CR A-0007]
 
