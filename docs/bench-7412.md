@@ -114,16 +114,30 @@ kept running (the A540 showed signal, "Synchronisiere"), and restarting
 the daemon alone, with no upload, found the control slot again at once:
 the chip is alive and the PCM/TDM alignment was lost.
 
-Measured the same evening with the alignment watch (`563b080`): the chip
-moves its PCM frame by whole 16-bit lanes against a steady bit clock --
-by 8 lanes about 10 s after radio-on, which is when the control channel
-stopped, and by -2 lanes two minutes later. The driver lost nothing
-(overruns, dropped blocks and TX underruns all stayed at 0) and the frame
-rate held at 8000/s, so it is not the box losing data and not a clock
-change. This fits the clean room's account [CR A-0012] that the chip owns
-both the bit clock and a frame sync (FSC, gpio9) and that AVM's host
-re-locks to the chip continuously, but not its guess of a single
-half-word step. What moves the frame is asked in Q-0013. Until the daemon
-re-hunts the slot on silence, a 7412 whose session died must be put in
-reset by hand after the stop (the "After the tests" block above); the
-service's stop does not reset the chip.
+Measured the same evening with the alignment watch (`563b080`): each loss
+is the chip's frame moving by whole 16-bit lanes in our stream (8, 12, 20
+lanes), against a steady bit clock and with the SSC's overflow flags
+clear. At first that read as the chip moving its frame [CR A-0012, A-0013],
+but the SSC's flags cannot see words lost in the DMA ring, so it was not
+evidence either way.
+
+**Cause: the box, not the chip.** A ring-health check in the driver
+(kmod-lantiq-ssc-pcm `0000455`) showed the next loss coming with its 1 ms
+DMA collector held off for 27.5 ms, longer than the 24 ms ring: the
+receive ring ran full and the send ring ran empty. Soaks with the chip
+held in reset (no radio) found a 26-27 ms interrupt blackout every 120 s;
+it went away with `ubihealthd` (OpenWrt's periodic flash check) stopped
+and came back when it was started again. The blackout lands on whichever
+CPU `ubihealthd` runs on, so pinning the timer to one CPU (`6a457d8`)
+failed in a full run. The driver now runs one collector per CPU
+(`e3c898d`): a 15-minute run with the radio on and `ubihealthd` running
+kept its control channel throughout (longest ring gap 1.01 ms, session
+never lost, park verified), and a soak shows the blackouts still come and
+are covered ("timer on cpu 1 held off 27 ms"). Whether the chip also moves
+its frame on its own (Q-0013) is not needed for any loss seen so far; the
+clean room's frame-sync facts [CR A-0014] (FSC as EXIN5, interrupt line
+42) stay on file for a frame-sync alignment later.
+
+A 7412 whose park could not be verified must still be put in reset by
+hand after the stop (the "After the tests" block above); the service's
+stop does not reset the chip.
