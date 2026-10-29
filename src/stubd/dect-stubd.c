@@ -188,6 +188,31 @@ static long tz_offset_seconds(time_t t)
 		d -= 86400L;
 	return d;
 }
+
+/*
+ * The box's local time as a <<TIME-DATE>> value, when the clock may be
+ * trusted (clock_is_trustworthy). Returns 1 with dt and off_s (seconds east
+ * of GMT) filled, 0 when there is nothing we may send.
+ */
+static int clock_now(uint8_t mode, struct dect_time *dt, long *off_s)
+{
+	time_t now_s = time(NULL);
+	struct tm tm;
+
+	if (!clock_is_trustworthy(now_s, mode) || !localtime_r(&now_s, &tm))
+		return 0;
+	*off_s = tz_offset_seconds(now_s);
+	memset(dt, 0, sizeof(*dt));
+	dt->year   = (uint8_t)(tm.tm_year % 100);
+	dt->month  = (uint8_t)(tm.tm_mon + 1);
+	dt->day    = (uint8_t)tm.tm_mday;
+	dt->hour   = (uint8_t)tm.tm_hour;
+	dt->minute = (uint8_t)tm.tm_min;
+	dt->second = (uint8_t)tm.tm_sec;
+	dt->tz_quarters = (int16_t)(*off_s / 900);
+	dt->tz_valid = 1;
+	return 1;
+}
 #include "dect_g722.h"
 
 /* Short read window per candidate slot while probing (blocks ~4 ms each). */
@@ -409,6 +434,23 @@ struct stubd {
 		unsigned queue[DECT_MM_MAX_SLOT];	/* slots asked meanwhile */
 		unsigned nq;
 	} dereg;
+	/*
+	 * The periodic date and time (-a timeupdate=MIN): one round over all
+	 * handsets every MIN minutes, one handset at a time -- on its link
+	 * if it has one, else paged first (TS 102 527-3 §7.4.2.1).
+	 */
+	struct {
+		enum { TIME_IDLE, TIME_PAGING, TIME_SENT } st;
+		uint64_t next_round;	/* 0 = not scheduled yet */
+		int      in_round;
+		unsigned next;		/* handset table index to visit next */
+		int      target;
+		uint8_t  tpui[3];
+		unsigned pages;
+		uint64_t page_at;
+		int      answered;	/* it came up for our page: release it */
+		uint64_t sent_at;
+	} tu;
 	/*
 	 * The control socket (docs/bridge-interface.md §2): one client at a
 	 * time, one message per line.
@@ -1162,6 +1204,12 @@ struct stubd {
 		 * STA_UNSYNC would refuse it. The operator gets to say.
 		 */
 		uint8_t  timesync;
+		/*
+		 * timeupdate=MIN: every MIN minutes, the date and time to
+		 * every handset we hold (time_tick), on top of the one after
+		 * each location registration. 0 = only then.
+		 */
+		unsigned time_every_min;
 		/*
 		 * signal=N: send <<SIGNAL>> N in the SETUP. v33 showed a
 		 * call-class-3 SETUP displays the caller but never alerts,
@@ -7479,19 +7527,16 @@ static struct dect_link *link_known_hs(struct stubd *s, int i)
 }
 
 /*
- * A page response while we page a handset to deregister it: if it carries
- * that handset's identity, the link adopts it and dereg_tick() sends the
- * request there. Returns 1 when it was the target's (consumed).
+ * A page response from handset i, which we paged without a call: if it
+ * carries that handset's identity, the link adopts it, so link_known_hs()
+ * finds it. Returns 1 when it was handset i's.
  */
-static int dereg_page_response(struct stubd *s, struct side_link *sl,
-			       const struct dect_link_ind *ind)
+static int page_adopt(struct stubd *s, struct side_link *sl,
+		      const struct dect_link_ind *ind, int i, const char *why)
 {
 	struct dect_link *l = sl ? &sl->link : &s->reg.link;
 	unsigned k;
-	int i = s->dereg.target;
 
-	if (s->dereg.st != DEREG_PAGING || !ind->page_response)
-		return 0;
 	for (k = 0; k < l->mm.n_held; k++)
 		if (l->mm.held[k].tag == i)
 			break;
@@ -7502,12 +7547,42 @@ static int dereg_page_response(struct stubd *s, struct side_link *sl,
 	if (sl) {
 		sl->adopted = i;
 	} else if ((unsigned)i != s->cur) {
-		hs_switch(s, (unsigned)i, " (deregistration)");
+		hs_switch(s, (unsigned)i, why);
 		dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
 		iwu_lines(s, &s->reg.link.cc.iwu, stubd_sub_slot(s));
 	}
+	return 1;
+}
+
+/*
+ * A page response while we page a handset to deregister it: if it carries
+ * that handset's identity, the link adopts it and dereg_tick() sends the
+ * request there. Returns 1 when it was the target's (consumed).
+ */
+static int dereg_page_response(struct stubd *s, struct side_link *sl,
+			       const struct dect_link_ind *ind)
+{
+	int i = s->dereg.target;
+
+	if (s->dereg.st != DEREG_PAGING || !ind->page_response ||
+	    !page_adopt(s, sl, ind, i, " (deregistration)"))
+		return 0;
 	printf("dereg: DECT %u answered the page with its own identity\n",
 	       hs_slot(s, (unsigned)i));
+	return 1;
+}
+
+/* The same for a handset paged for the date and time (time_tick). */
+static int time_page_response(struct stubd *s, struct side_link *sl,
+			      const struct dect_link_ind *ind)
+{
+	int i = s->tu.target;
+
+	if (s->tu.st != TIME_PAGING || !ind->page_response ||
+	    !page_adopt(s, sl, ind, i, " (date and time)"))
+		return 0;
+	s->tu.answered = 1;
+	printf("time: DECT %u answered the page\n", hs_slot(s, (unsigned)i));
 	return 1;
 }
 
@@ -7679,6 +7754,207 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 	default:
 		break;
 	}
+}
+
+#define TIME_PAGES	5u		/* 3 s apart, as a ring's */
+#define TIME_PAGE_MS	3000u
+#define TIME_SENT_MS	5000u		/* the FACILITY's ack, at most */
+
+static void drain_nwk(struct stubd *s, uint64_t now);
+
+/*
+ * Anything a page of ours could get in the way of: a ring, an internal
+ * call, a deregistration, a call or list session on any link. The date and
+ * time can wait for all of them.
+ */
+static int time_base_busy(struct stubd *s)
+{
+	unsigned k;
+
+	if (s->dereg.st != DEREG_IDLE || s->ic.st != IC_IDLE ||
+	    (s->ring_state != RING_IDLE && s->ring_state != RING_DONE))
+		return 1;
+	if (s->reg.active && dect_cc_busy(&s->reg.link.cc))
+		return 1;
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active && dect_cc_busy(&s->side[k].link.cc))
+			return 1;
+	return 0;
+}
+
+/* Push what a link has queued towards the chip. */
+static void time_pump(struct stubd *s, struct dect_link *l, uint64_t now)
+{
+	unsigned k;
+
+	if (l == &s->reg.link) {
+		drain_nwk(s, now);
+		return;
+	}
+	for (k = 0; k < SIDE_MAX; k++)
+		if (s->side[k].active && &s->side[k].link == l)
+			side_pump(s, &s->side[k]);
+}
+
+/* Done with the current handset: on to the next one. */
+static void time_next(struct stubd *s)
+{
+	s->tu.st = TIME_IDLE;
+	s->tu.next = (unsigned)s->tu.target + 1u;
+}
+
+/*
+ * -a timeupdate=MIN: the date and time to every handset we hold, every MIN
+ * minutes (maintainer, 2026-10-29). One interval for the base, not one per
+ * handset: a handset that attached a minute before a round gets it twice,
+ * which is harmless.
+ *
+ * TS 102 527-3 §7.4.2.0 makes it "the responsibility of the entity to
+ * ensure that time and date information within the peer entity is up to
+ * date", and §7.4.2.1 says how to reach a handset with no link: "the FP
+ * shall initiate indirect link establishment" -- a page, as for a call, with
+ * the LCE header "000" (no U-plane). That is the C-plane page the
+ * deregistration sends. Then the {FACILITY} (dect_link_send_time), and once
+ * it is acknowledged we release the link we brought up, as after a call
+ * (EN 300 175-5 §14.2.7). A handset that already has a link gets it there
+ * and keeps its link.
+ *
+ * One handset at a time, and only while the base is otherwise idle
+ * (time_base_busy); a handset that does not answer TIME_PAGES pages is off
+ * or out of range and is skipped until the next round. The same clock gate
+ * as after a location registration: no trustworthy clock, no round.
+ */
+static void time_tick(struct stubd *s, uint64_t now, int radio_on)
+{
+	uint64_t every = (uint64_t)s->audio.time_every_min * 60000u;
+	struct dect_link *l;
+	struct dect_time dt;
+	long off_s;
+	int i;
+
+	if (!every || !radio_on)
+		return;
+	if (!s->tu.next_round)
+		s->tu.next_round = now + every;
+	if (!s->tu.in_round) {
+		if (now < s->tu.next_round)
+			return;
+		s->tu.next_round = now + every;
+		if (!clock_now(s->audio.timesync, &dt, &off_s)) {
+			printf("time: update round skipped -- the clock is "
+			       "not disciplined (STA_UNSYNC or pre-2020)\n");
+			return;
+		}
+		s->tu.in_round = 1;
+		s->tu.next = 0;
+		s->tu.st = TIME_IDLE;
+		printf("time: update round, every %u min\n",
+		       s->audio.time_every_min);
+	}
+
+	if (s->tu.st == TIME_IDLE) {
+		while (s->tu.next < s->n_hs && !s->hs[s->tu.next].loaded)
+			s->tu.next++;
+		if (s->tu.next >= s->n_hs) {
+			s->tu.in_round = 0;
+			printf("time: update round done\n");
+			return;
+		}
+		if (time_base_busy(s))
+			return;
+		s->tu.target = (int)s->tu.next;
+		s->tu.pages = 0;
+		s->tu.page_at = now;
+		s->tu.answered = 0;
+		s->tu.st = TIME_PAGING;
+		{
+			struct dect_mm_cfg cfg;
+			struct dect_mm mm;
+
+			memset(&cfg, 0, sizeof(cfg));
+			cfg.sub_slot = (uint8_t)hs_slot(s,
+						(unsigned)s->tu.target);
+			dect_mm_init(&mm, &cfg);
+			dect_mm_tpui(&mm, s->tu.tpui);
+		}
+	}
+	i = s->tu.target;
+	if (!s->hs[i].loaded) {		/* deregistered meanwhile */
+		time_next(s);
+		return;
+	}
+	l = link_known_hs(s, i);
+
+	if (s->tu.st == TIME_PAGING) {
+		if (l) {
+			if (!clock_now(s->audio.timesync, &dt, &off_s) ||
+			    dect_link_send_time(l, &dt) != 0) {
+				printf("time: DECT %u: could not queue the "
+				       "date and time\n",
+				       hs_slot(s, (unsigned)i));
+				time_next(s);
+				return;
+			}
+			time_pump(s, l, now);
+			printf("time: DECT %u: sent the date and time "
+			       "(20%02u-%02u-%02u %02u:%02u:%02u, "
+			       "GMT%+ld:%02ld)%s\n", hs_slot(s, (unsigned)i),
+			       dt.year, dt.month, dt.day, dt.hour, dt.minute,
+			       dt.second, off_s / 3600,
+			       labs(off_s % 3600) / 60,
+			       s->tu.answered ? "" : " on its link");
+			if (!s->tu.answered) {
+				time_next(s);
+				return;
+			}
+			s->tu.st = TIME_SENT;
+			s->tu.sent_at = now;
+			return;
+		}
+		/* a call or a ring came first: page again later */
+		if (time_base_busy(s)) {
+			s->tu.st = TIME_IDLE;
+			return;
+		}
+		if (now < s->tu.page_at)
+			return;
+		if (s->tu.pages >= TIME_PAGES) {
+			printf("time: DECT %u did not answer %u pages -- "
+			       "skipped until the next round\n",
+			       hs_slot(s, (unsigned)i), TIME_PAGES);
+			time_next(s);
+			return;
+		}
+		{
+			/* C-plane only, the TPUI: the deregistration's page */
+			uint8_t p[3] = { 0x08, s->tu.tpui[1], s->tu.tpui[2] };
+
+			chip_mail(s, 0x0300u, p, 3);
+		}
+		if (!s->tu.pages)
+			printf("time: DECT %u has no link -- paging it\n",
+			       hs_slot(s, (unsigned)i));
+		s->tu.pages++;
+		s->tu.page_at = now + TIME_PAGE_MS;
+		return;
+	}
+
+	/* TIME_SENT: release the link we brought up, once the ack is in */
+	if (!l) {
+		time_next(s);		/* the handset released it itself */
+		return;
+	}
+	if ((l->ciss_n || l->lapc.outstanding || l->lapc.txmsg_len) &&
+	    now - s->tu.sent_at < TIME_SENT_MS)
+		return;
+	if (!dect_cc_busy(&l->cc)) {
+		chip_mail(s, 0x0202u, &l->handle, 1);	/* [CR A-0127] */
+		printf("time: link released (0x0202 on handle %u)%s\n",
+		       (unsigned)l->handle,
+		       l->ciss_n || l->lapc.outstanding
+		       ? ", the FACILITY unacknowledged" : "");
+	}
+	time_next(s);
 }
 
 /* -------------------------------------------------------------------------
@@ -8846,7 +9122,8 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 	 * the ring timed out). Promote this link to the main one and ring on
 	 * it; anything else that answers here is not ours to ring.
 	 */
-	if (dereg_page_response(s, sl, &ind)) {
+	if (dereg_page_response(s, sl, &ind) ||
+	    time_page_response(s, sl, &ind)) {
 		side_pump(s, sl);
 		return;
 	}
@@ -9030,7 +9307,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		       : "ignored (7.4.2.2)");
 	}
 
-	if (dereg_page_response(s, NULL, &ind))
+	if (dereg_page_response(s, NULL, &ind) ||
+	    time_page_response(s, NULL, &ind))
 		ind.page_response = 0;
 
 	/* an internal call's target answering on the main link (finding 5) */
@@ -9302,23 +9580,10 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 */
 	if (s->reg.link.mm.stats.located != s->reg.time_sent_for) {
 		struct dect_time dt;
-		time_t now_s = time(NULL);
-		struct tm tm;
+		long off_s;
 
 		s->reg.time_sent_for = s->reg.link.mm.stats.located;
-		if (clock_is_trustworthy(now_s, s->audio.timesync)
-		    && localtime_r(&now_s, &tm)) {
-			long off_s = tz_offset_seconds(now_s);
-
-			memset(&dt, 0, sizeof(dt));
-			dt.year   = (uint8_t)(tm.tm_year % 100);
-			dt.month  = (uint8_t)(tm.tm_mon + 1);
-			dt.day    = (uint8_t)tm.tm_mday;
-			dt.hour   = (uint8_t)tm.tm_hour;
-			dt.minute = (uint8_t)tm.tm_min;
-			dt.second = (uint8_t)tm.tm_sec;
-			dt.tz_quarters = (int16_t)(off_s / 900);
-			dt.tz_valid = 1;
+		if (clock_now(s->audio.timesync, &dt, &off_s)) {
 			if (dect_link_send_time(&s->reg.link, &dt) == 0)
 				printf("reg: sent the date and time "
 				       "(20%02u-%02u-%02u %02u:%02u:%02u, "
@@ -10268,6 +10533,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 					side_call_tick(s, &s->side[k], now);
 			ic_tick(s, now);
 			dereg_tick(s, now);
+			time_tick(s, now, s->do_register &&
+				  s->sess.state == DECT_SESS_UP);
 			ctl_tick(s, now);
 			bridge_tick(s, now);
 			ab_tick(s);
@@ -10722,6 +10989,12 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			else
 				return -1;
 		}
+		else if (klen == 10 && !memcmp(key, "timeupdate", 10)) {
+			/* minutes, up to 30 days */
+			if (!eq || v > 43200u)
+				return -1;
+			a->time_every_min = (unsigned)v;
+		}
 		else if (klen == 2 && !memcmp(key, "ti", 2))
 			a->ti_fixed = (int)v;
 		else if (klen == 6 && !memcmp(key, "signal", 6)) {
@@ -11061,6 +11334,10 @@ static void usage(void)
 		"                    location registration. auto (default) only when\n"
 		"                    the kernel says the clock is disciplined;\n"
 		"                    force trusts it anyway; off never sends\n"
+		"           timeupdate=MIN  also send it to every handset every\n"
+		"                    MIN minutes, paging the ones without a\n"
+		"                    link (0, the default: only after a location\n"
+		"                    registration)\n"
 		"           noconnect = never send 0x022D (the stock connect is\n"
 		"           0x0251 then 0x0230 and nothing else)\n"
 		"           tone=HZ (multiple of 125) transmits an A-law test tone to\n"
