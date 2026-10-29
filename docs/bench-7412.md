@@ -210,7 +210,7 @@ means the codecs were not matched.
 
 ## Card: pass-through, call waiting, DTMF, voicemail, date (for 2026-10-30)
 
-Box at `45b0264` (dect-stubd md5 `f6814ca6`, `opendectcell.so` md5 `618fd5f7`;
+Box at `45b0264` (dect-stubd md5 `f6814ca6`, `opendectcell.so` md5 `618fd5f7`; since 2026-10-30 00:00 dect-stubd from `d174295` (md5 `d3f8953d`, the same base mode plus `-K`), the init script from `b2e1a22` and LuCI from `bfe2f6e`;
 `baresip-mod-mwi` installed, `/etc/hotplug.d/ntp/25-opendectcell` in place).
 Outcomes written before the run:
 
