@@ -703,7 +703,7 @@ struct stubd {
 	uint32_t vs_changes[64];
 	uint32_t vs_frames;
 	/*
-	 * Uplink hold statistics for the bearer lane (tone_word): how many
+	 * Uplink hold statistics for the bearer lane (lane0_word): how many
 	 * live words were held longer than the nominal two frames in the
 	 * last second, how many extra frames that cost, and how many of
 	 * those holds started at the same position within the 80-frame
@@ -749,7 +749,6 @@ struct stubd {
 	uint8_t     tx_idle;		/* filler for unmapped slots (-a txidle) */
 	uint8_t     tx_voice_idle;	/* filler for the voice lanes */
 	uint32_t    tx_blocks;
-	unsigned    tone_phase;		/* index into tone_sine, advanced per frame */
 	/*
 	 * Audio bind parameters [CR A-0029 §1]. Every field AVM derives from its
 	 * negotiated call state is settable here, because we cannot derive them
@@ -973,12 +972,13 @@ struct stubd {
 		 * established, so omitting it is the clean comparison.
 		 */
 		int      no_connect;
-		unsigned tone_hz;	/* transmit test tone (0 = off); multiple of 125 */
-		uint8_t  tone_word;	/* raw DMA word to write it into (default 0) */
-		int      tone_word_set;	/* toneword= given */
-		int      tone_high;	/* high byte lane instead of low */
-		int      tone16;	/* 16-bit linear in the whole word (default profile) */
-		int      tone16be;	/* ... big-endian within the word */
+		/*
+		 * toneword=N: the TDM word of lane 0, the main link's call, in
+		 * both directions. 0 on the 7520; on the SSC transport it
+		 * follows the control lane unless given.
+		 */
+		uint8_t  lane0_word;
+		int      lane0_word_set;	/* toneword= given */
 		/*
 		 * GenDSP routes to establish once the call's audio is connected:
 		 * 0xFFF1 sub 0x0A {dst, src} to task 0x23 [CR COMMAND_SET §7.1,
@@ -1942,53 +1942,6 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 	return 0;
 }
 
-/* One cycle at 8000 frames/s / 64 = 125 Hz steps; amplitude ~ -12 dBFS. */
-static const int16_t tone_sine[64] = {
-	     0,    784,   1561,   2322,   3061,   3771,   4445,   5075,
-	  5657,   6184,   6652,   7055,   7391,   7656,   7846,   7961,
-	  8000,   7961,   7846,   7656,   7391,   7055,   6652,   6184,
-	  5657,   5075,   4445,   3771,   3061,   2322,   1561,    784,
-	     0,   -784,  -1561,  -2322,  -3061,  -3771,  -4445,  -5075,
-	 -5657,  -6184,  -6652,  -7055,  -7391,  -7656,  -7846,  -7961,
-	 -8000,  -7961,  -7846,  -7656,  -7391,  -7055,  -6652,  -6184,
-	 -5657,  -5075,  -4445,  -3771,  -3061,  -2322,  -1561,   -784
-};
-
-/*
- * Write the test tone into its lane. Host -> chip uses the same raw word
- * indexing as chip -> host -- our control slot is transmitted at raw word 1
- * and received there too -- so raw word 0, low byte, is the transmit side of
- * dect1 under A-0035's mapping. Writing A-law here while a call is up is the
- * one-way TX proof A-0030 §8.4, A-0033 step 3 and A-0035 step 5 all ask for.
- */
-static void tx_tone(struct stubd *s, uint8_t *fr)
-{
-	unsigned int w = s->audio.tone_word;
-	unsigned int step = s->audio.tone_hz * 64u / 8000u;
-
-	if (!s->audio.tone_hz || !s->reg.call_bound || w >= s->slots ||
-	    w == (unsigned int)s->tx_slot)
-		return;
-	if (s->audio.tone16) {
-		/*
-		 * The stock driver's *default* (non-enhanced) profile has a
-		 * separate 16-bit path [CR A-0030 §3 Q3, A-0035 §Q1]; which
-		 * profile is active is not established. Byte order within the
-		 * word is not to be inferred from the platform, so both are
-		 * selectable.
-		 */
-		int16_t v = tone_sine[s->tone_phase];
-		uint8_t lo = (uint8_t)(v & 0xFF), hi = (uint8_t)((v >> 8) & 0xFF);
-
-		fr[w * 2u] = s->audio.tone16be ? hi : lo;
-		fr[w * 2u + 1u] = s->audio.tone16be ? lo : hi;
-	} else {
-		fr[w * 2u + (s->audio.tone_high ? 1u : 0u)] =
-			dect_alaw_encode(tone_sine[s->tone_phase]);
-	}
-	s->tone_phase = (s->tone_phase + step) & 63u;
-}
-
 /* A received lane word that carries bearer data rather than a fill. */
 static int lane_word_live(uint32_t v)
 {
@@ -2278,30 +2231,30 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		 * There is nothing useful to send in that window.
 		 */
 		if (s->ab.l[0].cfd >= 0 && s->ab.l[0].call &&
-		    s->reg.call_bound && s->audio.tone_word < s->slots &&
-		    s->audio.tone_word != (unsigned int)s->tx_slot &&
+		    s->reg.call_bound && s->audio.lane0_word < s->slots &&
+		    s->audio.lane0_word != (unsigned int)s->tx_slot &&
 		    (s->reg.call_wideband || !s->audio.remode_ms ||
 		     s->reg.remode_done)) {
 			/* the bridge's speech (docs/bridge-interface.md §3) */
-			ab_frame(&s->ab.l[0], fr, s->audio.tone_word,
+			ab_frame(&s->ab.l[0], fr, s->audio.lane0_word,
 				 rx ? rx + (f * s->slots +
-					    s->audio.tone_word) * 2u : NULL);
+					    s->audio.lane0_word) * 2u : NULL);
 		} else if (s->ic.st == IC_UP && rx && s->reg.call_bound &&
 		    ic_word(s, s->ic.caller == -1 ? s->ic.tside :
 			    s->ic.tside == -1 ? s->ic.caller :
 			    IC_PARTY_NONE) >= 0 &&
-		    s->audio.tone_word < s->slots) {
+		    s->audio.lane0_word < s->slots) {
 			/* internal call: lane 0 hears the other party */
 			const uint8_t *p = rx + (f * s->slots + (unsigned)
 				ic_word(s, s->ic.caller == -1 ? s->ic.tside :
 					s->ic.caller)) * 2u;
 
-			fr[s->audio.tone_word * 2u] = p[0];
-			fr[s->audio.tone_word * 2u + 1u] = p[1];
+			fr[s->audio.lane0_word * 2u] = p[0];
+			fr[s->audio.lane0_word * 2u + 1u] = p[1];
 		} else if (s->audio.play && s->audio.play_raw &&
 			   s->reg.call_bound &&
 			   (!s->audio.remode_ms || s->reg.remode_done)) {
-			unsigned int w = s->audio.tone_word;
+			unsigned int w = s->audio.lane0_word;
 
 			/* Verbatim lane: two bytes every frame, no cadence. */
 			if (w < s->slots && w != (unsigned int)s->tx_slot) {
@@ -2312,7 +2265,7 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 				s->play_pos += 2u;
 			}
 		} else if (s->audio.play && s->reg.call_bound) {
-			unsigned int w = s->audio.tone_word;
+			unsigned int w = s->audio.lane0_word;
 
 			if (w < s->slots && w != (unsigned int)s->tx_slot) {
 				int advance;
@@ -2362,7 +2315,7 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 				fr[w * 2u + 1u] = s->audio.play[s->play_pos - 1u];
 			}
 		} else if (s->audio.loopback && s->reg.call_bound && rx) {
-			unsigned int w = s->audio.tone_word;
+			unsigned int w = s->audio.lane0_word;
 
 			if (w < s->slots && w != (unsigned int)s->tx_slot) {
 				const uint8_t *src = rx + (f * s->slots + w) * 2u;
@@ -2402,7 +2355,6 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 			}
 		}
 		xlane_tx(s, fr, rx, f);
-		tx_tone(s, fr);
 		if (ql >= 2u) {
 			fr[(unsigned int)s->tx_slot * 2u] = s->txq[qh];
 			fr[(unsigned int)s->tx_slot * 2u + 1u] =
@@ -4350,12 +4302,6 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	       a->no_gain ? "SKIPPED " : "", a->sel, a->gain,
 	       m.param[1], a->mask, a->mode, m.param[5],
 	       a->nowait ? "" : " -- 0x022D waits for 0x0242");
-	if (a->tone_hz)
-		printf("call: tx tone: %u Hz %s into raw word %u%s\n",
-		       a->tone_hz,
-		       a->tone16 ? (a->tone16be ? "pcm16-be" : "pcm16-le") : "A-law",
-		       a->tone_word,
-		       a->tone16 ? "" : (a->tone_high ? " high byte" : " low byte"));
 
 	/*
 	 * 0x022D connects the path of a connection "whose channel is already
@@ -9338,7 +9284,7 @@ static int ic_word(const struct stubd *s, int side)
 	    ic_wideband(s, s->ic.caller) != ic_wideband(s, s->ic.tside)))
 		return -1;
 	if (side < 0)
-		w = s->reg.call_bound ? (int)s->audio.tone_word : -1;
+		w = s->reg.call_bound ? (int)s->audio.lane0_word : -1;
 	else if (s->side[side].lane < 0 ||
 		 !s->xl[s->side[side].lane].connected)
 		w = -1;
@@ -10659,7 +10605,7 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 			memcpy(&v, fr + (f * s->slots + n) * 2u, 2);
 			if (s->vs_frames && v != s->vs_last[n])
 				s->vs_changes[n]++;
-			if (n == s->audio.tone_word) {
+			if (n == s->audio.lane0_word) {
 				int live = v != 0x0000u && v != 0xFEFEu &&
 					   v != 0xFFFFu;
 
@@ -11534,19 +11480,9 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->play_pcm = (klen == 7 && key[4] == 'p');
 			a->play_raw = (klen == 7 && key[4] == 'r');
 		}
-		else if (!eq && klen == 8 && !memcmp(key, "tonehigh", 8))
-			a->tone_high = 1;
-		else if (!eq && klen == 6 && !memcmp(key, "tone16", 6))
-			a->tone16 = 1;
-		else if (!eq && klen == 8 && !memcmp(key, "tone16be", 8))
-			a->tone16 = a->tone16be = 1;
-		else if (klen == 4 && !memcmp(key, "tone", 4)) {
-			if (v % 125u || v > 3875u)
-				return -1;
-			a->tone_hz = (unsigned)v;
-		} else if (klen == 8 && !memcmp(key, "toneword", 8)) {
-			a->tone_word = (uint8_t)v;
-			a->tone_word_set = 1;
+		else if (klen == 8 && !memcmp(key, "toneword", 8)) {
+			a->lane0_word = (uint8_t)v;
+			a->lane0_word_set = 1;
 		}
 		else if (klen == 7 && !memcmp(key, "xmailms", 7))
 			a->xmail_ms = (unsigned)v;
@@ -11767,10 +11703,9 @@ static void usage(void)
 		"                    registration)\n"
 		"           noconnect = never send 0x022D (the stock connect is\n"
 		"           0x0251 then 0x0230 and nothing else)\n"
-		"           tone=HZ (multiple of 125) transmits an A-law test tone to\n"
-		"           the handset while a call is up, into raw word toneword=N\n"
-		"           (default 0 = dect1), low byte, or the high byte with tonehigh;\n"
-		"           tone16 / tone16be write 16-bit linear into the whole word;\n"
+		"           toneword=N the TDM word of the main call's speech\n"
+		"           (default 0; on the SSC transport the lane after the\n"
+		"           control lane)\n"
 		"           dsp=DST:SRC (repeatable) sends GenDSP connect 0xFFF1/0A after\n"
 		"           the audio path is up: ADPCM 0..3, PCM 4..6, wideband 7..9,\n"
 		"           silence 12, test tone 15 (PCM 6 = raw word 0, PCM 4 = raw 5)\n"
@@ -12794,16 +12729,16 @@ int main(int argc, char **argv)
 		       "both ways\n", d, s.tx_slot);
 		s.rx_slot = s.tx_slot;
 	}
-	if (s.ssc && !s.audio.tone_word_set) {
+	if (s.ssc && !s.audio.lane0_word_set) {
 		/*
 		 * The 7412's audio lanes follow the control lane, one per
 		 * call, the first call's next to it [CR A-0015]; observed:
 		 * that lane leaves the idle pattern when a call connects.
 		 */
-		s.audio.tone_word = (uint8_t)(((unsigned int)s.tx_slot + 1u) %
+		s.audio.lane0_word = (uint8_t)(((unsigned int)s.tx_slot + 1u) %
 					      s.slots);
 		printf("ssc: speech lane %u (control lane + 1)\n",
-		       (unsigned int)s.audio.tone_word);
+		       (unsigned int)s.audio.lane0_word);
 	}
 	if (s.ssc) {
 		/* call n's speech in control lane + n [CR A-0015] */
