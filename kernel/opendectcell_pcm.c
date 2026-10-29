@@ -800,7 +800,11 @@ static int pcm_step_dma(struct dect_pcm *p)
 	p->slot_bytes = ALIGN(sizeof(struct dect_pcm_block) + p->block_bytes,
 			      8);
 	p->ring_slots = PCM_RING_SLOTS;
-	p->ring = vmalloc(p->ring_slots * p->slot_bytes);
+	/*
+	 * Zeroed: read() hands out whole slots, and the alignment padding
+	 * after a block is never written (security audit 2026-10-29).
+	 */
+	p->ring = vzalloc(p->ring_slots * p->slot_bytes);
 	if (!p->ring)
 		return -ENOMEM;
 	p->head = 0;

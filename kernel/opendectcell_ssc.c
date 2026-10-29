@@ -554,6 +554,7 @@ long dect_ssc_ioctl(struct dect_ssc *s, unsigned int cmd, void __user *argp)
 	struct dect_pcm_config cfg;
 	struct dect_pcm_regs regs;
 	struct dect_pcm_stats st;
+	unsigned long flags;
 	__u32 n;
 	int ret;
 
@@ -575,11 +576,12 @@ long dect_ssc_ioctl(struct dect_ssc *s, unsigned int cmd, void __user *argp)
 			return ret;
 		return copy_to_user(argp, &regs, sizeof(regs)) ? -EFAULT : 0;
 	case DECT_IOC_PCM_STATS:
-		spin_lock(&s->ring_lock);
+		/* the 8 kHz hrtimer takes ring_lock in hard-irq context */
+		spin_lock_irqsave(&s->ring_lock, flags);
 		st = s->st;
 		st.step = s->step;
 		st.block_bytes = s->block_bytes;
-		spin_unlock(&s->ring_lock);
+		spin_unlock_irqrestore(&s->ring_lock, flags);
 		return copy_to_user(argp, &st, sizeof(st)) ? -EFAULT : 0;
 	default:
 		return -ENOTTY;
