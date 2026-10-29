@@ -671,14 +671,11 @@ struct stubd {
 	unsigned sub_slot;
 	/*
 	 * The call key for the chip (0x0208, stock's call layout [CR A-0126]),
-	 * sent whenever a call is ciphered; -k off withholds it, -k reversed
-	 * byte-reverses the key. Plain order is right: measured 2026-10-28,
-	 * the handset's release read through the cipher in plain order and
-	 * arrived garbled reversed (docs/stub-api.md §2.1).
+	 * sent whenever a call is ciphered, in plain byte order (docs/stub-api.md
+	 * §2.1); -k off withholds it.
 	 */
 	struct chip_cipher {
 		int     disabled;	/* -k off */
-		int     reversed;	/* -k reversed (wrong on 07.56) */
 	} chip_cipher;
 	/* Voice-slot probe: which TDM slot carries a call's audio (mapping open). */
 	uint16_t vs_last[64];		/* every lane of an SSC frame */
@@ -1062,17 +1059,6 @@ struct stubd {
 		const char *clip_number;
 		const char *clip_name;
 		/*
-		 * The descriptor fields, settable for the same reason every
-		 * 0x0230 field is: v28 sent a byte-exact 0x6C and 0x6D and the
-		 * C4 displayed neither, so which field the handset gates on is
-		 * now the open question and one run should be able to sweep it.
-		 * Defaults are the honest ones (not screened); the stock
-		 * producer's ordinary branch sends clipscr=1, i.e. `01 81`.
-		 */
-		uint8_t  clip_ton, clip_npi, clip_scr;
-		uint8_t  cnip_scr, cnip_alpha;
-		int      clip_first;	/* identity IEs before BASIC-SERVICE */
-		/*
 		 * lineid=N linetype=N callid=N callstatus=N: the
 		 * <<CALL-INFORMATION>> subrecords of an FP-originated SETUP.
 		 * TS 102 527-3 7.4.5.3.2 requires a line identifier in every
@@ -1211,23 +1197,20 @@ static uint32_t sub_uak_base = SUB_UAK_BASE_0825;
 #define SUB_UAK_END	(SUB_UAK_BASE + DECT_MM_MAX_SLOT * SUB_UAK_STRIDE)
 
 /*
- * Which second-stage STUB the chip runs. The chip says so itself only in the
- * 0xFFF2 build stamp right after a boot, which a run reusing a loaded STUB
- * never sees, so fwload.sh records the blob it uploaded here. The UAK table
- * address above is known for 08.25 only: on 2026-10-24 the box ran 07.56 for
- * seven hours, every read-back said MISMATCH and every audit five foreign
- * slots, and all of it was a read of unrelated memory.
- */
-/*
  * The daemon's files live in a directory only root can enter, not in the
  * world-writable /tmp, where any local user could plant them first: a
  * forged STUB record or status, a deregistration request (security audit
- * 2026-10-29, F1). The /tmp names of old lab scripts are still read, but
- * only from a file root owns that nobody else may write.
+ * 2026-10-29, F1).
+ *
+ * Which second-stage STUB the chip runs. The chip says so itself only in the
+ * 0xFFF2 build stamp right after a boot, which a run reusing a loaded STUB
+ * never sees, so the service's load_chip (opendectcell.init) records the blob it
+ * uploaded in DECT_STUB_RECORD. The chip RAM addresses we read, the UAK
+ * table's above, belong to one build: read against another they are
+ * unrelated memory.
  */
 #define DECT_RUN_DIR		"/var/run/opendectcell"
 #define DECT_STUB_RECORD	DECT_RUN_DIR "/stub.second"
-#define DECT_STUB_RECORD_OLD	"/tmp/dect-stub.second"
 
 /* fopen(path, "r"), if path is root's own and only root may write it. */
 static FILE *fopen_root_only(const char *path)
@@ -1252,9 +1235,6 @@ static int stub_build_read(char *name, size_t cap)
 {
 	FILE *f = fopen_root_only(DECT_STUB_RECORD);
 	size_t n;
-
-	if (!f)
-		f = fopen_root_only(DECT_STUB_RECORD_OLD);
 
 	name[0] = '\0';
 	if (!f)
@@ -5100,8 +5080,7 @@ static void send_chip_cipher_link(struct stubd *s, const struct dect_mm *mm,
 	m.prim = 0x0208u;		/* call key [CR A-0126] */
 	m.param[n++] = handle;
 	for (i = 0; i < DECT_MM_DCK_LEN; i++)
-		m.param[n + i] = s->chip_cipher.reversed
-			? dck[DECT_MM_DCK_LEN - 1u - i] : dck[i];
+		m.param[n + i] = dck[i];
 	n += DECT_MM_DCK_LEN;
 	n += 15u;			/* param[9..23]: 00 (memset) */
 	m.param[n++] = 0xFFu;
@@ -5114,8 +5093,7 @@ static void send_chip_cipher_link(struct stubd *s, const struct dect_mm *mm,
 	memset(&m, 0, sizeof(m));	/* the mail held the key */
 	/* Never log this mail's parameters: they carry the cipher key. */
 	printf("call: cipher: call key to the chip (0x0208, link %u, %u bytes, "
-	       "%s order)\n", (unsigned int)handle, (unsigned int)n,
-	       s->chip_cipher.reversed ? "reversed" : "plain");
+	       "plain order)\n", (unsigned int)handle, (unsigned int)n);
 }
 
 static void send_chip_cipher(struct stubd *s)
@@ -6861,7 +6839,6 @@ static int ic_wideband(const struct stubd *s, int p);
 #define DEREG_PAGES	10u		/* 3 s apart: 30 s to reach it */
 #define DEREG_PAGE_MS	3000u
 #define DEREG_REQ_PATH	DECT_RUN_DIR "/deregister"
-#define DEREG_REQ_PATH_OLD	"/tmp/opendectcell-deregister"
 
 static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
 		      uint16_t n)
@@ -7039,10 +7016,6 @@ static void dereg_start(struct stubd *s, uint64_t now)
 	char *p = buf, *end;
 	unsigned slot, n = 0;
 
-	if (!f) {
-		path = DEREG_REQ_PATH_OLD;
-		f = fopen_root_only(path);
-	}
 	if (f) {
 		if (!fgets(buf, sizeof(buf), f))
 			buf[0] = 0;
@@ -10705,12 +10678,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->ring_ms = (unsigned)v;
 		else if (klen == 10 && !memcmp(key, "ringattach", 10))
 			a->ring_attach_ms = (unsigned)v;
-		else if (klen == 7 && !memcmp(key, "clipton", 7))
-			a->clip_ton = (uint8_t)v;
-		else if (klen == 7 && !memcmp(key, "clipnpi", 7))
-			a->clip_npi = (uint8_t)v;
-		else if (klen == 7 && !memcmp(key, "clipscr", 7))
-			a->clip_scr = (uint8_t)v;
 		else if (klen == 8 && !memcmp(key, "basicsvc", 8))
 			a->basic_svc = (uint8_t)v, a->basic_svc_set = 1;
 		else if (!eq && klen == 10 && !memcmp(key, "narrowband", 10))
@@ -10798,12 +10765,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->memdump[a->n_memdump].len = (uint32_t)len;
 			a->n_memdump++;
 		}
-		else if (!eq && klen == 9 && !memcmp(key, "clipfirst", 9))
-			a->clip_first = 1;
-		else if (klen == 7 && !memcmp(key, "cnipscr", 7))
-			a->cnip_scr = (uint8_t)v;
-		else if (klen == 9 && !memcmp(key, "cnipalpha", 9))
-			a->cnip_alpha = (uint8_t)v;
 		else if (klen == 6 && !memcmp(key, "lineid", 6)) {
 			if (v >= DECT_CALLINFO_LINE_NONE)
 				return -1;
@@ -10976,13 +10937,11 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 	return 0;
 }
 
-/* Parse -k off | reversed. Returns 0 on success, -1 on a malformed spec. */
+/* Parse -k off. Returns 0 on success, -1 on a malformed spec. */
 static int parse_chip_cipher(struct chip_cipher *cc, const char *spec)
 {
 	if (!strcmp(spec, "off"))
 		cc->disabled = 1;
-	else if (!strcmp(spec, "reversed"))
-		cc->reversed = 1;
 	else
 		return -1;
 	return 0;
@@ -11014,9 +10973,8 @@ static void usage(void)
 		"           Repeat for every handset the base holds: all are served\n"
 		"           and installed in their chip slots; the first is rung\n"
 		"  -k SPEC  the call key for the chip (0x0208, stock's layout,\n"
-		"           [CR A-0126]) goes out before every CIPHER-REQUEST; SPEC\n"
-		"           off withholds it, reversed byte-reverses the key (wrong\n"
-		"           on 07.56, kept for comparison)\n"
+		"           [CR A-0126]) goes out before every CIPHER-REQUEST; -k off\n"
+		"           withholds it\n"
 		"  -w FILE  capture the call's voice slot to FILE (raw, 2 bytes per\n"
 		"           frame, while a call is bound) -- holds call audio, keep\n"
 		"           it local\n"
@@ -11149,10 +11107,6 @@ static void usage(void)
 		"           (0x6C, printable IA5) and name (0x6D, UTF-8) in the\n"
 		"           FP-originated CC-SETUP, both presented as allowed and\n"
 		"           user-provided-not-screened. Omitted options send no IE.\n"
-		"           clipton=N clipnpi=N clipscr=N cnipscr=N cnipalpha=N\n"
-		"           sweep the descriptor fields; the stock producer's\n"
-		"           ordinary branch is clipscr=1, giving `01 81`.\n"
-		"           clipfirst puts both IEs before <<BASIC-SERVICE>>\n"
 		"           lineid=N (0..126) linetype=N (bit 0 VoIP delay, bit 1\n"
 		"           in-band second calls) callid=N callstatus=N add a\n"
 		"           <<CALL-INFORMATION>> (0x7E) to the FP-originated\n"
@@ -11514,11 +11468,6 @@ int main(int argc, char **argv)
 	 */
 	s.audio.gain = 0x2Bu;
 	s.audio.flags = 1;		/* channel 1 */
-	s.audio.clip_ton = DECT_CLIP_TON_UNKNOWN;
-	s.audio.clip_npi = DECT_CLIP_NPI_E164;
-	s.audio.clip_scr = DECT_CLIP_SCR_USER_UNSCREENED;
-	s.audio.cnip_scr = DECT_CLIP_SCR_USER_UNSCREENED;
-	s.audio.cnip_alpha = DECT_CLIP_ALPHABET_UTF8;
 	s.rx_word_prev = 0xFFFFFFFFu;	/* no word seen yet */
 	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
@@ -11736,7 +11685,7 @@ int main(int argc, char **argv)
 	s.stub_build = stub_build_read(s.stub_name, sizeof(s.stub_name));
 	printf("chip: STUB second stage %s\n",
 	       s.stub_build == STUB_UNKNOWN ? "unknown (no " DECT_STUB_RECORD
-					      ", run fwload.sh)"
+					      ")"
 					    : s.stub_name);
 	/*
 	 * The 7412's 06.88 STUB reacts to the bring-up only with its radio
@@ -11890,25 +11839,23 @@ int main(int argc, char **argv)
 	dect_clip_init(&s.clip);
 	if (s.audio.clip_number
 	    && dect_clip_set_number(&s.clip, s.audio.clip_number,
-				    (enum dect_clip_ton)s.audio.clip_ton,
-				    (enum dect_clip_npi)s.audio.clip_npi,
+				    DECT_CLIP_TON_UNKNOWN, DECT_CLIP_NPI_E164,
 				    DECT_CLIP_PRES_ALLOWED,
-				    (enum dect_clip_screening)s.audio.clip_scr)) {
+				    DECT_CLIP_SCR_USER_UNSCREENED)) {
 		fprintf(stderr, "clip: number rejected (printable IA5, "
 			"at most %u bytes)\n", DECT_CLIP_NUMBER_MAX);
 		return 1;
 	}
 	if (s.audio.clip_name
 	    && dect_clip_set_name(&s.clip, s.audio.clip_name,
-				  (enum dect_clip_alphabet)s.audio.cnip_alpha,
+				  DECT_CLIP_ALPHABET_UTF8,
 				  DECT_CLIP_PRES_ALLOWED,
-				  (enum dect_clip_screening)s.audio.cnip_scr)) {
+				  DECT_CLIP_SCR_USER_UNSCREENED)) {
 		fprintf(stderr, "cnip: name rejected (well-formed UTF-8 "
 			"without control characters, at most %u bytes)\n",
 			DECT_CLIP_NAME_MAX);
 		return 1;
 	}
-	s.clip.emit_before_basic_service = (uint8_t)(s.audio.clip_first != 0);
 	if (!dect_callinfo_valid(&s.audio.callinfo)) {
 		fprintf(stderr, "callinfo: rejected (linetype needs lineid; "
 			"callstatus must be a defined call status)\n");
@@ -11930,10 +11877,7 @@ int main(int argc, char **argv)
 			       ci->line_id, STUBD_LINE_ID);
 	}
 	if (s.audio.clip_number || s.audio.clip_name)
-		printf("clip: ton=%u npi=%u clipscr=%u cnipscr=%u "
-		       "cnipalpha=%u -- CC-SETUP will carry %s%s%s\n",
-		       s.audio.clip_ton, s.audio.clip_npi, s.audio.clip_scr,
-		       s.audio.cnip_scr, s.audio.cnip_alpha,
+		printf("clip: CC-SETUP will carry %s%s%s\n",
 		       s.audio.clip_number ? "a number" : "",
 		       (s.audio.clip_number && s.audio.clip_name) ? " and " : "",
 		       s.audio.clip_name ? "a name" : "");

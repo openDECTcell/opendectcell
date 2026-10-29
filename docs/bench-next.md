@@ -76,8 +76,12 @@ sound); the point is whether the call **stays up**.
 
 ```
 ssh root@192.168.1.1 '/tmp/dect-stubd -g -P 0000 -s /etc/opendectcell-sub.a540 -s /etc/opendectcell-sub.c430a -s /etc/opendectcell-sub.as690h -p -t 120 -a mask=0x0002,codec=3,status=8000 > /tmp/vS1a-$(date +%H%M%S).log 2>&1'
-ssh root@192.168.1.1 '/tmp/dect-stubd -g -P 0000 -s /etc/opendectcell-sub.a540 -s /etc/opendectcell-sub.c430a -s /etc/opendectcell-sub.as690h -p -t 120 -k plain -a mask=0x0002,codec=3,status=8000 > /tmp/vS1b-$(date +%H%M%S).log 2>&1'
 ```
+
+The second run sent the key in plain order (then `-k plain`). Plain order is
+the default since this test and the reversed order is gone, so the daemon
+knows no `-k plain` any more: the first command alone is a ciphered call
+today.
 
 | you see | meaning |
 |---|---|

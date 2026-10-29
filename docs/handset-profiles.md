@@ -110,7 +110,7 @@ standard behaviour, what a handset without a profile gets.
 | `cc.bind_before_connect` | `yes`, `no` | `no` | bind the audio before our {CC-CONNECT} (EN 300 175-5 §9.3.1.8) | `-a bindfirst` |
 | `cc.name.method` | `cnip`, `display`, `both`, `none` | `cnip` | how a caller's name reaches the handset: <<CALLING-PARTY-NAME>> in the {CC-SETUP} (EN 300 444 §8.42), and/or display text in a {CC-INFO} <<MULTI-DISPLAY>> once the handset rings | `-a cnip=` and `-a infoie=` |
 | `cc.name.display` | hex with `{text}`, `{len}` | `hex:{text}` | the **contents** of the <<MULTI-DISPLAY>> element (tag 28H and its length are added) for `display`: a vendor's framing goes here as data. `{text}` is the name, else the number, in the DECT alphabet | `-a infoie=` |
-| `cc.name.alphabet` | `auto`, `utf8`, `dect` | `auto` | <<CALLING-PARTY-NAME>> alphabet: `auto` = UTF-8 to Part 3, DECT (IA5) otherwise (TS 102 527-3 §7.4.17) | `-a cnipalpha=` |
+| `cc.name.alphabet` | `auto`, `utf8`, `dect` | `auto` | <<CALLING-PARTY-NAME>> alphabet: `auto` = UTF-8 to Part 3, DECT (IA5) otherwise (TS 102 527-3 §7.4.17) | built in |
 | `cc.timer` | `handset`, `base` | `handset` | `base`: the base draws the call timer as display text once a second after the answer, as stock does for some Gigasets ([CR A-0125]) | planned |
 | `cc.number.method` | `clip`, `display`, `both` | `clip` | the caller's number: <<CALLING-PARTY-NUMBER>>, and/or display text as for names | `-a clip=` |
 
