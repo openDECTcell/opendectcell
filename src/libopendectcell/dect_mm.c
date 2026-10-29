@@ -355,11 +355,15 @@ static void on_auth_reply_pt(struct dect_mm *mm, const uint8_t *ies,
 	const uint8_t *res;
 	size_t res_len;
 	uint8_t ks[DECT_AUTH_KEY_LEN], dck[DECT_CIPHER_KEY_LEN], xres[4];
+	int ok;
 
 	res = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res_len);
 	dect_dsaa_a11(mm->cipher_uak, mm->rs, ks);
 	dect_dsaa_a12(ks, mm->rand_f, dck, xres);
-	pt_auth_result(mm, res && res_len == 4u && !memcmp(res, xres, 4));
+	ok = res && res_len == 4u && !memcmp(res, xres, 4);
+	if (ok)
+		mm->authenticated = 1;
+	pt_auth_result(mm, ok);
 }
 
 void dect_mm_set_uak(struct dect_mm *mm, const uint8_t uak[DECT_MM_UAK_LEN])
@@ -815,24 +819,33 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 	if (mm->cfg.auth_locate && mm->uak_lookup && rand_f && rs) {
 		uint8_t uak[DECT_MM_UAK_LEN];
 
-		if (mm->pt_auth == PT_AUTH_LOCATE)
-			return;			/* its repeat: still waiting */
-		if (!mm->pt_auth &&
-		    !mm->uak_lookup(mm->uak_lookup_ctx, pid, pid_len, uak)) {
-			/* annex H.2, example 2: AUTHENTICATION-REQUEST nested
-			 * in the location registration, then the answer */
-			mm->locate_la_len = la && la_len <= sizeof(mm->locate_la)
-					    ? la_len : 0;
-			if (mm->locate_la_len)
-				memcpy(mm->locate_la, la, la_len);
-			memcpy(mm->cipher_uak, uak, DECT_MM_UAK_LEN);
-			memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
-			memcpy(mm->rs, rs, sizeof(mm->rs));
-			mm->pt_auth = PT_AUTH_LOCATE;
-			mm->pt_auth_deadline_ms = 0;
-			send_auth_request_fp(mm, 0x08u);
+		/*
+		 * Its repeat while we wait, or another challenge of ours in
+		 * flight (a termination): not now -- the handset repeats it.
+		 * This used to fall through to LOCATE-ACCEPT unchallenged
+		 * (security audit 2026-10-29, A2).
+		 */
+		if (mm->pt_auth)
+			return;
+		/* a held identity without a key cannot prove itself */
+		if (mm->uak_lookup(mm->uak_lookup_ctx, pid, pid_len, uak)) {
+			mm->stats.locate_auth_failed++;
+			send_locate_reject(mm, DECT_MM_REJECT_AUTH_FAILED);
 			return;
 		}
+		/* annex H.2, example 2: AUTHENTICATION-REQUEST nested in the
+		 * location registration, then the answer */
+		mm->locate_la_len = la && la_len <= sizeof(mm->locate_la)
+				    ? la_len : 0;
+		if (mm->locate_la_len)
+			memcpy(mm->locate_la, la, la_len);
+		memcpy(mm->cipher_uak, uak, DECT_MM_UAK_LEN);
+		memcpy(mm->rand_f, rand_f, sizeof(mm->rand_f));
+		memcpy(mm->rs, rs, sizeof(mm->rs));
+		mm->pt_auth = PT_AUTH_LOCATE;
+		mm->pt_auth_deadline_ms = 0;
+		send_auth_request_fp(mm, 0x08u);
+		return;
 	}
 	send_locate_accept(mm, la, la_len);
 }
@@ -915,6 +928,7 @@ static void on_auth_reply_cipher(struct dect_mm *mm, const uint8_t *ies,
 	}
 	memcpy(mm->dck, dck, DECT_MM_DCK_LEN);
 	memcpy(mm->cipher_res, xres, sizeof(mm->cipher_res));
+	mm->authenticated = 1;
 	mm->cipher_state = DECT_MM_CIPHER_READY;
 	send_cipher_request(mm);
 	mm->cipher_on = 0;
@@ -1055,6 +1069,7 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 	/* Authenticated: the requested identity is now the one we hold. */
 	memcpy(mm->port_id, mm->pend_id, mm->pend_id_len);
 	mm->port_id_len = mm->pend_id_len;
+	mm->authenticated = 1;
 
 	send_auth_reply(mm, res2);
 	send_access_accept(mm);

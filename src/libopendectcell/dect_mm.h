@@ -335,6 +335,14 @@ struct dect_mm {
 	uint8_t  term_by_pt;
 	/* its request waits for our authentication of it (§13.5.2) */
 	uint8_t  pt_auth;			/* 0, PT_AUTH_TERMINATE/_LOCATE */
+	/*
+	 * The handset on this connection has proved its key: a registration,
+	 * or a RES to our challenge that matched. Claiming a held IPUI
+	 * (dect_mm_adopt) is not proof -- the IPUI is sent in clear -- so
+	 * nothing that costs or changes anything may rest on port_id alone
+	 * (security audit 2026-10-29, A1-A3).
+	 */
+	uint8_t  authenticated;
 	uint64_t pt_auth_deadline_ms;		/* <MM_auth.1>, 0 = armed */
 	dect_mm_uak_lookup uak_lookup;
 	void    *uak_lookup_ctx;

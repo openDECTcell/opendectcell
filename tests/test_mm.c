@@ -1324,8 +1324,9 @@ static int lookup(void *ctx, const uint8_t *id, size_t len,
  * cfg.auth_locate (annex H.2 example 2): a known handset's LOCATE-REQUEST
  * gets our AUTHENTICATION-REQUEST first; the right RES gives LOCATE-ACCEPT,
  * a wrong one or <MM_auth.1> LOCATE-REJECT "authentication failed"; its
- * repeat meanwhile is not answered twice. Without a UAK for it, or with
- * the option off, the accept comes at once, as before.
+ * repeat meanwhile is not answered twice. With the option off the accept
+ * comes at once, as before; a held identity without a key is rejected
+ * (test_locate_cannot_skip_the_challenge).
  */
 static void test_location_registration_authenticated(void)
 {
@@ -1383,7 +1384,60 @@ static void test_location_registration_authenticated(void)
 			CHECK_EQ(mm.stats.locate_auth_failed, 1u);
 		}
 		CHECK_EQ(mm.pt_auth, 0u);
+		/* only the matching RES proves the handset */
+		CHECK_EQ(mm.authenticated, k == 0 ? 1u : 0u);
 	}
+}
+
+/*
+ * Security audit 2026-10-29, A2: a LOCATE-REQUEST that arrives while
+ * another challenge of ours is in flight (here the one for its access-
+ * rights termination) used to fall through to LOCATE-ACCEPT unchallenged;
+ * and a held identity with no key was accepted without one. Now the first
+ * is not answered (the handset repeats it) and the second is rejected.
+ */
+static void test_locate_cannot_skip_the_challenge(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t keyless[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x44 };
+	uint8_t rand_f[8] = { 7, 7, 7, 7, 1, 2, 3, 4 };
+	uint8_t rs[16] = { 0x42, 0x24 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .rfpi = { 1, 2, 3, 4, 5 },
+				   .sub_slot = 1, .auth_locate = 1 };
+	struct dect_mm mm;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	/* a termination challenge in flight, then a LOCATE-REQUEST */
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, ours, sizeof(ours));
+	mm.port_id_len = sizeof(ours);
+	dect_mm_set_uak(&mm, lookup_uak);
+	dect_mm_set_uak_lookup(&mm, lookup, NULL);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+			       DECT_TI_ORIGINATOR, 0,
+			       DECT_MM_ACCESS_RIGHTS_TERMINATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY,
+			    ours, sizeof(ours));
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REQUEST);
+	n = locate_from(buf, sizeof(buf), ours, sizeof(ours));
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	CHECK_EQ(dect_mm_poll(&mm, out, sizeof(out)), 0u);
+	CHECK_EQ(mm.authenticated, 0u);
+
+	/* a held identity the owner has no key for */
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, keyless, sizeof(keyless));
+	mm.port_id_len = sizeof(keyless);
+	dect_mm_set_uak_lookup(&mm, lookup, NULL);
+	n = locate_from(buf, sizeof(buf), keyless, sizeof(keyless));
+	dect_mm_rx(&mm, buf, n, rand_f, rs);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_REJECT);
+	CHECK_EQ(mm.stats.locate_auth_failed, 1u);
+	CHECK_EQ(mm.authenticated, 0u);
 }
 
 static void test_a_held_handset_is_accepted_and_adopted(void)
@@ -1669,6 +1723,7 @@ int main(void)
 	test_terminate_access_rights();
 	test_handset_deregisters_itself();
 	test_location_registration_authenticated();
+	test_locate_cannot_skip_the_challenge();
 	test_key_allocation_fails_on_timeout_or_refusal();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
