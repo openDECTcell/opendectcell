@@ -34,8 +34,8 @@ interface.
 
 ### What's missing so far
 
-One SIP call at a time; no call waiting or hold; no phonebook on the handset;
-a SIP account can ring only one handset; only the FRITZ!Box 7520 is tested.
+No call waiting or hold; no phonebook on the handset; only the FRITZ!Box
+7520 is tested (the 7412 is being brought up).
 The full list is in [docs/status.md](docs/status.md), and what comes next is
 in the [roadmap](ROADMAP.md).
 

@@ -71,6 +71,14 @@ case), the refusal of an unattached line still open; step 3 done (`f5d150a`,
 rings, and CS call connect after they answer (`2c76ace`). On-air checks:
 `bench-next.md` tests 8-10.
 
+**Progress (2026-10-29):** step 4 done in the bridge rather than in the
+daemon: a VoIP profile may be the line of several handsets, and the
+baresip module sends one call-in per handset; the first to answer takes
+the call and the others are released (`07a57dc`). A call-in for a handset
+while another is in a call is rung on a side link, up to the chip's three
+calls. The line a handset picks for an outgoing call is used. Not yet on
+air.
+
 Steps 1-3 are desk work; 4 needs two handsets and a bench run; 5-6 need the
 A540 (the only Part 3 handset on the bench) plus a second caller, which before
 the bridge exists means an internal call from another handset.

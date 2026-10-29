@@ -47,19 +47,19 @@ handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── opendectc
 | `hello api=79 lines=1 hs=3` | client connects (then an `hs ... state=registered` line per handset) | — |
 | `hs hs=2 state=registered name="Kueche" model=gigaset-c430a part3=0` | on connect, and when a handset is renamed (`model` with a profile, `part3` once its capabilities are known); `state=attached` on location registration comes with step 2 | `names_take()`, profiles |
 | `hs hs=2 state=gone` | deregistered | `dereg_erase()` |
-| `call-out call=5 hs=1 line=1 number=0301234567` | a handset's number is complete (en bloc, `#`, the dial pause, `1C 15`) | `dial_route()`, the line choice (`dect_cc_line()`) |
+| `call-out call=5 hs=1 line=1 number=0301234567` | a handset's number is complete (en bloc or <<SENDING-COMPLETE>>, `#`, the dial pause, `1C 15`), on the main link or a side link; `line` is the one the handset chose (TS 102 527-3 §7.4.5.2) if it has that line, else 1 | `dial_route()`, `side_route()`, `dect_cc_line()` |
 | `digit call=5 d=7` | keypad during a connected call (DTMF, TS 102 527-3 §7.4.14) | `learn_keypad()` in ACTIVE |
 | `ringing call=7 hs=2` | a handset alerts on our call | CC RINGING |
 | `answered call=7 hs=2` | a handset answers (the others are released, §7.4.3.5.4) | CC CONNECT, CS call connect |
 | `released call=5 by=hs reason=normal` | a handset hangs up or the call failed | CC release, `dect_cc_release_reason()` |
-| `busy call=7 why=channels\|in-call` | an incoming call cannot be offered | `link_in_use()`, the channel count (A-0124) |
+| `busy sip=abc why=channels\|in-call` | a call-in cannot be offered: the handset is in a call or being rung (`in-call`, also when three calls are up), or no audio channel is free (`channels`) | `hs_in_call()`, `lanes_available()` (A-0124) |
 
 ### 2.2 bridge → dect-stubd (commands)
 
 | message | from SIP | DECT side |
 |---|---|---|
 | `lines line=1 name="Line 1" hs=1,2 line=2 name="Office" hs=2,3` | the configured pool | `dect_iwu_clear_lines()`, `dect_iwu_add_line()`, list change notices |
-| `call-in line=1 number=0301234567 name="Wednesday" sip=abc` | INVITE on a line | allocate `call`, page and ring every idle attached handset with the full call information to Part 3 handsets; answer `call-in-ok call=7 sip=abc` or `busy` |
+| `call-in line=1 hs=2 number=0301234567 name="Wednesday" sip=abc` | INVITE on a line | allocate `call`, page and ring handset `hs` (default: the first) with the full call information to a Part 3 handset, naming `line`; on the main link if it is free, else on a side link (a side ring); answer `call-in-ok call=7 sip=abc` or `busy`. An account that is the line of several handsets gets one call-in per handset from the bridge |
 | `remote-ringing call=5` | 180/183 | {CC-ALERTING} to the handset (ring-back tone to a Part 3 handset, <<SIGNAL>> 01H) |
 | `remote-answered call=5` | 200 OK | {CC-CONNECT} with CS call connect (TS 102 527-3 §7.4.6.4.3: only when end to end connected) |
 | `remote-released call=5 reason=busy\|normal\|unreachable\|rejected` | BYE, 486, 404, 603 | busy: the busy tone and CS disconnecting to Part 3 (§7.4.8.3), else {CC-RELEASE} with the reason (14H user busy, 00H normal, 12H user unknown, 15H user rejection) |
@@ -67,7 +67,9 @@ handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── opendectc
 | `deregister hs=3` | the LuCI page | `dereg_begin()` (replaces SIGUSR2 + file) |
 | `register-window seconds=120 profile=gigaset-a540` | the LuCI page | `reg_window()` (replaces SIGUSR1); `profile=`, optional, is the model picked before registering: the handset that enrols in this window gets it as `<store>.profile` (`reg_profile_apply()`) |
 
-Call waiting, hold and toggle (lines-and-calls.md steps 5-6) add
+Up to three calls (the chip's audio channels) run at once, each with
+its own `call` id. Call waiting, hold and toggle (lines-and-calls.md
+steps 5-6) add
 `call-in` for a busy Part 3 handset (call waiting instead of `busy`),
 `hold`/`resume`/`toggle call=` from the handset's `1C` codes, and their
 answers; they come with those steps.
@@ -87,14 +89,20 @@ while the daemon runs (`-g`) and is removed on exit.
 
 ## 3. Audio
 
-- A second Unix socket per call, `SOCK_SEQPACKET`, opened by dect-stubd when
-  a call's audio is bound and announced as `audio call=5 path=... rate=16000`.
-- Frames of 20 ms of **linear 16-bit PCM**, little-endian: 640 octets at
-  16 kHz (wideband, the handset's G.722 decoded by dect-stubd's `dect_g722`),
-  320 at 8 kHz (narrowband, from the chip's G.726 path as linear PCM, the
-  mode-2 bind). Both directions on the same socket.
-- The bridge feeds them to a small baresip audio module (`ausrc`/`auplay`
-  named `opendectcell`); baresip encodes for the SIP side (G.722, G.711, Opus).
+- One listening `SOCK_SEQPACKET` socket, `/var/run/opendectcell-audio.sock`
+  (mode 0600), and one connection per call: once a call's speech is
+  bound, dect-stubd announces it as `audio call=5 path=... rate=16000
+  frame=640`; the bridge connects and sends `call=5` as its first message,
+  and the call's lane takes the connection. A connection that names no
+  waiting call within 2 s is closed.
+- Frames of 20 ms of **16 kHz linear 16-bit PCM**, 640 octets, in the
+  host's byte order (both ends run on the box), both directions on the
+  same connection. dect-stubd codes them to and from the lane: a wideband
+  call's G.722 (`dect_g722`), a narrowband call's 16-bit linear samples at
+  8 kHz, resampled 2:1 (`dect_rs2`), so the bridge sees one format.
+- The bridge feeds them to its baresip audio module (`ausrc`/`auplay`
+  named `opendectcell`, the device named per call); baresip encodes for the
+  SIP side (G.722, G.711, Opus).
 - Internal calls stay inside dect-stubd (the host bridge of A-0124); the
   bridge never sees them.
 
@@ -129,7 +137,7 @@ while the daemon runs (`-g`) and is removed on exit.
    exchange 640-octet frames of 16 kHz linear PCM. dect-stubd codes them
    to and from the call's G.722 lane (40 ms of priming, silence on an
    underrun, each of the handset's coded words taken once). A narrowband
-   call gets no audio socket yet. `dect-stubd --bridge-echo [ring
+   call got no audio socket yet (it does since step 5). `dect-stubd --bridge-echo [ring
    [NUMBER]]` is a test bridge: it answers any dialled number and plays
    the caller's voice back 0.5 s late; `ring` also places a call-in.
 4. **Built** (2026-10-28) as a baresip module, not a separate daemon:
@@ -160,13 +168,21 @@ while the daemon runs (`-g`) and is removed on exit.
    INVITE to an account that registers is taken only from the address
    its last REGISTER 2xx came from (baresip's `ua_req_check_origin()`),
    else 403; `opendectcell_any_source yes` in baresip's config turns that off.
-5. `lines` and the pool: two lines, ringing all attached handsets
-   (lines-and-calls.md step 4).
-6. Wideband audio over the socket (the G.722 path).
+5. **Built** (2026-10-29): up to three bridged calls at once, each with
+   its own audio connection; a handset on a side link dials out, and a
+   call-in for a handset while the main link is in a call rings it on a
+   side link. Narrowband calls are resampled to the socket's 16 kHz.
+   Numbers sent complete (redial, the phonebook) go to the bridge too.
+   A VoIP profile may be the line of several handsets: the bridge sends
+   one call-in per handset, the first `answered` takes the SIP call and
+   the other legs get `remote-released`. The line a handset picks goes
+   out with `call-out`, the called one comes in with `call-in`. Not yet
+   tested on air.
+6. `lines` and the pool in dect-stubd (one line list for the cell rather
+   than per handset files), when the controller needs it.
 
 ## Open points
 
 - Decided: a baresip module (fewer processes); see step 4.
-- The narrowband linear PCM path: which bind gives clean linear PCM both ways
-  today (`call-g7.md`), and whether the audio socket should carry G.722
-  untouched instead and let baresip decode it.
+- Whether the audio socket should carry G.722 untouched for a G.722 SIP
+  call and save the decode and encode (wideband to wideband).

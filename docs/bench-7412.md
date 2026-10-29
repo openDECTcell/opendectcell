@@ -166,8 +166,27 @@ control lane (`03d4107`), the next internal call had audio both ways:
 lane +1 (A540, channel 1) and +2 (C430A, channel 2) each changed 4000
 times a second, so call *n* is in control lane + *n* [CR A-0015].
 
-Open: two external calls at once (the SIP bridge carries one call; call
-waiting is not built), narrowband over SIP (the bridge is wideband only),
-the A540's call timer (none on the internal call; stock draws it as
-display text for some Gigasets [CR A-0125], `cc.timer` in
-docs/handset-profiles.md, not built).
+Open after this run: two external calls at once (the SIP bridge carried
+one call), narrowband over SIP (the bridge was wideband only), the A540's
+call timer on the internal call. The timer: stock gives a Part 3 caller
+the line id and type on an internal call too, from CALL-PROC on, and the
+A540 times a call only with them [CR 7412 A-0016, capture 14]; we sent
+the call id and status alone (`e9e767b` adds the line). Base-drawn
+timers are for Part 1 handsets only. The other two are built in
+`07a57dc`; card below.
+
+## Card: several calls, shared line, narrowband (2026-10-29 evening)
+
+Box at `07a57dc` (dect-stubd md5 `67d4b1e4`, `opendectcell.so` md5 `696ccc03`,
+hand-copied) with the init script of `ead1a36`; `voip1` is Line 1 of
+DECT 1 (A540) and DECT 2 (C430A). Outcomes written before the run:
+
+| test | pass | fail and what it means |
+|---|---|---|
+| 1. Call the number from outside | both handsets ring; answer on one, the other stops at once; audio both ways | only one rings: the bridge's second leg (`opendectcell: call from ... rings 2 handset(s)` missing) or the side ring (`bridge: paged DECT n`); the other keeps ringing: `remote-released` for the losing leg |
+| 2. While 1 is up, the other handset dials a number outside | second SIP call connects, audio both ways on both calls | `bridge: 3 calls already` or `busy`: the call table; no audio on one: the lane (`audio: call N's speech on ... lane 2`) or the device name (`audio source "..." is no call of ours`) |
+| 3. A540 in a call, call the number again from a second phone | the C430A rings (side ring) and can take it | busy at once: `why=channels` or `in-call` in the log |
+| 4. An internal call A540 -> C430A | the A540 shows its call timer | no timer: the line in CONNECT (`7e 0c ... 02 01 85` with `-p`) |
+| 5. Wideband off (Network > DECT, Wideband audio), one call out | a clear narrowband call both ways | silence or noise: the linear lane's format on the 7412 (A-0015 says 16-bit linear, one sample a frame) |
+| 6. Redial from the A540's list | the call goes out over SIP | a silent local call: `number_complete()` |
+

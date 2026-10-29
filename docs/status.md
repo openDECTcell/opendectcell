@@ -27,16 +27,17 @@ tested · ❌ not built yet · ➖ out of scope for now
 
 | Feature | State | Notes |
 |---|---|---|
-| Calls in and out through a SIP account | ✅ | One SIP call at a time |
+| Calls in and out through a SIP account | ✅ | |
 | HD voice (wideband, G.722) | ✅ | Both directions, the default |
-| Narrowband voice (handsets without HD) | 🟡 | Works for calls between handsets; not yet passed on to SIP calls |
+| Narrowband voice (handsets without HD) | 🟡 | Between handsets; to SIP since 2026-10-29, not yet tested on a call |
 | Caller's number on the display | ✅ | |
 | Caller's name on the display | 🟡 | Sent the standard way; the C430A and AS690H show it only as a separate text screen, and on the A540 it is still being tested |
 | Line name on the display ("via Line 1") | ✅ | CAT-iq handsets |
 | Calls between handsets (internal calls) | ✅ | |
-| Two calls at the same time | 🟡 | Tested for calls between handsets; on SIP only one call at a time |
-| Two SIP accounts per handset (Line 1, Line 2) | 🟡 | Both ring the handset; outgoing calls always use Line 1 |
-| One SIP account ringing several handsets | ❌ | A VoIP profile is the line of one handset for now |
+| Several calls at the same time | 🟡 | Up to three (the chip's voice channels). Two calls between handsets tested; several SIP calls built 2026-10-29, not yet tested |
+| Two SIP accounts per handset (Line 1, Line 2) | 🟡 | Both ring the handset; a CAT-iq handset's calls go out on the line it picks, others' on Line 1 (built, not yet tested) |
+| One SIP account ringing several handsets | 🟡 | A VoIP profile may be the line of several handsets; a call rings them all and the first to answer takes it (built 2026-10-29, not yet tested) |
+| Redial and calls from the phonebook | 🟡 | A number sent complete goes to SIP; it was connected locally before 2026-10-29 |
 | Call waiting, hold, switching between calls | ❌ | Designed ([lines-and-calls.md](lines-and-calls.md)), not built |
 | "Busy" when all voice channels are taken | ✅ | |
 | Phonebook and call lists on the handset | ❌ | Planned, from a vCard source over HTTPS |
@@ -56,7 +57,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 |---|---|---|
 | FRITZ!Box 7520 | ✅ | The development box |
 | FRITZ!Box 7530 | 🟡 | Same hardware as the 7520 and the same OpenWrt image, but not tested on one yet |
-| FRITZ!Box 7412 | 🟡 | The service runs on a 7412 with the `kmod-lantiq-ssc-pcm` transport: chip upload, control channel, radio on and park (2026-10-29). No handset has registered yet |
+| FRITZ!Box 7412 | 🟡 | With the `kmod-lantiq-ssc-pcm` transport (2026-10-29): two handsets registered, SIP calls in and out with HD voice, a call between handsets. Not released yet ([bench-7412.md](bench-7412.md)) |
 | FRITZ!Box 7362 SL | ❌ | Analysed only |
 | Other FRITZ!Boxes | ❌ | Many use the same DECT chip; see [hardware-abstraction.md](hardware-abstraction.md) for what a new model needs |
 
@@ -83,7 +84,7 @@ handsets are very welcome; see [CONTRIBUTING.md](../CONTRIBUTING.md).
 - Installing on a freshly flashed box (the development box was set up step
   by step).
 - Three calls at the same time (the chip has three voice channels; two were
-  tested).
+  tested), and more than one SIP call at a time.
 
 ## Later, or out of scope
 
