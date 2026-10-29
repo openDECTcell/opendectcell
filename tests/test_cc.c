@@ -460,6 +460,57 @@ static int read_negative_ack(const uint8_t *out, size_t n,
  * not supported", tone 09H -- and is never taken for digits. A call id not
  * ours: CS idle, "control code failed". Not to a Part 1 handset.
  */
+/*
+ * Parallel calls on: the control codes go to the owner with their call id,
+ * a number after 1CH 15H starts the keypad afresh, nothing is answered by
+ * CC itself; dect_cc_call_status() sends a status without a tone.
+ */
+static void test_parallel_hands_over_control_codes(void)
+{
+	static const uint8_t accept[] = { 0x1C, 0x35 };
+	static const uint8_t parallel_ext[] = { 0x1C, 0x15, '0', '3', '0' };
+	struct dect_callinfo ci;
+	struct dect_cc cc;
+	uint8_t buf[64], out[64], code, id;
+	const uint8_t *k;
+	size_t n, klen, vn;
+	const uint8_t *v;
+
+	dect_cc_init(&cc);
+	dect_cc_set_call_status(&cc, 1, 3);
+	dect_cc_set_parallel(&cc, 1);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x88);
+	buf[n++] = DECT_IE_SENDING_COMPLETE;
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;				/* CALL-PROC, CONNECT */
+	CHECK_EQ(dect_cc_take_control(&cc, &code, &id), 0);
+
+	n = pp_control(buf, sizeof(buf), accept, sizeof(accept), 5);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_poll(&cc, out, sizeof(out)), 0u);	/* no nack */
+	CHECK_EQ(dect_cc_take_control(&cc, &code, &id), 1);
+	CHECK_EQ(code, 0x35u);
+	CHECK_EQ(id, 5u);
+	CHECK_EQ(dect_cc_take_control(&cc, &code, &id), 0);	/* once */
+
+	n = pp_control(buf, sizeof(buf), parallel_ext, sizeof(parallel_ext), 0);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_take_control(&cc, &code, &id), 1);
+	CHECK_EQ(code, 0x15u);
+	k = dect_cc_keypad(&cc, &klen);
+	CHECK(k && klen == 3u && memcmp(k, "030", 3) == 0);
+
+	CHECK_EQ(dect_cc_call_status(&cc, 3, DECT_CS_CALL_HOLD,
+				     DECT_CC_NO_REASON, DECT_CC_NO_SIGNAL), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_INFO);
+	CHECK(dect_nwk_find_fixed_ie(out + 2, n - 2, DECT_IE_SIGNAL) < 0);
+	v = dect_nwk_find_ie(out + 2, n - 2, DECT_IE_CALL_INFORMATION, &vn);
+	CHECK(v && dect_callinfo_parse(v, vn, &ci) == 0 && ci.call_id == 3u &&
+	      ci.call_status == DECT_CS_CALL_HOLD && !ci.has_status_reason);
+}
+
 static void test_control_codes_get_a_negative_ack(void)
 {
 	static const uint8_t toggle[] = { 0x1C, 0x31 };
@@ -2961,6 +3012,7 @@ int main(void)
 	test_setup_without_basic_service_is_refused();
 	test_setup_with_flag_one_is_ignored();
 	test_control_codes_get_a_negative_ack();
+	test_parallel_hands_over_control_codes();
 	test_service_change_is_rejected();
 	test_call_waiting_indication();
 	test_release_with_a_reason_and_busy_system();

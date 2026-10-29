@@ -722,6 +722,34 @@ uint8_t dect_cc_codec(const struct dect_cc *cc)
 	return cc->chosen_codec;
 }
 
+static void queue_status_info(struct dect_cc *cc, uint8_t signal,
+			      uint8_t call_id, uint8_t status, uint8_t reason);
+
+void dect_cc_set_parallel(struct dect_cc *cc, int on)
+{
+	cc->parallel = on ? 1u : 0u;
+}
+
+int dect_cc_take_control(struct dect_cc *cc, uint8_t *code,
+			 uint8_t *call_id)
+{
+	if (!cc->ctl_pending)
+		return 0;
+	cc->ctl_pending = 0;
+	*code = cc->ctl_code;
+	*call_id = cc->ctl_call_id;
+	return 1;
+}
+
+int dect_cc_call_status(struct dect_cc *cc, uint8_t call_id, uint8_t status,
+			uint8_t reason, uint8_t signal)
+{
+	if (!cc->call_status || cc->state == DECT_CC_ST_NULL)
+		return -1;
+	queue_status_info(cc, signal, call_id, status, reason);
+	return 0;
+}
+
 int dect_cc_prefer_narrowband(struct dect_cc *cc)
 {
 	if (cc->chosen_codec != CODEC_ID_G722 || !cc->peer_has_g726)
@@ -734,11 +762,9 @@ static void accept_now(struct dect_cc *cc);
 static void proceed(struct dect_cc *cc);
 
 /*
- * {CC-INFO}: <<SIGNAL>>, then <<CALL-INFORMATION>> {call id, status, and a
- * call status reason unless DECT_CC_NO_REASON}.
+ * {CC-INFO}: <<SIGNAL>> unless DECT_CC_NO_SIGNAL, then <<CALL-INFORMATION>>
+ * {call id, status, and a call status reason unless DECT_CC_NO_REASON}.
  */
-#define DECT_CC_NO_REASON	0xFFu
-
 static void queue_status_info(struct dect_cc *cc, uint8_t signal,
 			      uint8_t call_id, uint8_t status, uint8_t reason)
 {
@@ -751,8 +777,9 @@ static void queue_status_info(struct dect_cc *cc, uint8_t signal,
 		return;
 	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
 				 cc->ti_flag, cc->ti_value, DECT_CC_INFO);
-	off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
-				    DECT_IE_SIGNAL, signal);
+	if (signal != DECT_CC_NO_SIGNAL)
+		off = dect_nwk_put_fixed_ie(b, DECT_LAPC_MSG_MAX, off,
+					    DECT_IE_SIGNAL, signal);
 	dect_callinfo_init(&ci);
 	ci.has_call_id = 1;
 	ci.call_id = call_id;
@@ -792,8 +819,8 @@ static uint8_t current_call_status(const struct dect_cc *cc)
  * number", a parallel internal call, during a connected call. They are not
  * digits, so they never reach the keypad.
  *
- * We hold one call per link, so none of these can be served yet
- * (lines-and-calls.md steps 5-6). §7.4.3.4 then wants the negative
+ * With dect_cc_set_parallel() the owner serves them (dect_cc_take_control()).
+ * Without, none can be served, and §7.4.3.4 wants the negative
  * acknowledgement, even for a feature the FP lacks: the targeted call's
  * current status again, the reason "control code not supported", and the
  * negative acknowledgement tone (09H) in the same {CC-INFO}. A call id that
@@ -828,6 +855,28 @@ static int control_code(struct dect_cc *cc, const uint8_t *ies,
 		return 0;
 	}
 	cc->stats.control_codes++;
+	if (cc->parallel && cc->call_status) {
+		ci_ie = dect_nwk_find_ie(ies, ies_len,
+					 DECT_IE_CALL_INFORMATION, &cn);
+		cc->ctl_pending = 1;
+		cc->ctl_code = p[0] == 0x17u ? 0x17u : p[1];
+		cc->ctl_call_id = 0;
+		if (ci_ie && dect_callinfo_parse(ci_ie, cn, &ci) == 0 &&
+		    ci.has_call_id)
+			cc->ctl_call_id = ci.call_id;
+		/* a number after 1CH 15H or 17H: the parallel call's */
+		if (cc->ctl_code == 0x15u || cc->ctl_code == 0x17u) {
+			size_t skip = p[0] == 0x17u ? 1u : 2u;
+
+			cc->keypad_len = 0;
+			cc->keypad_overflow = 0;
+			if (n > skip && n - skip <= sizeof(cc->keypad)) {
+				memcpy(cc->keypad, p + skip, n - skip);
+				cc->keypad_len = n - skip;
+			}
+		}
+		return 1;
+	}
 	if (!cc->call_status)
 		return 1;
 	status = current_call_status(cc);

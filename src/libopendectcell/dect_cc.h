@@ -220,6 +220,13 @@ struct dect_cc {
 	 * busy_deadline_ms with the busy tone, then is released.
 	 */
 	uint8_t  busy_notified;
+	/*
+	 * Parallel calls (dect_cc_set_parallel()): the last control code the
+	 * handset sent, for the owner -- 1CH xx as xx, 17H as 17H -- and the
+	 * call id it named (0 = none).
+	 */
+	uint8_t  parallel;
+	uint8_t  ctl_pending, ctl_code, ctl_call_id;
 	uint64_t busy_deadline_ms;
 	/*
 	 * <CC.02> (EN 300 175-5 §9.5.1, A.1: 36 s): our {CC-RELEASE} awaits
@@ -594,6 +601,34 @@ void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti);
  */
 int dect_cc_call_waiting(struct dect_cc *cc, const struct dect_callinfo *ci,
 			 const struct dect_clip *id);
+
+/*
+ * Parallel calls (TS 102 527-3 §7.4.3), for an owner that runs them: on,
+ * the control codes of table 17 a Part 3 handset sends in {CC-INFO} during
+ * a call are handed over (dect_cc_take_control()) instead of answered with
+ * the negative acknowledgement. Digits after 1CH 15H or 17H in the same
+ * <<MULTI-KEYPAD>> go to the keypad, which they start afresh.
+ */
+void dect_cc_set_parallel(struct dect_cc *cc, int on);
+
+/*
+ * The control code the handset sent last, once: code is xx of 1CH xx, or
+ * 17H; call_id the id it named, 0 if none. Returns 1 if there was one.
+ */
+int dect_cc_take_control(struct dect_cc *cc, uint8_t *code,
+			 uint8_t *call_id);
+
+/*
+ * A call status for one of the handset's calls in {CC-INFO} (§7.4.6.4):
+ * call_id, status (DECT_CS_*), a reason or DECT_CC_NO_REASON, and a
+ * <<SIGNAL>> or DECT_CC_NO_SIGNAL. -1 unless call status is on and the
+ * transaction is up.
+ */
+#define DECT_CC_NO_REASON	0xFFu
+#define DECT_CC_NO_SIGNAL	0xFFu
+
+int dect_cc_call_status(struct dect_cc *cc, uint8_t call_id, uint8_t status,
+			uint8_t reason, uint8_t signal);
 
 /* Queue a CC-RELEASE to hang up an active call. Returns 0, or -1 if idle. */
 int dect_cc_release(struct dect_cc *cc);
