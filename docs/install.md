@@ -41,8 +41,8 @@ the repository).
 
 ### FRITZ!Box 7412 (experimental)
 
-The 7412 runs the base since 2026-10-29, but no handset has registered with
-it yet ([7412-spi-tdm-and-loader.md](7412-spi-tdm-and-loader.md) §1b,
+The 7412 runs the base since 2026-10-29: handsets register, and SIP calls in
+and out work with HD voice ([7412-spi-tdm-and-loader.md](7412-spi-tdm-and-loader.md) §1b,
 [bench-7412.md](bench-7412.md)). Its PCM bus needs a second kernel module
 that is **not part of the release yet**: `kmod-lantiq-ssc-pcm`, the generic
 Lantiq SSC PCM transport, from its own repository. Build it with the OpenWrt
@@ -160,11 +160,27 @@ phone" set up for it.
    and encryption) suit nearly every provider; if your provider supports
    TLS, choose it under Server and NAT.
 2. Tab **Handsets**, *Edit* the handset, tab General: pick the profile as
-   **Line 1**. Its calls go out on Line 1, and calls to that account ring
-   it. Line 2 is an optional second account that rings it too. A profile
-   can be the line of one handset only.
+   **Line 1**. Calls to that account ring the handset, and its calls go out
+   on Line 1. Line 2 is an optional second account that rings it too; a
+   CAT-iq handset can pick Line 2 for a call it makes. A profile may be the
+   line of several handsets: a call to it rings them all, and the first to
+   answer takes it.
 3. *Save & Apply*. Status > DECT, tab VoIP shows whether the line is
    registered, and the codec and encryption of each call.
+
+Up to three calls run at once, over SIP or between handsets (*Several
+calls*, tab General). Handsets without HD voice call over SIP too; for
+G.711 the speech is resampled by `baresip-mod-auresamp`, which comes with
+`opendectcell-baresip`.
+
+The base takes a SIP call only from the server the account registers with.
+If your provider's calls come from other addresses (the Log says "is not
+from the account's server -- 403"), allow them on the command line:
+
+```sh
+uci set opendectcell.main.sip_any_source=1; uci commit opendectcell
+/etc/init.d/opendectcell restart
+```
 
 ## Upgrading and removing
 
@@ -186,7 +202,7 @@ The *Log* tab of Status > DECT shows what the base and the SIP side say.
 | The handset says the PIN is wrong | Enter the PIN shown in the web page right now (*New PIN* changes it). Some handsets first try 0000 by themselves |
 | Registration does not start | Press *Register a handset* again: the window closes after two minutes |
 | The VoIP tab shows a line as not registered | The reason is shown next to it. Check user name, password and registrar in the VoIP profile |
-| A call is "busy" right away | Only one SIP call at a time is supported for now |
+| A call is "busy" right away | The handset is already in a call or ringing, or three calls are up (the chip's voice channels; one if *Several calls* is off) |
 
 If you are stuck, please open an issue: [CONTRIBUTING.md](../CONTRIBUTING.md)
 says what to include.

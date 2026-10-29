@@ -50,17 +50,22 @@ Two facts drive the design:
 
 ## 4. Userspace side: one package, one profile per model
 
-- **One package for all models:** `opendectcell` contains `dect-fwload`, `dect-stubd`, `dect-probe`, `libopendectcell`, the init script and all board profiles.
-  - It depends on the right kernel module for the target (`+TARGET_lantiq:kmod-opendectcell-lantiq`, …), so installing `opendectcell` is enough.
+- **One package for all models:** `opendectcell` contains `dect-fwload`, `dect-stubd` (with `libopendectcell` built in), the init script, all board profiles and the handset profiles.
+  - It depends on the right kernel modules for the target (`+TARGET_lantiq_xrx200:kmod-opendectcell-lantiq`, `+TARGET_lantiq_xrx200:kmod-lantiq-ssc-pcm`, `+TARGET_ipq40xx:kmod-opendectcell-ipq40xx`), so installing `opendectcell` is enough.
   - The programs contain **no per-model code**. Everything model-specific is in the profile.
 - **Board profiles** are read-only files at `/usr/share/opendectcell/boards/<board_name>`, e.g. `/usr/share/opendectcell/boards/avm,fritz7412`. In the repo they live in `boards/`.
   - Format: plain `key=value` lines with `#` comments, readable by people and sourceable by the shell init script.
   - They are replaced by every package upgrade, so fixes reach users automatically.
 - **User settings** go into `/etc/config/opendectcell` (UCI). It holds only what a user may want to change (enabled, RFPI override, debug level) and, for experts, deliberate overrides of profile keys. UCI files survive upgrades, and the profile underneath stays current.
 - **Start-up:** the procd init script reads `board_name`, loads the matching profile, applies UCI overrides and passes the result to the daemons as command-line options. The daemons don't parse files, which keeps them simple to test on the PC.
-- **Unsupported box:** the init script prints one clear message ("This box (…) is not supported by openDECTcell") and starts nothing.
+- **Box without a profile:** the init script logs "no board profile for '…'; using the 7520 defaults" and goes on with its built-in 7520/7530 values; UCI can override each of them.
 
-### Profile keys (initial set)
+### Profile keys
+
+What the init script reads today: `fw_firstlevel`, `fw_secondlevel`,
+`dect_mode`, `uart`, `strap`, `factory_mtd`, `factory_offset`, `led_path`,
+`pcm_kmod`, `pcm_dev` and `pcm_slots`. The other keys below are recorded
+for the model but **read by nothing yet**; some are in no profile file yet.
 
 | Key | Meaning | 7412 value |
 |---|---|---|
@@ -69,18 +74,21 @@ Two facts drive the design:
 | `fw_family` | STUB family; selects address translation (0 for `441`, 0xF0000 for `488`) | `441` |
 | `fw_firstlevel` | First-level loader file name | `dectfw_firstlevel_441-06.88-7412.hex` |
 | `fw_secondlevel` | STUB file name; `dect-stubd` picks chip RAM addresses by it, so a build gets a name of its own | `dectfw_secondlevel_441-06.88-7412.hex` |
-| `fw_firstlevel_sha256`, `fw_secondlevel_sha256` | Builds our docs are verified against (reference by hash only); checked before loading | `72f8e27a…045f2`, `4fabee65…cfaa6` |
+| `fw_firstlevel_sha256`, `fw_secondlevel_sha256` | Builds our docs are verified against (reference by hash only). Not read: the init script checks both files against its own list of known builds (`KNOWN_FW`, the same table as `tools/dect-fw-extract.py`) | `72f8e27a…045f2`, `4fabee65…cfaa6` |
 | `dect_mode` | Mode word: low byte goes into TLV tag 7, bit 8 is the first-level boot flag | `0x119` |
-| `uart` | Firmware-load UART device | `/dev/ttyLTQ0` (*assumed*) |
-| `uart_is_console` | The UART is also the serial console (console must be released) | `1` |
+| `uart` | Firmware-load UART device | `/dev/ttyLTQ0` (*observed* 2026-10-29, [bench-7412.md](bench-7412.md)) |
+| `uart_is_console` | The UART is also the serial console (console must be released). Not read: the init script and the uci-defaults script release whatever getty runs on `uart` | `1` |
 | `uart_baud_rom`, `uart_baud_stub` | Baud rates for the ROM and the first-level stage | *open* |
 | `pcm_kmod` | Transport module loaded before the chip boots, where another module than openDECTcell's carries the bus (it holds the PCM clock enable); empty: none | `lantiq_ssc_pcm` |
 | `pcm_dev` | PCM device `dect-stubd` opens (`-d`); empty: `/dev/dect0` | `/dev/ssc-pcm0` |
 | `pcm_slots` | 16-bit slots per frame (`-c`); empty: the module's default | `36` (mode 0x119, *observed* 2026-10-28) |
 | `pcm_words_per_frame`, `pcm_ctrl_slot`, `pcm_voice_slots` | Frame layout | 36 lanes (`pcm_slots`); control lane found by probing, every run elsewhere (no frame sync); speech of call *n* in control lane + *n*, same lane both ways [CR A-0015], set by the daemon (2026-10-29, `d1d2c8f`) |
-| `factory_cfg` | Where the factory DECT config block is stored | *open* (M1) |
-| `rfpi_fallback` | Source for the RFPI if the factory block holds the placeholder | *open* (M1) |
-| `max_calls` | Parallel calls the STUB supports in this mode | *open* (about 3) |
+| `strap` | `0`: the uploader leaves the chip's boot strap alone (`dect-fwload --no-strap`) | `0` |
+| `led_path` | The DECT LED's brightness file, driven by `dect-stubd` | `/sys/class/leds/green:dect/brightness` |
+| `factory_mtd`, `factory_offset` | The factory DECT config block (RFPI and calibration) | `/dev/mtd0`, `0x1e800` |
+| `factory_cfg` | Where the factory DECT config block is stored; superseded by `factory_mtd`/`factory_offset`, empty | (empty) |
+| `rfpi_fallback` | Source for the RFPI if the factory block holds the placeholder | `maca` |
+| `max_calls` | Parallel calls the STUB supports in this mode; `dect-stubd` allows three (its `twocalls` option) whatever this says | `3` |
 
 New keys are added when a model needs them, with a default that keeps existing profiles valid.
 

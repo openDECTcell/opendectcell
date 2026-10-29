@@ -22,7 +22,9 @@ interface.
 - **Your handsets on OpenWrt:** register GAP and CAT-iq handsets with a
   random PIN; up to six per box.
 - **Phone calls over SIP:** each handset gets up to two SIP accounts (*VoIP
-  profiles*), for a provider or your own telephone system.
+  profiles*), for a provider or your own telephone system; several handsets
+  can share one, and a call to it rings them all.
+- **Up to three calls at once**, over SIP or between handsets.
 - **HD voice and encryption:** wideband G.722 audio, encrypted on the air by
   default.
 - **Caller ID and line names** on the handset display.
@@ -45,7 +47,7 @@ in the [roadmap](ROADMAP.md).
 |---|---|
 | **FRITZ!Box 7520** | ✅ works: the development box |
 | **FRITZ!Box 7530** | 🟡 same hardware as the 7520, not yet tested |
-| FRITZ!Box 7412 | 🟡 base runs on a 7412 (needs `kmod-lantiq-ssc-pcm`); no handset registered yet |
+| FRITZ!Box 7412 | 🟡 handsets register and SIP calls work (needs `kmod-lantiq-ssc-pcm`); not released yet |
 | FRITZ!Box 7362 SL | analysed only |
 
 **Tested handsets:** Gigaset A540 CAT, Gigaset C430A, Gigaset AS690H and AVM

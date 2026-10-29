@@ -6,26 +6,28 @@ the cell protocol exists. The bridge carries the events the cell protocol will
 carry, so the controller can replace it without touching `dect-stubd`. This
 page is that interface: the messages, who sends them, which DECT procedure
 each one drives (all built and unit-tested, see `lines-and-calls.md`), and
-who may send what. Not built yet; step 7 of `lines-and-calls.md`.
+who may send what. Built: dect-stubd's side and the baresip module (§5).
 
 ## 1. Pieces
 
 ```
-handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── opendectcell-sipd ──(ctrl_tcp)── baresip ── SIP
-                                 └──────(audio socket)──────────┘
+handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── baresip + module opendectcell ── SIP
+                                 └──────(audio socket)─────────┘
 ```
 
 - **dect-stubd** stays the DECT side: it owns the handsets, the line pool
   (`dect_iwu` lines), call ids, the CC state per handset.
-- **opendectcell-sipd**, a small new daemon, is the bridge: it translates the
-  messages below to baresip's `ctrl_tcp` commands and events (JSON in
-  netstrings), and moves audio between the audio socket and a baresip audio
-  module. One SIP account per pool line.
+- **The bridge** is the baresip module `opendectcell` (`src/baresip/opendectcell.c`,
+  package `opendectcell-baresip`), loaded into baresip itself: it is the control
+  socket's client, translates the messages below to and from baresip's
+  calls, and is baresip's audio source and player on the audio socket.
+  One baresip account per VoIP profile that is a handset's line; the init
+  script writes the accounts and the line map `/var/run/opendectcell/lines`
+  (`<hs> <line> <aor>`) at every start (§5, step 4).
 - **baresip** (OpenWrt telephony feed, BSD) does SIP, RTP and the codecs on
   the network side.
-- Later the **controller** speaks the same messages over the network instead of
-  opendectcell-sipd; `-a controller=ADDR` is accepted today and logs "not
-  implemented, running standalone".
+- Later the **controller** speaks the same messages over the network instead
+  of the module; nothing of it is built yet.
 
 ## 2. The control socket
 
