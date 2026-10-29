@@ -93,15 +93,37 @@ console_claim() {
 	return 0
 }
 
+# A value from UCI (LuCI writes it) must consist of the characters of
+# CLASS before it reaches a shell word, a daemon option or a config file
+# line: a newline, a space or a comma there adds what the user never set
+# (security audit 2026-10-29, F3). uci_ok NAME VALUE CLASS
+uci_ok() {
+	case "$2" in
+	*[!$3]*)
+		log "option $1 '$2' has characters it may not have; ignored"
+		return 1
+		;;
+	esac
+	return 0
+}
+
+# config_get, falling back to DEFAULT when the value fails uci_ok
+uci_get() {
+	local __v
+	config_get __v main "$2" "$3"
+	uci_ok "$2" "$__v" "$4" || __v="$3"
+	eval "$1=\$__v"
+}
+
 load_chip() {
 	local dir first second tty mtd off mode unverified f extra
-	config_get dir main firmware_dir /etc/opendectcell/firmware
-	config_get first main first "$fw_firstlevel"
-	config_get second main second "$fw_secondlevel"
-	config_get tty main uart "$uart"
-	config_get mtd main factory_mtd "$factory_mtd"
-	config_get off main factory_offset "$factory_offset"
-	config_get mode main mode "$dect_mode"
+	uci_get dir firmware_dir /etc/opendectcell/firmware 'A-Za-z0-9/._-'
+	uci_get first first "$fw_firstlevel" 'A-Za-z0-9._-'
+	uci_get second second "$fw_secondlevel" 'A-Za-z0-9._-'
+	uci_get tty uart "$uart" 'A-Za-z0-9/'
+	uci_get mtd factory_mtd "$factory_mtd" 'A-Za-z0-9/'
+	uci_get off factory_offset "$factory_offset" '0-9A-Fa-fx'
+	uci_get mode mode "$dect_mode" '0-9A-Fa-fx'
 	config_get strapv main strap "$strap"
 
 	[ -r "$dir/$first" ] && [ -r "$dir/$second" ] || {
@@ -398,17 +420,19 @@ baresip_write() {
 	[ "$BS_ACCOUNTS" -gt 0 ] || return 1
 	{
 		echo "# written by /etc/init.d/opendectcell from /etc/config/opendectcell"
-		config_get v main sip_port 5060
+		uci_get v sip_port 5060 '0-9'
 		echo "sip_listen 0.0.0.0:$v"
-		config_get v main rtp_ports '10000-20000'
+		uci_get v rtp_ports '10000-20000' '0-9-'
 		echo "rtp_ports $v"
-		config_get v main rtp_dscp 46
+		uci_get v rtp_dscp 46 '0-9'
 		echo "rtp_tos $((v * 4))"
-		config_get v main sip_dscp 24
+		uci_get v sip_dscp 24 '0-9'
 		echo "sip_tos $((v * 4))"
-		config_get v main net_interface
+		uci_get v net_interface '' 'A-Za-z0-9._-'
 		[ -n "$v" ] && echo "net_interface $v"
 		config_get v main dns_server
+		uci_ok dns_server "$(printf '%s' "$v" | tr -d '[]')" \
+			'0-9A-Fa-f.:' || v=
 		# baresip wants IP:port; a bare address gets port 53
 		case "$v" in
 		"") ;;
@@ -418,9 +442,9 @@ baresip_write() {
 		esac
 		config_get_bool v main tls_verify 1
 		echo "sip_verify_server $([ "$v" = 1 ] && echo yes || echo no)"
-		config_get v main tls_cafile
+		uci_get v tls_cafile '' 'A-Za-z0-9/._-'
 		[ -n "$v" ] && echo "sip_cafile $v"
-		config_get v main jitter '20-160'
+		uci_get v jitter '20-160' '0-9-'
 		lo=${v%-*}; hi=${v#*-}
 		echo "audio_jitter_buffer_type adaptive"
 		echo "audio_jitter_buffer_delay $(( (lo + 19) / 20 ))-$(( (hi + 19) / 20 ))"
@@ -453,20 +477,20 @@ start_service() {
 
 	load_chip || return 1
 	overrides_write
-	config_get pin main pin ''
+	uci_get pin pin '' '0-9'
 	if [ -z "$pin" ]; then
 		pin=$(pin_make)
 		uci -q set opendectcell.main.pin="$pin" && uci -q commit opendectcell
 		log "made a registration PIN (Network > DECT, Handsets shows it)"
 	fi
-	config_get stores main stores '/etc/opendectcell-sub.*'
+	uci_get stores stores '/etc/opendectcell-sub.*' 'A-Za-z0-9/._*-'
 	config_get options main options ''
 	config_get_bool reg main registration 0
 	[ "$reg" = 1 ] && options="${options:+$options,}regopen"
 	config_get_bool wb main wideband 1
 	[ "$wb" = 1 ] || options="${options:+$options,}narrowband"
 	config_get_bool ov main overlap 1
-	config_get dw main dialwait 3000
+	uci_get dw dialwait 3000 '0-9'
 	if [ "$ov" = 1 ]; then
 		options="${options:+$options,}dialwait=$dw"
 	else
@@ -475,7 +499,7 @@ start_service() {
 	# On unless turned off: ciphered calls work since 2026-10-28
 	config_get_bool ci main cipher 1
 	[ "$ci" = 1 ] || nocipher="-C"
-	config_get rw main regwindow 120
+	uci_get rw regwindow 120 '0-9'
 	options="${options:+$options,}regwindow=$rw"
 	# authentication on location registration: the daemon's default
 	config_get_bool la main locauth 1
@@ -509,7 +533,11 @@ start_service() {
 	done
 
 	procd_open_instance
-	procd_set_param command $PROG $PCM_ARGS -g -P "$pin" $nocipher $args \
+	# the PIN through a root-only file: on the command line every local
+	# user could read it in /proc (security audit 2026-10-29, F2)
+	( umask 077; printf '%s\n' "$pin" > /var/run/opendectcell/pin )
+	procd_set_param command $PROG $PCM_ARGS -g -P @/var/run/opendectcell/pin \
+		$nocipher $args \
 		${options:+-a "$options"}
 	procd_set_param stdout 1
 	procd_set_param stderr 1

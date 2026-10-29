@@ -10998,7 +10998,8 @@ static void usage(void)
 		"           registration, then run the host C-plane stack so a\n"
 		"           handset can register (parks the radio on exit)\n"
 		"  -P PIN   registration PIN / AC, 4 to 8 digits (default 0000;\n"
-		"           used with -g)\n"
+		"           used with -g); -P @FILE reads it from a file only\n"
+		"           root may write\n"
 		"  -s PATH  subscription store, holds the handset key; reloaded into\n"
 		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off).\n"
 		"           Repeat for every handset the base holds: all are served\n"
@@ -11642,6 +11643,26 @@ int main(int argc, char **argv)
 			break;
 		case 'g': s.do_register = 1; break;
 		case 'P':
+			/*
+			 * @FILE: the PIN from a root-only file, so it is not on
+			 * the command line for every local user to read in
+			 * /proc (security audit 2026-10-29, F2).
+			 */
+			if (optarg[0] == '@') {
+				static char pinbuf[DECT_PIN_DIGITS_MAX + 2];
+				FILE *pf = fopen_root_only(optarg + 1);
+
+				if (!pf || !fgets(pinbuf, sizeof(pinbuf), pf)) {
+					fprintf(stderr, "-P: cannot read %s\n",
+						optarg + 1);
+					if (pf)
+						fclose(pf);
+					return 2;
+				}
+				fclose(pf);
+				pinbuf[strcspn(pinbuf, "\r\n")] = '\0';
+				optarg = pinbuf;
+			}
 			/* GAP: up to 8 decimal digits (a 32-bit AC) */
 			if (dect_dsaa_pin_check(optarg, DECT_PIN_DIGITS_MIN)) {
 				fprintf(stderr, "-P wants %u to %u decimal "
