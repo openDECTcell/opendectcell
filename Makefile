@@ -17,8 +17,6 @@ export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
 TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
-LIBDECT_SRC := src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c src/libopendectcell/dect_audio.c \
-	src/libopendectcell/dect_g722.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c
 
 # Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
 SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-25.12.5-ipq40xx-*))
@@ -47,27 +45,25 @@ $(BUILD)/dect-pcmcap: src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c s
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) -Ikernel/include/uapi -Isrc/libopendectcell -o $@ src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
 
-# Host build of dect-stubd: compiles everywhere, runs only on the box.
 # Offline: recover the full mail stream from a `dect-stubd -w` capture. The
 # control slot is in every capture, so this works on runs already taken.
 $(BUILD)/dect-maildump: src/tools/dect-maildump.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_mail.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc/libopendectcell -o $@ src/tools/dect-maildump.c src/libopendectcell/dect_mail.c
 
+# Host build of dect-stubd: compiles everywhere, runs only on the box.
 $(BUILD)/dect-stubd: $(STUBD_SRC) src/stubd/ssc_align.h src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC) -lm
 
-# Result: build/dect-fwload.arm (stripped), ready to copy to the box.
+# For the 7520: build/dect-fwload.arm, dect-pcmcap.arm and dect-stubd.arm,
+# stripped, ready to copy to the box (dect-fwload.arm.dbg keeps symbols).
 cross: $(FWLOAD_SRC)
 	@test -x "$(XCC)" || { echo "OpenWrt SDK not found: set SDK="; exit 1; }
 	@mkdir -p $(BUILD)
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Wshadow $(DEFS) \
 		-o $(BUILD)/dect-fwload.arm.dbg $(FWLOAD_SRC)
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip -o $(BUILD)/dect-fwload.arm $(BUILD)/dect-fwload.arm.dbg
-	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi \
-		-o $(BUILD)/dect-sla.arm src/tools/dect-sla.c
-	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-sla.arm
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi -Isrc/libopendectcell $(DEFS) \
 		-o $(BUILD)/dect-pcmcap.arm src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-pcmcap.arm
@@ -110,7 +106,6 @@ $(BUILD)/test_nwk: tests/test_nwk.c src/libopendectcell/dect_nwk.c src/libopende
 $(BUILD)/test_dsaa: tests/test_dsaa.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_dsaa.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_dsaa.c src/libopendectcell/dect_dsaa.c
-
 
 $(BUILD)/test_mm: tests/test_mm.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.h tests/check.h
 	@mkdir -p $(BUILD)
