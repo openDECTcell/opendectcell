@@ -116,6 +116,7 @@
 #define DECT_IWU_CONTENT_MAX	(DECT_IWU_DATA_PER_PKT * (DECT_IWU_OUT_MAX - 1u))
 
 #define DECT_IWU_NAME_MAX	16u	/* UTF-8 bytes, NUL-terminated */
+#define DECT_IWU_PIN_TRIES	3u	/* wrong PIN entries per call */
 #define DECT_IWU_SAVE_MAX	128u	/* the data of one 'save entry' */
 #define DECT_IWU_HANDSETS	8u	/* Internal Names List capacity */
 #define DECT_IWU_SESSIONS	2u	/* "at least two sessions at a time" */
@@ -141,6 +142,7 @@ struct dect_iwu_stats {
 	uint32_t ignored;	/* records we have no reply for */
 	uint32_t malformed;	/* too short, wrong discriminator, bad coding */
 	uint32_t saved;		/* entries saved by a handset */
+	uint32_t pin_wrong;	/* 'Current PIN code' entries that did not match */
 };
 
 /*
@@ -197,6 +199,15 @@ struct dect_iwu {
 	uint8_t  pin[4];
 	uint8_t  pin_known;
 	uint8_t  pin_ok;
+	/*
+	 * Wrong PINs on this link. After DECT_IWU_PIN_TRIES no entry is
+	 * compared any more while the connection lasts, so guessing costs a
+	 * new connection per few tries (security audit 2026-10-29, A4); the
+	 * owner limits those. pin_wrong_seen is the owner's, for counting
+	 * stats.pin_wrong.
+	 */
+	uint8_t  pin_tries;
+	uint32_t pin_wrong_seen;
 	uint8_t  ciphered;
 	/* "delete entry" on the Internal Names List: the terminal whose
 	 * deregistration a handset asked for (7.4.10.4.6.1); the owner runs it

@@ -1014,10 +1014,15 @@ static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
 				 */
 				if (!iwu->ciphered)
 					reason = DECT_LIA_NACK_NOT_ALLOWED;
-				else if (flen != 5u || !iwu->pin_known ||
+				else if (iwu->pin_tries >= DECT_IWU_PIN_TRIES) {
+					reason = DECT_LIA_NACK_INCORRECT_PIN;
+					iwu->pin_ok = 0;
+				} else if (flen != 5u || !iwu->pin_known ||
 					 memcmp(p + 1, iwu->pin, 4)) {
 					reason = DECT_LIA_NACK_INCORRECT_PIN;
 					iwu->pin_ok = 0;
+					iwu->pin_tries++;
+					iwu->stats.pin_wrong++;
 				} else {
 					iwu->pin_ok = 1;
 				}

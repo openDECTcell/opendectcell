@@ -677,6 +677,39 @@ static void test_delete_a_handset_needs_the_pin(void)
 	CHECK_EQ(iwu.pin_ok, 0u);
 }
 
+/*
+ * Guessing the PIN (security audit 2026-10-29, A4): after three wrong
+ * entries on a link even the right one is refused, and every wrong one is
+ * counted for the owner's limit across connections.
+ */
+static void test_pin_guesses_are_limited(void)
+{
+	static const uint8_t pin1234[4] = { 0xFF, 0xFF, 0x12, 0x34 };
+	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
+	static const uint8_t s7[] = { 0xC3, 0x00, 0x07, 0x00 };
+	static const uint8_t edit_pin[] = { 0xC3, 0x08, 0x82, 0x81, 0x01 };
+	static const uint8_t save_pin[] = { 0xC3, 0x0A, 0x82, 0x81 };
+	uint8_t last_pin[] = { 0xC3, 0x14, 0x82, 0x81, 0x87,
+			       0x01, 0x85, 0x80, 0xFF, 0xFF, 0x12, 0x34 };
+	struct dect_iwu iwu;
+	unsigned k;
+
+	base_with_two_handsets(&iwu);
+	dect_iwu_set_pin(&iwu, pin1234);
+	iwu.ciphered = 1;
+	handle(&iwu, s6, sizeof(s6));		/* session 1: internal names */
+	handle(&iwu, s7, sizeof(s7));		/* session 2: system settings */
+	for (k = 0; k < 4; k++) {	/* three wrong, then the right one */
+		last_pin[11] = k < 3 ? (uint8_t)(0x40 + k) : 0x34;
+		handle(&iwu, edit_pin, sizeof(edit_pin));
+		handle(&iwu, save_pin, sizeof(save_pin));
+		handle(&iwu, last_pin, sizeof(last_pin));
+		CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_INCORRECT_PIN);
+		CHECK_EQ(iwu.pin_ok, 0u);
+	}
+	CHECK_EQ(iwu.stats.pin_wrong, 3u);
+}
+
 /* Not list access, a rejection, our own confirms fed back: silence. */
 static void test_other_records_are_ignored_or_flagged(void)
 {
@@ -767,6 +800,7 @@ int main(void)
 	test_rename_a_handset();
 	test_remove_handset();
 	test_delete_a_handset_needs_the_pin();
+	test_pin_guesses_are_limited();
 	test_search_internal_names();
 	test_other_records_are_ignored_or_flagged();
 	test_reset_sessions();

@@ -484,6 +484,13 @@ struct stubd {
 	/* GAP registration (-g): the host-side C-plane stack per connection. */
 	int do_register;
 	const char *pin;	/* registration PIN / AC */
+	/*
+	 * Wrong PINs in the System Settings List across all connections, and
+	 * the lockout they earn (security audit 2026-10-29, A4): the library
+	 * allows a few per connection, this bounds the connections.
+	 */
+	unsigned    pin_wrong;
+	uint64_t    pin_wrong_since, pin_locked_until;
 	int rand_fd;		/* /dev/urandom, -1 if unavailable */
 	uint8_t rfpi[DECT_MM_RFPI_LEN];
 	int have_rfpi;
@@ -6657,12 +6664,38 @@ static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
  * only travels ciphered), which handsets are in a call (no deletion then),
  * and the deletion a handset asked for, which is a deregistration.
  */
+#define PIN_WRONG_MAX		10u
+#define PIN_WRONG_WINDOW_MS	3600000u	/* the count's window */
+#define PIN_LOCK_MS		3600000u	/* no PIN check after that */
+
 static void lists_tick(struct stubd *s, struct dect_link *l)
 {
 	struct dect_iwu *iwu = &l->cc.iwu;
+	uint64_t now = mono_ms();
 	unsigned j;
 
-	if (!iwu->pin_known && s->pin) {
+	if (iwu->stats.pin_wrong != iwu->pin_wrong_seen) {
+		if (!s->pin_wrong_since ||
+		    now - s->pin_wrong_since > PIN_WRONG_WINDOW_MS) {
+			s->pin_wrong = 0;
+			s->pin_wrong_since = now;
+		}
+		s->pin_wrong += iwu->stats.pin_wrong - iwu->pin_wrong_seen;
+		iwu->pin_wrong_seen = iwu->stats.pin_wrong;
+		printf("list: wrong PIN entered (%u within the hour)\n",
+		       s->pin_wrong);
+		if (s->pin_wrong >= PIN_WRONG_MAX && now >= s->pin_locked_until) {
+			s->pin_locked_until = now + PIN_LOCK_MS;
+			printf("list: %u wrong PINs -- no PIN is accepted for "
+			       "the next hour\n", s->pin_wrong);
+		}
+		fflush(stdout);
+	}
+	if (now < s->pin_locked_until) {
+		/* nothing to compare against: every entry is wrong */
+		iwu->pin_known = 0;
+		iwu->pin_ok = 0;
+	} else if (!iwu->pin_known && s->pin) {
 		uint8_t ac[4];
 
 		if (!dect_dsaa_pin_to_ac(s->pin, ac, sizeof(ac)))
