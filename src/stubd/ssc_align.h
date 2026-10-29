@@ -59,4 +59,22 @@ void ssc_align_tx_commit(struct ssc_align *a, const uint8_t *t, size_t w);
  */
 int ssc_idle_offset(const uint8_t *data, size_t len, unsigned int cnt[16]);
 
+/*
+ * Where the idle lanes sit in data: returns the bit offset as
+ * ssc_idle_offset() finds it (-1: none) and sets *mask to the lane
+ * positions within a frame of slots lanes, counted from that offset in
+ * data[0], that read 0xFEFE in at least three quarters of the frames. A
+ * shift of the chip's frame against the SSC's stream shows here: lost whole
+ * lanes rotate the mask, a lost or gained bit changes the offset. slots is
+ * 1..64.
+ */
+int ssc_idle_lanes(const uint8_t *data, size_t len, unsigned int slots,
+		   uint64_t *mask);
+
+/*
+ * k such that moving every lane position i of from to (i + k) % slots
+ * gives to; -1 when no rotation does (or either mask is empty).
+ */
+int ssc_lanes_rotation(uint64_t from, uint64_t to, unsigned int slots);
+
 #endif /* OPENDECTCELL_SSC_ALIGN_H */

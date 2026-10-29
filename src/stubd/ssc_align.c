@@ -88,3 +88,51 @@ int ssc_idle_offset(const uint8_t *data, size_t len, unsigned int cnt[16])
 			best = o;
 	return cnt[best] ? (int)best : -1;
 }
+
+int ssc_idle_lanes(const uint8_t *data, size_t len, unsigned int slots,
+		   uint64_t *mask)
+{
+	unsigned int cnt[16], hit[64], tot[64], p;
+	size_t nb = len * 8u, b, k;
+	int off;
+
+	*mask = 0;
+	if (!slots || slots > 64u)
+		return -1;
+	off = ssc_idle_offset(data, len, cnt);
+	if (off < 0)
+		return -1;
+	memset(hit, 0, sizeof(hit));
+	memset(tot, 0, sizeof(tot));
+	for (k = 0, b = (size_t)off; b + 24u <= nb; k++, b += 16u) {
+		const uint8_t *q = data + b / 8u;
+		uint32_t v = (uint32_t)q[0] << 16 | (uint32_t)q[1] << 8 | q[2];
+
+		p = (unsigned int)(k % slots);
+		tot[p]++;
+		hit[p] += ((v >> (8u - b % 8u)) & 0xffffu) == 0xfefeu;
+	}
+	for (p = 0; p < slots; p++)
+		if (tot[p] && hit[p] * 4u >= tot[p] * 3u)
+			*mask |= 1ull << p;
+	return off;
+}
+
+int ssc_lanes_rotation(uint64_t from, uint64_t to, unsigned int slots)
+{
+	uint64_t all = slots >= 64u ? ~0ull : (1ull << slots) - 1u;
+	unsigned int k;
+
+	from &= all;
+	to &= all;
+	if (!from || !to || !slots || slots > 64u)
+		return -1;
+	for (k = 0; k < slots; k++) {
+		uint64_t r = k ? ((from << k) | (from >> (slots - k))) & all
+			       : from;
+
+		if (r == to)
+			return (int)k;
+	}
+	return -1;
+}

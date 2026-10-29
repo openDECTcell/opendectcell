@@ -203,6 +203,65 @@ static void test_idle_offset(unsigned int off)
 	CHECK(cnt[(off + 8u) % 16u] > 0);
 }
 
+/*
+ * The alignment watch (ssc_idle_lanes): the idle frame's three 0xFEFE lanes
+ * at positions 10-12, then the same stream with one 16-bit word lost (the
+ * mask rotates, the offset stays) and with one bit lost (the offset moves,
+ * the lanes stay).
+ */
+static void test_idle_lanes(unsigned int off)
+{
+	static const unsigned int frame[36] = {
+		0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+		0xffff, 0xffff, 0xfefe, 0xfefe, 0xfefe, 0xd5d5, 0x0c08, 0xffff,
+		0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+		0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+		0xffff, 0xffff, 0xffff, 0xffff,
+	};
+	uint8_t s[72u * 16u + 4u];
+	uint64_t mask, base;
+	size_t k, i, n = (sizeof(s) * 8u - off) / 16u;
+	int got;
+
+	memset(s, 0xff, sizeof(s));
+	for (k = 0; k < n; k++)
+		for (i = 0; i < 16u; i++)
+			putbit(s, off + 16u * k + i,
+			       (int)(frame[k % 36u] >> (15u - i)) & 1);
+	got = ssc_idle_lanes(s, sizeof(s), 36u, &mask);
+	CHECK_EQ(got, (int)off);
+	base = 7ull << 10;
+	CHECK_EQ(mask, base);
+
+	/* a word lost before the stream: every lane one position earlier */
+	got = ssc_idle_lanes(s + 2, sizeof(s) - 2u, 36u, &mask);
+	CHECK_EQ(got, (int)off);
+	CHECK_EQ(mask, 7ull << 9);
+	CHECK_EQ(ssc_lanes_rotation(base, mask, 36u), 35);
+
+	/* one bit lost: the offset moves by one, the lanes stay */
+	if (off) {
+		uint8_t t[sizeof(s)];
+
+		memset(t, 0xff, sizeof(t));
+		for (k = 1; k < sizeof(s) * 8u; k++)
+			putbit(t, k - 1u, getbit(s, k));
+		got = ssc_idle_lanes(t, sizeof(t) - 1u, 36u, &mask);
+		CHECK_EQ(got, (int)off - 1);
+		CHECK_EQ(mask, base);
+	}
+}
+
+static void test_lanes_rotation(void)
+{
+	CHECK_EQ(ssc_lanes_rotation(7ull << 10, 7ull << 10, 36u), 0);
+	CHECK_EQ(ssc_lanes_rotation(7ull << 10, 7ull << 12, 36u), 2);
+	/* across the frame end: 34, 35, 0 */
+	CHECK_EQ(ssc_lanes_rotation(7ull << 10, (3ull << 34) | 1u, 36u), 24);
+	CHECK_EQ(ssc_lanes_rotation(7ull << 10, 5ull << 10, 36u), -1);
+	CHECK_EQ(ssc_lanes_rotation(0, 7ull, 36u), -1);
+}
+
 static void test_no_idle(void)
 {
 	uint8_t s[256];
@@ -223,7 +282,9 @@ int main(void)
 		test_tx_burst(off);
 		test_roundtrip(off);
 		test_idle_offset(off);
+		test_idle_lanes(off);
 	}
+	test_lanes_rotation();
 	test_no_idle();
 	return CHECK_DONE();
 }

@@ -385,6 +385,20 @@ struct stubd {
 	int ssc_aligned;		/* offset measured: fix what we read */
 	uint64_t ssc_tx_sent_prev, ssc_tx_idle_prev;
 	/*
+	 * The alignment watch (ssc_watch()): the idle lanes' bit offset and
+	 * frame positions in the raw stream, and the driver's counters, at
+	 * the last line it printed. The 7412's control channel went silent
+	 * 23-60 s after contact in 4 of 5 runs on 2026-10-29; this says
+	 * whether the stream lost data, slipped a bit or drifted.
+	 */
+	int      ssc_w_off;		/* -2: not measured yet */
+	uint64_t ssc_w_mask;
+	int      ssc_w_pend_off;	/* a change seen once, not yet printed */
+	uint64_t ssc_w_pend_mask;
+	uint64_t ssc_w_next;		/* next check, mono ms */
+	uint32_t ssc_w_deaths;		/* session deaths already reported */
+	struct ssc_pcm_stats ssc_w_st;
+	/*
 	 * Downlink starvation, sampled once a second. The driver refills a
 	 * transmit block when the chip's clock asks for one and fills any
 	 * frame the queue cannot supply with the idle template, so
@@ -1793,6 +1807,98 @@ static void ssc_rx_fix(struct stubd *s, uint8_t *fr, size_t len)
 		return;
 	ssc_align_rx(&s->ssc_al, fr, t, len);
 	free(t);
+}
+
+/* "10,11,12" for the lane positions in mask; "-" for none. */
+static void lanes_str(char *out, size_t cap, uint64_t mask)
+{
+	size_t n = 0;
+	unsigned int i;
+
+	out[0] = '\0';
+	for (i = 0; i < 64u && n + 4u < cap; i++)
+		if (mask & (1ull << i))
+			n += (size_t)snprintf(out + n, cap - n, "%s%u",
+					      n ? "," : "", i);
+	if (!n && cap > 1u)
+		snprintf(out, cap, "-");
+}
+
+/*
+ * The SSC alignment watch, once a second on a raw block (before
+ * ssc_rx_fix()): where the chip's idle lanes sit (ssc_idle_lanes()) and the
+ * driver's loss counters. Prints the first measurement, any change that
+ * holds for two checks, any lost data and every session death, with the
+ * counter deltas since the last line. Reads only; changes nothing.
+ *   lanes rotated, offset kept, overruns up -> the SSC lost words;
+ *   offset changed, counters still          -> a bit slipped on the bus;
+ *   lanes rotating step by step             -> the frame length is wrong;
+ *   nothing moved at a death                -> the STUB stopped talking.
+ */
+static void ssc_watch(struct stubd *s, const uint8_t *raw, size_t len,
+		      uint64_t now)
+{
+	struct ssc_pcm_stats st;
+	char was[200], is[200];
+	const char *why = NULL;
+	uint64_t mask;
+	int off, rot;
+
+	if (!s->ssc || !s->slots || now < s->ssc_w_next)
+		return;
+	s->ssc_w_next = now + 1000u;
+	off = ssc_idle_lanes(raw, len, s->slots, &mask);
+	memset(&st, 0, sizeof(st));
+	if (ioctl(s->fd, SSC_PCM_IOC_STATS, &st))
+		return;
+	if (s->ssc_w_off == -2) {
+		lanes_str(is, sizeof(is), mask);
+		printf("ssc: watch: idle lanes at bit %d, positions %s; "
+		       "driver frames %llu overruns %u dropped %llu "
+		       "tx_underruns %u\n", off, is,
+		       (unsigned long long)st.frames, st.overruns,
+		       (unsigned long long)st.dropped, st.tx_underruns);
+		s->ssc_w_off = s->ssc_w_pend_off = off;
+		s->ssc_w_mask = s->ssc_w_pend_mask = mask;
+		s->ssc_w_st = st;
+		s->ssc_w_deaths = s->sess.stats.deaths;
+		return;
+	}
+	if (off != s->ssc_w_off || mask != s->ssc_w_mask) {
+		/* one check is noise (a lane in use); two in a row are not */
+		if (off == s->ssc_w_pend_off && mask == s->ssc_w_pend_mask)
+			why = "LANES MOVED";
+		s->ssc_w_pend_off = off;
+		s->ssc_w_pend_mask = mask;
+	} else {
+		s->ssc_w_pend_off = off;
+		s->ssc_w_pend_mask = mask;
+	}
+	if (!why && (st.overruns != s->ssc_w_st.overruns ||
+		     st.dropped != s->ssc_w_st.dropped ||
+		     st.tx_underruns != s->ssc_w_st.tx_underruns))
+		why = "driver lost data";
+	if (s->sess.stats.deaths != s->ssc_w_deaths)
+		why = "STUB SILENT";
+	if (!why)
+		return;
+	lanes_str(was, sizeof(was), s->ssc_w_mask);
+	lanes_str(is, sizeof(is), mask);
+	rot = ssc_lanes_rotation(s->ssc_w_mask, mask, s->slots);
+	printf("ssc: watch: %s at %llu ms: bit %d -> %d, idle lanes %s -> %s "
+	       "(%s%d); driver +%llu frames, overruns +%u, dropped +%llu, "
+	       "tx_underruns +%u\n", why,
+	       (unsigned long long)(now - g_start), s->ssc_w_off, off, was, is,
+	       rot < 0 ? "no rotation " : "rotated by ", rot < 0 ? 0 : rot,
+	       (unsigned long long)(st.frames - s->ssc_w_st.frames),
+	       st.overruns - s->ssc_w_st.overruns,
+	       (unsigned long long)(st.dropped - s->ssc_w_st.dropped),
+	       st.tx_underruns - s->ssc_w_st.tx_underruns);
+	fflush(stdout);
+	s->ssc_w_off = off;
+	s->ssc_w_mask = mask;
+	s->ssc_w_st = st;
+	s->ssc_w_deaths = s->sess.stats.deaths;
 }
 
 /*
@@ -10482,6 +10588,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 
 				if (!pcm_block_ok(s, h))
 					continue;
+				ssc_watch(s, fr, block, now);
 				ssc_rx_fix(s, fr, block);
 				if (h->flags & DECT_PCM_BF_DROPPED)
 					fprintf(stderr, "warning: dropped blocks before seq %u\n",
@@ -10675,6 +10782,18 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		}
 	}
 	ctl_close(s);
+	if (s->ssc && s->ssc_w_off != -2) {
+		char is[200];
+
+		lanes_str(is, sizeof(is), s->ssc_w_mask);
+		printf("ssc: watch summary: idle lanes at bit %d, positions %s; "
+		       "driver frames %llu overruns %u dropped %llu "
+		       "tx_underruns %u\n", s->ssc_w_off, is,
+		       (unsigned long long)s->ssc_w_st.frames,
+		       s->ssc_w_st.overruns,
+		       (unsigned long long)s->ssc_w_st.dropped,
+		       s->ssc_w_st.tx_underruns);
+	}
 	printf("session: state %d contacts %u answers %u status %u deaths %u\n",
 	       s->sess.state, s->sess.stats.contacts_sent, s->sess.stats.answers,
 	       s->sess.stats.status_mails, s->sess.stats.deaths);
@@ -11924,6 +12043,7 @@ int main(int argc, char **argv)
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN1;
 	s.audio.nlr = 1;		/* bench 2026-10-28, vNLR: harmless */
 	s.audio.locauth = 1;	/* bench 2026-10-28, test 19: all three answer */
+	s.ssc_w_off = -2;	/* ssc_watch(): nothing measured yet */
 	s.audio.auth_first = 1;	/* security audit 2026-10-29, A1 */
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
