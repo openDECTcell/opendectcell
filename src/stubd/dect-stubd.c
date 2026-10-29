@@ -522,8 +522,8 @@ struct stubd {
 		uint64_t sent_at;
 	} tu;
 	/*
-	 * The control socket (docs/bridge-interface.md §2): one client at a
-	 * time, one message per line.
+	 * The control socket (docs/bridge-interface.md §2): one message per
+	 * line, from up to CTL_CLIENTS clients at once.
 	 */
 	struct {
 		int      lfd;		/* listening; -1 = none */
@@ -746,25 +746,6 @@ struct stubd {
 		uint16_t mask;		/* 0x0230 TDM slot mask, little-endian */
 		uint8_t  mode;		/* 0x0230 master byte (not a mode) */
 		uint8_t  codec;		/* 0x0230 extra byte (not a codec id) */
-		/*
-		 * remode=MS: MS ms after 0x022D, send a SECOND 0x0230 for the
-		 * same handle and channel with flag bit 6 CLEAR.
-		 *
-		 * [CR A-0039]: the chip's channel configurator picks its mode
-		 * from the assign's flags and the path state. A first 0x0230,
-		 * and the 0x022D connect, both run mode 1 -- which routes PCM
-		 * out(k) from the silence constant, parks PCM in(k) in a sink,
-		 * and writes a skip over the channel's transmit chain, i.e.
-		 * disables it. Our whole sequence runs mode 1 twice, so nothing
-		 * we write to the lane can reach the air and nothing from the
-		 * air reaches us through the matrix. That is the decoupling
-		 * measured on 2026-10-23 (3.8 dB of envelope range against the
-		 * source's 52.9 dB, no correlation at any offset).
-		 *
-		 * A second 0x0230 with bit 6 clear while the path is already on
-		 * selects mode 2: PCM out(k) <- channel k, channel k <- PCM
-		 * in(k), and a NOP over the chain, i.e. enabled.
-		 */
 		/* subslot=N: chip subscription slot, 1..6. 0 = use the store's. */
 		unsigned sub_slot;
 		/*
@@ -824,6 +805,17 @@ struct stubd {
 		 */
 		uint8_t  info_ie[64];
 		size_t   info_ie_len;
+		/*
+		 * remode=MS: MS ms after 0x022D, a second 0x0230 for the same
+		 * handle and channel with flag bit 6 clear. [CR A-0039]: the
+		 * chip's channel configurator picks its mode from the assign's
+		 * flags and the path state. A first 0x0230 with bit 6 set and
+		 * the 0x022D connect both run mode 1, which feeds PCM out(k)
+		 * from the silence constant and disables the channel's transmit
+		 * chain; a second 0x0230 with bit 6 clear while the path is on
+		 * selects mode 2: PCM out(k) <- channel k, channel k <- PCM
+		 * in(k). main() says when it is sent.
+		 */
 		unsigned remode_ms;
 		const char *led_path;	/* led=PATH, NULL = the default */
 		const char *state_path;	/* statefile=PATH, NULL = the default */
@@ -1009,17 +1001,6 @@ struct stubd {
 		const char *line_name;	/* -a linename=NAME, "Line 1" */
 		int      no_ctl;	/* -a noctl */
 		/*
-		 * play=FILE: transmit a raw G.722 stream to the handset while a
-		 * call is up, looping. The lane wants one coded 16-bit word per
-		 * two TDM frames, i.e. 8000 bytes/s, which is exactly G.722's
-		 * rate, so the file is consumed two bytes every two frames.
-		 *
-		 * This is the clean downlink source the loopback cannot be: the
-		 * loopback re-sends the uplink including its underruns, so any
-		 * glitch the handset plays might be ours. A file plays the same
-		 * every time.
-		 */
-		/*
 		 * ring=MS: MS ms after the radio is up, call the handset.
 		 * Page it with 0x0300, then send an FP-originated CC-SETUP on
 		 * the link it brings up. Milestone B; see docs/call-g7.md.
@@ -1055,6 +1036,17 @@ struct stubd {
 		 * "Intern". Each is opt-in; none means no IE.
 		 */
 		struct dect_callinfo callinfo;
+		/*
+		 * play=FILE: transmit a raw G.722 stream to the handset while a
+		 * call is up, looping. The lane wants one coded 16-bit word per
+		 * two TDM frames, i.e. 8000 bytes/s, which is exactly G.722's
+		 * rate, so the file is consumed two bytes every two frames.
+		 *
+		 * This is the clean downlink source the loopback cannot be: the
+		 * loopback re-sends the uplink including its underruns, so any
+		 * glitch the handset plays might be ours. A file plays the same
+		 * every time.
+		 */
 		const char *play_path;
 		/*
 		 * playpcm=FILE takes the same lane but feeds it ordinary
@@ -1311,10 +1303,6 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
 }
 
 /*
- * Send a mail: encode the transmit element (libopendectcell) and spread its two
- * bytes per frame into the transmit control slot, idle (0xFF) elsewhere.
- */
-/*
  * What we can and cannot know about a command after we send it.
  *
  * The maintainer asked whether we check that anything we tell the chip
@@ -1335,11 +1323,10 @@ static void log_mail(const struct dect_mail *m, const char *dir, int show_params
  *     state, so a silently lost write self-heals. That is how it gets away
  *     with it, and it is a better design than checking.
  *
- *     **That reassurance does not transfer to us.** `0x017C`, the re-assert,
- *     is on the list of mails we deliberately do not send. Stock does not
- *     verify but does re-assert; we did neither. So the subscription table --
- *     the thing that has actually caused us trouble -- is where we were most
- *     exposed and least like stock, which is why it now gets an audit as well
+ *     We re-assert too: the stored subscriptions go back into the chip at
+ *     start-up, and 0x017C, the locked-in handset mask, follows every
+ *     registration and deregistration [CR A-0129]. The subscription table --
+ *     the thing that has actually caused us trouble -- gets an audit as well
  *     as the UAK read-back.
  *   - **The UAK is the exception**: written once at enrolment, never
  *     re-asserted, and it is the credential a handset needs to attach. Stock
@@ -1635,6 +1622,12 @@ static ssize_t pcm_write(struct stubd *s, const uint8_t *frames, size_t len,
 	return w;
 }
 
+/*
+ * Send a mail: encode the transmit element (libopendectcell), two bytes per frame
+ * in the transmit control slot. Once run_loop() runs, the bytes join the
+ * control-slot queue that tx_block() drains; before that (probing, bring-up)
+ * they go out at once in a burst of frames, idle (0xFF) elsewhere.
+ */
 static int send_mail(struct stubd *s, unsigned int tx_slot,
 		     const struct dect_mail *m)
 {
@@ -2535,6 +2528,15 @@ static void gen_rand(struct stubd *s, uint8_t *buf, size_t n)
 #define SUB_MAGIC	0x44535531u	/* "DSU1" */
 #define SUB_MAGIC2	0x44535532u	/* "DSU2": adds the identities below */
 
+/* The original layout, so files written before version 2 still load. */
+struct sub_record_v1 {
+	uint32_t magic;
+	uint8_t  slot;
+	uint8_t  uak[DECT_MM_UAK_LEN];
+	uint8_t  port_id_len;
+	uint8_t  port_id[DECT_MM_PORTID_MAX];
+};
+
 /*
  * Version 2 adds the two identity IEs an FP-originated SETUP must carry, so a
  * call *to* the handset does not depend on the handset having called us first
@@ -2545,15 +2547,6 @@ static void gen_rand(struct stubd *s, uint8_t *buf, size_t n)
  * A version 1 file still loads; it simply has no identities, and they are
  * learned and saved the first time the handset places a call.
  */
-/* The original layout, so files written before version 2 still load. */
-struct sub_record_v1 {
-	uint32_t magic;
-	uint8_t  slot;
-	uint8_t  uak[DECT_MM_UAK_LEN];
-	uint8_t  port_id_len;
-	uint8_t  port_id[DECT_MM_PORTID_MAX];
-};
-
 struct sub_record {
 	uint32_t magic;
 	uint8_t  slot;
@@ -2625,9 +2618,9 @@ static void hs_load(struct stubd *s, unsigned i)
 	s->cc_id_unarmed_warned = 0;
 }
 
-/* Make handset i the current one; a no-op if it already is. */
 static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot);
 
+/* Make handset i the current one; a no-op if it already is. */
 static void hs_switch(struct stubd *s, unsigned i, const char *why)
 {
 	if (i == s->cur || i >= s->n_hs)
@@ -2859,13 +2852,6 @@ static void send_subscription_tail(struct stubd *s);
 static void install_subscription(struct stubd *s, uint8_t slot,
 				 const uint8_t uak[DECT_MM_UAK_LEN]);
 
-/*
- * Test M4 (docs/multicell-experiments.md): play the controller for a
- * roamer. MM holds a {LOCATE-REQUEST} from an identity this link does not
- * know; if it is the remote= store's, its record "arrives" fetchdelay ms
- * after the request, and the request is answered. Times are from the
- * request, so the handset's patience is measured, not ours.
- */
 static void pump_lapc(struct stubd *s);
 
 /* The controller's answer: hold the fetched record on the main link. */
@@ -2883,6 +2869,13 @@ static void fetch_keep(struct stubd *s)
 				   s->fetch_idx);
 }
 
+/*
+ * Test M4 (docs/multicell-experiments.md): play the controller for a
+ * roamer. MM holds a {LOCATE-REQUEST} from an identity this link does not
+ * know; if it is the remote= store's, its record "arrives" fetchdelay ms
+ * after the request, and the request is answered. Times are from the
+ * request, so the handset's patience is measured, not ours.
+ */
 static void fetch_tick(struct stubd *s, uint64_t now)
 {
 	const uint8_t *id;
@@ -2967,11 +2960,6 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 	pump_lapc(s);
 }
 
-/*
- * Overlap receiving: accept a handset-placed call once its digits have
- * been quiet for dialwait ms. Stands in for a dial plan or the
- * controller, which would decide on the number instead.
- */
 static int ic_start(struct stubd *s, int side, uint64_t now);
 
 /* The handset table entry with this IPUI, or -1. */
@@ -2986,11 +2974,6 @@ static int hs_by_ipui(const struct stubd *s, const uint8_t *id, size_t len)
 	return -1;
 }
 
-/*
- * Learn each handset's <<TERMINAL-CAPABILITY>> from whichever link carried
- * its {LOCATE-REQUEST}, matched by the IPUI that link adopted, and log it
- * once. Runtime only, relearned at every daemon start (handsets locate).
- */
 /*
  * A handset's capability as it last reported it, kept beside its store as
  * <store>.cap ("part3 0|1" and "ng 0|1"): a handset reports it only with a
@@ -3035,6 +3018,11 @@ static void cap_load(struct stubd *s, unsigned i)
 	       s->hs[i].cap_ng ? "NG-DECT Part 1" : "GAP only");
 }
 
+/*
+ * Learn each handset's <<TERMINAL-CAPABILITY>> from whichever link carried
+ * its {LOCATE-REQUEST}, matched by the IPUI that link adopted, log it once
+ * and keep it beside its store (cap_save()).
+ */
 static void cap_tick(struct stubd *s, struct dect_link *l)
 {
 	const struct dect_term_cap *tc = &l->mm.peer_cap;
@@ -3121,13 +3109,6 @@ static uint8_t call_id_for(void *ctx, const struct dect_link *l)
 }
 
 /*
- * dect_link's question when a handset's {CC-SETUP} arrives: call status
- * for it? Only an NG-DECT Part 3 handset gets it (TS 102 527-3 §7.4.6.4.1;
- * stock sends it to the A540 alone, A-0125). Not yet seen: no opinion, so
- * the default stays and the A540's call timer (test 15) cannot be lost to
- * a missing location registration.
- */
-/*
  * -a locauth: the UAK stored for an identity, for MM's authentication of a
  * handset inside its location registration (dect_mm_set_uak_lookup()).
  */
@@ -3150,6 +3131,13 @@ static int uak_lookup(void *ctx, const uint8_t *id, size_t len,
 	return -1;
 }
 
+/*
+ * dect_link's question when a handset's {CC-SETUP} arrives: call status
+ * for it? Only an NG-DECT Part 3 handset gets it (TS 102 527-3 §7.4.6.4.1;
+ * stock sends it to the A540 alone, A-0125). Not yet seen: no opinion, so
+ * the default stays and the A540's call timer (test 15) cannot be lost to
+ * a missing location registration.
+ */
 static int call_status_for(void *ctx, const uint8_t *ipui, size_t len)
 {
 	const struct stubd *s = ctx;
@@ -3292,13 +3280,13 @@ static void info_tick(struct stubd *s, uint64_t now)
 	pump_lapc(s);
 }
 
+static int bridge_call_out(struct stubd *s, int p, uint64_t now);
+
 /*
  * Route the main link's handset call once its number is complete: an
  * internal call if it names a handset, else the routed steps (alertms,
  * bindfirst) or CONNECT at once.
  */
-static int bridge_call_out(struct stubd *s, int p, uint64_t now);
-
 static void dial_route(struct stubd *s, uint64_t now)
 {
 	s->reg.ic_tried = 1;
@@ -3359,6 +3347,11 @@ static int number_complete(const struct dect_cc *cc)
 	       (cls == 0x8u || cls == 0x9u || cc->list_number);
 }
 
+/*
+ * Overlap receiving: accept a handset-placed call once its digits have
+ * been quiet for dialwait ms. Stands in for a dial plan or the
+ * controller, which would decide on the number instead.
+ */
 static void dial_tick(struct stubd *s, uint64_t now)
 {
 	const uint8_t *k;
@@ -3461,15 +3454,6 @@ static void sub_audit_reply(struct stubd *s, uint32_t addr,
 static void sub_audit_send(struct stubd *s, uint8_t mine);
 
 /*
- * Persist the just-enrolled handset in the chip so it holds standby and is
- * reachable: 0x0247 {slot, op=1, status} then 0x020A {slot, UAK[16], extra},
- * to STUB task 0x02, in that order, after LOCATE-ACCEPT [CR A-0026]. The 16-byte
- * 0x020A record is the allocated UAK. The `status`/`extra` security-mode bytes
- * have no known enumeration [CR A-0026]; we send 0x00 and validate on hardware.
- * 0xF605 / 0x015F / 0x017C are intentionally NOT sent (not on AVM's ordinary
- * voice-handset path).
- */
-/*
  * Clear every subscription slot we do not own.
  *
  * The chip keeps a subscription table of its own and it SURVIVES our daemon:
@@ -3493,10 +3477,10 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep,
 	uint8_t slot;
 
 	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
-		if (keep_mask & (1u << slot))
-			continue;
 		const uint8_t p[3] = { slot, 0x00u /* op: clear */, 0x00u };
 
+		if (keep_mask & (1u << slot))
+			continue;
 		chip_mail(s, 0x0247u, p, sizeof(p));
 	}
 	printf("sub: cleared chip subscription slots other than");
@@ -3550,6 +3534,12 @@ static void send_subscription(struct stubd *s)
 	send_subscription_tail(s);
 }
 
+/*
+ * Put a handset into its chip slot so it holds standby and is reachable:
+ * 0x0247 {slot, op 1, flag} then 0x020A {slot, UAK[16], config}, to STUB
+ * task 0x02, in that order [CR A-0026]. send_subscription_tail() follows
+ * with 0x017C.
+ */
 static void install_subscription(struct stubd *s, uint8_t slot,
 				 const uint8_t uak[DECT_MM_UAK_LEN])
 {
@@ -3616,12 +3606,9 @@ static void send_subscription_tail(struct stubd *s)
 						: live_slot_mask(s);
 
 	/*
-	 * [CR A-0114] 0x017c sets the traffic-bearer slot-availability mask
-	 * 0xdb3. Without it 0xdb3 stays at its init 0x3f (all slots in-use)
-	 * and the CC state machine allocates no bearer slot for an incoming
-	 * call, so a GAP handset refuses with 0x32 "insufficient bearers".
-	 * Stock sends this right after 0x020A; 0xdb3 is global so once is
-	 * enough. The handler takes the second payload byte into 0xdb3.
+	 * 0x017C {00, mask}: the handsets locked in (see audio_cfg.slot_mask,
+	 * [CR A-0129]). Stock sends it right after the 0x020A records and
+	 * after every deregistration.
 	 */
 	if (!s->audio.no_slot_cfg) {
 		const uint8_t p[2] = { 0x00u /* unused by the handler */, mask };
@@ -3631,6 +3618,22 @@ static void send_subscription_tail(struct stubd *s)
 		       "[CR A-0129]\n", mask,
 		       s->audio.slot_mask_fixed ? " (pinned by slotmask=)" : "");
 	}
+}
+
+/*
+ * On the 7412's 06.88 STUB a memory read (task 0x23) sent right behind
+ * 0x020A/0x0247 (task 0x02) is answered before they take effect: the read 40
+ * ms after a 0x020A found the record missing, a sweep 1 s later found it in
+ * place (observed 2026-10-29). There, the read-back and the slot audit wait.
+ */
+#define SUB_CHECK_DELAY_0688_MS	1000u
+
+static int sub_check_defer(struct stubd *s)
+{
+	if (!s->uak_0688 || s->sub_check_firing)
+		return 0;
+	s->sub_check_at = mono_ms() + SUB_CHECK_DELAY_0688_MS;
+	return 1;
 }
 
 /*
@@ -3661,22 +3664,6 @@ static void send_subscription_tail(struct stubd *s)
  * The UAK is key material. We compare it and report the verdict; the bytes
  * are never printed, not even under -p.
  */
-/*
- * On the 7412's 06.88 STUB a memory read (task 0x23) sent right behind
- * 0x020A/0x0247 (task 0x02) is answered before they take effect: the read 40
- * ms after a 0x020A found the record missing, a sweep 1 s later found it in
- * place (observed 2026-10-29). There, the read-back and the slot audit wait.
- */
-#define SUB_CHECK_DELAY_0688_MS	1000u
-
-static int sub_check_defer(struct stubd *s)
-{
-	if (!s->uak_0688 || s->sub_check_firing)
-		return 0;
-	s->sub_check_at = mono_ms() + SUB_CHECK_DELAY_0688_MS;
-	return 1;
-}
-
 static void uak_verify_send(struct stubd *s, uint8_t slot)
 {
 	uint32_t addr;
@@ -3831,9 +3818,9 @@ static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
  *
  * `[CR A-0086]` says stock gets away without verifying because it
  * periodically **re-asserts** subscription state, so a lost write self-heals.
- * **That reassurance does not transfer to us**: `0x017C`, the re-assert, is
- * on the list of mails we deliberately do not send. Stock does not verify but
- * does re-assert; we do neither. Of the two of us, we are the one exposed.
+ * We re-assert at start-up and send 0x017C after every change [CR A-0129],
+ * but a slot cleared or written once can still be lost, and only a read
+ * shows it.
  *
  * Occupancy only -- a slot holds key material or it does not. We never print
  * the key, and we cannot yet say WHICH handset a slot belongs to: that is the
@@ -3956,28 +3943,11 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 }
 
 /*
- * Connect the assigned channel: 0x022D with bit 7 clear. `chan` is the
- * channel the chip confirmed in 0x0242 -- A-0032 Q9: trust the returned
- * channel, not the one we asked for.
- *
- * CAVEAT, 2026-10-23 [CR A-0075 §0]: "confirmed" is too strong. 0x0242 is
- * emitted on EVERY path through the handler, including the early-out that
- * does nothing -- it means "mail processed", not "matrix changed". vF418 has
- * six byte-identical 0x0242 replies to sends that changed nothing, next to
- * one that configured the matrix. The real act/no-act gate is the
- * connection's byte 0/byte 1 plus record +0x116 bit 5. We keep using the
- * returned channel because it is still the channel, but nothing here should
- * be read as evidence that a 0x0230 landed.
- */
-/*
  * 0x0233 AUDIO_DISCONNECT -- the clean inverse of 0x0230 [CR A-0070].
  *
- * We have never sent this. `call_bound` was set when a call connected and
- * cleared only when the LINK restarted, so the audio channel stayed armed
- * after every call ended and the next call inherited whatever state the last
- * one left. The chip's handler runs the configurator in mode 0 (release) and
- * clears the path-on bit (record +0x116 b6), which is exactly the teardown we
- * have been missing.
+ * Sent when a call's CC ends, so the next call does not start on top of the
+ * last one's audio state. The chip's handler runs the configurator in mode 0
+ * (release) and clears the path-on bit (record +0x116 b6).
  *
  * [CR A-0070] §4 gives the release order: 0x0233 first, then 0x0202 once the
  * DLC is quiescent. This is the audio half.
@@ -3990,6 +3960,20 @@ static void send_audio_disconnect(struct stubd *s, uint8_t handle)
 	printf("call: audio disconnected (0x0233 on handle %u)\n", handle);
 }
 
+/*
+ * Connect the assigned channel: 0x022D with bit 7 clear. `chan` is the
+ * channel the chip confirmed in 0x0242 -- A-0032 Q9: trust the returned
+ * channel, not the one we asked for.
+ *
+ * CAVEAT [CR A-0075 §0]: "confirmed" is too strong. 0x0242 is
+ * emitted on EVERY path through the handler, including the early-out that
+ * does nothing -- it means "mail processed", not "matrix changed". vF418 has
+ * six byte-identical 0x0242 replies to sends that changed nothing, next to
+ * one that configured the matrix. The real act/no-act gate is the
+ * connection's byte 0/byte 1 plus record +0x116 bit 5. We keep using the
+ * returned channel because it is still the channel, but nothing here should
+ * be read as evidence that a 0x0230 landed.
+ */
 static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 {
 	const struct audio_cfg *a = &s->audio;
@@ -4019,25 +4003,6 @@ static void audio_connect_fallback(struct stubd *s, uint64_t now)
 	send_audio_connect(s, s->reg.handle, s->audio.flags & 0x0Fu);
 }
 
-/*
- * Ask the STUB for the per-link connection status: 0xF624 {link, 0x0A},
- * answered by 0xF625 with a 0x2D-byte status record. AVM's host driver polls
- * this every 30 s for its connection monitor [CR the hardware-analysis notes §6 1.5,
- * §5 host mail 0xF611]. It is a pure read, so it changes nothing about what
- * the radio transmits -- which is why it is usable during a live call.
- *
- * The record's first bytes are the ones we are after: MAC slot, RF carrier,
- * the codec/slot-type byte and the link type. The codec byte doubles as the
- * bearer's slot type: 0 = full slot (G.726 narrowband), 1..3 = long slot
- * (G.722 or the AVM wideband codecs) [CR the hardware-analysis notes §8 3.3,
- * §5 4.4]. A G.722 call that is running on a full-slot bearer would explain
- * silence on an otherwise correctly bound audio channel.
- */
-/*
- * One chip-memory read per tick, cycling through the configured ranges.
- * The reply (0xFFF1 sub 0x08) carries the address and the bytes and is
- * printed by the ordinary mail log, so no extra decoding lives here.
- */
 /*
  * Second 0x0230 with flag bit 6 clear, once the path is on: asks the chip's
  * channel configurator for mode 2 instead of the mode 1 our bind leaves it
@@ -4091,6 +4056,12 @@ static void seq_tick(struct stubd *s, uint64_t now)
 	s->reg.seq_idx++;
 }
 
+/*
+ * -a memdump: one chip-memory read per tick, cycling through the configured
+ * ranges. The reply (0xFFF1 sub 0x08) carries the address and the bytes and
+ * is printed by the ordinary mail log (tools/dect_memdump.py reads it), so
+ * no decoding lives here.
+ */
 static void mem_dump_tick(struct stubd *s, uint64_t now)
 {
 	uint32_t addr, left;
@@ -4122,8 +4093,22 @@ static void mem_dump_tick(struct stubd *s, uint64_t now)
 	}
 }
 
-static void send_conn_status_one(struct stubd *s, uint8_t handle);
+/*
+ * Ask the STUB for a link's connection status: 0xF624 {link, 0x0A}, answered
+ * by 0xF625 with a 0x2D-byte status record (report_conn_status()). AVM's host
+ * driver polls this every 30 s for its connection monitor [CR the
+ * hardware-analysis notes §6 1.5, §5 host mail 0xF611]. A pure read, so it
+ * changes nothing on the air and is safe during a call.
+ */
+static void send_conn_status_one(struct stubd *s, uint8_t handle)
+{
+	/* 0x0A: the selector AVM's monitor uses */
+	const uint8_t p[2] = { handle, 0x0Au };
 
+	chip_mail(s, 0xF624u, p, sizeof(p));
+}
+
+/* -a status=MS: poll every speech call's link, the main one and the sides. */
 static void send_conn_status_req(struct stubd *s, uint64_t now)
 {
 	unsigned k;
@@ -4146,14 +4131,6 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 	send_conn_status_one(s, s->reg.handle);
 }
 
-static void send_conn_status_one(struct stubd *s, uint8_t handle)
-{
-	/* 0x0A: the selector AVM's monitor uses */
-	const uint8_t p[2] = { handle, 0x0Au };
-
-	chip_mail(s, 0xF624u, p, sizeof(p));	/* connection status request */
-}
-
 /*
  * Page the handset so it brings up a link we can send a CC-SETUP on.
  *
@@ -4174,8 +4151,7 @@ static void send_conn_status_one(struct stubd *s, uint8_t handle)
  * for any other basic service -- `-a basicsvc=0x80` paged "wideband to
  * follow" and then sent a narrowband SETUP, so that test was measuring a
  * self-contradiction rather than narrowband.
- */
-/*
+ *
  * INERT ON THE AIR, 2026-10-23 [CR A-0076]. The chip never reads mail[2] of
  * 0x0300: it takes the TPUI from bytes 3 and 4 and passes a hardcoded format
  * constant to the page builder, so 0x0C and 0x2C produce byte-identical
@@ -4311,18 +4287,8 @@ static void send_page(struct stubd *s)
 		       ? "" : " -- WARNING: TPUI never acknowledged");
 }
 
-/*
- * Queue the FP-originated CC-SETUP.
- *
- * Run E1b (2026-10-22) showed why this must not be done the moment the chip
- * reports the link up: we sent the SETUP as an I-frame at t=90166 and the
- * handset's LCE page response was only parsed at t=90246, 80 ms later. The
- * handset answered RR with N(R)=0 -- it had not received the frame -- so the
- * I-frame was lost, LAPC retransmitted it a full second later, and the A540
- * released the call with RELEASE-REASON 0x32 "Insufficient resources" as soon
- * as the retransmission arrived. The SETUP therefore waits for the handset to
- * answer the page, which is also the order the paging procedure prescribes.
- */
+static struct dect_clip ring_clip;	/* s->clip as the target's profile wants it */
+
 /*
  * The <<BASIC-SERVICE>> of our SETUP to handset i. A pure GAP handset
  * (neither NG-DECT Part 1 nor 3) gets GAP's incoming call, basic speech
@@ -4330,8 +4296,6 @@ static void send_page(struct stubd *s)
  * gives an internal call class 9 to NG handsets only. Not yet seen: as
  * configured. Spec sweep, finding 15.
  */
-static struct dect_clip ring_clip;	/* s->clip as the target's profile wants it */
-
 static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
 {
 	if (i >= 0 && (unsigned)i < s->n_hs && s->hs[i].prof.cc_basic_service)
@@ -4434,6 +4398,15 @@ static void cs_connect_tick(struct stubd *s, uint64_t now)
 	pump_lapc(s);
 }
 
+/*
+ * Queue the FP-originated {CC-SETUP} on the main link, once the handset has
+ * answered our page or the page-response deadline has passed. Not the
+ * moment the chip reports the link up: a SETUP sent before the handset's
+ * page response was lost as an I-frame it did not expect, and the
+ * retransmission a second later drew 0x32 "insufficient resources".
+ * Waiting for the page response is also the order the paging procedure
+ * prescribes.
+ */
 static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 {
 	/*
@@ -4449,7 +4422,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 		return;
 	}
 	/*
-	 * Our call goes to the first store's handset. A link that has taken on
+	 * Our call goes to the handset we ring (ring_hs). A link that has taken on
 	 * another handset is that handset's; a {CC-SETUP} on it would address
 	 * the wrong one. Wait for it to clear, as for a busy CC entity.
 	 */
@@ -4961,12 +4934,6 @@ static void send_chip_cipher(struct stubd *s)
 	send_chip_cipher_link(s, &s->reg.link.mm, s->reg.handle);
 }
 
-/* Flush any LAPC frames the FSM wants to transmit. */
-/*
- * Move whatever the link has queued onto the wire. The framing, the Lc
- * signature and the 0x0244 mail are the library's (openDECTcell#67); ours is only
- * the transport.
- */
 /*
  * The Fon/DECT LED. The 7520 has no LED of its own for DECT: its front
  * panel shares one "Fon/DECT" LED, green:fon under OpenWrt, which nothing
@@ -5187,6 +5154,11 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		unlink(tmp);
 }
 
+/*
+ * Move whatever the main link's LAPC has queued onto the wire, as 0x0244
+ * mails. The framing, the Lc signature and the 0x0244 mail are the
+ * library's (openDECTcell#67); ours is only the transport.
+ */
 static void pump_lapc(struct stubd *s)
 {
 	struct dect_mail m;
@@ -5194,8 +5166,7 @@ static void pump_lapc(struct stubd *s)
 	/*
 	 * Take a frame out of LAPC only when the control queue can hold a
 	 * whole mail: once dequeued it is gone, and LAPC retransmits a lost
-	 * I-frame by timer but never a lost RR or UA. send_mail() used to be
-	 * called with its result ignored (second external review, finding 2).
+	 * I-frame by timer but never a lost RR or UA.
 	 */
 	while (sizeof(s->txq) - s->txq_len >= DECT_TX_ELEM_MAX &&
 	       dect_link_poll_append_mail(&s->reg.link, &m)) {
@@ -6723,10 +6694,6 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 }
 
 /*
- * SIGUSR2: deregister the handsets in the slots named in DEREG_REQ_PATH
- * (one or more numbers, e.g. "1 3"), one after the other.
- */
-/*
  * The link that carries handset i by its own word: MM adopted it (its
  * LOCATE-REQUEST, a call it placed, or its page response below). Not the
  * presumption that a main link which has adopted no one serves s->cur (as
@@ -6807,6 +6774,10 @@ static int time_page_response(struct stubd *s, struct side_link *sl,
 	return 1;
 }
 
+/*
+ * SIGUSR2: deregister the handsets in the slots named in DEREG_REQ_PATH
+ * (one or more numbers, e.g. "1 3"), one after the other.
+ */
 static void dereg_start(struct stubd *s, uint64_t now)
 {
 	char buf[64] = "";
@@ -7180,9 +7151,9 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
  * bridge stays connected; LuCI's commands come and go); `hello` and an
  * `hs` line per handset when one connects, `hs` again to every client when
  * one is renamed or deregistered; replies go to the client that asked,
- * call traffic only to the bridge; `deregister` and `register-window` from it, as SIGUSR2
- * and SIGUSR1 do. Nothing a SIP peer says reaches MM through here except
- * these two configuration commands (§4).
+ * call traffic only to the bridge; `deregister` and `register-window`
+ * from it, as SIGUSR2 and SIGUSR1 do. Nothing a SIP peer says reaches MM
+ * through here except these two configuration commands (§4).
  */
 static void bc_clear(struct stubd *s, struct bcall *b);
 
@@ -7320,12 +7291,14 @@ static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
 
 /*
  * The bridge (docs/bridge-interface.md §2, step 2 of §5): a client that
- * sent "bridge" carries the main link's external calls. Out: the
- * handset's number goes out as call-out, and remote-ringing,
- * remote-answered and remote-released drive ALERTING, CONNECT and the
- * release. In: call-in rings the first handset, and ringing, answered and
- * released come back. Without a bridge nothing changes: a dialled call is
- * connected locally (the lab's test sound or loop-back).
+ * sent "bridge" carries the external calls, up to BC_MAX at once, on the
+ * main link or on side links (struct bcall). Out: a handset's number goes
+ * out as call-out, and remote-ringing, remote-answered and remote-released
+ * drive ALERTING, CONNECT and the release. In: call-in rings the handset
+ * hs= names (the first without it), on the main link or, while that is
+ * busy, on a side link of its own; ringing, answered and released come
+ * back. Without a bridge nothing changes: a dialled call is connected
+ * locally (the lab's test sound or loop-back).
  */
 static unsigned bridge_new_id(struct stubd *s)
 {
@@ -9852,11 +9825,6 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 }
 
 /*
- * Dump the call's voice slot while it is bound: the raw two bytes per frame,
- * in frame order, with nothing interpreted. Decoding happens offline -- see
- * tools/voice-decode.py, which tries the candidate formats against the file.
- */
-/*
  * A lab file that may hold call audio or chip mails: the owner's alone,
  * and never through a link someone else placed (security audit
  * 2026-10-29, F5).
@@ -9868,9 +9836,20 @@ static FILE *fopen_private(const char *path)
 	return fd < 0 ? NULL : fdopen(fd, "wb");
 }
 
+/*
+ * -w: dump the call's voice slot (-V), or every slot, while a call is bound:
+ * the raw two bytes per slot and frame, in frame order, with nothing
+ * interpreted. Decoding happens offline -- tools/voice-decode.py tries the
+ * candidate formats against the file. Every slot is the default so that one
+ * capture can be searched for the voice: A-0029 §4 warns that a 16-bit TDM
+ * word may hold two independent 8-bit channels and that a slot picked by
+ * index in the DMA buffer is not necessarily the logical channel.
+ */
 static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 {
+	uint8_t *cp = s->voice_buf;
 	unsigned int f;
+	size_t n;
 
 	/*
 	 * Normally only a bound call is captured, which keeps the files small.
@@ -9881,14 +9860,6 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 	if (!s->voice_fp || (!s->reg.call_bound && !s->audio.cap_all))
 		return;
 
-	/*
-	 * Default (-V absent) dumps every slot of every frame, so one capture
-	 * can be searched offline for the voice: A-0029 §4 warns that a 16-bit
-	 * TDM word may hold two independent 8-bit channels, that the lane
-	 * matters, and that a slot picked by index in the DMA buffer is not
-	 * necessarily the logical channel. Guessing a slot per run would cost a
-	 * dial each; capturing all of them costs disk.
-	 */
 	/*
 	 * Check the filesystem every megabyte or so and stop before it fills.
 	 * The capture's own writes report ENOSPC, but the log's do not, so a
@@ -9910,9 +9881,7 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 	}
 
 	if (s->voice_slot < 0) {
-		size_t n = (size_t)fpb * s->slots * 2u;
-		uint8_t *cp = s->voice_buf;
-
+		n = (size_t)fpb * s->slots * 2u;
 		memcpy(cp, fr, n);
 		/*
 		 * Not the control slot: it carries the chip's mails, and a
@@ -9923,29 +9892,24 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 				memset(cp + (f * s->slots +
 					     (unsigned int)s->rx_slot) * 2u,
 				       0xff, 2);
-		if (fwrite(cp, 1, n, s->voice_fp) != n)
-			goto fail;
+	} else {
+		if ((unsigned int)s->voice_slot >= s->slots ||
+		    s->voice_slot == s->rx_slot)
+			return;
+		for (f = 0; f < fpb; f++)
+			memcpy(cp + f * 2u, fr + (f * s->slots +
+			       (unsigned int)s->voice_slot) * 2u, 2);
+		n = (size_t)fpb * 2u;
+	}
+	if (fwrite(cp, 1, n, s->voice_fp) == n) {
 		s->voice_bytes += (uint32_t)n;
 		return;
 	}
-
-	if ((unsigned int)s->voice_slot >= s->slots ||
-	    s->voice_slot == s->rx_slot)
-		return;
-	for (f = 0; f < fpb; f++) {
-		if (fwrite(fr + (f * s->slots + (unsigned int)s->voice_slot) * 2u,
-			   2, 1, s->voice_fp) != 1)
-			goto fail;
-		s->voice_bytes += 2u;
-	}
-	return;
-fail:
 	perror("voice capture");
 	fclose(s->voice_fp);
 	s->voice_fp = NULL;
 }
 
-/* Main loop: decode mails, drive the session, (re)send the contact. */
 /* The 06.88 read-back and slot audit, once their delay is up. */
 static void sub_check_tick(struct stubd *s, uint64_t now)
 {
@@ -9961,6 +9925,11 @@ static void sub_check_tick(struct stubd *s, uint64_t now)
 	s->sub_check_firing = 0;
 }
 
+/*
+ * The main loop: read the receive blocks, decode the mails, answer each
+ * block with a transmit block, drive the session and every timer, and
+ * (re)send the contact. Parks the radio before it returns.
+ */
 static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 {
 	size_t block = s->slots * 2u * fpb;
@@ -10293,11 +10262,6 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 }
 
 /*
- * Parse -a key=value[,key=value...]: the audio bind fields (see struct
- * audio_cfg). Returns 0 on
- * success, -1 on a malformed spec.
- */
-/*
  * The -a keys whose value is a word, a path or carries a ':', not a
  * number. Each needs its value: given bare, the parser used to read
  * through a NULL '=' (security audit 2026-10-29, F5).
@@ -10334,6 +10298,10 @@ static char *audio_value(const char *eq, const char *end)
 	return v;
 }
 
+/*
+ * Parse -a key[=value][,key[=value]...] into struct audio_cfg. Returns 0 on
+ * success, -1 on a malformed spec.
+ */
 static int parse_audio(struct audio_cfg *a, const char *spec)
 {
 	while (*spec) {
@@ -10711,17 +10679,18 @@ static void usage(void)
 		"           not share such logs) -- implies -v\n"
 		"  -M SRC:DST:PRIM[:HEX]  after contact, send this mail (repeatable,\n"
 		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n"
-		"  -g       GAP registration mode: bring up the radio + open\n"
-		"           registration, then run the host C-plane stack so a\n"
-		"           handset can register (parks the radio on exit)\n"
+		"  -g       base mode: bring up the radio (registration closed\n"
+		"           unless -a regopen) and run the host C-plane stack for\n"
+		"           the handsets (parks the radio on exit)\n"
 		"  -P PIN   registration PIN / AC, 4 to 8 digits (default 0000;\n"
 		"           used with -g); -P @FILE reads it from a file only\n"
 		"           root may write\n"
 		"  -s PATH  subscription store, holds the handset key; reloaded into\n"
 		"           the chip at start-up (default /etc/opendectcell-sub, \"\" = off).\n"
 		"           Repeat for every handset the base holds: all are served\n"
-		"           and installed in their chip slots; the first is rung\n"
-		"  -k SPEC  the call key for the chip (0x0208, stock's layout,\n"
+		"           and installed in their chip slots; -a ring= rings the\n"
+		"           first, a bridge call-in the one it names\n"
+		"  -k off   the call key for the chip (0x0208, stock's layout,\n"
 		"           [CR A-0126]) goes out before every CIPHER-REQUEST; -k off\n"
 		"           withholds it\n"
 		"  -w FILE  capture the call's voice slot to FILE (raw, 2 bytes per\n"
@@ -10758,11 +10727,11 @@ static void usage(void)
 		"                     per Gigaset, 0x02 C4; default 0x00) [CR A-0113]\n"
 		"           attflag=N 0x0247 install flag byte (stock bit0=1,\n"
 		"                     A540 0x03; default 0x00) [CR A-0113]\n"
-		"           ringattach=MS same, but MS ms after the handset's FIRST\n"
-		"                     C-plane contact (unattended runs; a lost A540\n"
-		"                     re-locks anywhere from 2 s to minutes later)\n"
 		"           ring=MS calls the handset MS ms after start-up: page\n"
 		"           (0x0300) then an FP-originated CC-SETUP\n"
+		"           ringattach=MS the same, but MS ms after the handset's\n"
+		"                     FIRST C-plane contact (unattended runs; a lost\n"
+		"                     A540 re-locks anywhere from 2 s to minutes later)\n"
 		"           play=FILE transmits a raw G.722 stream (8000 bytes/s) to\n"
 		"           the handset while a call is up, looping -- a clean\n"
 		"           downlink source, unlike the loopback\n"
@@ -10788,12 +10757,16 @@ static void usage(void)
 		"                        List (\"Line 1\"; no commas)\n"
 		"           ctl=PATH     the control socket, default\n"
 		"                        " DECT_CTL_PATH " (0600; noctl: none)\n"
-		"           twocalls     a second (third) handset may call while one\n"
-		"           is in a call: side links get their own audio channel\n"
-		"           (2 -> TDM word 3, 3 -> word 2; lane2=CH:WORD to override)\n"
-		"           with the test file or loop-back, as the main call\n"
-		"           regopen      open registration while running (enrol a\n"
-		"           handset; default closed, subscribed handsets attach)\n"
+		"           twocalls     up to three calls at once: a handset may call\n"
+		"           or be called while another is in a call. Side links get\n"
+		"           their own audio channel (2 -> TDM word 3, 3 -> word 2;\n"
+		"           lane2=CH:WORD, lane3= to override) and their speech goes\n"
+		"           through the bridge as the main call's does\n"
+		"           regopen[=SECS] open registration at start-up (enrol a\n"
+		"           handset; closed after SECS, default never). Without it\n"
+		"           registration is closed and subscribed handsets attach\n"
+		"           regwindow=SECS how long a window opened by SIGUSR1\n"
+		"           (opendectcell.init register) stays open (default 120)\n"
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech;\n"
 		"           0x80 with narrowband)\n"
@@ -10822,9 +10795,8 @@ static void usage(void)
 		"           interval (default 50). Polling starts at link-up, so\n"
 		"           one run gives an idle baseline and the live state.\n"
 		"           Read only; never writes chip memory.\n"
-		"           playsync advances the coded stream on the received\n"
-		"           lane's word boundary instead of a cadence of our own;\n"
-		"           required for anything but a steady tone\n"
+		"           playsync locks play= to the received lane's word boundary\n"
+		"           in a narrowband call too (a wideband call always locks)\n"
 		"           statefile=PATH writes the base's state as JSON, at most\n"
 		"           once a second (default " STATE_DEFAULT_PATH ");\n"
 		"           nostatefile turns it off\n"
@@ -10869,7 +10841,10 @@ static void usage(void)
 		"           call is bound (for radio-off TDM probing)\n"
 		"           status=MS polls the chip's per-link connection status\n"
 		"           (0xF624, read-only) every MS ms while a call is bound and\n"
-		"           prints the MAC slot, carrier and bearer slot type\n"
+		"           prints its slot, carrier and signal levels\n"
+		"           holdback=MS nochipkeys remote=PATH fetchdelay=MS\n"
+		"           locvalid=N: the multi-cell tests M2 and M4\n"
+		"           (docs/multicell-experiments.md)\n"
 		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0\n"
 		"           (flags=0x41 is the wideband bind used at G7),\n"
 		"           txidle=0xff,voiceidle=0xff\n");
@@ -10908,11 +10883,6 @@ static int profile_load(const char *path, struct dect_profile *p)
 	return dect_profile_parse(text, n, p, profile_say, (void *)path);
 }
 
-/*
- * dect-stubd --check-profile FILE [FIRMWARE]: validate one profile without
- * the radio, and for a device profile its manufacturer layer, looked up
- * beside it as <extends>.profile; print what it resolves to.
- */
 /*
  * dect-stubd --ctl LINE...: a client for the control socket, for scripts
  * and the bench (the box has no socat). Sends each LINE, prints what the
@@ -11129,6 +11099,11 @@ static int bridge_echo(int argc, char **argv)
 	return 0;
 }
 
+/*
+ * dect-stubd --check-profile FILE [FIRMWARE]: validate one profile without
+ * the radio, and for a device profile its manufacturer layer, looked up
+ * beside it as <extends>.profile; print what it resolves to.
+ */
 static int check_profile(const char *path, const char *fw)
 {
 	static struct dect_profile p, mfr;
@@ -11227,28 +11202,18 @@ int main(int argc, char **argv)
 	s.audio.slot_mask = 0x00u;	/* computed unless slotmask= pins it */
 	ab_init(&s);
 	/*
-	 * The mode-2 re-assign. Since 2026-10-25 it is sent only when the
-	 * first 0x0230 had flag bit 6 set (the 0x41 wideband bind every lab
-	 * script used); see the resolution after option parsing. With bit 6
-	 * clear in the first assign -- our default flags=1 -- the chip reaches
-	 * mode 2 by itself once 0x022D turns the path on, as A-0046/A-0047
-	 * said, and the re-assign only adds a 500 ms mode-9 window: a burst of
-	 * noise in both directions at the start of every call (runs 25-27,
-	 * A540 and AS690H).
+	 * The mode-2 re-assign (remode_tick()), sent only when -a flags= set
+	 * bit 6 in the first 0x0230 (see the resolution after option parsing):
+	 * without it such a bind stays in mode 9 and no downlink audio reaches
+	 * the handset. With bit 6 clear in flags -- the default, 1 -- none is
+	 * sent: a narrowband bind reaches mode 2 by itself once 0x022D turns
+	 * the path on (A-0046/A-0047), a wideband call gets stock's bind,
+	 * which needs none, and a re-assign would only add a 500 ms mode-9
+	 * window of noise.
 	 *
-	 * When it is sent: the 2026-10-23 history.
-	 * Without it the 0x41 bind stays in mode 9 and no downlink audio of
-	 * any format reaches the handset. With it, and linear PCM on the lane,
-	 * a whole call is audible (vF411).
-	 *
-	 * 500 ms, and not less. This was briefly defaulted to 150 ms on the
-	 * reasoning that it is comfortably after the 0x0242 which triggers
-	 * 0x022D; vF414 then failed with the enable word never reaching 1 and
-	 * dest 6 falling back to silence 4 s in, while vF411 at 500 ms held
-	 * for a whole call. The two runs differ in nothing else. The MAC-side
-	 * bearer handler evidently runs its own configurator pass after
-	 * 0x022D, and a re-assign that arrives before it is simply
-	 * overwritten. 500 ms is the only value with evidence behind it.
+	 * 500 ms and not less: the chip's MAC-side bearer handler runs its own
+	 * configurator pass after 0x022D, and a re-assign that arrives before
+	 * it is overwritten (at 150 ms the enable word never reached 1).
 	 */
 	s.audio.remode_ms = 500;
 	/*
