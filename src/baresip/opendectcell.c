@@ -7,13 +7,19 @@
  *     says "bridge", and from then on dect-stubd hands it the handsets'
  *     external calls;
  *   - the audio source and player "openDECTcell", fed through dect-stubd's
- *     audio socket, one connection per call: 20 ms frames of 16 kHz
- *     linear PCM both ways (a narrowband call is resampled by
- *     dect-stubd). The DECT side sets the pace -- each frame from the
- *     handset is handed to baresip as the microphone, and in the same
- *     breath one frame is pulled from baresip's player and sent to the
- *     handset. Each call's audio device is named after its slot here
+ *     audio socket, one connection per call: 20 ms frames of linear PCM
+ *     both ways, at the rate of the call's SIP codec (8 kHz for G.711,
+ *     16 kHz for G.722). The DECT side sets the pace -- each frame from
+ *     the handset is handed to baresip as the microphone, and in the
+ *     same breath one frame is pulled from baresip's player and sent to
+ *     the handset. Each call's audio device is named after its slot here
  *     (audio_set_devicename()), so its source and player find it;
+ *   - codecs matched end to end where signalling allows, so neither the
+ *     box nor baresip converts (docs/bridge-interface.md §3): a
+ *     narrowband handset's call offers G.711 only, a caller who offers
+ *     no G.722 rings the handsets narrowband, an account whose handsets
+ *     are all narrowband answers G.711, and the far end's codec goes
+ *     back with remote-answered;
  *   - the line map /var/run/opendectcell/lines ("<hs> <line> <aor>" per line,
  *     written by the init script from /etc/config/opendectcell): which accounts
  *     belong to which handsets. An account may be the line of several
@@ -46,8 +52,7 @@
 #define LINES_PATH	"/var/run/opendectcell/lines"
 #define STATUS_PATH	"/var/run/opendectcell/voip.json"
 #define STATUS_MS	2000u
-#define FRAME		320u	/* samples: 20 ms at 16 kHz */
-#define RATE		16000u
+#define FRAME_MAX	320u	/* samples: 20 ms at 16 kHz */
 #define RETRY_MS	2000u
 #define MAX_LINES	12u
 #define MAX_CALLS	8u	/* DECT calls: legs ringing, and talking */
@@ -85,6 +90,7 @@ struct bcall {
 	struct tmr   ring;		/* a call-in's RING_MS limit */
 	/* its speech: the audio socket connection, baresip's two ends */
 	int              afd;		/* -1 = none */
+	unsigned         rate;		/* the connection's: 8000 or 16000 */
 	struct re_fhs   *afhs;
 	struct ausrc_st *src;
 	struct auplay_st *play;
@@ -105,6 +111,8 @@ struct auplay_st {
 
 static struct line lines[MAX_LINES];
 static unsigned n_lines;
+/* handsets that speak narrowband only, by slot (dect-stubd's hs lines) */
+static bool hs_narrow[7];
 static struct bcall calls[MAX_CALLS];
 static unsigned next_tok;
 static bool any_source;		/* config opendectcell_any_source: see sip_origin_ok() */
@@ -395,7 +403,8 @@ static void aud_close(struct bcall *bc)
 static void aud_read(int flags, void *arg)
 {
 	struct bcall *bc = arg;
-	int16_t up[FRAME], down[FRAME];
+	int16_t up[FRAME_MAX], down[FRAME_MAX];
+	size_t sampc = bc->rate / 50u;
 	struct auframe af;
 	ssize_t n;
 
@@ -405,36 +414,100 @@ static void aud_read(int flags, void *arg)
 		aud_close(bc);
 		return;
 	}
-	if (n != (ssize_t)sizeof(up))
+	if (n != (ssize_t)(sampc * sizeof(up[0])))
 		return;
+	/* at the connection's rate; auresamp covers a codec changed since */
 	if (bc->src) {
 		struct ausrc_st *src = bc->src;
 
-		auframe_init(&af, AUFMT_S16LE, up, FRAME, RATE, 1);
+		auframe_init(&af, AUFMT_S16LE, up, sampc, bc->rate, 1);
 		af.timestamp = src->ts;
-		src->ts += (uint64_t)FRAME * 1000000u / RATE;
+		src->ts += 20000u;
 		src->rh(&af, src->arg);
 	}
-	memset(down, 0, sizeof(down));
+	memset(down, 0, sampc * sizeof(down[0]));
 	if (bc->play) {
-		auframe_init(&af, AUFMT_S16LE, down, FRAME, RATE, 1);
+		auframe_init(&af, AUFMT_S16LE, down, sampc, bc->rate, 1);
 		bc->play->wh(&af, bc->play->arg);
 	}
-	(void)send(bc->afd, down, sizeof(down), MSG_DONTWAIT | MSG_NOSIGNAL);
+	(void)send(bc->afd, down, sampc * sizeof(down[0]),
+		   MSG_DONTWAIT | MSG_NOSIGNAL);
 }
 
-/* Connect to the audio socket and name the call (its first message). */
+/*
+ * The account's audio codecs as its audio_codecs parameter writes them;
+ * narrow: only the 8 kHz ones. Empty when none qualifies.
+ */
+static void codecs_str(const struct account *acc, bool narrow, char *buf,
+		       size_t sz)
+{
+	const struct le *le;
+	size_t n = 0;
+
+	buf[0] = '\0';
+	for (le = list_head(account_aucodecl(acc)); le; le = le->next) {
+		const struct aucodec *ac = le->data;
+
+		if (narrow && ac->srate != 8000u)
+			continue;
+		n += (size_t)re_snprintf(buf + n, sz - n, "%s%s/%u/%u",
+					 n ? "," : "", ac->name, ac->srate,
+					 ac->ch);
+		if (n >= sz - 1u)
+			break;
+	}
+}
+
+/*
+ * A call that baresip creates now (ua_connect(), ua_accept()) offers or
+ * answers only the account's narrowband codecs, when it has any: a call
+ * keeps the formats it was made with, so narrow_end() puts the account's
+ * list back right after. saved: at least 256 octets.
+ */
+static bool narrow_begin(struct account *acc, char *saved, size_t sz)
+{
+	char nb[256];
+
+	codecs_str(acc, false, saved, sz);
+	codecs_str(acc, true, nb, sizeof(nb));
+	if (!nb[0] || !strcmp(nb, saved))
+		return false;		/* nothing narrowband, or nothing else */
+	return account_set_audio_codecs(acc, nb) == 0;
+}
+
+static void narrow_end(struct account *acc, const char *saved)
+{
+	if (account_set_audio_codecs(acc, saved))
+		warning("openDECTcell: could not restore the account's codecs\n");
+}
+
+/* The rate of the call's SIP codec, 16000 until one is chosen. */
+static unsigned call_rate(const struct call *call)
+{
+	const struct aucodec *ac = call_audio(call) ?
+		audio_codec(call_audio(call), true) : NULL;
+
+	return ac && ac->srate == 8000u ? 8000u : 16000u;
+}
+
+/*
+ * Connect to the audio socket and name the call in the first message,
+ * with the rate its frames take: the SIP codec's, so a narrowband call
+ * to G.711 is resampled nowhere.
+ */
 static void aud_open(struct bcall *bc, const char *path)
 {
 	struct sockaddr_un a;
-	char hello[16];
+	char hello[32];
 	int fd, n;
 
 	aud_close(bc);
 	memset(&a, 0, sizeof(a));
 	a.sun_family = AF_UNIX;
 	str_ncpy(a.sun_path, path, sizeof(a.sun_path));
-	n = re_snprintf(hello, sizeof(hello), "call=%u", bc->id);
+	bc->rate = call_rate(bc->call);
+	n = re_snprintf(hello, sizeof(hello), "call=%u rate=%u", bc->id,
+			bc->rate);
 	fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
 	if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a)) ||
 	    send(fd, hello, (size_t)n, MSG_NOSIGNAL) != n) {
@@ -449,16 +522,21 @@ static void aud_open(struct bcall *bc, const char *path)
 		return;
 	}
 	bc->afd = fd;
-	info("openDECTcell: call %u's audio connected\n", bc->id);
+	info("openDECTcell: call %u's audio connected (%u Hz)\n", bc->id, bc->rate);
 }
 
+/*
+ * A handset's call out; narrow: it offered no G.722 (dect-stubd's
+ * codec=nb), so the INVITE offers G.711 only and nothing converts.
+ */
 static void call_out(unsigned id, unsigned hs, unsigned line,
-		     const char *number)
+		     const char *number, bool narrow)
 {
 	struct ua *ua = line_ua(hs, line);
 	struct bcall *bc;
 	struct pl pl;
-	char *uri = NULL;
+	char *uri = NULL, saved[256];
+	bool narrowed;
 	int err;
 
 	if (!ua && line != 1)
@@ -472,8 +550,11 @@ static void call_out(unsigned id, unsigned hs, unsigned line,
 	}
 	pl_set_str(&pl, number);
 	err = account_uri_complete_strdup(ua_account(ua), &uri, &pl);
+	narrowed = narrow && narrow_begin(ua_account(ua), saved, sizeof(saved));
 	if (!err)
 		err = ua_connect(ua, &bc->call, NULL, uri, VIDMODE_OFF);
+	if (narrowed)
+		narrow_end(ua_account(ua), saved);
 	mem_deref(uri);
 	if (err) {
 		warning("openDECTcell: call %u to %s: %m\n", id, number, err);
@@ -504,7 +585,15 @@ static void ctl_line(const char *line, size_t len)
 	(void)dect_ctl_get_uint(&m, "line", 1, 2, &ln);
 
 	if (!strcmp(m.verb, "call-out")) {
-		call_out(id, hs, ln, dect_ctl_get(&m, "number"));
+		const char *c = dect_ctl_get(&m, "codec");
+
+		call_out(id, hs, ln, dect_ctl_get(&m, "number"),
+			 c && !strcmp(c, "nb"));
+	} else if (!strcmp(m.verb, "hs")) {
+		const char *wb = dect_ctl_get(&m, "wideband");
+
+		if (hs)
+			hs_narrow[hs] = wb && !strcmp(wb, "0");
 	} else if (!strcmp(m.verb, "call-in-ok")) {
 		bc = bc_by_tok(dect_ctl_get(&m, "sip"));
 		if (bc && bc->call) {
@@ -733,7 +822,7 @@ static void ring_timeout(void *arg)
 
 /* One leg of a call in: hand it to dect-stubd for line l's handset. */
 static int call_in_leg(struct ua *ua, struct call *call, const struct line *l,
-		       const char *num, const char *name)
+		       const char *num, const char *name, bool narrow)
 {
 	struct dect_ctl_out o;
 	struct bcall *bc = bc_new();
@@ -752,6 +841,8 @@ static int call_in_leg(struct ua *ua, struct call *call, const struct line *l,
 	dect_ctl_add(&o, "number", num);
 	if (name[0])
 		dect_ctl_add(&o, "name", name);
+	if (narrow)
+		dect_ctl_add(&o, "codec", "nb");
 	dect_ctl_add(&o, "sip", bc->tok);
 	if (ctl_send(&o)) {
 		bc->call = NULL;
@@ -768,7 +859,10 @@ static void call_in(struct ua *ua, struct call *call)
 	const char *peer = call_peeruri(call), *at, *colon;
 	/* what dect-stubd puts into the CLIP: longer, it drops the field */
 	char num[DECT_CLIP_NUMBER_MAX + 1] = "", name[DECT_CLIP_NAME_MAX + 1] = "";
+	struct stream *strm = call_audio(call) ? audio_strm(call_audio(call))
+					       : NULL;
 	unsigned i, legs = 0;
+	bool narrow;
 
 	if (!line_of(ua))
 		return;			/* not one of the handsets' accounts */
@@ -788,9 +882,11 @@ static void call_in(struct ua *ua, struct call *call)
 	 */
 	if (call_peername(call))
 		utf8_cut(name, call_peername(call), DECT_CLIP_NAME_MAX);
+	/* a caller who offers no G.722: the handsets ring narrowband */
+	narrow = !strm || !sdp_media_rformat(stream_sdpmedia(strm), "G722");
 	for (i = 0; i < n_lines; i++)
 		if (aor_is(ua, lines[i].aor) &&
-		    call_in_leg(ua, call, &lines[i], num, name) == 0)
+		    call_in_leg(ua, call, &lines[i], num, name, narrow) == 0)
 			legs++;
 	if (!legs) {
 		warning("openDECTcell: call from %s: not handed to the base\n",
@@ -800,6 +896,23 @@ static void call_in(struct ua *ua, struct call *call)
 	}
 	info("openDECTcell: call from %s rings %u handset(s)\n", peer ? peer : "?",
 	     legs);
+}
+
+/* Every handset the account rings speaks narrowband only. */
+static bool account_narrow(const struct ua *ua)
+{
+	unsigned i;
+	bool any = false;
+
+	for (i = 0; i < n_lines; i++) {
+		if (!aor_is(ua, lines[i].aor))
+			continue;
+		if (lines[i].hs >= RE_ARRAY_SIZE(hs_narrow) ||
+		    !hs_narrow[lines[i].hs])
+			return false;
+		any = true;
+	}
+	return any;
 }
 
 /* ---- the VoIP status ----------------------------------------------------- */
@@ -1028,8 +1141,17 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 			bevent_stop(event);
 			break;
 		}
-		if (ua_accept(ua, msg))
-			warning("openDECTcell: could not accept the call\n");
+		{
+			char saved[256];
+			bool narrowed = account_narrow(ua) &&
+				narrow_begin(ua_account(ua), saved,
+					     sizeof(saved));
+
+			if (ua_accept(ua, msg))
+				warning("openDECTcell: could not accept the call\n");
+			if (narrowed)
+				narrow_end(ua_account(ua), saved);
+		}
 		break;
 	}
 	case UA_EVENT_CALL_INCOMING:
@@ -1044,8 +1166,11 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 		}
 		break;
 	case UA_EVENT_CALL_ESTABLISHED:
+		/* the far end's codec: a narrowband one connects the handset
+		 * narrowband */
 		if (bc && bc->out)
-			(void)ctl_call("remote-answered", bc->id, NULL, NULL);
+			(void)ctl_call("remote-answered", bc->id, "codec",
+				       call_rate(call) == 8000u ? "nb" : "wb");
 		break;
 	case UA_EVENT_CALL_CLOSED: {
 		unsigned i;
@@ -1114,9 +1239,9 @@ static int src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 			device ? device : "");
 		return ENODEV;
 	}
-	if (prm->fmt != AUFMT_S16LE || prm->ch != 1 || prm->srate != RATE) {
-		warning("openDECTcell: the source needs 16 kHz mono S16LE "
-			"(ausrc_srate 16000, ausrc_channels 1)\n");
+	if (prm->fmt != AUFMT_S16LE || prm->ch != 1) {
+		warning("openDECTcell: the source needs mono S16LE "
+			"(ausrc_channels 1)\n");
 		return ENOTSUP;
 	}
 	st = mem_zalloc(sizeof(*st), src_destructor);
@@ -1143,9 +1268,9 @@ static int play_alloc(struct auplay_st **stp, const struct auplay *ap,
 			device ? device : "");
 		return ENODEV;
 	}
-	if (prm->fmt != AUFMT_S16LE || prm->ch != 1 || prm->srate != RATE) {
-		warning("openDECTcell: the player needs 16 kHz mono S16LE "
-			"(auplay_srate 16000, auplay_channels 1)\n");
+	if (prm->fmt != AUFMT_S16LE || prm->ch != 1) {
+		warning("openDECTcell: the player needs mono S16LE "
+			"(auplay_channels 1)\n");
 		return ENOTSUP;
 	}
 	st = mem_zalloc(sizeof(*st), play_destructor);

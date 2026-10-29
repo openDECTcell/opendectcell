@@ -458,8 +458,8 @@ baresip_write() {
 		echo "audio_jitter_buffer_delay $(( (lo + 19) / 20 ))-$(( (hi + 19) / 20 ))"
 		echo "audio_player opendectcell,"
 		echo "audio_source opendectcell,"
-		echo "ausrc_srate 16000"
-		echo "auplay_srate 16000"
+		# no ausrc_srate/auplay_srate: each call's audio runs at its
+		# SIP codec's rate, so a G.711 call is resampled nowhere
 		echo "ausrc_channels 1"
 		echo "auplay_channels 1"
 		echo "module_path $BS_MODS"
@@ -468,8 +468,9 @@ baresip_write() {
 		config_get_bool v main sip_any_source 0
 		[ "$v" = 1 ] && echo "opendectcell_any_source yes"
 	} > "$BS_DIR/config"
-	# auresamp: the bridge's speech is 16 kHz, G.711 is 8 kHz, and
-	# baresip's core drops frames whose rate is not the codec's
+	# auresamp: baresip's core drops frames whose rate is not the
+	# codec's; the bridge's are, unless a codec changes mid-call or the
+	# two ends share no codec
 	for v in auresamp.so g711.so g722.so stun.so turn.so ice.so srtp.so dtls_srtp.so mwi.so; do
 		bs_module module "$v"
 	done

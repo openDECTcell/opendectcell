@@ -371,6 +371,12 @@ struct bcall {
 	unsigned id;		/* 0 = free */
 	int      party;		/* -1 the main link, else a side index */
 	unsigned line;		/* the pool line, 1 or 2 */
+	/*
+	 * The SIP side is narrowband (a caller who offered no G.722, a far
+	 * end that answered G.711): the handset's leg is too, so neither the
+	 * box nor baresip converts.
+	 */
+	int      narrow;
 	int      out;		/* 1: the handset called out, 0: call-in */
 	int      busy_seen;	/* the CC call existed */
 	int      rang, answered;	/* events sent */
@@ -390,10 +396,12 @@ struct bcall {
 
 /*
  * One lane's speech on the audio socket: lane 0 is the main link's, 1 + i
- * extra lane i's. Wideband: G.722 octets, a word held two frames, coded
- * here. Narrowband: one 16-bit linear sample per frame (8 kHz), resampled
- * here, so the socket is 16 kHz either way. down[] holds what goes to the
- * handset in the lane's own format.
+ * extra lane i's. The lane carries G.722 octets (wideband, a word held two
+ * frames) or one 16-bit linear sample per frame (narrowband, 8 kHz); the
+ * socket carries linear PCM at the rate the bridge asked for, its SIP
+ * codec's. Matched -- narrowband to 8 kHz -- the samples pass as they
+ * are; otherwise they are coded or resampled here. down[] holds what goes
+ * to the handset in the lane's own format.
  */
 #define AB_LANES	(1u + XLANE_MAX)
 
@@ -401,9 +409,10 @@ struct ab_lane {
 	int      cfd;		/* the bridge's connection, -1 = none */
 	unsigned call;		/* announced for this call id, 0 = none */
 	int      wideband;
+	unsigned rate;		/* the socket's: 8000 or 16000 */
 	struct dect_g722_state enc, dec;
 	struct dect_g722_state sil;	/* the fill's own: enc codes the speech */
-	struct dect_rs2 rs_up, rs_down;
+	struct dect_rs2 rs_up, rs_down;	/* towards the bridge, from it */
 	uint8_t  down[8192];
 	size_t   dh, dn;
 	uint8_t  up[320];	/* from the handset: 20 ms in the lane's format */
@@ -1752,7 +1761,7 @@ static int lane_word_live(uint32_t v)
  * Silence when the FIFO runs dry.
  */
 #define AB_PATH		"/var/run/opendectcell-audio.sock"
-#define AB_FRAME	640u	/* octets: 20 ms of 16 kHz 16-bit PCM */
+#define AB_FRAME	640u	/* octets: 20 ms of 16-bit PCM at 16 kHz, the most */
 #define AB_PRIME_MS	40u	/* buffered towards the handset before the first */
 #define AB_HELLO_MS	2000u	/* a new connection names its call within */
 
@@ -1780,35 +1789,85 @@ static void ab_pop(struct ab_lane *l)
 		l->underruns++;
 }
 
-/* One word from the handset; every 20 ms a frame to the bridge. */
+/*
+ * One word from the handset; every 20 ms a frame to the bridge, at its
+ * rate. Nothing is decoded while no bridge is connected.
+ */
 static void ab_up(struct ab_lane *l, const uint8_t *w)
 {
-	int16_t pcm[AB_FRAME / 2u];
-	size_t full = l->wideband ? 160u : 320u;
+	int16_t wb[AB_FRAME / 2u], nb[AB_FRAME / 4u];
+	const int16_t *out;
+	size_t n;
 
 	l->up[l->un++] = w[0];
 	l->up[l->un++] = w[1];
-	if (l->un < full)
+	if (l->un < (l->wideband ? 160u : 320u))
 		return;
 	l->un = 0;
+	if (l->cfd < 0)
+		return;
 	if (l->wideband) {
-		(void)dect_g722_decode(&l->dec, l->up, full, pcm);
+		n = dect_g722_decode(&l->dec, l->up, 160u, wb);
+		out = wb;
+		if (l->rate == 8000u) {
+			n = dect_rs2_down(&l->rs_up, wb, n, nb);
+			out = nb;
+		}
 	} else {
-		int16_t nb[160];
 		unsigned i;
 
 		for (i = 0; i < 160u; i++)
 			nb[i] = (int16_t)(l->up[2u * i] |
 					  (l->up[2u * i + 1u] << 8));
-		(void)dect_rs2_up(&l->rs_up, nb, 160u, pcm);
+		n = 160u;
+		out = nb;
+		if (l->rate != 8000u) {
+			n = dect_rs2_up(&l->rs_up, nb, n, wb);
+			out = wb;
+		}
 	}
-	if (l->cfd < 0)
-		return;
-	if (send(l->cfd, pcm, sizeof(pcm), MSG_DONTWAIT | MSG_NOSIGNAL) ==
-	    (ssize_t)sizeof(pcm))
+	if (send(l->cfd, out, n * sizeof(out[0]), MSG_DONTWAIT | MSG_NOSIGNAL) ==
+	    (ssize_t)(n * sizeof(out[0])))
 		l->frames_up++;
 	else
 		l->dropped++;
+}
+
+/*
+ * A frame from the bridge (pcm, n samples at the lane's rate) into the
+ * lane's own format, appended to down[].
+ */
+static void ab_down(struct ab_lane *l, int16_t *pcm, size_t n)
+{
+	int16_t wb[AB_FRAME / 2u], nb[AB_FRAME / 4u];
+	uint8_t d[AB_FRAME / 2u];
+	size_t k, j, cap = sizeof(l->down);
+
+	if (l->wideband) {
+		if (l->rate == 8000u) {
+			n = dect_rs2_up(&l->rs_down, pcm, n, wb);
+			pcm = wb;
+		}
+		k = dect_g722_encode(&l->enc, pcm, n, d);
+	} else {
+		if (l->rate != 8000u) {
+			n = dect_rs2_down(&l->rs_down, pcm, n, nb);
+			pcm = nb;
+		}
+		for (j = 0; j < n; j++) {
+			d[2u * j] = (uint8_t)(pcm[j] & 0xFF);
+			d[2u * j + 1u] = (uint8_t)((uint16_t)pcm[j] >> 8);
+		}
+		k = 2u * n;
+	}
+	if (l->dn + k > cap) {
+		l->dropped++;		/* 1 s (wideband) or 0.25 s behind */
+		return;
+	}
+	for (j = 0; j < k; j++)
+		l->down[(l->dh + l->dn + j) % cap] = d[j];
+	l->dn += k;
+	l->frames_down++;
 }
 
 /* One frame of lane l, TDM word w: src is the handset's word, or NULL. */
@@ -4167,11 +4226,23 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 #define RING_PAGE_CC	0x0Cu		/* CC page */
 #define RING_PAGE_WIDEBAND 0x20u	/* ... wideband SETUP to follow */
 
-static uint8_t ring_page_info(const struct stubd *s)
+/* The page for an external call: wideband to follow, unless narrow. */
+static uint8_t ring_page_info(const struct stubd *s, int narrow)
 {
 	return (uint8_t)(RING_PAGE_CC |
-			 ((s->audio.basic_svc & 0x0Fu) == 0x08u
+			 ((s->audio.basic_svc & 0x0Fu) == 0x08u && !narrow
 			  ? RING_PAGE_WIDEBAND : 0u));
+}
+
+/* The main link's ring is for a narrowband call (struct bcall). */
+static int main_ring_narrow(const struct stubd *s)
+{
+	unsigned i;
+
+	for (i = 0; i < BC_MAX; i++)
+		if (s->bc[i].id && s->bc[i].party == -1)
+			return s->bc[i].narrow;
+	return 0;
 }
 
 #define RING_RELEASE_WAIT_MS	3000u	/* [CR A-0053] DLC arms a ~5 s guard */
@@ -4267,13 +4338,13 @@ static void send_page(struct stubd *s)
 	 * built from the slot would address the wrong handset.
 	 */
 	ring_target_tpui(s, tpui);
-	p[0] = ring_page_info(s);
+	p[0] = ring_page_info(s, main_ring_narrow(s));
 	p[1] = tpui[1];
 	p[2] = tpui[2];
 	chip_mail(s, 0x0300u, p, sizeof(p));
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
-	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
+	       s->ring_pages, RING_PAGE_RETRIES, p[0],
 	       tpui[1], tpui[2], s->audio.basic_svc,
 	       /*
 		* We page BY the TPUI we assigned. If the handset never
@@ -4307,6 +4378,18 @@ static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
 	    !s->hs[i].cap_ng)
 		return 0x80u;
 	return configured;
+}
+
+/*
+ * The basic service of our SETUP to handset t for an external call:
+ * basic speech (G.726) when the SIP side is narrowband, so the handset
+ * codes what the far end hears, else what target_svc() gives it.
+ */
+static uint8_t ring_svc(const struct stubd *s, unsigned t, int narrow)
+{
+	uint8_t svc = target_svc(s, (int)t, s->audio.basic_svc);
+
+	return narrow ? (uint8_t)(svc & 0xF0u) : svc;
 }
 
 /*
@@ -4468,7 +4551,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 */
 	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
 			      s->cc_fixed_id, s->cc_fixed_id_len,
-			      target_svc(s, 0, s->audio.basic_svc),
+			      ring_svc(s, s->ring_hs, main_ring_narrow(s)),
 			      &ring_clip)) {
 		ring_callinfo(s, 0);
 		s->ring_state = RING_DONE;
@@ -7241,6 +7324,10 @@ static void ctl_hs_to(struct stubd *s, int c, unsigned i, const char *state)
 			dect_ctl_add(&o, "model", s->hs[i].prof_id);
 		if (s->hs[i].cap_known)
 			dect_ctl_add_uint(&o, "part3", s->hs[i].cap_part3 ? 1 : 0);
+		/* 0: we call it narrowband, so its account may answer G.711 */
+		dect_ctl_add_uint(&o, "wideband", !s->audio.narrowband &&
+				  (target_svc(s, (int)i, s->audio.basic_svc) &
+				   0x0Fu) == 0x08u);
 	}
 	if (c >= 0) {
 		ctl_send_to(s, c, &o);
@@ -7445,6 +7532,9 @@ static int bridge_call_out(struct stubd *s, int p, uint64_t now)
 	dect_ctl_add_uint(&o, "call", b->id);
 	dect_ctl_add_uint(&o, "hs", party_hs_slot(s, p));
 	dect_ctl_add_uint(&o, "line", b->line);
+	/* nb: the handset's call is narrowband, so the INVITE offers G.711 */
+	dect_ctl_add(&o, "codec", dect_cc_codec(cc) == DECT_CC_CODEC_G722 ?
+		     "wb" : "nb");
 	dect_ctl_add(&o, "number", num);
 	ctl_send_bridge(s, &o);
 	printf("bridge: call %u out from DECT %u to \"%s\" -- waiting for the "
@@ -7519,7 +7609,8 @@ static void ring_main(struct stubd *s, struct bcall *b, unsigned t)
  */
 static void sr_page(struct stubd *s, struct bcall *b)
 {
-	const uint8_t p[3] = { ring_page_info(s), b->tpui[1], b->tpui[2] };
+	const uint8_t p[3] = { ring_page_info(s, b->narrow), b->tpui[1],
+			       b->tpui[2] };
 
 	chip_mail(s, 0x0300u, p, sizeof(p));
 	b->pages++;
@@ -7591,7 +7682,7 @@ static void sr_setup(struct stubd *s, struct bcall *b, unsigned k,
 	if (hp->cc_name_method == 1 || hp->cc_name_method == 3)
 		clip.name[0] = '\0';		/* display text or none */
 	r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
-			     target_svc(s, (int)t, s->audio.basic_svc), &clip);
+			     ring_svc(s, t, b->narrow), &clip);
 	dect_cc_set_callinfo(&l->cc, &prev);
 	dect_cc_set_signal(&l->cc, s->audio.signal_on, s->audio.signal_value);
 	if (r) {
@@ -7711,7 +7802,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		const char *num = dect_ctl_get(m, "number");
 		const char *name = dect_ctl_get(m, "name");
 		const char *sip = dect_ctl_get(m, "sip");
-		const char *why = NULL;
+		const char *why = NULL, *codec;
 		struct dect_clip clip;
 		unsigned want = 0, t = 0, line = STUBD_LINE_ID;
 
@@ -7737,6 +7828,8 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		if (dect_ctl_get(m, "line") &&
 		    dect_ctl_get_uint(m, "line", 1, 2, &line))
 			line = STUBD_LINE_ID;
+		/* codec=nb: the caller offered no G.722 */
+		codec = dect_ctl_get(m, "codec");
 		b = bc_new(s);
 		if (s->n_hs && hs_in_call(s, t))
 			why = "in-call";
@@ -7770,6 +7863,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 					DECT_CLIP_SCR_USER_UNSCREENED);
 		b->id = bridge_new_id(s);
 		b->line = line;
+		b->narrow = codec && !strcmp(codec, "nb");
 		b->since = now;
 		b->target = (int)t;
 		b->clip = clip;
@@ -7824,7 +7918,18 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		if (ic_cc(s, p)->state == DECT_CC_ST_PROCEEDING)
 			(void)dect_cc_alert(ic_cc(s, p));
 	} else {
-		printf("bridge: call %u answered by the far end\n", id);
+		const char *codec = dect_ctl_get(m, "codec");
+
+		/*
+		 * codec=nb: the far end speaks narrowband, so the handset
+		 * does too (G.726, if it offered it) rather than the box
+		 * converting its G.722.
+		 */
+		if (codec && !strcmp(codec, "nb") &&
+		    dect_cc_prefer_narrowband(ic_cc(s, p)))
+			b->narrow = 1;
+		printf("bridge: call %u answered by the far end%s\n", id,
+		       b->narrow ? " -- narrowband, G.726 to the handset" : "");
 		(void)dect_cc_connect(ic_cc(s, p));
 	}
 	if (ic_active(s, p))
@@ -7994,7 +8099,7 @@ static const struct bcall *ab_call_of(struct stubd *s, unsigned i, int *wb)
 static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
 {
 	char buf[32];
-	unsigned i, id = 0;
+	unsigned i, id = 0, rate = 16000u;
 	ssize_t n = recv(s->ab.pend[j], buf, sizeof(buf) - 1u, MSG_DONTWAIT);
 
 	if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
@@ -8002,8 +8107,10 @@ static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
 		return;
 	if (n > 0) {
 		buf[n] = '\0';
-		if (sscanf(buf, "call=%u", &id) != 1)
+		if (sscanf(buf, "call=%u rate=%u", &id, &rate) < 1)
 			id = 0;
+		if (rate != 8000u)
+			rate = 16000u;
 	}
 	for (i = 0; id && i < AB_LANES; i++) {
 		struct ab_lane *l = &s->ab.l[i];
@@ -8011,8 +8118,14 @@ static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
 		if (l->call != id || l->cfd >= 0)
 			continue;
 		l->cfd = s->ab.pend[j];
+		l->rate = rate;
 		s->ab.pend[j] = -1;
-		printf("audio: the bridge connected for call %u\n", id);
+		printf("audio: the bridge connected for call %u at %u Hz -- %s\n",
+		       id, rate, l->wideband ? (rate == 8000u ?
+		       "G.722 decoded and resampled here (no common codec)" :
+		       "G.722 coded here") : rate == 8000u ?
+		       "narrowband, passed as it is" :
+		       "narrowband, resampled here (no common codec)");
 		return;
 	}
 	close(s->ab.pend[j]);
@@ -8055,12 +8168,9 @@ static void ab_tick(struct stubd *s, uint64_t now)
 		dect_ctl_begin(&o, "audio");
 		dect_ctl_add_uint(&o, "call", b->id);
 		dect_ctl_add(&o, "path", AB_PATH);
-		dect_ctl_add_uint(&o, "rate", 16000);
-		dect_ctl_add_uint(&o, "frame", AB_FRAME);
 		ctl_send_bridge(s, &o);
-		printf("audio: call %u's speech on %s (lane %u, %s; 16 kHz, "
-		       "20 ms)\n", b->id, AB_PATH, i,
-		       wb ? "wideband" : "narrowband");
+		printf("audio: call %u's speech on %s (lane %u, %s)\n", b->id,
+		       AB_PATH, i, wb ? "wideband" : "narrowband");
 	}
 	while ((c = accept(s->ab.lfd, NULL, NULL)) >= 0) {
 		for (i = 0; i < AB_LANES && s->ab.pend[i] >= 0; i++)
@@ -8082,10 +8192,8 @@ static void ab_tick(struct stubd *s, uint64_t now)
 
 		while (l->cfd >= 0) {
 			int16_t pcm[AB_FRAME / 2u];
-			uint8_t d[AB_FRAME / 2u];
 			ssize_t n = recv(l->cfd, pcm, sizeof(pcm),
 					 MSG_DONTWAIT);
-			size_t k, j, cap = sizeof(l->down);
 
 			if (n == 0) {
 				ab_end(l, "the bridge closed it");
@@ -8097,30 +8205,9 @@ static void ab_tick(struct stubd *s, uint64_t now)
 					ab_end(l, "read failed");
 				break;
 			}
-			if (l->wideband) {
-				k = dect_g722_encode(&l->enc, pcm,
-						     (size_t)n / 4u * 2u, d);
-			} else {
-				int16_t nb[AB_FRAME / 4u];
-				size_t m = dect_rs2_down(&l->rs_down, pcm,
-							 (size_t)n / 4u * 2u,
-							 nb);
-
-				for (j = 0; j < m; j++) {
-					d[2u * j] = (uint8_t)(nb[j] & 0xFF);
-					d[2u * j + 1u] =
-						(uint8_t)((uint16_t)nb[j] >> 8);
-				}
-				k = 2u * m;
-			}
-			if (l->dn + k > cap) {
-				l->dropped++;	/* 0.5 s (narrowband) or 1 s behind */
-				continue;
-			}
-			for (j = 0; j < k; j++)
-				l->down[(l->dh + l->dn + j) % cap] = d[j];
-			l->dn += k;
-			l->frames_down++;
+			/* 20 ms at the lane's rate, anything else is not ours */
+			if ((size_t)n == l->rate / 50u * sizeof(pcm[0]))
+				ab_down(l, pcm, (size_t)n / sizeof(pcm[0]));
 		}
 	}
 }
