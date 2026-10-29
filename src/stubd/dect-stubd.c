@@ -634,8 +634,7 @@ struct stubd {
 	 * again until the handset brings up a link or we give up.
 	 */
 	enum { RING_IDLE, RING_RELEASING, RING_PAGING, RING_WAIT_PAGE_RESP,
-	       RING_SETUP_DELAY, RING_DONE } ring_state;
-	uint64_t ring_setup_at;		/* when setupdelay=N expires */
+	       RING_DONE } ring_state;
 	uint64_t ring_release_until;	/* give the link time to go down */
 	uint64_t ring_wait_since;	/* a link in use held the ring back */
 	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
@@ -781,12 +780,6 @@ struct stubd {
 		 * selects mode 2: PCM out(k) <- channel k, channel k <- PCM
 		 * in(k), and a NOP over the chain, i.e. enabled.
 		 */
-		int nocodeclist;	/* omit <<CODEC-LIST>> from CC-SETUP */
-		/*
-		 * nostockcfg: omit the three config mails stock sends before
-		 * radio-on. The control for the bring-up-gap test.
-		 */
-		int no_stock_cfg;
 		/* subslot=N: chip subscription slot, 1..6. 0 = use the store's. */
 		unsigned sub_slot;
 		/*
@@ -830,14 +823,6 @@ struct stubd {
 		int      slot_mask_fixed;	/* slotmask=N given */
 		int      no_slot_cfg;
 		/*
-		 * setupdelay=N: wait N ms after the page response before the
-		 * {CC-SETUP}. [CR A-StockTrace-5 §15] measured a connection
-		 * bearer on stock ~360 ms before its setup; we send ours
-		 * ~120 ms after the connection comes up, which may simply be
-		 * before the MAC has finished bringing the bearer up.
-		 */
-		unsigned setup_delay_ms;
-		/*
 		 * codeclist=HEX replaces the <<CODEC-LIST>> contents (the IE
 		 * value, without tag or length). EN 300 175-5 §7.7.54: one
 		 * negotiation octet then 3 octets per codec
@@ -854,17 +839,11 @@ struct stubd {
 		 */
 		uint8_t  info_ie[64];
 		size_t   info_ie_len;
-		unsigned xmail_ms;	/* hold -M mails until this many ms in */
 		unsigned remode_ms;
 		const char *led_path;	/* led=PATH, NULL = the default */
 		const char *state_path;	/* statefile=PATH, NULL = the default */
 		int      no_state;	/* nostatefile */
-		/*
-		 * Registration closed unless regopen (since 2026-10-25, the
-		 * maintainer: "we don't want anything to register unless we
-		 * tell it to"). noregopen is still accepted, and is the default.
-		 */
-		int      no_reg_open;
+		int      reg_open;	/* regopen: open registration at start-up */
 		unsigned reg_window_s;	/* regopen=SECS: close after; 0 = never */
 		int      two_calls;	/* twocalls: speech on side links */
 		int      locauth;	/* locauth: authenticate on locating */
@@ -1014,56 +993,7 @@ struct stubd {
 		 * did not run there: the A540 ended its list links itself.
 		 */
 		int      nlr;
-		/*
-		 * pagehdr=N: a FOURTH payload byte on the 0x0300 page.
-		 *
-		 * [CR A-0091] corrects [CR A-0076] §2. The page builder does
-		 * not compile the LCE header in: it builds page+4 as
-		 * bit0 | ((mail[5] & 0x0F) << 1) | (bits 5-7 preserved), and
-		 * mail[5] is the 0x0300 body byte AFTER the TPUI -- our
-		 * param[3]. (A-0076 was still right that mail[2], our page
-		 * info byte, is never read.)
-		 *
-		 * Neither we nor stock has ever written mail[5]: stock's
-		 * sender emits three payload bytes exactly as ours does. So
-		 * the builder has been reading a byte past what the sender
-		 * wrote -- whatever chip buffer state happens to be there.
-		 * That means the on-air LCE header is not known to be stable,
-		 * let alone correct, and it is NOT a constant we are stuck
-		 * with.
-		 *
-		 * -1 keeps the three-byte page we have always sent, so the
-		 * default changes nothing. 0..15 appends the byte.
-		 */
-		int	 page_hdr;
 		unsigned setup_tries;	/* 0 = RING_SETUP_TRIES */
-		/*
-		 * pagemail=SPEC: raw mails to send IMMEDIATELY after each
-		 * 0x0300 page, in the order given. -M cannot do this -- its
-		 * mails fire once, when the session comes up, not per page.
-		 *
-		 * This exists for 0x015E. docs/mac-bringup.md has recorded the
-		 * stock sequence since the MAC bring-up work:
-		 *
-		 *   0x022C -> 0x015C -> 0x0300 -> 0x015E x2 -> 0x0300
-		 *
-		 * Stock sends 0x015E twice around every page; we have never
-		 * sent it once. [CR A-0076] notes it carries a bearer-type
-		 * field read by the MAC config -- mentioned only to rule it
-		 * out as a page builder, so nobody asked what it does as a
-		 * BEARER REQUEST. Our whole primitive inventory has no
-		 * connection- or bearer-setup mail in it, which is the shape
-		 * of a hole that "insufficient resources" would fit.
-		 *
-		 * The payload is deliberately NOT built in: we have no
-		 * observed bytes for 0x015E, only that it exists and has a
-		 * bearer-type field. Q-0055 asks the room for the layout. A
-		 * wrong bearer request is likelier to wedge the MAC than a
-		 * missing one, and the chip has no error indication to catch
-		 * it [A-0086], so the bytes come from the answer, not from us.
-		 */
-		const char *page_mail[4];
-		unsigned n_page_mail;
 		/*
 		 * timesync: 0 = auto (send only when the kernel says the
 		 * clock is disciplined), 1 = force (send anyway), 2 = off.
@@ -1093,18 +1023,6 @@ struct stubd {
 		const char *ctl_path;	/* -a ctl=PATH, the control socket */
 		const char *line_name;	/* -a linename=NAME, "Line 1" */
 		int      no_ctl;	/* -a noctl */
-		/*
-		 * ti=N: pin the CC transaction identifier of an FP-originated
-		 * SETUP; -1 (the default) uses the lowest free value, 0.
-		 * Written 2026-10-22 because stock uses TI 0 in every
-		 * base->handset SETUP we have bytes for, every call this
-		 * project ever completed used TI 0 (v28, v30, v34, A2, A3, B2)
-		 * and every refused one used TI 1. The only ti=0 test then ran
-		 * under the drain defect and was void, and the lab scripts
-		 * pinned ti=1 from then on. Settled 2026-10-24: run 15 (ti=0)
-		 * rang the A540, run 16 (ti=1, same session) was refused.
-		 */
-		int      ti_fixed;
 		/*
 		 * play=FILE: transmit a raw G.722 stream to the handset while a
 		 * call is up, looping. The lane wants one coded 16-bit word per
@@ -1193,7 +1111,6 @@ struct stubd {
 	size_t      play_pos;		/* byte offset into audio.play */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
 	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
-	uint8_t     next_ti;		/* FP-originated TI value: 0, or -a ti= */
 	const char *voice_path;
 	FILE       *voice_fp;
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
@@ -4519,7 +4436,6 @@ static void send_page(struct stubd *s)
 {
 	struct dect_mail m;
 	uint8_t tpui[3];
-	unsigned i;
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
@@ -4536,44 +4452,9 @@ static void send_page(struct stubd *s)
 	m.param[1] = tpui[1];
 	m.param[2] = tpui[2];
 	m.param_len = 3;
-	/*
-	 * The optional fourth byte -- mail[5] -- from which [CR A-0091] says
-	 * the builder takes bits 1-4 of the page header byte at 0x96ad+4.
-	 * Off by default: the three-byte page is what every run so far has
-	 * sent and what stock sends.
-	 */
-	if (s->audio.page_hdr >= 0) {
-		m.param[3] = (uint8_t)s->audio.page_hdr;
-		m.param_len = 4;
-	}
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
-	if (s->audio.page_hdr >= 0)
-		/*
-		 * [CR A-0093]: the byte at 0x96ad+4 is composed, not copied --
-		 * bit 0 is always set, bits 1-4 carry mail[5] bits 0-3, and
-		 * bits 5-7 are a fixed init constant. So the header to compare
-		 * against a reading is (byte >> 1) & 7, and the low five bits
-		 * we expect are ((hdr & 0x0F) << 1) | 1.
-		 */
-		printf("ring: page carries mail[5] = 0x%02x -> expect LCE "
-		       "header %u, 0x96ad+4 low bits 0x%02x (A-0091/93)\n",
-		       (unsigned)s->audio.page_hdr,
-		       (unsigned)(s->audio.page_hdr & 0x07),
-		       (unsigned)(((s->audio.page_hdr & 0x0F) << 1) | 1));
-	/*
-	 * Whatever the caller wants sent straight after the page -- see the
-	 * comment on page_mail. Sent here rather than from the poll loop so
-	 * the ordering against 0x0300 is exact, which is the whole point.
-	 */
-	for (i = 0; i < s->audio.n_page_mail; i++) {
-		printf("ring: page mail %u/%u: %s\n", i + 1u,
-		       s->audio.n_page_mail, s->audio.page_mail[i]);
-		if (send_mail_spec(s, s->audio.page_mail[i]))
-			printf("ring: page mail %u FAILED to parse/send: %s\n",
-			       i + 1u, s->audio.page_mail[i]);
-	}
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
 	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
@@ -4739,23 +4620,11 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 		return;
 	}
 	/*
-	 * dect_cc_setup_id() refuses unless the CC entity is idle, and this is
-	 * a real collision rather than a rare one: the A540 CAT opens a CAT-iq
-	 * service call of its own roughly every 17 s and holds it for about
-	 * 13 s. Run F4 caught it exactly -- the handset's call ran 48.6 s to
-	 * 61.6 s and our ring fired at 58.5 s -- so abandoning the ring on the
-	 * first refusal loses the call about as often as not. Retry while the
-	 * paging window is still open.
-	 */
-	/*
 	 * EN 300 444 §6.9.2: the lowest free transaction value, which for our
-	 * one-call CC entity is always 0. This used to rotate per call, and
-	 * every Gigaset refused every incoming call for it: run 15 (value 0)
-	 * rang the A540, run 16 (value 1, same session) was refused with 0x32.
-	 * See dect_cc_set_next_ti(). -a ti=N still overrides, for tests.
+	 * one-call CC entity is always 0 (see dect_cc_set_next_ti()). The
+	 * Gigasets refuse an incoming call with any other.
 	 */
-	s->next_ti = s->audio.ti_fixed >= 0 ? (uint8_t)s->audio.ti_fixed : 0u;
-	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
+	dect_cc_set_next_ti(&s->reg.link.cc, 0);
 	{
 		uint8_t id = alloc_call_id(s, &s->reg.link);
 
@@ -4778,6 +4647,12 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 		if (hp && (hp->cc_name_method == 1 || hp->cc_name_method == 3))
 			ring_clip.name[0] = '\0';	/* display or none */
 	}
+	/*
+	 * dect_cc_setup_id() refuses unless the CC entity is idle, and that is
+	 * not rare: the A540 opens a CAT-iq service call of its own roughly
+	 * every 17 s and holds it for about 13 s. Retry while the paging window
+	 * is still open rather than lose the ring on the first refusal.
+	 */
 	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
 			      s->cc_fixed_id, s->cc_fixed_id_len,
 			      target_svc(s, 0, s->audio.basic_svc),
@@ -4857,24 +4732,6 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	 * deadline passes, so a handset that never answers the page the way
 	 * we expect still gets a call rather than silence.
 	 */
-	if (s->ring_state == RING_SETUP_DELAY) {
-		if (now >= s->ring_setup_at) {
-			ring_queue_setup(s, now, "setupdelay elapsed");
-			/*
-			 * ring_queue_setup() leaves the state alone when the
-			 * CC entity was busy, so without this we would come
-			 * straight back here on the next tick with the
-			 * deadline already past and burn the whole retry
-			 * budget in a few hundred milliseconds. Hand the
-			 * retry back to RING_WAIT_PAGE_RESP, which owns the
-			 * RING_SETUP_RETRY_MS spacing.
-			 */
-			if (s->ring_state == RING_SETUP_DELAY)
-				s->ring_state = RING_WAIT_PAGE_RESP;
-		}
-		return;
-	}
-
 	if (s->ring_state == RING_WAIT_PAGE_RESP) {
 		if (now >= s->ring_resp_deadline)
 			ring_queue_setup(s, now, s->ring_setup_tries
@@ -5683,7 +5540,7 @@ static void main_cc_setup(struct stubd *s)
 	 * Gigasets ring without it. codeclist=HEX still sends one, e.g.
 	 * codeclist=90020084 for the old list.
 	 */
-	if (s->audio.codeclist_len && !s->audio.nocodeclist)
+	if (s->audio.codeclist_len)
 		dect_cc_set_codec_list(&s->reg.link.cc, s->audio.codeclist,
 				       s->audio.codeclist_len);
 	else
@@ -5703,8 +5560,8 @@ static void main_cc_setup(struct stubd *s)
 	dect_cc_set_default_line(&s->reg.link.cc, STUBD_LINE_ID,
 				 DECT_CALLINFO_NDT_DELAY);
 	dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
-	/* the lowest free value, 0, unless -a ti= says otherwise */
-	dect_cc_set_next_ti(&s->reg.link.cc, s->next_ti);
+	/* the lowest free transaction value, 0 (EN 300 444 §6.9.2) */
+	dect_cc_set_next_ti(&s->reg.link.cc, 0);
 }
 
 static void xlane_release(struct stubd *s, struct side_link *sl);
@@ -5736,7 +5593,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	if (s->have_rfpi)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
 	/*
-	 * Who may enrol. Closed with noregopen. With the first store already
+	 * Who may enrol. Closed unless regopen. With the first store already
 	 * holding a handset, only that handset may re-enrol into it (or a held
 	 * one, once adopted, into its own): a new handset used to land in the
 	 * first store and overwrite the ring target (review, 2026-10-25). A
@@ -9394,26 +9251,16 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		ind.page_response = 0;
 	}
 	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP) {
-		if (s->audio.setup_delay_ms) {
-			s->ring_state = RING_SETUP_DELAY;
-			s->ring_setup_at = now + s->audio.setup_delay_ms;
-			printf("ring: page answered -- holding the CC-SETUP "
-			       "for %u ms to let the MAC finish the bearer\n",
-			       s->audio.setup_delay_ms);
-		} else {
-			if (s->cur != s->ring_hs)
-				hs_switch(s, s->ring_hs,
-					  " (the ring target answered)");
-			ring_queue_setup(s, now, "page response received");
-			/*
-			 * Push it out in the same breath. The main loop would
-			 * now get it within POLL_MS anyway, but the handset
-			 * has just answered the page and is listening: the
-			 * whole point of waiting for the page response is to
-			 * hit that window.
-			 */
-			drain_nwk(s, now);
-		}
+		if (s->cur != s->ring_hs)
+			hs_switch(s, s->ring_hs, " (the ring target answered)");
+		ring_queue_setup(s, now, "page response received");
+		/*
+		 * Push it out in the same breath. The main loop would now get
+		 * it within POLL_MS anyway, but the handset has just answered
+		 * the page and is listening: the whole point of waiting for
+		 * the page response is to hit that window.
+		 */
+		drain_nwk(s, now);
 	}
 
 	/*
@@ -9968,8 +9815,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * a re-arm would lose the call we are placing.
 		 */
 		{
-			int ring_busy = s->ring_state == RING_WAIT_PAGE_RESP ||
-					s->ring_state == RING_SETUP_DELAY;
+			int ring_busy = s->ring_state == RING_WAIT_PAGE_RESP;
 			int busy = s->reg.active &&
 				   (s->reg.call_bound ||
 				    dect_cc_busy(&s->reg.link.cc) ||
@@ -10572,18 +10418,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			else if (s->verbose)
 				log_mail(&cm, "tx  ", s->show_params);
 		}
-		/*
-		 * Once up, send the extra mails in order, one per tick
-		 * (~100 ms) -- but not before xmail_ms, if one is given.
-		 *
-		 * Extra mails fire as soon as the session is up, which is far
-		 * too early for anything aimed at a HANDSET: in vF424 they went
-		 * out at t = 28..36 ms, before the handset had locked to the
-		 * base and before the stored subscription was reloaded into the
-		 * chip. xmailms holds them until the given point instead.
-		 */
-		if (s->sess.state == DECT_SESS_UP && s->xmail_idx < s->n_xmail &&
-		    now - g_start >= s->audio.xmail_ms) {
+		/* Once up, send the extra mails in order, one per tick (~100 ms). */
+		if (s->sess.state == DECT_SESS_UP && s->xmail_idx < s->n_xmail) {
 			if (send_mail_spec(s, s->xmail[s->xmail_idx]))
 				fprintf(stderr, "extra mail %u (%s) failed\n",
 					s->xmail_idx, s->xmail[s->xmail_idx]);
@@ -10592,20 +10428,13 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				printf("all %u extra mails sent\n", s->n_xmail);
 		}
 		/*
-		 * Reload a stored subscription into the chip once the radio is up,
-		 * the way AVM restores saved handsets at boot [CR A-0026], so the
-		 * handset stays known across daemon restarts.
-		 */
-		/*
-		 * Normally this waits for the extra mails, so a -M sequence can
-		 * run before the chip knows any handset. With xmailms the order
-		 * is deliberately the other way round: the mails are being held
-		 * BACK so the handset is already known and locked when they go
-		 * out, so the reload must not wait for them.
+		 * Reload the stored subscriptions into the chip once the radio is
+		 * up, the way AVM restores saved handsets at boot [CR A-0026], so
+		 * the handsets stay known across daemon restarts. After the extra
+		 * mails, so a -M sequence runs before the chip knows any handset.
 		 */
 		if (s->sess.state == DECT_SESS_UP && any_uak(s) &&
-		    !s->sub_restored &&
-		    (s->xmail_idx >= s->n_xmail || s->audio.xmail_ms)) {
+		    !s->sub_restored && s->xmail_idx >= s->n_xmail) {
 			send_subscription(s);
 			s->sub_restored = 1;
 			printf("sub: stored subscription reloaded into the chip\n");
@@ -10743,7 +10572,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 static const char *const audio_word_keys[] = {
 	"seqstep", "play", "playpcm", "playraw", "led",
 	"statefile", "profiles", "ctl", "linename", "remote",
-	"clip", "memdump", "timesync", "pagemail", "codeclist", "infoie",
+	"clip", "memdump", "timesync", "codeclist", "infoie",
 	"lane2", "lane3", "cnip",
 };
 
@@ -10789,12 +10618,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->att_cfg = (uint8_t)v;
 		else if (eq && klen == 7 && !memcmp(key, "attflag", 7))
 			a->att_flag = (uint8_t)v;
-		else if (!eq && klen == 11 && !memcmp(key, "nocodeclist", 11))
-			a->nocodeclist = 1;
-		else if (!eq && klen == 9 && !memcmp(key, "noregopen", 9))
-			a->no_reg_open = 1;
 		else if (klen == 7 && !memcmp(key, "regopen", 7))
-			a->no_reg_open = 0, a->reg_window_s = eq ? (unsigned)v : 0u;
+			a->reg_open = 1, a->reg_window_s = eq ? (unsigned)v : 0u;
 		else if (klen == 9 && !memcmp(key, "regwindow", 9))
 			a->reg_signal_s = (unsigned)v;
 		else if (!eq && klen == 8 && !memcmp(key, "twocalls", 8))
@@ -10821,17 +10646,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->lane_word[k] = (uint8_t)w;
 			a->lane_set[k] = 1;
 		}
-		else if (!eq && klen == 10 && !memcmp(key, "nostockcfg", 10))
-			a->no_stock_cfg = 1;
 		else if (eq && klen == 7 && !memcmp(key, "subslot", 7)) {
 			if (v < 1u || v > DECT_MM_MAX_SLOT)
 				return -1;
 			a->sub_slot = (unsigned)v;
-		}
-		else if (eq && klen == 10 && !memcmp(key, "setupdelay", 10)) {
-			if (v > 5000u)
-				return -1;
-			a->setup_delay_ms = (unsigned)v;
 		}
 		else if (eq && klen == 9 && !memcmp(key, "codeclist", 9)) {
 			const char *h = eq + 1;
@@ -10913,21 +10731,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->all_call_status = 1;
 		else if (!eq && klen == 12 && !memcmp(key, "nocallstatus", 12))
 			a->no_call_status = 1;
-		else if (klen == 8 && !memcmp(key, "pagemail", 8)) {
-			/* text, not a number: a mail spec, taken verbatim */
-			size_t n = (size_t)(spec - (eq + 1));
-			char *text;
-
-			if (a->n_page_mail >= sizeof(a->page_mail) /
-					      sizeof(a->page_mail[0]))
-				return -1;
-			text = malloc(n + 1);
-			if (!text)
-				return -1;
-			memcpy(text, eq + 1, n);
-			text[n] = '\0';
-			a->page_mail[a->n_page_mail++] = text;
-		}
 		else if (klen == 10 && !memcmp(key, "setuptries", 10)) {
 			/*
 			 * How long to keep re-offering a CC-SETUP the local CC
@@ -10944,21 +10747,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			if (v < 1u || v > 200u)
 				return -1;
 			a->setup_tries = (unsigned)v;
-		}
-		else if (klen == 7 && !memcmp(key, "pagehdr", 7)) {
-			/*
-			 * Only the low nibble reaches the page, and anything
-			 * above 0x0F is rejected rather than masked so a typo
-			 * is not silently accepted as something else.
-			 *
-			 * [CR A-0093]: the builder also has a second path that
-			 * forces the header to 0 when mail[5] & 0xC0 != 0.
-			 * Capping at 0x0F means we can never trip it by
-			 * accident.
-			 */
-			if (v > 0x0Fu)
-				return -1;
-			a->page_hdr = (int)v;
 		}
 		else if (klen == 8 && !memcmp(key, "timesync", 8)) {
 			if (!eq)
@@ -10978,8 +10766,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 				return -1;
 			a->time_every_min = (unsigned)v;
 		}
-		else if (klen == 2 && !memcmp(key, "ti", 2))
-			a->ti_fixed = (int)v;
 		else if (klen == 6 && !memcmp(key, "signal", 6)) {
 			a->signal_value = (uint8_t)v;
 			a->signal_on = 1;
@@ -11076,8 +10862,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->lane0_word = (uint8_t)v;
 			a->lane0_word_set = 1;
 		}
-		else if (klen == 7 && !memcmp(key, "xmailms", 7))
-			a->xmail_ms = (unsigned)v;
 		else if (klen == 6 && !memcmp(key, "remode", 6)) {
 			a->remode_ms = (unsigned)v;
 			a->remode_set = 1;
@@ -11280,17 +11064,12 @@ static void usage(void)
 		"           signal=N <<SIGNAL>> N in the SETUP (0x40..0x47 =\n"
 		"           alerting pattern 0..7; default 0x41, external call)\n"
 		"           nosignal     omit it: the A540 then rings silently\n"
-		"           pagemail=SPEC sends a raw mail (same syntax as -M)\n"
-		"           IMMEDIATELY after each page; repeatable, up to 4, in\n"
-		"           order. For 0x015E, which stock sends twice around\n"
-		"           every page and we never send at all.\n"
 		"           setuptries=N re-offers a refused CC-SETUP N times\n"
 		"           codeclist=HEX <<CODEC-LIST>> value octets for CC-SETUP\n"
 		"           (default none: basic speech means G.726)\n"
 		"           infoie=HEX   encoded IEs sent once in a CC-INFO when the\n"
 		"           handset rings on our call (e.g. <<MULTI-DISPLAY>>)\n"
 		"           subslot=N    chip subscription slot 1..6 (TPUI + UAK slot)\n"
-		"           nostockcfg   omit stock's 0153/0169/0157 bring-up config\n"
 		"           locauth      authenticate a handset with its UAK inside its\n"
 		"                        location registration (the default;\n"
 		"                        nolocauth switches it off)\n"
@@ -11308,17 +11087,6 @@ static void usage(void)
 		"           with the test file or loop-back, as the main call\n"
 		"           regopen      open registration while running (enrol a\n"
 		"           handset; default closed, subscribed handsets attach)\n"
-		"           noregopen    closed, the default\n"
-		"           setupdelay=N hold the CC-SETUP N ms after the page\n"
-		"           (default 8; the default 16 s budget is SHORTER than\n"
-		"           our own F<CC.03> timer, so it gives up first)\n"
-		"           pagehdr=N appends a FOURTH byte to the 0x0300 page\n"
-		"           (mail[5], 0..15). [CR A-0091]: the chip builds the\n"
-		"           page header byte at 0x96ad+4 from it, so the low 3\n"
-		"           bits select the on-air LCE header -- 4 is the GAP\n"
-		"           voice code, 0 is C-plane only. Neither we nor stock\n"
-		"           has ever set this byte, so the builder has been\n"
-		"           reading whatever was in the buffer. OFF by default.\n"
 		"           basicsvc=N sets <<BASIC-SERVICE>> (default 0x88: high\n"
 		"           nibble call class, low nibble 8 = wideband speech;\n"
 		"           0x80 with narrowband)\n"
@@ -11755,19 +11523,10 @@ int main(int argc, char **argv)
 	s.audio.memdump_ms = 50u;	/* default chip-memory poll interval */
 	s.audio.basic_svc = RING_BASIC_SVC;
 	s.audio.dial_wait_ms = 3000u;
-	s.audio.no_reg_open = 1;	/* closed unless -a regopen */
 	s.audio.reg_signal_s = 120u;
 	s.audio.lane_ch[0] = 2; s.audio.lane_word[0] = 3;	/* Q-0063 */
 	s.audio.lane_ch[1] = 3; s.audio.lane_word[1] = 2;
 	s.audio.slot_mask = 0x00u;	/* computed unless slotmask= pins it */
-	/*
-	 * -1, not 0: the struct is memset to zero above, and a zero here
-	 * would append a fourth page byte of 0x00 on every run -- changing
-	 * what we transmit by default on the strength of one trace. Off
-	 * unless asked.
-	 */
-	s.audio.page_hdr = -1;
-	s.audio.ti_fixed = -1;
 	ab_init(&s);
 	/*
 	 * The mode-2 re-assign. Since 2026-10-25 it is sent only when the
@@ -11938,25 +11697,20 @@ int main(int argc, char **argv)
 		 * stock's sequence, not an implementation of an understood
 		 * mechanism. Judge it by whether 0x96ad populates and whether
 		 * the handset rings.
-		 *
-		 * -a nostockcfg restores the old two-mail bring-up, so the
-		 * difference is one flag.
 		 */
 		/* src/dst/prim parse with base 0, so hex needs the 0x prefix. */
-		if (!s.audio.no_stock_cfg) {
-			s.xmail[s.n_xmail++] = "0x14:0x02:0x0153:00";	/* ECO_CONFIG */
-			s.xmail[s.n_xmail++] = "0x14:0x02:0x0169:07";	/* FEATURE_FLAGS */
-			s.xmail[s.n_xmail++] = "0x14:0x02:0x0157:00";	/* CAPABILITY_PROFILE */
-		}
+		s.xmail[s.n_xmail++] = "0x14:0x02:0x0153:00";	/* ECO_CONFIG */
+		s.xmail[s.n_xmail++] = "0x14:0x02:0x0169:07";	/* FEATURE_FLAGS */
+		s.xmail[s.n_xmail++] = "0x14:0x02:0x0157:00";	/* CAPABILITY_PROFILE */
 		s.xmail[s.n_xmail++] = "0x22:0x02:0x015b:01";	/* radio/beacon on */
 		/*
 		 * Registration open ('A') only when asked (-a regopen): nothing
 		 * enrols unless we mean it to. Closed is 0x022C 01.
 		 */
-		if (s.audio.no_reg_open)
-			s.xmail[s.n_xmail++] = "0x22:0x02:0x022c:01";	/* closed */
-		else
+		if (s.audio.reg_open)
 			s.xmail[s.n_xmail++] = "0x22:0x02:0x022b:41";	/* 'A': open reg */
+		else
+			s.xmail[s.n_xmail++] = "0x22:0x02:0x022c:01";	/* closed */
 	}
 	if (optind != argc) {
 		usage();
@@ -11972,7 +11726,7 @@ int main(int argc, char **argv)
 	if (!s.audio.remode_set && !(s.audio.flags & 0x40u))
 		s.audio.remode_ms = 0;	/* mode 2 from the first assign */
 	/* the window the start-up mail opens (0x022B), if regopen asked */
-	s.reg_open = !s.audio.no_reg_open;
+	s.reg_open = s.audio.reg_open;
 	s.reg_open_until = s.reg_open && s.audio.reg_window_s ?
 			   mono_ms() + s.audio.reg_window_s * 1000ull : 0;
 	if (!s.audio.basic_svc_set)
