@@ -613,9 +613,7 @@ struct stubd {
 	int         cc_id_unarmed_warned;
 	/* rejected_identity of this connection's CC, as last reported */
 	uint32_t    cc_rejected_seen;
-	unsigned    page_rejects;	/* {LCE-PAGE-REJECT}s sent */
 	struct side_link side[SIDE_MAX];
-	unsigned    side_started;
 	/* The Fon/DECT LED, see led_tick(). */
 	int         led_fd;
 	int         led_state;		/* last written, -1 = unknown */
@@ -3477,10 +3475,6 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep,
 	sub_audit_send(s, keep);
 }
 
-static void install_subscription(struct stubd *s, uint8_t slot,
-				 const uint8_t uak[DECT_MM_UAK_LEN]);
-static void send_subscription_tail(struct stubd *s);
-
 /*
  * Every handset we hold goes into its chip slot, the current one last so its
  * read-back is the one outstanding; only slots no store uses are cleared.
@@ -4327,15 +4321,6 @@ static uint8_t ring_page_info(const struct stubd *s)
 			  ? RING_PAGE_WIDEBAND : 0u));
 }
 
-/*
- * Pages before giving up. 4 (12 s) was far too short: run F1 (2026-10-22)
- * paged at 45/48/51/54 s, gave up at 57 s, and the handset's first connection
- * came at 75.8 s -- it was still re-synchronising after the base had been off
- * the air between runs, which the handset shows as "Synchronisiere". Cover a
- * realistic re-sync instead, since an unanswered page costs nothing.
- */
-static void pump_lapc(struct stubd *s);
-
 #define RING_RELEASE_WAIT_MS	3000u	/* [CR A-0053] DLC arms a ~5 s guard */
 #define RING_IN_USE_WAIT_MS	30000u	/* a list session or MM, at most */
 
@@ -4358,6 +4343,12 @@ static int link_in_use(const struct dect_link *l)
 		return 1;
 	return 0;
 }
+
+/*
+ * Pages before giving up: enough to cover a handset still re-synchronising
+ * after the base was off the air (it shows "Synchronisiere"), which can take
+ * over half a minute. An unanswered page costs nothing.
+ */
 #define RING_PAGE_RETRIES	20u	/* pages before giving up (60 s) */
 #define RING_PAGE_INTERVAL	3000u	/* ms between them: <LCE.03> (EN 300 175-5 A.6) */
 #define RING_PAGE_RESP_MS	1500u	/* wait this long for the page response */
@@ -5977,8 +5968,6 @@ static void profiles_resolve_all(struct stubd *s, const char *why)
  * untested. A handset with no link up learns at its next location
  * registration (the CLSS paging path is not built).
  */
-static int hs_of_link(const struct stubd *s, const struct dect_link *l);
-
 static int notify_ok(const struct stubd *s, const struct dect_link *l)
 {
 	int i = hs_of_link(s, l);
@@ -6344,7 +6333,6 @@ static int side_start(struct stubd *s, uint8_t handle)
 	memset(&sl->frames, 0, sizeof(sl->frames));
 	sl->status_ms = 0;
 	sl->rejected_seen = 0;
-	s->side_started++;
 	printf("side: connection up (handle %u) -- handle %u is busy, so it "
 	       "gets a side link (location registration and list access "
 	       "only)\n", handle, s->reg.handle);
@@ -6493,8 +6481,6 @@ static void xlane_release(struct stubd *s, struct side_link *sl)
 	memset(&sl->frames, 0, sizeof(sl->frames));
 	sl->status_ms = 0;
 }
-
-static int ic_start(struct stubd *s, int side, uint64_t now);
 
 /* A side link's number is complete: internal, to the bridge, or local. */
 static void side_route(struct stubd *s, struct side_link *sl, uint64_t now)
@@ -6919,9 +6905,6 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	names_notify(s);		/* §7.4.10.2.2: one removed */
 	fflush(stdout);
 }
-
-static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
-			const char *who);
 
 /*
  * SIGUSR2: deregister the handsets in the slots named in DEREG_REQ_PATH
@@ -8478,8 +8461,6 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 	}
 }
 
-static void ab_open(struct stubd *s);
-
 static void ctl_open(struct stubd *s)
 {
 	struct sockaddr_un a;
@@ -8533,8 +8514,6 @@ static void ctl_open(struct stubd *s)
 	printf("ctl: listening on %s (0600)\n", s->ctl.path);
 	ab_open(s);
 }
-
-static void ab_close(struct stubd *s);
 
 static void ctl_close(struct stubd *s)
 {
@@ -8800,11 +8779,6 @@ static void side_pump(struct stubd *s, struct side_link *sl)
 			s->led_traffic++;
 	}
 }
-
-static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why);
-static void main_cc_setup(struct stubd *s);
-static void ic_target_link(struct stubd *s, struct side_link *sl,
-			   const struct dect_link_ind *ind, uint64_t now);
 
 /*
  * Swap side link sl with the main link: the ring target answered our page
@@ -9212,10 +9186,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			dect_link_drain(&s->reg.link, now);
 			rejected = !s->reg.link.lce_len;
 		}
-		if (rejected) {
+		if (rejected)
 			dect_lapc_disconnect(&s->reg.link.lapc);
-			s->page_rejects++;
-		}
 		pump_lapc(s);
 		printf("ring: page response from a handset we did not page "
 		       "(identity differs) -- %s, still waiting\n",
@@ -9551,7 +9523,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		s->reg.audio_connected = 0;
 		s->reg.remode_at = 0;
 		s->reg.remode_done = 0;
-		s->reg.seq_t0 = 0;
+		s->reg.seq_t0 = now;	/* seq window 0 starts now */
 		s->reg.seq_idx = 0;
 		s->reg.bind_ms = now;
 		s->reg.status_ms = 0;
@@ -9559,8 +9531,6 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		memset(&s->reg.last_status, 0, sizeof(s->reg.last_status));
 		s->reg.frames_total = 0;
 		s->reg.frames_last = 0;
-		s->reg.seq_t0 = mono_ms();	/* window 0 starts now */
-		s->reg.seq_idx = 0;
 		/*
 		 * Wideband when the call's codec is G.722 -- named by the
 		 * handset in its ALERTING/CONNECT, or by our CONNECT -- and
