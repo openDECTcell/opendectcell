@@ -12,7 +12,15 @@
 # their architecture so the two targets' files do not collide.
 #
 # OPENWRT=25.12.5 picks the OpenWrt release; TAG=v0.3.0 makes the build
-# fail unless the tag matches openwrt/version.mk.
+# fail unless the tag matches PKG_VERSION in openwrt/net/opendectcell/Makefile.
+#
+# The packages build the way an OpenWrt feed builds them (openwrt/README.md):
+# the feed is a copy of openwrt/, and the openDECTcell source is an archive of
+# the checkout put where the download would land, its hash written into the
+# copy's PKG_HASH. Tracked files only, with their uncommitted changes
+# (git stash create); a new file needs a `git add` first.
+# kmod-lantiq-ssc-pcm downloads from its own repository; where that is not
+# reachable (a private repository in CI) the 7412 build goes without it.
 set -eu
 
 target=${1:?usage: build.sh TARGET/SUBTARGET OUTDIR}
@@ -22,18 +30,50 @@ openwrt=${OPENWRT:-25.12.5}
 cache=${CACHE:-$root/build/release}
 base=https://downloads.openwrt.org/releases/$openwrt/targets/$target
 
-version=$(sed -n 's/^OPENDECTCELL_VERSION:=//p' "$root/openwrt/version.mk")
+version=$(sed -n 's/^PKG_VERSION:=//p' "$root/openwrt/net/opendectcell/Makefile")
 if [ -n "${TAG:-}" ] && [ "$TAG" != "v$version" ]; then
-	echo "tag $TAG does not match openwrt/version.mk ($version)" >&2
+	echo "tag $TAG does not match openwrt/net/opendectcell/Makefile ($version)" >&2
 	exit 1
 fi
 
+# source packages to compile, and the binary packages they make
+sources="opendectcell luci-app-opendectcell"
+packages="opendectcell opendectcell-baresip luci-app-opendectcell"
 case $target in
-ipq40xx/*) kmod=kmod-opendectcell-ipq40xx ;;
-lantiq/*) kmod=kmod-opendectcell-lantiq ;;
+ipq40xx/*) packages="$packages kmod-opendectcell-ipq40xx" ;;
+lantiq/*) packages="$packages kmod-opendectcell-lantiq" ;;
 *) echo "no openDECTcell kernel module for $target" >&2; exit 1 ;;
 esac
-packages="opendectcell $kmod luci-app-opendectcell opendectcell-baresip"
+ssc_url=$(sed -n 's/^PKG_SOURCE_URL:=//p' \
+	"$root/openwrt/kernel/lantiq-ssc-pcm/Makefile")
+ssc=0
+case $target in
+lantiq/*)
+	if GIT_TERMINAL_PROMPT=0 git ls-remote "$ssc_url" >/dev/null 2>&1; then
+		ssc=1
+		sources="$sources lantiq-ssc-pcm"
+		packages="$packages kmod-lantiq-ssc-pcm"
+	else
+		echo "warning: $ssc_url not reachable: no kmod-lantiq-ssc-pcm," \
+			"and opendectcell's dependency on it is dropped" >&2
+	fi
+	;;
+esac
+
+# The feed and the source archive, from the checkout: outside any git
+# work tree, or LuCI's version lookup would ask this repository's history
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+tree=$(cd "$root" && git stash create)
+tree=${tree:-HEAD}
+(cd "$root" && git archive "$tree" openwrt) | tar -x -C "$stage"
+case $target in
+lantiq/*) [ "$ssc" = 1 ] || rm -rf "$stage/openwrt/kernel/lantiq-ssc-pcm" ;;
+esac
+(cd "$root" && git archive --format=tar --prefix="opendectcell-$version/" "$tree") |
+	gzip -n > "$stage/opendectcell-$version.tar.gz"
+hash=$(sha256sum "$stage/opendectcell-$version.tar.gz" | cut -d' ' -f1)
+sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$hash/" "$stage/openwrt/net/opendectcell/Makefile"
 
 # The SDK, checked against the release's sha256sums
 mkdir -p "$cache" "$out"
@@ -69,17 +109,30 @@ if [ -n "${SIGN_KEY:-}" ]; then
 		{ echo "could not add signing to this SDK" >&2; exit 1; }
 fi
 
-# Our packages, and the feeds with what they build on: the SDK brings
-# only the toolchain, so even zlib and OpenSSL come from the base feed;
-# baresip from telephony, spandsp's libtiff from packages, luci-base
-for p in $packages; do
-	ln -sfn "$root/openwrt/package/$p" "package/$p"
+# Our feed, and the feeds with what it builds on: the SDK brings only
+# the toolchain, so even zlib and OpenSSL come from the base feed;
+# baresip from telephony, spandsp's libtiff from packages, luci-base and
+# luci.mk from luci. (Before the feed layout, build.sh linked each
+# package into package/: those links go.)
+old="package/opendectcell package/opendectcell-baresip package/kmod-opendectcell-ipq40xx
+	package/kmod-opendectcell-lantiq package/luci-app-opendectcell"
+for l in $old; do
+	if [ -L "$l" ]; then
+		rm -f $old
+		rm -rf tmp	# its package index still names them as core packages
+		break
+	fi
 done
-./scripts/feeds update base packages telephony luci
+grep -v '^src-link opendectcell ' feeds.conf.default > feeds.conf
+echo "src-link opendectcell $stage/openwrt" >> feeds.conf
+mkdir -p dl
+cp "$stage/opendectcell-$version.tar.gz" dl/
+./scripts/feeds update base packages telephony luci opendectcell
 ./scripts/feeds install -a -p base
 ./scripts/feeds install -a -p packages
 ./scripts/feeds install -a -p telephony
 ./scripts/feeds install luci-base
+./scripts/feeds install -a -p opendectcell
 
 # Only ours and what they depend on: the SDK's default builds every
 # package it knows, all of baresip's modules among them
@@ -93,10 +146,14 @@ done
 } > .config
 make defconfig >/dev/null
 
+# LuCI numbers an app by the git history of its directory, which the
+# staged feed has none of: ours carries the openDECTcell version instead.
 jobs=$(nproc 2>/dev/null || echo 2)
-for p in $packages; do
+for p in $sources; do
+	extra=
+	[ "$p" = luci-app-opendectcell ] && extra="PKG_SRC_VERSION=$version"
 	make "package/$p/clean" >/dev/null
-	make "package/$p/compile" -j"$jobs" V=s ||
+	make "package/$p/compile" -j"$jobs" V=s $extra ||
 		{ echo "build of $p failed" >&2; exit 1; }
 done
 

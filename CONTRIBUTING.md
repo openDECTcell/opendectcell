@@ -39,7 +39,7 @@ the web interface, the browser's console output helps.
 | `src/baresip/` | The baresip module that connects calls to SIP |
 | `src/tools/` | Development tools for captures (`dect-pcmcap`, `dect-maildump`, …) |
 | `kernel/` | The kernel drivers, one per SoC family (GPL-2.0-only) |
-| `openwrt/package/` | OpenWrt packages: Makefiles, init script, configuration, LuCI app |
+| `openwrt/` | The OpenWrt feed, laid out as upstream: `net/opendectcell` (packages, init script, configuration), `applications/luci-app-opendectcell`; see [openwrt/README.md](openwrt/README.md) |
 | `boards/` | Board profiles, one per FRITZ!Box model |
 | `profiles/` | Handset profiles |
 | `tests/` | Unit tests, run on the PC |
