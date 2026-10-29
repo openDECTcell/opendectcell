@@ -655,8 +655,8 @@ struct stubd {
 		int     reversed;	/* -k reversed (wrong on 07.56) */
 	} chip_cipher;
 	/* Voice-slot probe: which TDM slot carries a call's audio (mapping open). */
-	uint16_t vs_last[8];
-	uint32_t vs_changes[8];
+	uint16_t vs_last[64];		/* every lane of an SSC frame */
+	uint32_t vs_changes[64];
 	uint32_t vs_frames;
 	/*
 	 * Uplink hold statistics for the bearer lane (tone_word): how many
@@ -10304,7 +10304,14 @@ save:
  */
 static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 {
-	unsigned int f, n, nslots = s->slots < 8u ? s->slots : 8u;
+	/*
+	 * The 7520's eight slots, or every lane of the 7412's SSC frame: its
+	 * voice lanes are not known yet (Q-0015), and the frame starts at a
+	 * different lane every run, so the SSC report counts from the
+	 * control lane.
+	 */
+	unsigned int f, n, nslots = s->ssc ? (s->slots < 64u ? s->slots : 64u)
+					   : (s->slots < 8u ? s->slots : 8u);
 
 	if (!s->reg.call_bound)
 		return;
@@ -10341,10 +10348,22 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 		s->vs_frames++;
 	}
 	if (s->vs_frames >= 8000u) {		/* 8 kHz frame rate: about one second */
-		printf("call: slot activity (changes/s):");
-		for (n = 0; n < nslots; n++)
-			printf(" %u:%u", n, s->vs_changes[n]);
-		printf("\n");
+		if (s->ssc && s->rx_slot >= 0) {
+			printf("call: lane activity (changes/s, lane = rx "
+			       "control lane + k, only k that changed):");
+			for (n = 0; n < nslots; n++) {
+				unsigned int ln = (s->rx_slot + n) % nslots;
+
+				if (s->vs_changes[ln])
+					printf(" +%u:%u", n, s->vs_changes[ln]);
+			}
+			printf("\n");
+		} else {
+			printf("call: slot activity (changes/s):");
+			for (n = 0; n < nslots; n++)
+				printf(" %u:%u", n, s->vs_changes[n]);
+			printf("\n");
+		}
 		printf("call: uplink holds: %u longer than 2 frames, %u extra "
 		       "frames, %u frame-locked (same phase mod 80 as the "
 		       "previous hold)\n",
