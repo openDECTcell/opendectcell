@@ -153,17 +153,23 @@ radio-on ever sent, means the chip beacons by itself. With no mail after the
 boot it stays `ff`. Since `143c5fd` the 7412 bring-up begins with radio-off,
 and every run ends parked, so this does not change what the service sends.
 
-The daemon's log masks key bytes of memory reads in the 08.25 table range
-(`0x9518`) whatever the build; on 06.88 the table is at `0x067F` and is not
-masked, so do not memory-dump that range with `-p` once handsets are
-registered.
+**Since `c9d16f6`** `dect-stubd` uses `0x067F` on 06.88: it reads the key
+back after a restore, audits the six slots, and masks that range in its log
+as it masks `0x9518` on 08.25. On 06.88 a memory read sent right behind
+`0x020A`/`0x0247` is answered before they take effect (the record was
+missing 40 ms after the write and in place 1 s later), so both checks wait
+1 s there. With a dummy store on the box: "UAK read-back slot 1 at 0x0067F:
+MATCHES", audit `1=OURS`, the other slots empty. **Since `9ee12a4`** the park
+is read back on 06.88 as well (`0x010A` and `0x08B0`, both `00`: "park
+verified on the chip"); in the same run both read `01`/`09` while the radio
+was on.
 
 ### 06.88 against 08.25 [CR A-0007]
 
 *Derived statically* from both STUB blobs' mail dispatch tables:
 
 - Every bring-up, registration and subscription mail `dect-stubd` sends has a 06.88 handler with the same dispatch flags. Dispatch is by primitive, not by source task. The `0x020A` record handler is the same routine (16-byte record plus flag, stride 0x11, six slots).
-- The UAK record table is **not** at 0x9518 on 06.88; A-0007 gave only the displacement `0x067F`, and the command check found it there. `dect-stubd` still treats 06.88 as an unknown build and skips its table reads; using `0x067F` is open.
+- The UAK record table is **not** at 0x9518 on 06.88; A-0007 gave only the displacement `0x067F`, and the command check found it there. `dect-stubd` uses it since `c9d16f6`.
 - Missing on 06.88: `0x0251` (channel parameter, sent at call set-up, presumably ignored), `0x015E` and `0x015F` (sent only by the optional paging sequence or not at all), `0x0159`, `0x015C`.
 
 ## 2. STUB firmware patching (the first-stage loader, `the loader routine`)

@@ -39,6 +39,25 @@ cable.
 as [openwrt/opendectcell-signing-key.pem](../openwrt/opendectcell-signing-key.pem) in
 the repository).
 
+### FRITZ!Box 7412 (experimental)
+
+The 7412 runs the base since 2026-10-29, but no handset has registered with
+it yet ([7412-spi-tdm-and-loader.md](7412-spi-tdm-and-loader.md) §1b,
+[bench-7412.md](bench-7412.md)). Its PCM bus needs a second kernel module
+that is **not part of the release yet**: `kmod-lantiq-ssc-pcm`, the generic
+Lantiq SSC PCM transport, from its own repository. Build it with the OpenWrt
+SDK for `lantiq/xrx200` (its `tools/build.sh`) and install the package, or
+copy `lantiq_ssc_pcm.ko` to `/lib/modules/$(uname -r)/`. The service loads
+it before the chip boots; the board profile names it (`pcm_kmod`).
+
+The 7412 uses its **own** chip firmware, from `FRITZ.Box_7412.137.06.88.image`
+(step 3), under the names the board profile expects:
+`dectfw_firstlevel_441-06.88-7412.hex` and
+`dectfw_secondlevel_441-06.88-7412.hex`. `tools/dect-fw-extract.py` knows both
+stages by their hash and saves them under these names; running it on the 7412
+image has not been tested yet. The 7520's firmware does not drive the 7412's
+bus.
+
 ## 2. Install
 
 The box needs internet access while installing: OpenWrt's package manager

@@ -8,8 +8,8 @@ radio really beacons can only be seen from a handset. The 06.88 STUB needs its
 radio switched off before the bring-up; the daemon does that since `143c5fd`
 (command check, same doc §1b).
 
-**Before anything:** the box runs openDECTcell `143c5fd` or later. `md5sum
-/usr/sbin/dect-stubd` should print `b6b004f3ae6942a0387979d1548a8549`; the
+**Before anything:** the box runs openDECTcell `c9d16f6` or later. `md5sum
+/usr/sbin/dect-stubd` should print `ed610ef2e1fc990c67e9737d2f3df7a7`; the
 modules `lantiq_ssc_pcm.ko` and `opendectcell.ko` are in `/lib/modules/6.12.112/`.
 The 0.3.1 files are kept in `/root/dw-orig/`. The chip is held in reset
 through sysfs; release it first:
@@ -53,8 +53,9 @@ logread -f -e dect-stubd
 
 Press a key on the handset. Expected: it finds the base within a minute and
 the log shows a location registration of slot 1. Note: the 06.88 slot table
-address is unknown [CR A-0007], so the daemon skips its read-back and slot
-audit ("skipped -- STUB ... is loaded") -- that is expected, not a fault.
+table is at `0x067F` and the daemon reads the key back 1 s after restoring
+it: expect "UAK read-back slot 1 at 0x0067F: MATCHES" and an audit line with
+`1=OURS`.
 
 ## 3. Does the park silence the base? (3 minutes)
 
@@ -65,6 +66,7 @@ transmitting (Q-0010).
 
 ```
 /etc/init.d/opendectcell stop     # parks: close registration, radio off
+logread -e dect-stubd | grep "park"   # expect "park verified on the chip"
 ```
 
 Watch the handset for two minutes, without pressing keys.
