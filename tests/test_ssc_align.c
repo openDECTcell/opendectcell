@@ -263,12 +263,13 @@ static void test_lanes_rotation(void)
 }
 
 /*
- * The lane delay: a stream of numbered lanes fed in uneven pieces comes out
- * the same stream, k lanes late, with idle lanes in front.
+ * The lane delay: a stream of numbered lanes fed in uneven pieces, shorter
+ * and longer than the delay, comes out the same stream, k lanes late, with
+ * idle lanes in front.
  */
 static void test_lane_delay(unsigned int k)
 {
-	uint8_t in[2u * 100u], out[2u * 100u], t[2u * 100u + 2u * 64u];
+	uint8_t in[2u * 100u], out[2u * 100u];
 	struct ssc_lane_delay d;
 	size_t at = 0, piece = 2u, i;
 	int bad = 0;
@@ -282,9 +283,10 @@ static void test_lane_delay(unsigned int k)
 	while (at < sizeof(out)) {
 		size_t n = at + piece > sizeof(out) ? sizeof(out) - at : piece;
 
-		ssc_lane_delay_apply(&d, out + at, t, n);
+		ssc_lane_delay_apply(&d, out + at, n);
 		at += n;
-		piece = piece == 2u ? 14u : piece == 14u ? 6u : 2u;
+		piece = piece == 2u ? 14u : piece == 14u ? 6u :
+			piece == 6u ? 132u : 2u;
 	}
 	for (i = 0; i < 100u; i++) {
 		if (i < k)
@@ -320,6 +322,7 @@ int main(void)
 	test_lanes_rotation();
 	for (off = 0; off <= 40u; off += 5u)
 		test_lane_delay(off);
+	test_lane_delay(SSC_LANE_DELAY_MAX);
 	test_no_idle();
 	return CHECK_DONE();
 }

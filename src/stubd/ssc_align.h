@@ -23,16 +23,6 @@ struct ssc_align {
 /* Start both directions at offset off, with idle (all ones) carries. */
 void ssc_align_init(struct ssc_align *a, unsigned int off);
 
-/* Swap the two bytes of every 16-bit slot. */
-void ssc_swap_pairs(uint8_t *p, size_t len);
-
-/*
- * dst[i] = the 8 bits of src starting at bit 8 * i + bit, MSB first.
- * src must hold len + (bit + 7) / 8 bytes; bit is 0..16.
- */
-void ssc_bit_window(uint8_t *dst, const uint8_t *src, size_t len,
-		    unsigned int bit);
-
 /*
  * Receive, in place: advance the stream by off bits and swap each slot.
  * The head comes from the previous call's last two bytes, which delays the
@@ -76,9 +66,8 @@ struct ssc_lane_delay {
 /* Delay by lanes (0..SSC_LANE_DELAY_MAX), starting with idle (0xFF). */
 void ssc_lane_delay_init(struct ssc_lane_delay *d, unsigned int lanes);
 
-/* In place; t is scratch of len + 2 * lanes bytes. len is even. */
-void ssc_lane_delay_apply(struct ssc_lane_delay *d, uint8_t *buf, uint8_t *t,
-			  size_t len);
+/* In place, len bytes (even) of the stream. */
+void ssc_lane_delay_apply(struct ssc_lane_delay *d, uint8_t *buf, size_t len);
 
 /*
  * Where the idle lanes sit in data: returns the bit offset as

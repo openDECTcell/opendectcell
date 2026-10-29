@@ -11,7 +11,8 @@ void ssc_align_init(struct ssc_align *a, unsigned int off)
 	memset(a->tx_carry, 0xff, sizeof(a->tx_carry));
 }
 
-void ssc_swap_pairs(uint8_t *p, size_t len)
+/* Swap the two bytes of every 16-bit slot. */
+static void ssc_swap_pairs(uint8_t *p, size_t len)
 {
 	size_t i;
 
@@ -23,8 +24,12 @@ void ssc_swap_pairs(uint8_t *p, size_t len)
 	}
 }
 
-void ssc_bit_window(uint8_t *dst, const uint8_t *src, size_t len,
-		    unsigned int bit)
+/*
+ * dst[i] = the 8 bits of src starting at bit 8 * i + bit, MSB first.
+ * src must hold len + (bit + 7) / 8 bytes; bit is 0..16.
+ */
+static void ssc_bit_window(uint8_t *dst, const uint8_t *src, size_t len,
+			   unsigned int bit)
 {
 	unsigned int by = bit / 8u, bi = bit % 8u;
 	size_t i;
@@ -143,15 +148,24 @@ void ssc_lane_delay_init(struct ssc_lane_delay *d, unsigned int lanes)
 	memset(d->carry, 0xff, sizeof(d->carry));
 }
 
-void ssc_lane_delay_apply(struct ssc_lane_delay *d, uint8_t *buf, uint8_t *t,
-			  size_t len)
+void ssc_lane_delay_apply(struct ssc_lane_delay *d, uint8_t *buf, size_t len)
 {
+	uint8_t keep[sizeof(d->carry)];
 	size_t n = 2u * d->lanes;
 
 	if (!n)
 		return;
-	memcpy(t, d->carry, n);
-	memcpy(t + n, buf, len);
-	memcpy(buf, t, len);
-	memcpy(d->carry, t + len, n);
+	if (len >= n) {
+		/* the block's last n bytes are the next carry */
+		memcpy(keep, buf + len - n, n);
+		memmove(buf + n, buf, len - n);
+		memcpy(buf, d->carry, n);
+		memcpy(d->carry, keep, n);
+	} else {
+		/* a block shorter than the delay comes all from the carry */
+		memcpy(keep, buf, len);
+		memcpy(buf, d->carry, len);
+		memmove(d->carry, d->carry + len, n - len);
+		memcpy(d->carry + n - len, keep, len);
+	}
 }

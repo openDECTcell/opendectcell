@@ -431,6 +431,13 @@ struct stubd {
 	struct ssc_align ssc_al;	/* lane offset and stream carries */
 	int ssc_aligned;		/* offset measured: fix what we read */
 	struct ssc_lane_delay ssc_ld;	/* receive lanes onto the send numbering */
+	/*
+	 * Scratch for the SSC's per-block alignment, sized at bring-up so the
+	 * block path never allocates: ssc_rx_fix() needs a block + 2 bytes,
+	 * pcm_write() up to ssc_tx_cap bytes of stream (+ 2 for t).
+	 */
+	uint8_t *ssc_rx_t, *ssc_tx_t, *ssc_tx_out;
+	size_t   ssc_tx_cap;
 	uint64_t ssc_tx_sent_prev, ssc_tx_idle_prev;
 	/*
 	 * The alignment watch (ssc_watch()): the idle lanes' bit offset and
@@ -675,28 +682,10 @@ struct stubd {
 	struct chip_cipher {
 		int     disabled;	/* -k off */
 	} chip_cipher;
-	/* Voice-slot probe: which TDM slot carries a call's audio (mapping open). */
+	/* voice_slot_probe(): per-lane changes in the last second of a call */
 	uint16_t vs_last[64];		/* every lane of an SSC frame */
 	uint32_t vs_changes[64];
 	uint32_t vs_frames;
-	/*
-	 * Uplink hold statistics for the bearer lane (lane0_word): how many
-	 * live words were held longer than the nominal two frames in the
-	 * last second, how many extra frames that cost, and how many of
-	 * those holds started at the same position within the 80-frame
-	 * DECT frame as the previous one -- the frame-locked signature
-	 * that codec 0 showed in v22 and codec 3 did not in C4.
-	 */
-	uint32_t vh_run;		/* frames the current word has been held */
-	uint32_t vh_holds, vh_extra, vh_locked;
-	uint32_t vh_frame;		/* running frame index since bind */
-	uint32_t vh_last_phase;
-	/*
-	 * Voice capture (-w): dump the call's TDM slot raw, two bytes per frame,
-	 * so the sample format can be worked out offline. The slot is measured,
-	 * the encoding inside it is not: 8000 frames/s x 2 bytes could be 16-bit
-	 * linear at 8 kHz, A-law at 16 kHz, or A-law in one byte of each pair.
-	 */
 	int         no_cipher;		/* -C: never send CIPHER-REQUEST */
 	/*
 	 * Continuous transmit [CR A-0030 §1.1, §10]. Stock AVM services the TDM
@@ -726,6 +715,7 @@ struct stubd {
 	uint8_t     tx_idle;		/* filler for unmapped slots (-a txidle) */
 	uint8_t     tx_voice_idle;	/* filler for the voice lanes */
 	uint32_t    tx_blocks;
+	uint8_t    *tx_tmpl;		/* tx_templates(): two idle frames */
 	/*
 	 * Audio bind parameters [CR A-0029 §1]. Every field AVM derives from its
 	 * negotiated call state is settable here, because we cannot derive them
@@ -1095,8 +1085,13 @@ struct stubd {
 	size_t      play_pos;		/* byte offset into audio.play */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
 	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
+	/*
+	 * Voice capture (-w): the call's TDM slot raw, two bytes per frame, or
+	 * every slot, so the sample format can be worked out offline.
+	 */
 	const char *voice_path;
 	FILE       *voice_fp;
+	uint8_t    *voice_buf;		/* a block, the control slot blanked */
 	int         voice_slot;		/* -V: one slot only; <0 = every slot */
 	uint32_t    voice_bytes;
 	uint32_t    voice_space_checked;
@@ -1512,16 +1507,11 @@ static int pcm_block_ok(const struct stubd *s, const void *hdr)
  */
 static void ssc_rx_fix(struct stubd *s, uint8_t *fr, size_t len)
 {
-	uint8_t *t;
-
-	if (!s->ssc || !s->ssc_aligned || len < 2u)
+	if (!s->ssc || !s->ssc_aligned || len < 2u ||
+	    len > s->slots * 2u * s->fpb)
 		return;
-	t = malloc(len + 2u + 2u * SSC_LANE_DELAY_MAX);
-	if (!t)
-		return;
-	ssc_align_rx(&s->ssc_al, fr, t, len);
-	ssc_lane_delay_apply(&s->ssc_ld, fr, t, len);
-	free(t);
+	ssc_align_rx(&s->ssc_al, fr, s->ssc_rx_t, len);
+	ssc_lane_delay_apply(&s->ssc_ld, fr, len);
 }
 
 /* "10,11,12" for the lane positions in mask; "-" for none. */
@@ -1627,25 +1617,19 @@ static ssize_t pcm_write(struct stubd *s, const uint8_t *frames, size_t len,
 			 int burst)
 {
 	size_t fb = s->slots * 2u, tail = burst ? fb : 0u, n = len + tail;
-	uint8_t *t, *out;
 	ssize_t w;
 
 	if (!s->ssc)
 		return write(s->fd, frames, len);
-	t = malloc(n + 2u);
-	out = malloc(n);
-	if (!t || !out) {
-		free(t);
-		free(out);
-		errno = ENOMEM;
+	if (n > s->ssc_tx_cap) {
+		errno = EMSGSIZE;
 		return -1;
 	}
-	ssc_align_tx(&s->ssc_al, out, t, frames, len, tail, burst);
-	w = write(s->fd, out, n);
+	ssc_align_tx(&s->ssc_al, s->ssc_tx_out, s->ssc_tx_t, frames, len, tail,
+		     burst);
+	w = write(s->fd, s->ssc_tx_out, n);
 	if (w > 0)
-		ssc_align_tx_commit(&s->ssc_al, t, (size_t)w);
-	free(t);
-	free(out);
+		ssc_align_tx_commit(&s->ssc_al, s->ssc_tx_t, (size_t)w);
 	if (w > (ssize_t)len)
 		w = (ssize_t)len;
 	return w;
@@ -1840,6 +1824,7 @@ static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
 		struct xlane *x = &s->xl[i];
 		unsigned w = x->word;
 		const uint8_t *src;
+		int peer;
 
 		if (!x->used || !x->connected || w >= s->slots ||
 		    w == (unsigned)s->tx_slot)
@@ -1851,10 +1836,10 @@ static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
 		}
 		fr[w * 2u] = s->tx_voice_idle;
 		fr[w * 2u + 1u] = s->tx_voice_idle;
-		if (ic_peer_word(s, x) >= 0 && rx) {
-			/* the bridge: the other handset's uplink, as it comes */
-			const uint8_t *p = rx + (f * s->slots +
-				(unsigned)ic_peer_word(s, x)) * 2u;
+		peer = rx ? ic_peer_word(s, x) : -1;
+		if (peer >= 0) {
+			/* the other handset's uplink, as it comes */
+			const uint8_t *p = rx + (f * s->slots + (unsigned)peer) * 2u;
 
 			fr[w * 2u] = p[0];
 			fr[w * 2u + 1u] = p[1];
@@ -1895,190 +1880,186 @@ static void xlane_tx(struct stubd *s, uint8_t *fr, const uint8_t *rx,
 }
 
 /*
+ * The idle frames tx_block() starts every frame from: [0] while no call is
+ * bound, every lane the transmit filler; [1] during a call, the voice lanes'
+ * own filler, so a silent call sends silence rather than whatever the
+ * control path uses. The control slot is idle (0xFF) in both. Their inputs
+ * (the control slot, -a txidle and voiceidle) are fixed before run_loop()
+ * starts, so it builds them once.
+ */
+static void tx_templates(const struct stubd *s, uint8_t *t)
+{
+	size_t fb = s->slots * 2u;
+	unsigned int c = (unsigned int)s->tx_slot;
+
+	memset(t, s->tx_idle, fb);
+	memset(t + fb, s->tx_voice_idle, fb);
+	if (s->tx_slot >= 0 && c < s->slots) {
+		t[c * 2u] = t[c * 2u + 1u] = 0xFFu;
+		t[fb + c * 2u] = t[fb + c * 2u + 1u] = 0xFFu;
+	}
+}
+
+/*
+ * What lane 0, the main link's call, carries towards the handset, in order
+ * of precedence:
+ *
+ *   BRIDGE  the bridge's speech (docs/bridge-interface.md §3);
+ *   PEER    an internal call's other party, its uplink word as it comes;
+ *   RAW     -a playraw: a verbatim TDM lane, two bytes every frame;
+ *   PLAY    -a play/playpcm: G.722, one coded word per two frames;
+ *   LOOP    -a loopback: the handset's own word, straight back -- the
+ *           lane carries the coded bearer, so this needs no encoder;
+ *   IDLE    the voice filler.
+ *
+ * A narrowband call's lane stays silent until the mode-2 re-assign has gone
+ * out: before it the chip is in mode 9, where linear PCM decodes as a burst
+ * of noise. None of the inputs changes within a block, so tx_block() asks
+ * once per block.
+ */
+enum lane0_src { L0_IDLE, L0_BRIDGE, L0_PEER, L0_RAW, L0_PLAY, L0_LOOP };
+
+static enum lane0_src lane0_source(const struct stubd *s, const uint8_t *rx,
+				   unsigned int *peer)
+{
+	unsigned int w = s->audio.lane0_word;
+	int mode2 = s->reg.call_wideband || !s->audio.remode_ms ||
+		    s->reg.remode_done;
+
+	if (!s->reg.call_bound || w >= s->slots ||
+	    w == (unsigned int)s->tx_slot)
+		return L0_IDLE;
+	if (s->ab.l[0].cfd >= 0 && s->ab.l[0].call)
+		return mode2 ? L0_BRIDGE : L0_IDLE;
+	if (s->ic.st == IC_UP && rx) {
+		int p = ic_word(s, s->ic.caller == -1 ? s->ic.tside :
+				   s->ic.tside == -1 ? s->ic.caller :
+				   IC_PARTY_NONE);
+
+		if (p >= 0) {
+			*peer = (unsigned int)p;
+			return L0_PEER;
+		}
+	}
+	if (s->audio.play && s->audio.play_raw)
+		return mode2 ? L0_RAW : L0_IDLE;
+	if (s->audio.play)
+		return L0_PLAY;
+	if (s->audio.loopback && rx)
+		return L0_LOOP;
+	return L0_IDLE;
+}
+
+/*
+ * One frame of -a play on lane 0: out is the lane's word in the frame we
+ * send, in the received one (NULL when there is none).
+ *
+ * Lock the phase once, then free-run at two frames per word. The chip takes
+ * the downlink at a steady 8000 octets/s, so the rate is ours to keep; what
+ * we cannot know is which frame of each pair starts a word. The first change
+ * between two live received words shows the chip's pair boundary. Both
+ * directions run off one frame clock, so there is no drift to follow
+ * afterwards, and following every transition would starve the lane whenever
+ * the handset is silent. Idle fills are not live, or the lock would land on
+ * a block boundary.
+ */
+static void lane0_play(struct stubd *s, uint8_t *out, const uint8_t *in)
+{
+	int advance;
+
+	if ((s->audio.play_sync || s->reg.call_wideband) && in) {
+		uint32_t v = (uint32_t)in[0] | ((uint32_t)in[1] << 8);
+
+		if (v != s->rx_word_prev && lane_word_live(v) &&
+		    lane_word_live(s->rx_word_prev) && !s->play_locked) {
+			s->play_locked = 1;
+			s->play_phase = 0;
+		}
+		s->rx_word_prev = v;
+	}
+	advance = !s->play_phase || !s->play_pos;
+	s->play_phase ^= 1;
+	if (advance) {
+		if (s->play_pos + 2u > s->audio.play_len)
+			s->play_pos = 0;
+		s->play_pos += 2u;
+	}
+	out[0] = s->audio.play[s->play_pos - 2u];
+	out[1] = s->audio.play[s->play_pos - 1u];
+}
+
+/*
  * Transmit one DMA block: every frame carries the control slot (the next two
- * queued mail bytes, or idle when the queue is empty) and every other slot its
- * configured idle value. Called once per received block so the transmit side
- * keeps pace with the receive side without per-frame syscalls, which is the
- * cadence A-0030 §2 Q1 describes ("refills occur per buffer, not per
- * individual 8-kHz frame").
+ * queued mail bytes, or idle when the queue is empty), the calls' lanes, and
+ * every other slot its idle value. Called once per received block (rx, the
+ * same frames' receive side, or NULL), so the transmit side keeps pace with
+ * the receive side without per-frame syscalls, which is the cadence A-0030
+ * §2 Q1 describes ("refills occur per buffer, not per individual 8-kHz
+ * frame").
  */
 static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 		     const uint8_t *rx)
 {
 	size_t fb = s->slots * 2u;
-	unsigned int f, n;
+	unsigned int f, w = s->audio.lane0_word, peer = 0;
+	const uint8_t *tmpl;
+	enum lane0_src src0;
 	/*
 	 * Control-slot bytes are taken from a copy of the queue position and
-	 * committed only for the frames the driver accepted. They used to be
-	 * dequeued as the frames were built, so a failed or short write lost
-	 * part of a mail for good (second external review,
-	 * the clean-room record/an external review-1-24102026.md, finding 2). Frames take
-	 * the queue in pairs from the first frame on, so the bytes owed for
-	 * the first k accepted frames are min(2k, bytes taken).
+	 * committed only for the frames the driver accepted, so a failed or
+	 * short write loses no part of a mail. Frames take the queue in pairs
+	 * from the first frame on, so the bytes owed for the first k accepted
+	 * frames are min(2k, bytes taken).
 	 */
 	size_t qh = s->txq_head, ql = s->txq_len, taken, owed;
 	ssize_t wr;
 
 	if (s->tx_slot < 0)
 		return;
+	tmpl = s->tx_tmpl + (s->reg.call_bound ? fb : 0u);
+	src0 = lane0_source(s, rx, &peer);
 	for (f = 0; f < fpb; f++) {
 		uint8_t *fr = frames + f * fb;
+		const uint8_t *in = rx ? rx + f * fb : NULL;
 
-		for (n = 0; n < s->slots; n++) {
-			uint8_t fill = (n == (unsigned int)s->tx_slot)
-				? 0xFFu : s->tx_idle;
+		memcpy(fr, tmpl, fb);
+		switch (src0) {
+		case L0_BRIDGE:
+			ab_frame(&s->ab.l[0], fr, w, in ? in + w * 2u : NULL);
+			break;
+		case L0_PEER:
+			fr[w * 2u] = in[peer * 2u];
+			fr[w * 2u + 1u] = in[peer * 2u + 1u];
+			break;
+		case L0_RAW:
+			if (s->play_pos + 2u > s->audio.play_len)
+				s->play_pos = 0;
+			fr[w * 2u] = s->audio.play[s->play_pos];
+			fr[w * 2u + 1u] = s->audio.play[s->play_pos + 1u];
+			s->play_pos += 2u;
+			break;
+		case L0_PLAY:
+			lane0_play(s, fr + w * 2u, in ? in + w * 2u : NULL);
+			break;
+		case L0_LOOP: {
+			uint16_t v = (uint16_t)(in[w * 2u] |
+						(in[w * 2u + 1u] << 8));
 
-			fr[n * 2u] = fill;
-			fr[n * 2u + 1u] = fill;
+			/*
+			 * Only real bearer data: a routed but empty lane reads
+			 * 0x0000 and an unrouted one the 0xFEFE fill, and
+			 * feeding either back while the chip's path comes up
+			 * flattened a lane that was coming alive. Until there
+			 * is something real to send, send the filler.
+			 */
+			if (v != 0x0000u && v != 0xFEFEu) {
+				fr[w * 2u] = in[w * 2u];
+				fr[w * 2u + 1u] = in[w * 2u + 1u];
+			}
+			break;
 		}
-		/*
-		 * Voice lanes get their own filler so a silent call sends
-		 * silence rather than whatever the control path happens to use.
-		 */
-		if (s->reg.call_bound && s->tx_voice_idle != s->tx_idle) {
-			for (n = 0; n < s->slots; n++) {
-				if (n == (unsigned int)s->tx_slot)
-					continue;
-				fr[n * 2u] = s->tx_voice_idle;
-				fr[n * 2u + 1u] = s->tx_voice_idle;
-			}
-		}
-		/*
-		 * Bearer loopback: copy the received word straight back out,
-		 * byte for byte, frame for frame.
-		 *
-		 * What the chip puts on a bound call's lane is the coded G.722
-		 * bearer, not PCM -- 4000 distinct 16-bit words per second, each
-		 * held for two frames, which decodes to speech once de-duplicated
-		 * (v19, confirmed by ear). Copying it back verbatim therefore
-		 * hands the chip a valid coded stream with no encoder on our
-		 * side, and preserves the two-frame cadence for free. If the
-		 * handset hears itself, the transmit direction is proved -- and
-		 * it explains every inaudible test tone so far, because those
-		 * wrote A-law or linear PCM into a slot that carries coded bits.
-		 */
-		/*
-		 * File playback: one coded word per two frames, looping. Takes
-		 * precedence over the loopback, which it exists to replace as a
-		 * source whose glitches cannot be blamed on the uplink.
-		 */
-		/*
-		 * Hold the lane silent until the mode-2 re-assign has gone out.
-		 * Between 0x022D and the re-assign the chip is still in mode 9,
-		 * where linear PCM decodes as noise -- audible as a burst of
-		 * white noise at the start of every call (reported 2026-10-23,
-		 * and visible in vF411 as dir1 8001 -> 0000 one second in).
-		 * There is nothing useful to send in that window.
-		 */
-		if (s->ab.l[0].cfd >= 0 && s->ab.l[0].call &&
-		    s->reg.call_bound && s->audio.lane0_word < s->slots &&
-		    s->audio.lane0_word != (unsigned int)s->tx_slot &&
-		    (s->reg.call_wideband || !s->audio.remode_ms ||
-		     s->reg.remode_done)) {
-			/* the bridge's speech (docs/bridge-interface.md §3) */
-			ab_frame(&s->ab.l[0], fr, s->audio.lane0_word,
-				 rx ? rx + (f * s->slots +
-					    s->audio.lane0_word) * 2u : NULL);
-		} else if (s->ic.st == IC_UP && rx && s->reg.call_bound &&
-		    ic_word(s, s->ic.caller == -1 ? s->ic.tside :
-			    s->ic.tside == -1 ? s->ic.caller :
-			    IC_PARTY_NONE) >= 0 &&
-		    s->audio.lane0_word < s->slots) {
-			/* internal call: lane 0 hears the other party */
-			const uint8_t *p = rx + (f * s->slots + (unsigned)
-				ic_word(s, s->ic.caller == -1 ? s->ic.tside :
-					s->ic.caller)) * 2u;
-
-			fr[s->audio.lane0_word * 2u] = p[0];
-			fr[s->audio.lane0_word * 2u + 1u] = p[1];
-		} else if (s->audio.play && s->audio.play_raw &&
-			   s->reg.call_bound &&
-			   (!s->audio.remode_ms || s->reg.remode_done)) {
-			unsigned int w = s->audio.lane0_word;
-
-			/* Verbatim lane: two bytes every frame, no cadence. */
-			if (w < s->slots && w != (unsigned int)s->tx_slot) {
-				if (s->play_pos + 2u > s->audio.play_len)
-					s->play_pos = 0;
-				fr[w * 2u] = s->audio.play[s->play_pos];
-				fr[w * 2u + 1u] = s->audio.play[s->play_pos + 1u];
-				s->play_pos += 2u;
-			}
-		} else if (s->audio.play && s->reg.call_bound) {
-			unsigned int w = s->audio.lane0_word;
-
-			if (w < s->slots && w != (unsigned int)s->tx_slot) {
-				int advance;
-
-				if ((s->audio.play_sync ||
-				     s->reg.call_wideband) && rx) {
-					const uint8_t *src = rx
-						+ (f * s->slots + w) * 2u;
-					uint32_t v = (uint32_t)src[0]
-						   | ((uint32_t)src[1] << 8);
-
-					/*
-					 * Lock the phase once, then free-run
-					 * at two frames per word. The chip
-					 * takes the downlink at a steady 8000
-					 * octets/s, so the rate is ours to
-					 * keep; what we cannot know is which
-					 * frame of each pair starts a word.
-					 * The first change between two live
-					 * received words shows the chip's pair
-					 * boundary. Both directions run off
-					 * one frame clock, so there is no
-					 * drift to follow afterwards, and
-					 * following every transition would
-					 * starve the lane whenever the handset
-					 * is silent. Idle fills are not live,
-					 * or the lock would land on a block
-					 * boundary.
-					 */
-					if (v != s->rx_word_prev &&
-					    lane_word_live(v) &&
-					    lane_word_live(s->rx_word_prev) &&
-					    !s->play_locked) {
-						s->play_locked = 1;
-						s->play_phase = 0;
-					}
-					s->rx_word_prev = v;
-				}
-				advance = !s->play_phase || !s->play_pos;
-				s->play_phase ^= 1;
-				if (advance) {
-					if (s->play_pos + 2u > s->audio.play_len)
-						s->play_pos = 0;
-					s->play_pos += 2u;
-				}
-				fr[w * 2u] = s->audio.play[s->play_pos - 2u];
-				fr[w * 2u + 1u] = s->audio.play[s->play_pos - 1u];
-			}
-		} else if (s->audio.loopback && s->reg.call_bound && rx) {
-			unsigned int w = s->audio.lane0_word;
-
-			if (w < s->slots && w != (unsigned int)s->tx_slot) {
-				const uint8_t *src = rx + (f * s->slots + w) * 2u;
-				uint16_t v = (uint16_t)(src[0] | (src[1] << 8));
-
-				/*
-				 * Only echo real bearer data. A lane that is
-				 * routed but has nothing on it reads 0x0000, and
-				 * an unrouted one reads the 0xFEFE idle fill;
-				 * feeding either back means handing the chip's
-				 * downlink a stream of zeros or fill bytes while
-				 * its own path is still coming up. v20 did that
-				 * and its lane, which had started to come alive,
-				 * went flat within the first second -- where v22,
-				 * whose lane came up at once and echoed valid
-				 * coded words from the start, worked. Until there
-				 * is something real to send, send the filler.
-				 */
-				if (v != 0x0000u && v != 0xFEFEu) {
-					fr[w * 2u] = src[0];
-					fr[w * 2u + 1u] = src[1];
-				}
-			}
+		case L0_IDLE:
+			break;
 		}
 		xlane_tx(s, fr, rx, f);
 		if (ql >= 2u) {
@@ -2381,6 +2362,17 @@ static int ssc_bring_up(struct stubd *s, struct dect_pcm_config *cfg,
 	cfg->n_desc = sc.n_desc;
 	s->slots = sc.slots;
 	s->fpb = sc.frames_per_block;
+	/* a block, or the longest mail's burst (send_mail()) and its idle tail */
+	s->ssc_tx_cap = (size_t)s->slots * 2u *
+			(s->fpb > DECT_TX_ELEM_MAX / 2u + 1u ? s->fpb
+			 : DECT_TX_ELEM_MAX / 2u + 1u);
+	s->ssc_rx_t = malloc((size_t)s->slots * 2u * s->fpb + 2u);
+	s->ssc_tx_t = malloc(s->ssc_tx_cap + 2u);
+	s->ssc_tx_out = malloc(s->ssc_tx_cap);
+	if (!s->ssc_rx_t || !s->ssc_tx_t || !s->ssc_tx_out) {
+		fprintf(stderr, "ssc: out of memory\n");
+		return -1;
+	}
 	printf("config: %.32s (uapi %u), slots %u frames %u desc %u tx\n",
 	       si->name, si->version, sc.slots, sc.frames_per_block, sc.n_desc);
 	/* What the driver sends when no frame is queued: all ones, idle. */
@@ -2441,6 +2433,9 @@ static void tear_down(struct stubd *s)
 		step = SSC_PCM_STEP_OFF;
 		if (ioctl(s->fd, SSC_PCM_IOC_STEP, &step))
 			perror("SSC_PCM_STEP 0");
+		free(s->ssc_rx_t);
+		free(s->ssc_tx_t);
+		free(s->ssc_tx_out);
 		return;
 	}
 	if (ioctl(s->fd, DECT_IOC_PCM_STEP, &step))
@@ -10009,7 +10004,7 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 	unsigned int f, n, nslots = s->ssc ? (s->slots < 64u ? s->slots : 64u)
 					   : (s->slots < 8u ? s->slots : 8u);
 
-	if (!s->reg.call_bound)
+	if (!s->reg.call_bound || (!s->verbose && !s->voice_fp))
 		return;
 	for (f = 0; f < fpb; f++) {
 		for (n = 0; n < nslots; n++) {
@@ -10018,27 +10013,6 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 			memcpy(&v, fr + (f * s->slots + n) * 2u, 2);
 			if (s->vs_frames && v != s->vs_last[n])
 				s->vs_changes[n]++;
-			if (n == s->audio.lane0_word) {
-				int live = v != 0x0000u && v != 0xFEFEu &&
-					   v != 0xFFFFu;
-
-				if (v == s->vs_last[n]) {
-					s->vh_run++;
-				} else {
-					if (live && s->vh_run > 2u) {
-						uint32_t ph = (s->vh_frame -
-							       s->vh_run) % 80u;
-
-						s->vh_holds++;
-						s->vh_extra += s->vh_run - 2u;
-						if (ph == s->vh_last_phase)
-							s->vh_locked++;
-						s->vh_last_phase = ph;
-					}
-					s->vh_run = 1;
-				}
-				s->vh_frame++;
-			}
 			s->vs_last[n] = v;
 		}
 		s->vs_frames++;
@@ -10060,13 +10034,6 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 				printf(" %u:%u", n, s->vs_changes[n]);
 			printf("\n");
 		}
-		printf("call: uplink holds: %u longer than 2 frames, %u extra "
-		       "frames, %u frame-locked (same phase mod 80 as the "
-		       "previous hold)\n",
-		       s->vh_holds, s->vh_extra, s->vh_locked);
-		s->vh_holds = 0;
-		s->vh_extra = 0;
-		s->vh_locked = 0;
 		report_tx_starvation(s);
 		memset(s->vs_changes, 0, sizeof(s->vs_changes));
 		s->vs_frames = 0;
@@ -10133,10 +10100,8 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 
 	if (s->voice_slot < 0) {
 		size_t n = (size_t)fpb * s->slots * 2u;
-		uint8_t *cp = malloc(n);
+		uint8_t *cp = s->voice_buf;
 
-		if (!cp)
-			goto fail;
 		memcpy(cp, fr, n);
 		/*
 		 * Not the control slot: it carries the chip's mails, and a
@@ -10147,11 +10112,8 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 				memset(cp + (f * s->slots +
 					     (unsigned int)s->rx_slot) * 2u,
 				       0xff, 2);
-		if (fwrite(cp, 1, n, s->voice_fp) != n) {
-			free(cp);
+		if (fwrite(cp, 1, n, s->voice_fp) != n)
 			goto fail;
-		}
-		free(cp);
 		s->voice_bytes += (uint32_t)n;
 		return;
 	}
@@ -10196,11 +10158,15 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	uint8_t *txbuf = malloc(block);
 	uint64_t start = mono_ms();
 
-	if (!buf || !txbuf) {
+	s->tx_tmpl = malloc(2u * s->slots * 2u);
+	if (!buf || !txbuf || !s->tx_tmpl) {
 		free(buf);
 		free(txbuf);
+		free(s->tx_tmpl);
+		s->tx_tmpl = NULL;
 		return -1;
 	}
+	tx_templates(s, s->tx_tmpl);
 	uint64_t park_at = 0, drained_at = 0;
 
 	s->tx_ring = 1;		/* from here on, mails are paced by tx_block() */
@@ -10483,7 +10449,18 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	 * capture as words held over -- the audio stalls we are chasing. If it
 	 * is zero while the capture still stalls, the gaps are the chip's.
 	 */
-	{
+	if (s->ssc) {
+		struct ssc_pcm_stats st;
+
+		memset(&st, 0, sizeof(st));
+		if (!ioctl(s->fd, SSC_PCM_IOC_STATS, &st))
+			printf("pcm: blocks %llu dropped %llu overruns %u "
+			       "tx_frames %llu tx_idle %llu tx_underruns %u\n",
+			       (unsigned long long)st.blocks,
+			       (unsigned long long)st.dropped, st.overruns,
+			       (unsigned long long)st.tx_frames,
+			       (unsigned long long)st.tx_idle, st.tx_underruns);
+	} else {
 		struct dect_pcm_stats ps;
 
 		if (!ioctl(s->fd, DECT_IOC_PCM_STATS, &ps))
@@ -10499,6 +10476,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	verify_report(s);
 	free(buf);
 	free(txbuf);
+	free(s->tx_tmpl);
+	s->tx_tmpl = NULL;
 	return 0;
 }
 
@@ -12026,7 +12005,8 @@ int main(int argc, char **argv)
 				(unsigned long long)(need >> 20));
 			goto out;
 		}
-		s.voice_fp = fopen_private(s.voice_path);
+		s.voice_buf = malloc((size_t)s.slots * 2u * fpb);
+		s.voice_fp = s.voice_buf ? fopen_private(s.voice_path) : NULL;
 		if (!s.voice_fp) {
 			perror(s.voice_path);
 			goto out;
@@ -12045,8 +12025,15 @@ int main(int argc, char **argv)
 	}
 	if (s.voice_fp) {
 		fclose(s.voice_fp);
-		printf("voice: captured %u bytes from slot %d (%u frames)\n",
-		       s.voice_bytes, s.voice_slot, s.voice_bytes / 2u);
+		/* two bytes a frame for one slot, a whole frame for all */
+		if (s.voice_slot < 0)
+			printf("voice: captured %u bytes from every slot "
+			       "(%u frames)\n", s.voice_bytes,
+			       s.voice_bytes / (s.slots * 2u));
+		else
+			printf("voice: captured %u bytes from slot %d "
+			       "(%u frames)\n", s.voice_bytes, s.voice_slot,
+			       s.voice_bytes / 2u);
 	}
 
 	/*
@@ -12061,6 +12048,7 @@ int main(int argc, char **argv)
 out:
 	if (s.rand_fd >= 0)
 		close(s.rand_fd);
+	free(s.voice_buf);
 	tear_down(&s);
 	close(s.fd);
 	return ret;
