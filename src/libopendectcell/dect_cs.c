@@ -18,6 +18,19 @@ int dect_cs_decode_segment(const struct dect_mail *m, struct dect_cs_seg *seg)
 {
 	if (m->prim != DECT_PRIM_SIGNALLING)
 		return -1;
+	/*
+	 * The 06.88 STUB (FRITZ!Box 7412) sends only the first seven bytes,
+	 * {handle,01,seg[5]}: the A540's first segment came as
+	 * `00 01 91 00 01 b7 b5`, repeated every 2 s until the handset gave
+	 * up, because we dropped it as too short (2026-10-29).
+	 */
+	if (m->param_len == DECT_CS_SHORT_PARAM &&
+	    m->param[SEG_OFF_MARKER] == 0x01u) {
+		seg->handle = m->param[SEG_OFF_HANDLE];
+		memcpy(seg->data, &m->param[SEG_OFF_DATA], DECT_CS_SEG_LEN);
+		memset(seg->tag, 0, DECT_CS_TAG_LEN);
+		return 0;
+	}
 	if (m->param_len < DECT_CS_MIN_PARAM)
 		return -1;
 	/*

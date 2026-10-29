@@ -52,6 +52,35 @@ static void test_decode_segment_15(void)
 	CHECK_EQ(seg.tag[1], 0x0b);
 }
 
+/* The 06.88 STUB's 7-byte short form decodes, with a zero tag. */
+static void test_decode_segment_7(void)
+{
+	struct dect_mail m;
+	struct dect_cs_seg seg;
+	uint8_t p[] = { 0x00, 0x01, 0x91, 0x00, 0x01, 0xb7, 0xb5 };
+
+	memset(&m, 0, sizeof(m));
+	m.prim = DECT_PRIM_SIGNALLING;
+	m.param_len = sizeof(p);
+	memcpy(m.param, p, sizeof(p));
+	memset(seg.tag, 0xff, sizeof(seg.tag));
+
+	CHECK_EQ(dect_cs_decode_segment(&m, &seg), 0);
+	CHECK_EQ(seg.handle, 0x00);
+	CHECK_EQ(seg.data[0], 0x91);
+	CHECK_EQ(seg.data[4], 0xb5);
+	CHECK_EQ(seg.tag[0], 0x00);
+	CHECK_EQ(seg.tag[2], 0x00);
+
+	m.param[1] = 0x02;			/* marker */
+	CHECK_EQ(dect_cs_decode_segment(&m, &seg), -1);
+	m.param[1] = 0x01;
+	m.param_len = 6;			/* shorter than the short form */
+	CHECK_EQ(dect_cs_decode_segment(&m, &seg), -1);
+	m.param_len = 8;			/* between the two forms */
+	CHECK_EQ(dect_cs_decode_segment(&m, &seg), -1);
+}
+
 /* A wrong primitive or a too-short mail is rejected. */
 static void test_decode_rejects(void)
 {
@@ -140,6 +169,7 @@ int main(void)
 {
 	test_decode_segment_13();
 	test_decode_segment_15();
+	test_decode_segment_7();
 	test_decode_rejects();
 	test_decode_rejects_bad_marker_or_handle();
 	test_append_mail();

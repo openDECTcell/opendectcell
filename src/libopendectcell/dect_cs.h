@@ -29,11 +29,12 @@
 #define DECT_CS_SEG_LEN		5u	/* one Cs A-field tail segment */
 #define DECT_CS_TAG_LEN		3u	/* handset tag (PMID-like) */
 #define DECT_CS_MIN_PARAM	13u	/* {handle,01,seg[5],00,00,tag[3],handle} */
+#define DECT_CS_SHORT_PARAM	7u	/* {handle,01,seg[5]}: the 06.88 STUB */
 
 /* One inbound Cs segment, decoded from a 0x0203 mail. */
 struct dect_cs_seg {
 	uint8_t handle;			/* connection handle (terminal index 0..6) */
-	uint8_t tag[DECT_CS_TAG_LEN];	/* destination/source handset tag */
+	uint8_t tag[DECT_CS_TAG_LEN];	/* handset tag; zero in the short form */
 	uint8_t data[DECT_CS_SEG_LEN];	/* the 5-byte Cs channel segment */
 };
 
@@ -41,7 +42,8 @@ struct dect_cs_seg {
  * Decode a 0x0203 SIGNALLING_SEGMENT mail into seg. Returns 0 on success,
  * -1 if m is not a signalling segment or is too short. Accepts the documented
  * 13-byte layout and the longer (15-byte, with a 2-byte ref trailer) form seen
- * on hardware; only the fields above are read.
+ * on hardware; only the fields above are read. Also the 7-byte short form
+ * {handle,01,seg[5]} of the 7412's 06.88 STUB, which has no tag.
  */
 int dect_cs_decode_segment(const struct dect_mail *m, struct dect_cs_seg *seg);
 
