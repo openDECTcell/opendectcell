@@ -135,8 +135,8 @@ var REASONS = {
 };
 
 function report(r, done) {
-	ui.addNotification(null, E('p', r.ok ? done :
-		_('Not done: %s.').format(REASONS[r.reason] || r.reason)),
+	ui.addNotification(null, E('p', {}, [ r.ok ? done :
+		_('Not done: %s.').format(REASONS[r.reason] || r.reason) ]),
 		r.ok ? 'info' : 'warning');
 }
 
@@ -152,7 +152,8 @@ function ago(ms) {
 }
 
 function deregisterDialog(h) {
-	ui.showModal(_('Deregister DECT %d (%s)?').format(h.slot, h.name), [
+	/* an array, so the handset's own name is text, not markup */
+	ui.showModal([ _('Deregister DECT %d (%s)?').format(h.slot, h.name) ], [
 		E('p', {}, _('The base erases this handset\'s registration. The handset is told if it is in range; to use it again it has to be registered anew. A handset that is lost or switched off is erased after about 30 seconds without its confirmation.')),
 		E('p', {}, _('Its settings here go with it; its VoIP profiles stay, free for another handset.')),
 		E('div', { 'class': 'right' }, [
@@ -192,7 +193,7 @@ function deregisterDone(h) {
 				return new Promise(function(res) { window.setTimeout(res, 2000); }).then(gone);
 			ui.hideModal();
 			if (still) {
-				ui.addNotification(null, E('p', _('DECT %d is still registered after 40 s; its settings are kept. See Status > DECT, Log.').format(h.slot)), 'warning');
+				ui.addNotification(null, E('p', {}, [ _('DECT %d is still registered after 40 s; its settings are kept. See Status > DECT, Log.').format(h.slot) ]), 'warning');
 				return;
 			}
 			/*
@@ -202,7 +203,7 @@ function deregisterDone(h) {
 			 */
 			return fs.exec('/etc/init.d/opendectcell', [ 'forget', String(h.slot) ]).then(function(r) {
 				if (r.code != 0)
-					ui.addNotification(null, E('p', _('DECT %d is deregistered, but its settings could not be removed: %s').format(h.slot, r.stderr || r.code)), 'warning');
+					ui.addNotification(null, E('p', {}, [ _('DECT %d is deregistered, but its settings could not be removed: %s').format(h.slot, r.stderr || r.code) ]), 'warning');
 				window.location.reload();
 			});
 		});

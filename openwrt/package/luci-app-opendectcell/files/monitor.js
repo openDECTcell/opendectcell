@@ -148,16 +148,26 @@ var EVENTS = [
 	[ 'syncerr', _('Sync errors') ]
 ];
 
+/*
+ * A cell's content as DOM children. LuCI's dom.append() sets innerHTML for a
+ * plain string child but makes text nodes of an array's strings, and these
+ * cells carry text from the outside: handset names, SIP peers, a
+ * registrar's reason phrase. Elements pass through unchanged.
+ */
+function text(c) {
+	return c == null ? [] : Array.isArray(c) ? c : [ c ];
+}
+
 function table(headers, rows, cls) {
 	var t = E('table', { 'class': 'table' + (cls ? ' ' + cls : '') });
 
 	if (headers)
 		t.appendChild(E('tr', { 'class': 'tr table-titles' }, headers.map(function(h) {
-			return E('th', { 'class': 'th' }, h);
+			return E('th', { 'class': 'th' }, text(h));
 		})));
 	rows.forEach(function(r) {
 		t.appendChild(E('tr', { 'class': 'tr' }, r.map(function(c, i) {
-			return E('td', { 'class': 'td', 'style': !headers && i == 0 ? 'width:33%' : null }, c);
+			return E('td', { 'class': 'td', 'style': !headers && i == 0 ? 'width:33%' : null }, text(c));
 		})));
 	});
 	return t;
@@ -300,9 +310,9 @@ function connection(st, l) {
 		]));
 	}
 	return E('div', { 'class': 'cbi-section' }, [
-		E('h3', {}, handsetName(st, l) == _('DECT %d').format(l.slot) ?
+		E('h3', {}, text(handsetName(st, l) == _('DECT %d').format(l.slot) ?
 			_('Connection: DECT %d').format(l.slot) :
-			_('Connection: %s (DECT %d)').format(handsetName(st, l), l.slot))
+			_('Connection: %s (DECT %d)').format(handsetName(st, l), l.slot)))
 	].concat(cards));
 }
 
@@ -436,7 +446,7 @@ function voipCall(st, c) {
 		(c.codec_rx ? ' / ' + c.codec_rx : '') : '-';
 
 	return E('div', { 'class': 'cbi-section' }, [
-		E('h3', {}, _('Call: %s, %s').format(hsName(st, c.hs), lineName(c.hs, c.line))),
+		E('h3', {}, text(_('Call: %s, %s').format(hsName(st, c.hs), lineName(c.hs, c.line)))),
 		table(null, [
 			[ _('Direction'), c.direction == 'out' ? _('outgoing') : _('incoming') ],
 			[ _('Other party'), c.peer || '-' ],
@@ -454,7 +464,7 @@ function voipCall(st, c) {
 			[ _('Jitter (receiving)'), c.rx_jitter_us != null ?
 				_('%.1f ms').format(c.rx_jitter_us / 1000) : '-' ],
 			[ _('Round trip'), c.rtt_us ? _('%.1f ms').format(c.rtt_us / 1000) : '-' ],
-			[ _('Encryption'), c.secure ? E('strong', {}, _('on (%s)').format(c.encryption)) :
+			[ _('Encryption'), c.secure ? E('strong', {}, text(_('on (%s)').format(c.encryption))) :
 				c.encryption && c.encryption != 'none' ?
 					_('%s asked for, not in use').format(c.encryption) : _('off') ]
 		])
@@ -474,7 +484,7 @@ function renderVoip(st, voip, inst) {
 
 			return [
 				hsName(st, l.hs), lineName(l.hs, l.line), l.aor,
-				l.registration == 'registered' ? E('strong', {}, r) :
+				l.registration == 'registered' ? E('strong', {}, text(r)) :
 					l.reason ? _('%s: %s').format(r, l.reason) : r,
 				l.interval_s ? _('%d s').format(l.interval_s) : '-'
 			];
