@@ -585,6 +585,21 @@ static void test_rename_a_handset(void)
 	CHECK_EQ(iwu.handsets[1].name[0], '\0');
 	CHECK_EQ(iwu.names_changed, 0x2u);
 
+	/* a control character in a name is refused (audit A5) */
+	{
+		static const uint8_t ctrl[] = { 0xC3, 0x14, 0x81, 0x82, 0x85,
+			0x02, 0x83, 0x80, 'K', 0x0A };
+
+		iwu.names_changed = 0;
+		handle(&iwu, edit, sizeof(edit));
+		handle(&iwu, save, sizeof(save));
+		handle(&iwu, ctrl, sizeof(ctrl));
+		CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
+		CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_FORMAT);
+		CHECK_EQ(iwu.handsets[1].name[0], '\0');
+		CHECK_EQ(iwu.names_changed, 0u);
+	}
+
 	/* too long: cut to 15 octets, but not inside the 'ü' at 15-16 */
 	{
 		static const uint8_t lng[] = { 0xC3, 0x14, 0x81, 0x82, 0x93,

@@ -1033,12 +1033,27 @@ static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
 					&iwu->handsets[iwu->save_entry - 1u];
 				size_t nl = flen - 1u;
 
+				size_t ci;
+
 				if (nl > DECT_IWU_NAME_MAX - 1u) {
 					/* truncated (7.4.10.1), never inside a
 					 * UTF-8 sequence */
 					nl = DECT_IWU_NAME_MAX - 1u;
 					while (nl && (p[1 + nl] & 0xC0u) == 0x80u)
 						nl--;
+				}
+				/*
+				 * No control character: the name goes to every
+				 * handset's display, the log and LuCI (security
+				 * audit 2026-10-29, A5).
+				 */
+				for (ci = 0; ci < nl; ci++)
+					if (p[1 + ci] < 0x20u || p[1 + ci] == 0x7Fu)
+						break;
+				if (ci < nl) {
+					reason = DECT_LIA_NACK_FORMAT;
+					p += flen; n -= flen;
+					continue;
 				}
 				memcpy(h->name, p + 1, nl);
 				h->name[nl] = '\0';
