@@ -76,7 +76,7 @@ says at the top what it was for.
 | [call-g7.md](call-g7.md) | Getting a handset to ring and talk (gate G7): the long log of every run |
 | [why-the-handsets-never-rang.md](why-the-handsets-never-rang.md) | The search for why the Gigasets would not ring, and the answer |
 | [tasks-2026-10-28.md](tasks-2026-10-28.md) | Task list, still current for some open details |
-| [bench-2026-10-25.md](bench-2026-10-25.md), [bench-next.md](bench-next.md) | Bench test cards and their results; `bench-next.md` holds the open ones |
+| [bench-2026-10-25.md](bench-2026-10-25.md), [bench-next.md](bench-next.md), [bench-7412.md](bench-7412.md) | Bench test cards and their results; `bench-next.md` holds the open ones, `bench-7412.md` the first handset on a 7412 |
 
 The project-wide history and hand-over notes are in
 the maintainers' notes; the plan is in [ROADMAP.md](../ROADMAP.md).
