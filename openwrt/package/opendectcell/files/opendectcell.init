@@ -127,12 +127,14 @@ load_chip() {
 			return 1
 		}
 	fi
+	# the daemon's files: root only, not the world-writable /tmp
+	mkdir -p /var/run/opendectcell && chmod 700 /var/run/opendectcell
 	grep -q '^opendectcell ' /proc/modules || insmod opendectcell || {
 		log "insmod opendectcell failed"
 		return 1
 	}
 	# Already booted since the last module load: keep it.
-	[ -s /tmp/dect-stub.second ] && return 0
+	[ -s /var/run/opendectcell/stub.second ] && return 0
 	console_claim "$tty"
 	extra=""
 	[ -n "$mtd" ] && extra="$extra --factory-mtd $mtd --factory-offset $off"
@@ -143,11 +145,11 @@ load_chip() {
 		$extra \
 		>/tmp/dect-fwload.log 2>&1 || {
 		log "chip firmware upload failed, see /tmp/dect-fwload.log"
-		rm -f /tmp/dect-stub.second
+		rm -f /var/run/opendectcell/stub.second
 		return 1
 	}
 	# dect-stubd reads this to know which build's RAM addresses apply.
-	echo "$second" > /tmp/dect-stub.second
+	echo "$second" > /var/run/opendectcell/stub.second
 }
 
 # A handset's own settings (Network > DECT, Handsets, General): each

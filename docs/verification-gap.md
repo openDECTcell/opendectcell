@@ -340,7 +340,7 @@ was a read of the wrong memory. The "transient MISMATCH" note above was
 written before the switch and is not an explanation for these.
 
 `fwload.sh` now records the uploaded second stage in
-`/tmp/dect-stub.second`; `dect-stubd` reads it at start and prints
+`/var/run/opendectcell/stub.second` (earlier `/tmp/dect-stub.second`); `dect-stubd` reads it at start and prints
 `chip: STUB second stage ...`. On 08.25 it checks as before. On another
 build it skips the read-back and the audit and says so; the summary then
 lists `0x020A`/`0x0247` as NOT VERIFIED. With no record it checks and says

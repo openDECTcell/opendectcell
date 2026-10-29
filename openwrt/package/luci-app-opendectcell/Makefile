@@ -22,7 +22,7 @@ define Package/luci-app-opendectcell/description
   Network > DECT: the base's settings (/etc/config/opendectcell) and its
   handsets (rename, profile, register, deregister). Status > DECT: the DECT
   Monitor, per base, handset and connection, read from the state file
-  dect-stubd writes (/tmp/opendectcell-state.json).
+  dect-stubd writes (/var/run/opendectcell/state.json).
 endef
 
 define Build/Compile

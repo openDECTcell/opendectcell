@@ -3,7 +3,7 @@
 		"description": "Read the DECT base's state, change its settings and manage its handsets",
 		"read": {
 			"file": {
-				"/tmp/opendectcell-state.json": [ "read" ],
+				"/var/run/opendectcell/state.json": [ "read" ],
 				"/var/run/opendectcell/voip.json": [ "read" ],
 				"/etc/opendectcell/profiles": [ "list" ],
 				"/etc/opendectcell-sub.*.profile": [ "read" ],

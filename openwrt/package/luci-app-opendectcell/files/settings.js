@@ -25,7 +25,7 @@
  * Line menus offer only free ones, and the init script refuses a second
  * assignment too.
  */
-var STATE = '/tmp/opendectcell-state.json';
+var STATE = '/var/run/opendectcell/state.json';
 var VOIP = '/var/run/opendectcell/voip.json';
 var CTL = '/usr/sbin/dect-stubd';
 var PROFILES = '/etc/opendectcell/profiles';

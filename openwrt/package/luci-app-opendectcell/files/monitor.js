@@ -9,7 +9,7 @@
 /*
  * Status > DECT, the DECT Monitor: what the base is doing, for someone who
  * should not have to read a log. Three tabs: DECT reads
- * /tmp/opendectcell-state.json, which dect-stubd rewrites at most once a second
+ * /var/run/opendectcell/state.json, which dect-stubd rewrites at most once a second
  * (docs/diagnostics.md); VoIP reads /var/run/opendectcell/voip.json, which the
  * baresip module writes every 2 s; both start with their service's state
  * from procd, so a stopped service is told apart from anything else that
@@ -22,7 +22,7 @@
  * graph of level and quality, kept in the browser while the page is open.
  * Deliberately not a debugging console: raw mails stay in dect-stubd -v.
  */
-var STATE = '/tmp/opendectcell-state.json';
+var STATE = '/var/run/opendectcell/state.json';
 var VOIP = '/var/run/opendectcell/voip.json';
 var HISTORY_S = 300;		/* the graph's span */
 var history = {};		/* handle -> [{t, dbm, q}] */

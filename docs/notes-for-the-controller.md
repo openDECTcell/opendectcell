@@ -571,7 +571,7 @@ unwraps the 16-bit frame count, `dect_diag_json()` emits one object (IPUI
 only on request). MM keeps the handset's <<MODEL-IDENTIFIER>> and
 <<CODEC-LIST>> from its LOCATE or ACCESS-RIGHTS request. Use it for C5/C7
 rather than decoding `0xF625` again; `dect-stubd` writes the same objects to
-`/tmp/opendectcell-state.json` for LuCI.
+`/var/run/opendectcell/state.json` for LuCI.
 
 **API 17, `dect_mm_cfg.registration`.** `DECT_MM_REG_OPEN` (default, as
 before), `CLOSED`, or `SAME` (only the held `port_id` may re-enrol).

@@ -334,11 +334,11 @@ Start any run with all three stores (e.g. the test 13 command with
 `./ringone.sh a540`), wait until the AS690H is idle on the base, then:
 
 ```
-ssh root@192.168.1.1 'echo 3 > /tmp/opendectcell-deregister; kill -USR2 $(pidof dect-stubd)'
+ssh root@192.168.1.1 'echo 3 > /var/run/opendectcell/deregister; kill -USR2 $(pidof dect-stubd)'
 ```
 
 (3 = the AS690H's slot as the log's `sub:` lines name it; use the slot shown.
-Several at once: `echo "1 3" > /tmp/opendectcell-deregister`; they queue.)
+Several at once: `echo "1 3" > /var/run/opendectcell/deregister`; they queue.)
 
 | you see | meaning |
 |---|---|

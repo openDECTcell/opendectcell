@@ -1419,7 +1419,31 @@ static uint32_t sub_uak_base = SUB_UAK_BASE_0825;
  * seven hours, every read-back said MISMATCH and every audit five foreign
  * slots, and all of it was a read of unrelated memory.
  */
-#define DECT_STUB_RECORD	"/tmp/dect-stub.second"
+/*
+ * The daemon's files live in a directory only root can enter, not in the
+ * world-writable /tmp, where any local user could plant them first: a
+ * forged STUB record or status, a deregistration request (security audit
+ * 2026-10-29, F1). The /tmp names of old lab scripts are still read, but
+ * only from a file root owns that nobody else may write.
+ */
+#define DECT_RUN_DIR		"/var/run/opendectcell"
+#define DECT_STUB_RECORD	DECT_RUN_DIR "/stub.second"
+#define DECT_STUB_RECORD_OLD	"/tmp/dect-stub.second"
+
+/* fopen(path, "r"), if path is root's own and only root may write it. */
+static FILE *fopen_root_only(const char *path)
+{
+	struct stat st;
+	FILE *f = fopen(path, "r");
+
+	if (f && (fstat(fileno(f), &st) || st.st_uid != 0 ||
+		  (st.st_mode & (S_IWGRP | S_IWOTH)) || !S_ISREG(st.st_mode))) {
+		fprintf(stderr, "ignoring %s: not root's own file\n", path);
+		fclose(f);
+		f = NULL;
+	}
+	return f;
+}
 #define DECT_STUB_0825		"dectfw_secondlevel_441.hex"
 #define DECT_STUB_0688		"dectfw_secondlevel_441-06.88-7412.hex"	/* 7412 */
 
@@ -1427,8 +1451,11 @@ enum { STUB_UNKNOWN, STUB_0825, STUB_OTHER };
 
 static int stub_build_read(char *name, size_t cap)
 {
-	FILE *f = fopen(DECT_STUB_RECORD, "r");
+	FILE *f = fopen_root_only(DECT_STUB_RECORD);
 	size_t n;
+
+	if (!f)
+		f = fopen_root_only(DECT_STUB_RECORD_OLD);
 
 	name[0] = '\0';
 	if (!f)
@@ -5684,7 +5711,7 @@ static void led_tick(struct stubd *s, uint64_t now, int radio_on)
  * once a second, on /tmp, which is RAM. IPUIs only with -p: the file is
  * meant to be read by a web page.
  */
-#define STATE_DEFAULT_PATH	"/tmp/opendectcell-state.json"
+#define STATE_DEFAULT_PATH	DECT_RUN_DIR "/state.json"
 #define STATE_EVERY_MS		1000u
 
 /* A JSON string: quotes, backslashes and control characters escaped. */
@@ -7340,7 +7367,8 @@ static int ic_wideband(const struct stubd *s, int p);
 
 #define DEREG_PAGES	10u		/* 3 s apart: 30 s to reach it */
 #define DEREG_PAGE_MS	3000u
-#define DEREG_REQ_PATH	"/tmp/opendectcell-deregister"
+#define DEREG_REQ_PATH	DECT_RUN_DIR "/deregister"
+#define DEREG_REQ_PATH_OLD	"/tmp/opendectcell-deregister"
 
 static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
 		      uint16_t n)
@@ -7486,15 +7514,20 @@ static int dereg_page_response(struct stubd *s, struct side_link *sl,
 static void dereg_start(struct stubd *s, uint64_t now)
 {
 	char buf[64] = "";
-	FILE *f = fopen(DEREG_REQ_PATH, "r");
+	const char *path = DEREG_REQ_PATH;
+	FILE *f = fopen_root_only(path);
 	char *p = buf, *end;
 	unsigned slot, n = 0;
 
+	if (!f) {
+		path = DEREG_REQ_PATH_OLD;
+		f = fopen_root_only(path);
+	}
 	if (f) {
 		if (!fgets(buf, sizeof(buf), f))
 			buf[0] = 0;
 		fclose(f);
-		(void)remove(DEREG_REQ_PATH);
+		(void)remove(path);
 	}
 	for (;;) {
 		slot = (unsigned)strtoul(p, &end, 10);
@@ -11939,6 +11972,9 @@ int main(int argc, char **argv)
 		       s.audio.clip_number ? "a number" : "",
 		       (s.audio.clip_number && s.audio.clip_name) ? " and " : "",
 		       s.audio.clip_name ? "a name" : "");
+	/* its files' directory; the service makes it too (opendectcell.init) */
+	if (mkdir(DECT_RUN_DIR, 0700) && errno != EEXIST)
+		perror(DECT_RUN_DIR);
 	s.fd = open(dev, O_RDWR);
 	if (s.fd < 0) {
 		perror(dev);
