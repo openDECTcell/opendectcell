@@ -296,9 +296,7 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 	 * §7.3.3). A frame for another SAPI -- connectionless signalling is
 	 * SAPI 3 -- must not reach its sequence numbers or its reassembly.
 	 * The LLN is deliberately not checked: the PT may open on a class B
-	 * LLN, which we answer as class A (§9.2.4.3, below). Found by the
-	 * second external review, the clean-room record/an external review-1-24102026.md,
-	 * finding 5; the corpus has no SAPI-0-violating frame from a handset.
+	 * LLN, which we answer as class A (§9.2.4.3, below).
 	 */
 	if (f->sapi != DECT_LAPC_SAPI_CO) {
 		l->stats.rx_bad_sapi++;
@@ -362,11 +360,9 @@ int dect_lapc_rx(struct dect_lapc *l, const struct dect_lapc_frame *f,
 			 * M = 0, then deliver the kept prefix once. EN 300 444
 			 * §6.9.3 has the DLC convey the first segment and lets
 			 * it discard the rest; mandatory IEs sit in the first
-			 * 63 octets. The old code reset the buffer and went on
-			 * appending, so the tail of the long message came out
-			 * as a message of its own (second external review,
-			 * finding 3). Acknowledging the discarded segments is
-			 * correct: they were received.
+			 * 63 octets, and the tail must not come out as a
+			 * message of its own. Acknowledging the discarded
+			 * segments is correct: they were received.
 			 */
 			if (!l->rx_discard && f->info_len) {
 				size_t room = sizeof(l->rxmsg) - l->rxmsg_len;

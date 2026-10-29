@@ -5,22 +5,17 @@
  * A CAT-iq handset reads the base's lists over {CC-IWU-INFO} messages that
  * carry one <<IWU-TO-IWU>> element each (EN 300 175-5 7.7.23), protocol
  * discriminator 03H "List Access". The handset opens a session on a list,
- * reads entries, ends the session. Three lists are what a Gigaset asks for
- * before it considers itself synchronised with a base: the List of Supported
- * Lists (00H), the Internal Names List (06H) and the Line Settings List
- * (08H). They are small, static, and defined to the byte in clauses
- * 7.4.10.5.2, 7.4.10.5.8 and 7.4.11.4; this file serves them.
+ * reads entries, ends the session. This file serves four lists: the List
+ * of Supported Lists (00H), the Internal Names List (06H), the DECT System
+ * Settings List (07H) and the Line Settings List (08H), defined to the byte
+ * in clauses 7.4.10.5.2, 7.4.10.5.8, 7.4.11.3 and 7.4.11.4. A Gigaset
+ * considers itself synchronised with a base once it has read them.
  *
- * History, because it explains the defect this replaces. The first version
- * of this responder copied stock's reply bytes without decoding them. Its
- * "read entries confirm" announced three entries and never sent the data
- * packets that TS 102 527-3 7.4.10.4.3.2 says must follow ("Content of list
- * entry is transmitted in data packets"), so every Gigaset ran its sync,
- * waited ~3 s for data that never came, ended the session, tried the next
- * list, released, and started over -- "Synchronisiere" for ever, a
- * list-access call on every link that came up, and an incoming call refused
- * with "insufficient resources" while it was at it. Measured 2026-10-24
- * across 93 logs; see docs/call-g7.md.
+ * A "read entries confirm" is followed by the entries' data packets
+ * (TS 102 527-3 7.4.10.4.3.2: "Content of list entry is transmitted in data
+ * packets"); a handset that does not get them keeps resynchronising and
+ * runs a list-access call on every link (observed on hardware, see
+ * docs/call-g7.md).
  *
  * Coding conventions used throughout (7.4.10.4.10 table 62, 7.4.10.5.1.0,
  * and note 1 at table 39): session identifiers, indices, entry identifiers
@@ -66,12 +61,6 @@
 #define DECT_LIA_NACK			0x12u
 #define DECT_LIA_DATA			0x13u
 #define DECT_LIA_DATA_LAST		0x14u
-
-/* Legacy names kept for the daemon's log vocabulary. */
-#define DECT_IWU_OPEN		DECT_LIA_START_SESSION
-#define DECT_IWU_OPEN_RESP	DECT_LIA_START_SESSION_CFM
-#define DECT_IWU_CLOSE		DECT_LIA_END_SESSION
-#define DECT_IWU_CLOSE_ACK	DECT_LIA_END_SESSION_CFM
 
 /* List identifiers, 7.4.10.3. */
 #define DECT_LIA_LIST_SUPPORTED		0x00u
@@ -265,8 +254,8 @@ void dect_iwu_reset_sessions(struct dect_iwu *iwu);
  * Handle one received <<IWU-TO-IWU>> content (starting at the discriminator
  * octet). Replies, if any, are appended to `out` -- call with out->count = 0
  * for a fresh set. A record we do not recognise, or that needs no reply,
- * produces nothing: silence beats a guess, which is how this dialog used to
- * end up desynchronised.
+ * produces nothing: silence beats a guess, which would desynchronise the
+ * dialog.
  */
 void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		     struct dect_iwu_out *out);

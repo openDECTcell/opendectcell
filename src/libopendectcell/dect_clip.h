@@ -109,22 +109,13 @@ struct dect_clip {
 	uint8_t	name_alphabet;		/* enum dect_clip_alphabet */
 
 	/*
-	 * Placement hint, not a property of the identity: emit the two IEs
-	 * before <<BASIC-SERVICE>> rather than after it. It exists because a
-	 * byte-exact 0x6C and 0x6D placed after the fixed-length IE were
-	 * ignored by a C4 (v28/v29). What this sweeps is the position of the
-	 * identity relative to the FIXED-length <<BASIC-SERVICE>>; the
-	 * variable-length elements are in ascending identifier order on both
-	 * paths, which §7.6 requires.
-	 *
-	 * Corrected 2026-10-23: this comment used to claim the default path
-	 * "keeps" ascending order. It did when it was written, and stopped
-	 * when the codec list (0x7C) was added ahead of the identity (0x6C)
-	 * the same day. Fixed in dect_cc.c, with an invariant test. Note that
-	 * the ordering bug therefore post-dates v28/v29 and is NOT the reason
-	 * the C4 ignored the IEs then -- that is still open, and the leading
-	 * candidate remains that the call was not marked external
-	 * (<<CALL-INFORMATION>>, test card #73).
+	 * Placement hint for a bench experiment, not a property of the
+	 * identity: emit the two IEs before <<BASIC-SERVICE>> rather than
+	 * after it, to test whether a handset (the FRITZ!Fon C4) reads them
+	 * there. The variable-length elements are in ascending identifier
+	 * order either way, as EN 300 175-5 §7.6 requires; only their place
+	 * relative to the fixed-length <<BASIC-SERVICE>> moves. 0, the
+	 * default, is the standard order.
 	 */
 	uint8_t	emit_before_basic_service;
 };

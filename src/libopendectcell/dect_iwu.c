@@ -496,7 +496,7 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 		/*
 		 * The DECT System Settings List, one entry (7.4.11.3), read
 		 * only for now: nothing is marked editable, so an edit or save
-		 * is 'procedure not allowed'. Missing before (spec sweep, H21).
+		 * is 'procedure not allowed'.
 		 */
 		static const uint8_t hidden_pin[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
 		static const uint8_t fp = 0x30, yes = 0x31;
@@ -1278,8 +1278,7 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		 * Table 41: search is mandatory on the Internal Names List,
 		 * and "I" on the List of Supported Lists, the DECT System
 		 * Settings List and the Line Settings List, answered
-		 * 'procedure not allowed' (note 1). We sent 'not supported'
-		 * for all (spec sweep, H3, H12).
+		 * 'procedure not allowed' (note 1), not 'not supported'.
 		 */
 		unsigned session;
 		size_t k = get_ext(p, n, &session);

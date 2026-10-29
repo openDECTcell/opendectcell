@@ -348,19 +348,35 @@ void dect_mm_set_uak_lookup(struct dect_mm *mm, dect_mm_uak_lookup fn,
 	mm->uak_lookup_ctx = ctx;
 }
 
-/* The handset's AUTHENTICATION-REPLY to our challenge (pt_auth). */
-static void on_auth_reply_pt(struct dect_mm *mm, const uint8_t *ies,
-				    size_t ies_len)
+/*
+ * Check the <<RES>> of an {AUTHENTICATION-REPLY} to our challenge with the
+ * UAK: RES = A12(A11(UAK, RS), RAND_F), which also yields the DCK (EN 300
+ * 175-7). 1 on a match, 0 on a mismatch, -1 if the reply carries no
+ * 4-octet RES. xres and dck are filled either way.
+ */
+static int check_res(const struct dect_mm *mm, const uint8_t *ies,
+		     size_t ies_len, uint8_t dck[DECT_CIPHER_KEY_LEN],
+		     uint8_t xres[DECT_AUTH_RES_LEN])
 {
 	const uint8_t *res;
 	size_t res_len;
-	uint8_t ks[DECT_AUTH_KEY_LEN], dck[DECT_CIPHER_KEY_LEN], xres[4];
-	int ok;
+	uint8_t ks[DECT_AUTH_KEY_LEN];
 
-	res = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res_len);
 	dect_dsaa_a11(mm->cipher_uak, mm->rs, ks);
 	dect_dsaa_a12(ks, mm->rand_f, dck, xres);
-	ok = res && res_len == 4u && !memcmp(res, xres, 4);
+	res = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res_len);
+	if (!res || res_len != DECT_AUTH_RES_LEN)
+		return -1;
+	return memcmp(res, xres, DECT_AUTH_RES_LEN) == 0;
+}
+
+/* The handset's AUTHENTICATION-REPLY to our challenge (pt_auth). */
+static void on_auth_reply_pt(struct dect_mm *mm, const uint8_t *ies,
+			     size_t ies_len)
+{
+	uint8_t dck[DECT_CIPHER_KEY_LEN], xres[DECT_AUTH_RES_LEN];
+	int ok = check_res(mm, ies, ies_len, dck, xres) == 1;
+
 	if (ok)
 		mm->authenticated = 1;
 	pt_auth_result(mm, ok);
@@ -388,8 +404,7 @@ int dect_mm_terminate(struct dect_mm *mm)
  * {AUTHENTICATION-REQUEST} on its own transaction, DSAA, key type UAK,
  * RAND_P. A PT may do it before accepting a termination of its access
  * rights (§8.31), where answering is mandatory for the FT. Without the
- * UAK, or for another algorithm or key type, AUTHENTICATION-REJECT; we
- * used to ignore the request (spec sweep, N.26/M15).
+ * UAK, or for another algorithm or key type, AUTHENTICATION-REJECT.
  */
 static void on_ft_authentication(struct dect_mm *mm, const uint8_t *ies,
 				 size_t ies_len, const uint8_t rs[16])
@@ -491,12 +506,9 @@ static size_t put_codec_list(const struct dect_mm *mm, uint8_t *b, size_t off)
  * table 10 and table 21 both require exactly that, for the PT's outgoing
  * {CC-SETUP} and for the FT's incoming one.
  *
- * Exposed because CC needs the identical bytes. They used to be built only
- * here, so an FP-originated call had no way to name the FP and dect-stubd
- * waited to copy the pair out of the first call the handset placed instead.
- * That made "ring the handset" depend on the handset having dialled us first,
- * which is not a DECT requirement -- it was just this encoding living in one
- * function.
+ * Exposed because CC needs the identical bytes: an FP-originated
+ * {CC-SETUP} names the FP with them, so ringing a handset does not depend
+ * on the handset having called us first.
  */
 size_t dect_mm_fixed_identity(const struct dect_mm *mm, uint8_t *out,
 			      size_t cap)
@@ -551,8 +563,8 @@ static void send_access_reject_reason(struct dect_mm *mm, uint8_t why)
 }
 
 /*
- * A failed PIN is "authentication failed" (EN 300 175-5 §7.7.34). We used
- * to send 0x01, which means "TPUI unknown".
+ * A failed PIN is "authentication failed" (EN 300 175-5 §7.7.34), not 0x01,
+ * which means "TPUI unknown".
  */
 static void send_access_reject(struct dect_mm *mm)
 {
@@ -700,20 +712,6 @@ static void send_locate_reject(struct dect_mm *mm, uint8_t reason)
 	mm->stats.locate_rej++;
 }
 
-/*
- * Accept a location registration only from the handset we actually hold.
- *
- * We used to accept every {LOCATE-REQUEST} unconditionally. Measured
- * 2026-10-23 (vF418, vF426): with one handset's subscription loaded, a
- * DIFFERENT handset -- one the chip had no record of at all -- attached and
- * had its location registration accepted, thirty times in ninety seconds.
- * The chip admits anything locked to our RFPI, so this check is the only
- * gate there is, and without it the store said one thing while the air said
- * another, which made every identity question of the week ambiguous.
- *
- * A GAP FP serves subscribed handsets. If the <<PORTABLE-IDENTITY>> does not
- * match the one we hold, reject it.
- */
 /* 0 and *tc filled on a well-formed value, -1 otherwise (tc cleared). */
 static int term_cap_parse(const uint8_t *v, size_t n, struct dect_term_cap *tc)
 {
@@ -766,6 +764,16 @@ static void learn_self_description(struct dect_mm *mm, const uint8_t *ies,
 	}
 }
 
+/*
+ * Accept a location registration only from a handset we hold.
+ *
+ * A GAP FP serves subscribed handsets. The chip admits anything locked to
+ * our RFPI (observed on hardware: a handset the chip had no record of
+ * located thirty times in ninety seconds), so this check is the only gate
+ * there is. If the <<PORTABLE-IDENTITY>> is not one we hold, reject it --
+ * or, with cfg.defer_unknown, hold the request while the owner fetches the
+ * record.
+ */
 static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 			      size_t ies_len, const uint8_t rand_f[8],
 			      const uint8_t rs[16])
@@ -780,10 +788,8 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 	/*
 	 * <<PORTABLE-IDENTITY>> is mandatory here (EN 300 175-5 table 56), and
 	 * a missing mandatory element gets the reject with "information
-	 * element error" (§17.6.4). The check used to require the element to
-	 * be present before comparing it, so leaving it out skipped the
-	 * check and won a {LOCATE-ACCEPT}. Found by the second external
-	 * review (the clean-room record/an external review-1-24102026.md, finding 1).
+	 * element error" (§17.6.4) -- leaving it out must not skip the
+	 * identity check below.
 	 */
 	if (!pid) {
 		send_locate_reject(mm, DECT_MM_REJECT_IE_ERROR);
@@ -823,8 +829,7 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 		/*
 		 * Its repeat while we wait, or another challenge of ours in
 		 * flight (a termination): not now -- the handset repeats it.
-		 * This used to fall through to LOCATE-ACCEPT unchallenged
-		 * (security audit 2026-10-29, A2).
+		 * It must not fall through to LOCATE-ACCEPT unchallenged.
 		 */
 		if (mm->pt_auth)
 			return;
@@ -871,9 +876,8 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
  * AUTH-TYPE (EN 300 175-5 figure 28): octet 3 DSAA (0x01); octet 4 key type
  * UAK (1) and authentication key number 8 (A-0011 saw stock send 0x18);
  * octet 5 INC/DEF/TXC/UPC and the cipher key number. EN 300 444 table 43,
- * "storing the DCK", wants UPC 1 and cipher key number 8: 0x18. We sent
- * 0x10, which stores the DCK as key 0 while our CIPHER-REQUEST asks for key
- * 8 (spec sweep, 2026-10-28).
+ * "storing the DCK", wants UPC 1 and cipher key number 8: 0x18, the key
+ * our CIPHER-REQUEST asks for (0x10 would store it as key 0).
  */
 #define AUTH_TYPE_CIPHER { 0x01u, 0x18u, 0x18u }	/* DSAA, UAK #8, UPC + DCK #8 */
 #define CIPHER_INFO_DSC  { 0x81u, 0x98u }		/* [CR A-0027] enable, DCK #8 */
@@ -921,18 +925,14 @@ static void send_cipher_request(struct dect_mm *mm)
 static void on_auth_reply_cipher(struct dect_mm *mm, const uint8_t *ies,
 				 size_t ies_len)
 {
-	const uint8_t *res;
-	size_t res_len;
-	uint8_t ks[DECT_AUTH_KEY_LEN], dck[DECT_CIPHER_KEY_LEN], xres[4];
+	uint8_t dck[DECT_CIPHER_KEY_LEN], xres[DECT_AUTH_RES_LEN];
+	int r = check_res(mm, ies, ies_len, dck, xres);
 
-	res = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res_len);
-	if (!res || res_len != 4) {
+	if (r < 0) {
 		mm->cipher_state = DECT_MM_CIPHER_FAILED;
 		return;
 	}
-	dect_dsaa_a11(mm->cipher_uak, mm->rs, ks);
-	dect_dsaa_a12(ks, mm->rand_f, dck, xres);
-	if (memcmp(res, xres, 4) != 0) {
+	if (r == 0) {
 		/* not the handset it claims to be: the owner must end the
 		 * call (EN 300 444 §8.23.2.3) */
 		mm->cipher_state = DECT_MM_CIPHER_FAILED;
@@ -978,7 +978,7 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 	learn_self_description(mm, ies, ies_len);
 	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_AUTH_TYPE, &pid_len);
 	mm->peer_auth_len = 0;
-	if (pid && pid_len >= 2) {	/* spec sweep, M6: seen, logged */
+	if (pid && pid_len >= 2) {	/* kept for the owner's log */
 		mm->peer_auth_len = pid_len < sizeof(mm->peer_auth) ?
 				    (uint8_t)pid_len : sizeof(mm->peer_auth);
 		memcpy(mm->peer_auth, pid, mm->peer_auth_len);
@@ -987,16 +987,15 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 	/*
 	 * <<PORTABLE-IDENTITY>> is mandatory in the request (EN 300 175-5
 	 * table 37), and the accept must name it (table 38): without it, reject
-	 * with "information element error" (§17.6.4). We ran key allocation
-	 * and accepted without naming anyone (spec sweep, M5).
+	 * with "information element error" (§17.6.4).
 	 */
 	if (!pid || !pid_len || pid_len > sizeof(mm->pend_id)) {
 		send_access_reject_reason(mm, DECT_MM_REJECT_IE_ERROR);
 		return;
 	}
 	/*
-	 * No usable PIN, no registration. An empty PIN used to mean "0000",
-	 * so an owner that forgot to set one opened the base to anybody.
+	 * No usable PIN, no registration: an owner that forgot to set one
+	 * must not open the base to anybody.
 	 */
 	if (mm->cfg.registration == DECT_MM_REG_CLOSED || !pin_usable(mm) ||
 	    (mm->cfg.registration == DECT_MM_REG_SAME &&
@@ -1006,9 +1005,8 @@ static void on_access_rights_request(struct dect_mm *mm, const uint8_t *ies,
 		return;
 	}
 	/*
-	 * Held aside until the PIN is proven (on_auth_request()). This used to
-	 * overwrite port_id at once, so a stranger with the wrong PIN replaced
-	 * the identity we hold for the rest of the link.
+	 * Held aside until the PIN is proven (on_auth_request()), so a
+	 * stranger with the wrong PIN cannot replace the identity we hold.
 	 */
 	memcpy(mm->pend_id, pid, pid_len);
 	mm->pend_id_len = pid_len;
@@ -1059,8 +1057,7 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 		/*
 		 * The key allocation failed: AUTHENTICATION-REJECT, as the
 		 * standard requires, then close the access-rights request
-		 * the handset still has open (EN 300 444 §8.30.2.1). We sent
-		 * only the second, which bench test 9 accepted.
+		 * the handset still has open (EN 300 444 §8.30.2.1).
 		 */
 		send_auth_reject(mm);
 		send_access_reject(mm);
@@ -1101,8 +1098,7 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		return;
 	/*
 	 * MM has the one transaction value 0 (EN 300 175-5 §7.3 table 68);
-	 * another is illegal and the message ignored (§17.3.1). Every MM
-	 * message in the saved logs has TV 0 (spec sweep, M13).
+	 * another is illegal and the message ignored (§17.3.1).
 	 */
 	if (h.ti_value != 0u) {
 		mm->stats.bad_ti++;
@@ -1173,8 +1169,8 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		/*
 		 * The PT cannot cipher as asked (EN 300 444 §8.33.2.1). The
 		 * call is kept: we do not claim "encryption of all calls"
-		 * (N.35), and otherwise the FT "should not release" it. Made
-		 * visible; it was ignored (spec sweep, M12).
+		 * (N.35), and otherwise the FT "should not release" it. It is
+		 * recorded so the owner can see it.
 		 */
 		if (mm->cipher_state == DECT_MM_CIPHER_READY &&
 		    h.ti_flag == DECT_TI_RESPONDER) {
@@ -1203,9 +1199,8 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		 * Only for an assignment we made: one still pending, or one
 		 * that timed out (a late ACK is accepted but stays visible as
 		 * late, see dect_mm_tick()). An ACK with no assignment behind
-		 * it used to mark the TPUI confirmed all the same; paging
-		 * relies on that flag. Found by the second external review,
-		 * the clean-room record/an external review-1-24102026.md, finding 4.
+		 * it must not mark the TPUI confirmed: paging relies on that
+		 * flag.
 		 */
 		if (!mm->ident_pending && !mm->tpui_timed_out) {
 			mm->stats.tpui_unsolicited++;
@@ -1221,8 +1216,7 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		 * The PT cannot store the TPUI or found an error in the
 		 * {LOCATE-ACCEPT} (EN 300 444 §8.28.2.3): the assignment has
 		 * failed, as on <MM_ident.1> expiry, so stop the timer
-		 * (§13.2.2). It fell into "ignore" and ran the timer out
-		 * (spec sweep, M9). Final: a later ACK counts as unsolicited.
+		 * (§13.2.2). Final: a later ACK counts as unsolicited.
 		 */
 		if (!mm->ident_pending)
 			break;
@@ -1252,8 +1246,7 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 	/*
 	 * <MM_key.1> (EN 300 444 §8.32.1.1): from our {KEY-ALLOCATE} to the
 	 * PT's {AUTHENTICATION-REQUEST}. On expiry the procedure has failed,
-	 * with no retransmission (§8.32.2.1). We waited for as long as the
-	 * link lasted (spec sweep, M3).
+	 * with no retransmission (§8.32.2.1).
 	 */
 	if (mm->state != DECT_MM_WAIT_AUTH) {
 		mm->key_deadline_ms = 0;
@@ -1304,8 +1297,8 @@ void dect_mm_tick(struct dect_mm *mm, uint64_t now_ms)
 	}
 	/*
 	 * <MM_auth.1> (EN 300 444 §8.24, A.5): our {AUTHENTICATION-REQUEST}
-	 * before ciphering, unanswered for 10 s, has failed. It waited for
-	 * ever and the cipher never started or failed visibly (M11).
+	 * before ciphering, unanswered for 10 s, has failed, so the cipher
+	 * fails visibly rather than never starting.
 	 */
 	if (mm->cipher_state != DECT_MM_CIPHER_WAIT_REPLY) {
 		mm->auth_deadline_ms = 0;

@@ -27,8 +27,8 @@ int dect_nwk_parse(const uint8_t *msg, size_t len, struct dect_nwk_hdr *h,
 	h->msg_type = msg[1] & S_MSG_MASK;
 	/*
 	 * TV 7 announces an extended transaction value in octet 1a (§7.3).
-	 * Without extended TVs the message "shall be ignored" (§17.3.1); we
-	 * used to read octet 1a as the message type (spec sweep, E3).
+	 * Without extended TVs the message "shall be ignored" (§17.3.1):
+	 * octet 1a is not the message type.
 	 */
 	if (h->ti_value == 7u)
 		return -1;
