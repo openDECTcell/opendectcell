@@ -1398,6 +1398,7 @@ struct stubd {
  */
 #define DECT_STUB_RECORD	"/tmp/dect-stub.second"
 #define DECT_STUB_0825		"dectfw_secondlevel_441.hex"
+#define DECT_STUB_0688		"dectfw_secondlevel_441-06.88-7412.hex"	/* 7412 */
 
 enum { STUB_UNKNOWN, STUB_0825, STUB_OTHER };
 
@@ -11278,7 +11279,7 @@ int main(int argc, char **argv)
 	const char *dev = "/dev/dect0";
 	unsigned int run_seconds = 0, fpb;
 	struct dect_mail spec_check;	/* -M / -N validated at startup */
-	int c, ret = 1, sub_off = 0;
+	int c, ret = 1, sub_off = 0, auto_bringup = 0, passes;
 
 	memset(&s, 0, sizeof(s));
 	s.tx_slot = s.rx_slot = -1;
@@ -11448,6 +11449,7 @@ int main(int argc, char **argv)
 	/* -g auto-sends the MAC bring-up (radio on, open registration) unless the
 	 * caller supplied its own -M mails. [CR COMMAND_SET §6.1/§6.2] */
 	if (s.do_register && s.n_xmail == 0) {
+		auto_bringup = 1;
 		/*
 		 * Stock's MAC bring-up, in stock's order, from the 2026-10-24
 		 * capture of FRITZ!OS 175.07.56 on this hardware.
@@ -11526,6 +11528,26 @@ int main(int argc, char **argv)
 	       s.stub_build == STUB_UNKNOWN ? "unknown (no " DECT_STUB_RECORD
 					      ", run fwload.sh)"
 					    : s.stub_name);
+	/*
+	 * The 7412's 06.88 STUB reacts to the bring-up only with its radio
+	 * switched off first. From boot its 0xF602 byte 2 reads 01, as after
+	 * a radio-on; 0x015B 00 makes it 02. Sent in the 7520's order, the
+	 * 0xF623 scan report stayed flat (every carrier 0x1B) for 26, 30 and
+	 * 120 s after radio-on; with radio-off before the configuration --
+	 * or after a park in an earlier run -- it showed levels up to 0x3B
+	 * within 1-2 s, five runs of five. Radio-off after the configuration
+	 * did not help (runs X2 and Z1, observed on a 7412, 2026-10-29).
+	 * Whether the levels are our beacon or a neighbour the scan only sees
+	 * while it runs is open; a handset decides (docs/bench-7412.md).
+	 */
+	if (auto_bringup && !strcmp(s.stub_name, DECT_STUB_0688)) {
+		memmove(&s.xmail[1], &s.xmail[0],
+			s.n_xmail * sizeof(s.xmail[0]));
+		s.xmail[0] = "0x22:0x02:0x015b:00";	/* radio off first */
+		s.n_xmail++;
+		printf("chip: 06.88 bring-up: radio off before the "
+		       "configuration\n");
+	}
 	if (s.do_register && s.n_hs) {
 		unsigned i, j;
 
@@ -11716,17 +11738,21 @@ int main(int argc, char **argv)
 		 * yet: the service starts us the moment dect-fwload returns,
 		 * and the first search came back empty (2026-10-25, service
 		 * test; the same transient as run M1 that morning). Three
-		 * passes, ~4 s each, before giving up.
+		 * passes, ~4 s each, before giving up. The 7412's chip has
+		 * answered only 30 to 60 s after its upload (2026-10-29), so
+		 * the SSC transport makes ten, ~7 s each.
 		 */
 		int pass;
 
+		passes = s.ssc ? 10 : 3;
 		for (pass = 1; find_control_slot(&s, fpb); pass++) {
-			if (pass >= 3 || stop) {
+			if (pass >= passes || stop) {
 				fprintf(stderr, "control slot not found\n");
 				goto out;
 			}
 			fprintf(stderr, "control slot not found yet (pass %d of "
-				"3) -- the chip may still be starting\n", pass);
+				"%d) -- the chip may still be starting\n", pass,
+				passes);
 			if (s.ssc)
 				ssc_flip(&s);
 			sleep(1);
