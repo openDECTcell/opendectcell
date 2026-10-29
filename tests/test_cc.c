@@ -509,6 +509,16 @@ static void test_parallel_hands_over_control_codes(void)
 	v = dect_nwk_find_ie(out + 2, n - 2, DECT_IE_CALL_INFORMATION, &vn);
 	CHECK(v && dect_callinfo_parse(v, vn, &ci) == 0 && ci.call_id == 3u &&
 	      ci.call_status == DECT_CS_CALL_HOLD && !ci.has_status_reason);
+
+	/* off: a code not taken is dropped, and the next one refused */
+	n = pp_control(buf, sizeof(buf), accept, sizeof(accept), 5);
+	dect_cc_rx(&cc, buf, n);
+	dect_cc_set_parallel(&cc, 0);
+	CHECK_EQ(dect_cc_take_control(&cc, &code, &id), 0);
+	dect_cc_rx(&cc, buf, n);
+	CHECK_EQ(dect_cc_take_control(&cc, &code, &id), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_INFO);		/* the nack */
 }
 
 static void test_control_codes_get_a_negative_ack(void)

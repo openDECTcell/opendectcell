@@ -105,6 +105,7 @@ struct bcall {
 	struct tmr   ring;		/* a call-in's RING_MS limit */
 	/* its speech: the audio socket connection, baresip's two ends */
 	int              afd;		/* -1 = none */
+	char             apath[108];	/* the socket dect-stubd named */
 	unsigned         rate;		/* the connection's: 8000 or 16000 */
 	bool             g722;		/* ... carries G.722 octets, 16 kHz */
 	struct re_fhs   *afhs;
@@ -649,6 +650,8 @@ static void aud_open(struct bcall *bc, const char *path)
 	int fd, n;
 
 	aud_close(bc);
+	if (path != bc->apath)
+		str_ncpy(bc->apath, path, sizeof(bc->apath));
 	memset(&a, 0, sizeof(a));
 	a.sun_family = AF_UNIX;
 	str_ncpy(a.sun_path, path, sizeof(a.sun_path));
@@ -1455,6 +1458,14 @@ static int src_alloc(struct ausrc_st **stp, const struct ausrc *as,
 			"(ausrc_channels 1)\n");
 		return ENOTSUP;
 	}
+	/*
+	 * baresip starts the source afresh when a re-INVITE changed the
+	 * codec: the connection then carries the new one's format.
+	 */
+	if (bc->afd >= 0 && bc->call &&
+	    (bc->g722 != (call_codec(bc->call) == &g722_through) ||
+	     (!bc->g722 && bc->rate != call_rate(bc->call))))
+		aud_open(bc, bc->apath);
 	st = mem_zalloc(sizeof(*st), src_destructor);
 	if (!st)
 		return ENOMEM;
@@ -1507,8 +1518,13 @@ static int module_init(void)
 	err |= auplay_register(&auplay, baresip_auplayl(), "opendectcell",
 			       play_alloc);
 	err |= bevent_register(event_handler, NULL);
-	if (err)
+	if (err) {
+		bevent_unregister(event_handler);
+		ausrc = mem_deref(ausrc);
+		auplay = mem_deref(auplay);
+		aucodec_unregister(&g722_through);
 		return err;
+	}
 	for (i = 0; i < MAX_CALLS; i++)
 		calls[i].afd = -1;
 	(void)conf_get_bool(conf_cur(), "opendectcell_any_source", &any_source);

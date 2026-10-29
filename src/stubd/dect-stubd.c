@@ -5513,7 +5513,6 @@ static void main_cc_setup(struct stubd *s)
 	dect_cc_set_wideband(&s->reg.link.cc, !s->audio.narrowband);
 	dect_cc_set_overlap(&s->reg.link.cc, !s->audio.no_overlap);
 	dect_cc_set_route_complete(&s->reg.link.cc, 1);
-	dect_cc_set_parallel(&s->reg.link.cc, 1);
 	dect_cc_set_call_status(&s->reg.link.cc, !s->audio.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
@@ -5969,7 +5968,10 @@ static int notify_ok(const struct stubd *s, const struct dect_link *l)
 
 	if (i >= 0 && s->hs[i].prof.notify != DECT_PROF_AUTO)
 		return s->hs[i].prof.notify == DECT_PROF_ON;
-	return l->mm.peer_cap.present && l->mm.peer_cap.ng_part3;
+	if (l->mm.peer_cap.present)
+		return l->mm.peer_cap.ng_part3;
+	/* a link up for a page or a call: what the handset said before */
+	return i >= 0 && s->hs[i].cap_known && s->hs[i].cap_part3;
 }
 
 /*
@@ -6356,7 +6358,6 @@ static int side_start(struct stubd *s, uint8_t handle)
 	dect_cc_set_wideband(&sl->link.cc, !s->audio.narrowband);
 	dect_cc_set_overlap(&sl->link.cc, !s->audio.no_overlap);
 	dect_cc_set_route_complete(&sl->link.cc, 1);
-	dect_cc_set_parallel(&sl->link.cc, 1);
 	dect_cc_set_call_status(&sl->link.cc, !s->audio.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
@@ -6881,6 +6882,9 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	s->hs[i].absent = 1;		/* free for a new enrolment */
 	s->hs[i].name[0] = '\0';
 	s->hs[i].cap_known = 0;
+	memset(s->hs[i].mwi, 0, sizeof(s->hs[i].mwi));
+	s->hs[i].mwi_known = s->hs[i].mwi_due = 0;
+	s->tu.want &= ~(1u << i);
 	if ((unsigned)i == s->cur) {
 		s->uak_valid = 0;
 		s->sub_port_id_len = 0;
@@ -7946,18 +7950,29 @@ static void par_control(struct stubd *s, int p, uint8_t code, uint8_t id,
 		bc_clear(s, b);
 		return;
 	case 0x15u:			/* a parallel call out, its number next */
-		b = bc_live(s, p) < 2u ? bc_new(s) : NULL;
+		/* a call id of its own, none while -a callid= pins one */
+		b = bc_live(s, p) < 2u && alloc_call_id(s, NULL) ?
+		    bc_new(s) : NULL;
 		if (!b) {
-			/* §7.4.8.3: busy, then the call id freed */
 			uint8_t nid = alloc_call_id(s, NULL);
 			struct dect_cc *cc = ic_cc(s, p);
 
-			(void)dect_cc_call_status(cc, nid,
-				DECT_CS_CALL_DISCONNECTING,
-				DECT_CSR_SYSTEM_BUSY, DECT_SIGNAL_BUSY_TONE);
-			(void)dect_cc_call_status(cc, nid, DECT_CS_IDLE,
-				DECT_CC_NO_REASON, DECT_CC_NO_SIGNAL);
-			ic_drain(s, p, now);
+			if (nid) {
+				/* §7.4.8.3: busy, then the call id freed */
+				(void)dect_cc_call_status(cc, nid,
+					DECT_CS_CALL_DISCONNECTING,
+					DECT_CSR_SYSTEM_BUSY,
+					DECT_SIGNAL_BUSY_TONE);
+				(void)dect_cc_call_status(cc, nid,
+					DECT_CS_IDLE, DECT_CC_NO_REASON,
+					DECT_CC_NO_SIGNAL);
+				ic_drain(s, p, now);
+			} else {
+				par_nack(s, p, a ? a->dect_id :
+					 cc->status_call_id,
+					 DECT_CSR_SYSTEM_BUSY, now);
+			}
+			dect_cc_clear_keypad(cc);	/* its number */
 			return;
 		}
 		par_hold(s, p, now);
@@ -7977,6 +7992,8 @@ static void par_control(struct stubd *s, int p, uint8_t code, uint8_t id,
 		par_nack(s, p, id ? id : a ? a->dect_id :
 			 ic_cc(s, p)->status_call_id,
 			 DECT_CSR_CODE_NOT_SUPPORTED, now);
+		if (code == 0x17u)		/* the internal number */
+			dect_cc_clear_keypad(ic_cc(s, p));
 		return;
 	}
 	par_nack(s, p, id, DECT_CSR_CODE_FAILED, now);
@@ -8017,7 +8034,21 @@ static void par_tick(struct stubd *s, int p, uint64_t now)
 		return;
 	}
 	a = bc_active(s, p);
-	if (!len || !a || !a->dtmf)
+	if (!len)
+		return;
+	if (!a) {
+		/*
+		 * A call with a status here is past its own setup: every call
+		 * is held or waiting, and the digits are for none of them.
+		 */
+		for (i = 0; i < BC_MAX; i++)
+			if (s->bc[i].id && s->bc[i].party == p && s->bc[i].cs) {
+				dect_cc_clear_keypad(cc);
+				break;
+			}
+		return;
+	}
+	if (!a->dtmf)
 		return;
 	for (i = 0; i < len; i++) {
 		char dig[2] = { (char)k[i], '\0' };
@@ -8488,11 +8519,21 @@ static void bridge_tick(struct stubd *s, uint64_t now)
 	unsigned i;
 	int p;
 
-	/* control codes and keypad, once per link with a call of ours */
-	for (p = -1; p < (int)SIDE_MAX; p++)
-		if (bc_live(s, p) && ic_active(s, p) &&
-		    dect_cc_busy(ic_cc(s, p)))
+	/*
+	 * Control codes and keypad, once per link with a call of ours. A
+	 * link without one is not in parallel mode: the library refuses its
+	 * codes (§7.4.3.4), and none is left over for a later call.
+	 */
+	for (p = -1; p < (int)SIDE_MAX; p++) {
+		int ours;
+
+		if (!ic_active(s, p))
+			continue;
+		ours = bc_live(s, p) != 0;
+		dect_cc_set_parallel(ic_cc(s, p), ours);
+		if (ours && dect_cc_busy(ic_cc(s, p)))
 			par_tick(s, p, now);
+	}
 	for (i = 0; i < BC_MAX; i++) {
 		struct bcall *b = &s->bc[i];
 		struct dect_cc *cc;
@@ -8680,11 +8721,18 @@ static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
 	for (i = 0; id && i < AB_LANES; i++) {
 		struct ab_lane *l = &s->ab.l[i];
 
-		if (l->call != id || l->cfd >= 0)
+		if (l->call != id)
 			continue;
+		/* again: the SIP codec changed, the socket's format with it */
+		if (l->cfd >= 0)
+			ab_end(l, "the bridge connected again");
 		l->cfd = s->ab.pend[j];
 		l->rate = rate;
 		l->g722 = g722;
+		dect_g722_init(&l->sip_enc);
+		dect_g722_init(&l->sip_dec);
+		dect_rs2_init(&l->rs_up);
+		dect_rs2_init(&l->rs_down);
 		s->ab.pend[j] = -1;
 		printf("audio: the bridge connected for call %u (%s) -- %s\n",
 		       id, g722 ? "G.722" : rate == 8000u ? "8 kHz" : "16 kHz",

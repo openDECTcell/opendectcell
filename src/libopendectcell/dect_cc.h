@@ -601,7 +601,8 @@ int dect_cc_call_waiting(struct dect_cc *cc, const struct dect_callinfo *ci,
  * the control codes of table 17 a Part 3 handset sends in {CC-INFO} during
  * a call are handed over (dect_cc_take_control()) instead of answered with
  * the negative acknowledgement. Digits after 1CH 15H or 17H in the same
- * <<MULTI-KEYPAD>> go to the keypad, which they start afresh.
+ * <<MULTI-KEYPAD>> go to the keypad, which they start afresh. Off drops a
+ * code not yet taken.
  */
 void dect_cc_set_parallel(struct dect_cc *cc, int on);
 

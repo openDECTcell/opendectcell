@@ -108,7 +108,9 @@ the audio socket runs at each call's SIP rate.
   connects and sends its first message: `call=5 codec=g722` when the
   call's SIP codec is G.722, else `call=5 rate=8000` (or `16000`), and
   the call's lane takes the connection. A connection that names no
-  waiting call within 2 s is closed.
+  waiting call within 2 s is closed. When a re-INVITE changes the SIP
+  codec, the bridge connects again with the new format, and the new
+  connection replaces the old one.
 - Frames of 20 ms both directions on the same connection: 160 G.722
   octets, or linear 16-bit PCM at the rate (320 or 640 octets, host byte
   order: both ends run on the box). A message of one octet from the
@@ -129,8 +131,8 @@ the audio socket runs at each call's SIP rate.
   "G722" codec as well: it passes the octets through, each carried as two
   equal samples in baresip's pipeline, so a wideband call is coded by the
   two phones alone (baresip's g722 module and spandsp are not used).
-  G.711 is baresip's, a table lookup. `auresamp` is loaded for a codec
-  that changes mid-call.
+  G.711 is baresip's, a table lookup. `auresamp` adapts baresip's own
+  rates where they differ from the codec's.
 - The bridge picks the SIP codecs to match the handsets: a narrowband
   handset's INVITE offers G.711 only, an account whose handsets are all
   narrowband answers with G.711 only (`account_set_audio_codecs()` around

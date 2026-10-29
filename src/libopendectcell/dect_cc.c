@@ -728,6 +728,8 @@ static void queue_status_info(struct dect_cc *cc, uint8_t signal,
 void dect_cc_set_parallel(struct dect_cc *cc, int on)
 {
 	cc->parallel = on ? 1u : 0u;
+	if (!on)
+		cc->ctl_pending = 0;
 }
 
 int dect_cc_take_control(struct dect_cc *cc, uint8_t *code,
