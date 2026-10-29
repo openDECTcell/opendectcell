@@ -169,9 +169,22 @@ phone" set up for it.
    registered, and the codec and encryption of each call.
 
 Up to three calls run at once, over SIP or between handsets (*Several
-calls*, tab General). Handsets without HD voice call over SIP too; for
-G.711 the speech is resampled by `baresip-mod-auresamp`, which comes with
-`opendectcell-baresip`.
+calls*, tab General). Handsets without HD voice call over SIP too. The
+base picks the codecs so that the phones do the coding: an HD call goes
+through as G.722 untouched, a narrowband one as G.711.
+
+A CAT-iq handset (e.g. a Gigaset A540) also gets call waiting during a
+call and can hold, switch between and end two calls; other handsets give
+the caller "busy" while they are in a call. Keys pressed during a call go
+to the other end as DTMF, for voicemail and other menus (*DTMF* in the
+profile's Media tab, if your provider needs a particular mode).
+
+**Voicemail.** Switch on *Voicemail notification (MWI)* in the VoIP
+profile: when your provider's mailbox has new messages, CAT-iq handsets
+show the message indicator. Whether calls go to the mailbox (no answer,
+busy) is set at your provider, not on the base. To listen, call the
+mailbox number your provider gives; Gigaset handsets can store it as the
+"network mailbox" of the line and call it with a long press on 1.
 
 The base takes a SIP call only from the server the account registers with.
 If your provider's calls come from other addresses (the Log says "is not

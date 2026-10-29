@@ -79,6 +79,14 @@ while another is in a call is rung on a side link, up to the chip's three
 calls. The line a handset picks for an outgoing call is used. Not yet on
 air.
 
+**Progress (2026-10-29, late):** steps 5 and 6 built for bridged calls
+(`dect_cc_set_parallel()`, `par_control()` in dect-stubd): call waiting
+to a Part 3 handset in a call, accept (1C35), reject (1C36), release
+and accept (1C38), toggle (1C31), hold (1C41), resume (1C42), release one
+(1C33), and a second call out (1C15 + number). Internal parallel calls,
+transfer and conference get "control code not supported". Not yet on
+air.
+
 Steps 1-3 are desk work; 4 needs two handsets and a bench run; 5-6 need the
 A540 (the only Part 3 handset on the bench) plus a second caller, which before
 the bridge exists means an internal call from another handset.

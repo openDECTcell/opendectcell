@@ -29,7 +29,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 |---|---|---|
 | Calls in and out through a SIP account | ✅ | |
 | HD voice (wideband, G.722) | ✅ | Both directions, the default |
-| Narrowband voice (handsets without HD) | 🟡 | Between handsets; to SIP since 2026-10-29, not yet tested on a call |
+| Narrowband voice (handsets without HD) | 🟡 | Between handsets; to SIP since 2026-10-29, not yet tested on a call. Codecs are matched end to end, so the box converts only when the two sides share none |
 | Caller's number on the display | ✅ | |
 | Caller's name on the display | 🟡 | Sent the standard way; the C430A and AS690H show it only as a separate text screen, and on the A540 it is still being tested |
 | Line name on the display ("via Line 1") | ✅ | CAT-iq handsets |
@@ -38,10 +38,11 @@ tested · ❌ not built yet · ➖ out of scope for now
 | Two SIP accounts per handset (Line 1, Line 2) | 🟡 | Both ring the handset; a CAT-iq handset's calls go out on the line it picks, others' on Line 1 (built, not yet tested) |
 | One SIP account ringing several handsets | 🟡 | A VoIP profile may be the line of several handsets; a call rings them all and the first to answer takes it (built 2026-10-29, not yet tested) |
 | Redial and calls from the phonebook | 🟡 | A number sent complete goes to SIP; it was connected locally before 2026-10-29 |
-| Call waiting, hold, switching between calls | ❌ | Designed ([lines-and-calls.md](lines-and-calls.md)), not built |
+| Call waiting, hold, switching between calls | 🟡 | CAT-iq handsets (the A540): call waiting, accept, reject, hold, resume, toggle, a second call out, release one. Built 2026-10-29, not yet tested; other handsets get "busy" for a second call |
+| Keys during a call (DTMF, voicemail menus) | 🟡 | Sent to SIP as the profile's DTMF mode says; built 2026-10-29, not yet tested |
 | "Busy" when all voice channels are taken | ✅ | |
 | Phonebook and call lists on the handset | ❌ | Planned, from a vCard source over HTTPS |
-| Voicemail indicator on the handset | ❌ | The VoIP profile can subscribe to it, but the handset is not told yet |
+| Voicemail indicator on the handset | 🟡 | *Voicemail notification (MWI)* in the VoIP profile; CAT-iq handsets show the count. Built 2026-10-29, not yet tested |
 
 ## Web interface (LuCI)
 

@@ -28,6 +28,9 @@
  *     no G.722 rings the handsets narrowband, an account whose handsets
  *     are all narrowband answers G.711, and the far end's codec goes
  *     back with remote-answered;
+ *   - a Part 3 handset's parallel calls: hold and resume from dect-stubd
+ *     become re-INVITEs (call_hold()), keys during a call DTMF
+ *     (call_send_digit(), as the account's dtmfmode says);
  *   - voicemail: the message summary a VoIP profile with MWI subscribes to
  *     (baresip's mwi module, RFC 3842) goes to dect-stubd as "mwi" for
  *     every handset line the account is, which tells the handsets
@@ -827,6 +830,21 @@ static void ctl_line(const char *line, size_t len)
 		bc = bc_by_id(id);
 		if (bc && dect_ctl_get(&m, "path"))
 			aud_open(bc, dect_ctl_get(&m, "path"));
+	} else if (!strcmp(m.verb, "hold") || !strcmp(m.verb, "resume")) {
+		/* the handset put the call on hold or took it back */
+		bc = bc_by_id(id);
+		if (bc && call_hold(bc->call, m.verb[0] == 'h'))
+			warning("openDECTcell: call %u: could not %s it\n", id,
+				m.verb);
+	} else if (!strcmp(m.verb, "digit")) {
+		/* a key during the call: DTMF as the account sends it */
+		const char *d = dect_ctl_get(&m, "d");
+
+		bc = bc_by_id(id);
+		if (bc && d && d[0] && !d[1]) {
+			(void)call_send_digit(bc->call, d[0]);
+			(void)call_send_digit(bc->call, KEYCODE_REL);
+		}
 	}
 }
 

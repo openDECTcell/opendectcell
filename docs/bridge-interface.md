@@ -50,7 +50,8 @@ handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── baresip +
 | `hs hs=2 state=registered name="Kueche" model=gigaset-c430a part3=0 wideband=1` | on connect, and when a handset is renamed (`model` with a profile, `part3` once its capabilities are known; `wideband=0` when we call it narrowband: a GAP handset, its profile, or wideband off); `state=attached` on location registration comes with step 2 | `names_take()`, profiles, `target_svc()` |
 | `hs hs=2 state=gone` | deregistered | `dereg_erase()` |
 | `call-out call=5 hs=1 line=1 codec=wb number=0301234567` | a handset's number is complete (en bloc or <<SENDING-COMPLETE>>, `#`, the dial pause, `1C 15`), on the main link or a side link; `line` is the one the handset chose (TS 102 527-3 §7.4.5.2) if it has that line, else 1; `codec=nb` when the handset's call is narrowband (the INVITE then offers G.711 only) | `dial_route()`, `side_route()`, `dect_cc_line()`, `dect_cc_codec()` |
-| `digit call=5 d=7` | keypad during a connected call (DTMF, TS 102 527-3 §7.4.14) | `learn_keypad()` in ACTIVE |
+| `digit call=5 d=7` | a key during the connected call (DTMF, TS 102 527-3 §7.4.14): the bridge sends it as the account's `dtmfmode` says | `par_tick()`: the keypad once the call connected |
+| `hold call=5` / `resume call=5` | a Part 3 handset put the call on hold (1CH 41H, or by accepting a waiting call or toggling) or took it back (1CH 42H, 1CH 31H) | `par_control()` |
 | `ringing call=7 hs=2` | a handset alerts on our call | CC RINGING |
 | `answered call=7 hs=2` | a handset answers (the others are released, §7.4.3.5.4) | CC CONNECT, CS call connect |
 | `released call=5 by=hs reason=normal` | a handset hangs up or the call failed | CC release, `dect_cc_release_reason()` |
@@ -65,16 +66,21 @@ handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── baresip +
 | `remote-ringing call=5` | 180/183 | {CC-ALERTING} to the handset (ring-back tone to a Part 3 handset, <<SIGNAL>> 01H) |
 | `remote-answered call=5 codec=nb` | 200 OK | {CC-CONNECT} with CS call connect (TS 102 527-3 §7.4.6.4.3: only when end to end connected); `codec=nb` (the far end answered G.711): the CONNECT names G.726 if the handset offered it (`dect_cc_prefer_narrowband()`) |
 | `remote-released call=5 reason=busy\|normal\|unreachable\|rejected` | BYE, 486, 404, 603 | busy: the busy tone and CS disconnecting to Part 3 (§7.4.8.3), else {CC-RELEASE} with the reason (14H user busy, 00H normal, 12H user unknown, 15H user rejection) |
-| `mwi line=1 count=3` | NOTIFY message-summary | events notification type 0 (§7.4.1.2), later |
+| `mwi hs=2 line=1 count=3` | NOTIFY message-summary (RFC 3842, baresip's mwi module): one per handset line the account is | {FACILITY} with <<EVENTS-NOTIFICATION>> message waiting, voice, the count, the line (§7.4.1.2): at once on the handset's link, else in the date-and-time round's next visit, and again after each location registration (`mwi_send()`) |
 | `deregister hs=3` | the LuCI page | `dereg_begin()` (replaces SIGUSR2 + file) |
 | `register-window seconds=120 profile=gigaset-a540` | the LuCI page | `reg_window()` (replaces SIGUSR1); `profile=`, optional, is the model picked before registering: the handset that enrols in this window gets it as `<store>.profile` (`reg_profile_apply()`) |
 
 Up to three calls (the chip's audio channels) run at once, each with
-its own `call` id. Call waiting, hold and toggle (lines-and-calls.md
-steps 5-6) add
-`call-in` for a busy Part 3 handset (call waiting instead of `busy`),
-`hold`/`resume`/`toggle call=` from the handset's `1C` codes, and their
-answers; they come with those steps.
+its own `call` id. A Part 3 handset (call status) also runs parallel
+calls on its one link (TS 102 527-3 §7.4.3): a `call-in` for it while it
+is in a bridged call becomes call waiting instead of `busy`; accepting
+it holds the active call (`hold`, `answered`), 1CH 38H releases it
+instead (`released`), rejecting it is `released by=hs`; 1CH 15H and a
+number places a second call (`call-out`, the first goes on hold); toggle,
+hold, resume and releasing one call map to `hold`, `resume` and
+`released`. The far end releasing one of them sends that call's CS idle,
+not a release of the link. Internal parallel calls (17H), transfer and
+conference are refused with "control code not supported".
 
 ### 2.3 Answers and the client
 
