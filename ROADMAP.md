@@ -199,11 +199,13 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 - [ ] Implementation per the controller repo's own roadmap
 
 ## M11: Multi-cell
-- [ ] Research: DECT identities for a multi-cell system (ARI classes, allocation of EMC/EIC/FPN, uniqueness, which classes GAP/CAT-iq handsets accept); define how the controller assigns the system ARI and per-cell RPNs on first run
+- [x] Research: DECT identities for a multi-cell system (ARI classes, allocation of EMC/EIC/FPN, uniqueness, which classes GAP/CAT-iq handsets accept); define how the controller assigns the system ARI and per-cell RPNs on first run
+  - 2026-10-29: `docs/multicell-identities.md`. Class A, at most 7 cells per system (RPN 1-7); we hold no EMC, so the controller adopts one enrolled box's factory ARI as the system identity, forever; LAL 36 makes all cells one location area. Open: Q1 (can the RFPI be set other than by patching the firmware at upload?), and a decision on an EIC/EMC for more than 7 cells
 - [~] Idle roaming across cells with a shared registration database (controller)
   - 2026-10-25, one box (`docs/multicell-experiments.md`, 07.56 only): the chip admits, pages and rings handsets with no key in it, so admission is a host decision; deferred location registration (API 18) fetched a roamer's record in 2 s and registered it; a handset moving within one location area does not re-locate, so cells must fetch on any first message from an unknown IPUI or be pushed records ahead of time
   - M4: a held roamer's SETUP is answered at once (API 24), and the A540 waited 17.5 s for a 30 s fetch and connected. M6: Gigasets honour <<DURATION>> in LOCATE-ACCEPT (they re-locate every 41 s at 1 × 40.96 s), so cells could use it for presence
-- [ ] Research: inter-cell synchronisation (host-driven FSC on the 7412? STUB sync modes?) for seamless handover
+- [~] Research: inter-cell synchronisation (host-driven FSC on the 7412? STUB sync modes?) for seamless handover
+  - 2026-10-29, standards side: `docs/multicell-identities.md` §8. One FP's cells shall share frame and multiframe timing (EN 300 175-3 §6.2.2.1.1); across boxes only connection handover is possible (bearer handover needs one MAC). Without sync: idle roaming works with a conformance gap, calls drop at the cell edge. Open: the chip side (questions Q3-Q6 for the clean room) and EN 300 175-2/-7, not on disk
 - [~] Capacity per cell (about 3 calls); verify against the mode byte
   - 2026-10-25: **three voice channels per chip**, narrowband or wideband, from stock captures (A-0124). Tick it once bench test 18 shows two calls in parallel on our stack
   - 2026-10-28: **two calls in parallel on our stack** (bench test 18) and internal calls both ways (test 19). Three at once not yet tried. Calls get their own call id since `9a13f74`; the line pool, call waiting and ringing several handsets are designed in `docs/lines-and-calls.md` (steps 1-3 built)
