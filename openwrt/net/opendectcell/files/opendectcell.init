@@ -5,8 +5,7 @@
 #
 # Disabled by default (option enabled '0'): installing the package loads no
 # module and puts nothing on the air. Stopping the service parks the radio:
-# dect-stubd parks it on SIGTERM, and stop_service() sends the park mails
-# again afterwards in case the daemon could not.
+# dect-stubd parks it on SIGTERM and reads the park back from the chip.
 
 START=95
 STOP=10
@@ -15,7 +14,6 @@ extra_command "register" "Open handset registration for 'regwindow' seconds (120
 extra_command "forget" "Remove a deregistered handset's settings: forget <1-6>"
 
 PROG=/usr/sbin/dect-stubd
-PARK="-M 0x22:0x02:0x022c:01 -M 0x22:0x02:0x015b:00 -t 6"
 
 log() { logger -t opendectcell "$*"; echo "opendectcell: $*" >&2; }
 
@@ -621,11 +619,4 @@ register() {
 	local pid
 	pid=$(pidof dect-stubd) || { log "not running"; return 1; }
 	kill -USR1 $pid && log "registration open"
-}
-
-stop_service() {
-	# procd has sent SIGTERM and dect-stubd parked on the way out; make
-	# sure, since a radio left on transmits by itself.
-	sleep 1
-	pgrep -x dect-stubd >/dev/null || $PROG $PCM_ARGS $PARK >/dev/null 2>&1
 }
