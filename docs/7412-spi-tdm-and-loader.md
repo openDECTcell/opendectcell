@@ -128,9 +128,16 @@ inverse of the radio-on path) and stops the MAC, but never writes
 `0x010B`/`0x010C`. Use `0x010A` == 0 plus the absence of `0xF623` as "parked".
 It does not rewrite the RF registers the radio-on path sets, so "no RF" rests
 on no bearer being scheduled; the handset test stays. Our chip-side
-cross-check was inconclusive: `0x08A0`-`0x08DF` looks like a timer list (a
-100 Hz counter at `0x08B1` runs at boot and while on, frozen after the park),
-not the bearer table A-0010 named (Q-0011). `0x0776` read
+cross-check found a timer list at `0x08B0`, not a bearer table, and **[CR
+A-0011]** corrects A-0010 accordingly: 3-byte entries (next link, LE16
+expiry), radio-on schedules the beacon timers id0 and id1, radio-off cancels
+both, and a cancelled node links to itself. Checked against our snapshots:
+`0x08B0` (id0's link) reads `00` only after the park (`09` while on, `01`/`09`
+at boot), and id0's expiry `0x08B1` counts at 100 Hz until the park and then
+freezes. `0x08B3` (id1) read `01` while on as well, so it does not tell. The
+chip-side **parked** state on 06.88 is therefore `0x010A` = 0 and `0x08B0` =
+`00` with `0x08B1` frozen: the beacon is no longer scheduled. Zero RF on air
+is still for the handset test to confirm. `0x0776` read
 `0x80` throughout: bit 7 is set at boot, and bit 0 (eco on) follows bit 7 of
 the `0x0153` parameter, which our `00` leaves clear [CR A-0010].
 A-0009 also explains X2: in the boot state (`0x010A` = 1) every
