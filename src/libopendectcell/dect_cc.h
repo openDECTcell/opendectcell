@@ -1,27 +1,23 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * NWK Call Control (CC): the fixed-part side of a basic-speech call.
- * Specification: ETSI EN 300 175-5 §9, EN 300 444 (GAP).
+ * NWK Call Control (CC): the fixed-part side of one call at a time.
+ * Specification: ETSI EN 300 175-5 §9, EN 300 444 (GAP), TS 102 527-1 and
+ * -3 (NG-DECT Part 1 codec negotiation, Part 3 call status and lines).
  *
- * This is the minimal FP state machine for G7 milestone A (outgoing call): the
- * portable part dials, so it originates the CC transaction (SETUP, F=0), and we
- * answer it. For a first bring-up / loopback we accept immediately:
+ * Both directions. A handset-placed call (the PP originates, SETUP with
+ * F = 0) runs SETUP -> [SETUP-ACK, digits in INFO] -> CALL-PROC ->
+ * [ALERTING] -> CONNECT -> ACTIVE; the owner decides when each step is due
+ * (dect_cc_set_overlap(), dect_cc_proceed() and friends) or CC connects at
+ * once. An FP-originated call (dect_cc_setup_id()) runs SETUP -> ALERTING
+ * (RINGING) -> CONNECT, answered with CONNECT-ACK -> ACTIVE. Either side
+ * releases with RELEASE / RELEASE-COM. List-access calls (call class 2)
+ * carry the <<IWU-TO-IWU>> dialog of dect_iwu and are never connected.
  *
- *   PP -> FP  CC-SETUP        (basic speech; called number; PORTABLE-IDENTITY)
- *   FP -> PP  CC-CALL-PROC    we take the call
- *   FP -> PP  CC-CONNECT      we "answer" (the far end is our loopback)
- *   PP -> FP  CC-CONNECT-ACK
- *   --- ACTIVE: the caller binds the connection's audio channel ---
- *   either    CC-RELEASE / CC-RELEASE-COM on hang-up
- *
- * Transport-agnostic, exactly like dect_mm: feed decoded NWK messages in, pull
- * NWK messages out; the caller carries them over the acknowledged C-plane
- * (dect_lapc -> dect_lc -> dect_cs) and binds audio when the call goes ACTIVE.
- * No I/O. Re-implemented from the public ETSI text as GPL-2.0-or-later.
- *
- * The exact IE content the C4 sends in CC-SETUP (dialled-digit encoding, overlap
- * vs en-bloc) is to be confirmed against a hardware capture; the outbound
- * messages here are intentionally minimal until then.
+ * Transport-agnostic, like dect_mm: feed decoded NWK messages in, pull NWK
+ * messages out; the caller carries them over the acknowledged C-plane
+ * (dect_lapc -> dect_lc -> dect_cs), drives the timers with dect_cc_tick()
+ * and binds audio when the call goes ACTIVE. No I/O. Re-implemented from
+ * the public ETSI text as GPL-2.0-or-later.
  */
 #ifndef OPENDECTCELL_DECT_CC_H
 #define OPENDECTCELL_DECT_CC_H
@@ -37,7 +33,12 @@
 enum dect_cc_state {
 	DECT_CC_ST_NULL,		/* no call */
 	DECT_CC_ST_PROCEEDING,		/* SETUP seen, CALL-PROC/CONNECT queued */
-	DECT_CC_ST_CONNECT_PENDING,	/* CONNECT sent, awaiting CONNECT-ACK */
+	/*
+	 * Never entered: our {CC-CONNECT} to a handset-placed call goes
+	 * straight to ACTIVE (EN 300 175-5 §9.3.1.8). Kept while dect-stubd
+	 * still names it.
+	 */
+	DECT_CC_ST_CONNECT_PENDING,
 	DECT_CC_ST_ACTIVE,		/* call up: bind audio */
 	DECT_CC_ST_RELEASED,		/* call released */
 	/* Incoming call (we originate towards the handset). */
@@ -78,9 +79,8 @@ enum dect_cc_state {
  * "Insufficient resources": the reason EN 300 175-5 §9.5.2.3 prescribes for
  * the abnormal release of the OTHER side's call when two {CC-SETUP}s cross,
  * and the one §17.3.3 prescribes for a {CC-SETUP} received while another
- * call is already in progress. It is what the Gigaset handsets answered
- * every FP-originated call with for a week: their own CAT-iq list-access
- * call was crossing ours.
+ * call is already in progress. A CAT-iq handset opens a list-access call on
+ * every new link, so an FP-originated call to it often crosses one.
  */
 #define DECT_CC_REASON_INSUFFICIENT_RESOURCES	0x32u
 
@@ -127,10 +127,10 @@ struct dect_cc_stats {
 	uint32_t rejected_busy;
 };
 
-/* No <<BASIC-SERVICE>> was present in the peer's {CC-SETUP}. */
 /* Keypad characters held per transaction; longer input sets keypad_overflow. */
 #define DECT_CC_KEYPAD_MAX	32u
 
+/* No <<BASIC-SERVICE>> was present in the peer's {CC-SETUP}. */
 #define DECT_CC_SVC_NONE	0xFFu
 
 struct dect_cc {
@@ -188,13 +188,9 @@ struct dect_cc {
 	uint8_t peer_basic_service;
 
 	/*
-	 * Keypad information the peer has sent, in order, as received.
-	 *
-	 * GAP N.4 "dialled digits (basic)" is MANDATORY for an FT
-	 * (EN 300 444 table 1) and we did not implement it until 2026-10-23:
-	 * a handset dialling on our base sent {CC-INFO} with
-	 * <<MULTI-KEYPAD>> and we dropped every one. Seven runs in the
-	 * capture corpus hold the digits "12345" going past us.
+	 * Keypad information the peer has sent, in order, as received:
+	 * GAP N.4 "dialled digits (basic)", mandatory for an FT (EN 300 444
+	 * table 1), from <<MULTI-KEYPAD>> in {CC-SETUP} and {CC-INFO}.
 	 *
 	 * Stored RAW and lossless. GAP's basic set is 0-9, * and #, but a
 	 * handset may also send control codes (pause 0x05, register recall
@@ -246,7 +242,7 @@ struct dect_cc {
 	/*
 	 * Optional <<CALL-INFORMATION>> for an FP-originated SETUP: the
 	 * line (and call) identifiers that mark the call as external. Empty
-	 * by default, so the SETUP proved at G7 is unchanged.
+	 * by default: a GAP handset needs none.
 	 */
 	struct dect_callinfo callinfo;
 	uint8_t  next_ti;		/* transaction value for the next SETUP */
@@ -254,12 +250,8 @@ struct dect_cc {
 	 * F<CC.03>, the CC setup timer: 20 s, FT and PT (EN 300 175-5 A.1).
 	 * Started when we send a {CC-SETUP}; on expiry the FT shall reject the
 	 * call with {CC-RELEASE-COM} and release reason "timer expiry", and
-	 * enter NULL (9.3.2.2). 0 means not running.
-	 *
-	 * Without it a call the handset never answers leaves the entity stuck
-	 * in CALL PRESENT for ever, which is what happened all through the
-	 * 2026-10-22 ring tests: every refused call left a transaction behind
-	 * and only a daemon restart cleared it.
+	 * enter NULL (9.3.2.2), so a call the handset never answers does not
+	 * hold the entity in CALL PRESENT for ever. 0 means not running.
 	 */
 	uint64_t setup_deadline_ms;
 	uint8_t  overlap;		/* dect_cc_set_overlap() */
@@ -281,18 +273,15 @@ struct dect_cc {
 	 * FT does re-present it, it shall do so immediately." The PT, for its
 	 * part, "shall wait for the re-presentation of the incoming voice
 	 * call from the FT, and not setup any new outgoing call" for
-	 * P<CC.06> = 1.5 s. Measured on a Gigaset A540 CAT, 2026-10-24: the
-	 * handset opens a CAT-iq list-access call on every link that comes
-	 * up, so EVERY FP-originated call to it was a collision, and without
-	 * the re-presentation every one of them ended in that 0x32.
+	 * P<CC.06> = 1.5 s. Observed on hardware (Gigaset A540): the handset
+	 * opens a CAT-iq list-access call on every link that comes up, so an
+	 * FP-originated call to it collides and only rings when re-presented.
 	 *
-	 * `represent_left` counts down from `represent_max`
-	 * (DECT_CC_REPRESENT_MAX unless the caller changes it) per call.
+	 * `represent_left` counts down from DECT_CC_REPRESENT_MAX per call.
 	 */
 	uint8_t  setup_msg[DECT_LAPC_MSG_MAX];
 	size_t   setup_len;
 	uint8_t  represent_left;
-	uint8_t  represent_max;
 
 	/* FIFO of outbound NWK messages (e.g. CALL-PROC then CONNECT). */
 	uint8_t  out[DECT_CC_TXQ][DECT_LAPC_MSG_MAX];
@@ -301,7 +290,7 @@ struct dect_cc {
 
 	/*
 	 * <<CODEC-LIST>> to advertise in an FP-originated {CC-SETUP}; empty
-	 * means send none. Set with dect_cc_set_codec_list().
+	 * (the default) means send none. Set with dect_cc_set_codec_list().
 	 */
 	uint8_t  codec_list[8];
 	size_t   codec_list_len;
@@ -312,7 +301,12 @@ struct dect_cc {
 
 void dect_cc_init(struct dect_cc *cc);
 
-/* Advertise this <<CODEC-LIST>> in FP-originated setups; NULL clears it. */
+/*
+ * Advertise this <<CODEC-LIST>> value (EN 300 175-5 §7.7.54) in
+ * FP-originated setups; NULL, or a list longer than 8 octets, clears it.
+ * None is sent by default: the handset names its choice in {CC-ALERTING} or
+ * {CC-CONNECT} either way (TS 102 527-1 §7.3.3).
+ */
 void dect_cc_set_codec_list(struct dect_cc *cc, const uint8_t *list, size_t len);
 
 /*
@@ -326,12 +320,9 @@ void dect_cc_set_codec_list(struct dect_cc *cc, const uint8_t *list, size_t len)
  * gate is open, as it is after dect_cc_init().
  *
  * dect_link arms it from mm.port_id before every CC message, so the
- * {LOCATE-REQUEST} gate and this one always agree. It used to be open: on
- * 2026-10-24 the A540, rejected at location registration, still ran its
- * list-access call, was served the Internal Names List of whichever handset
- * the daemon held and showed that handset's name as its own -- and in an
- * enrolment window, before any identity was held, its {CC-SETUP} was where
- * the daemon learned the identities it later offered the AS690H's calls to.
+ * {LOCATE-REQUEST} gate and this one always agree: a handset rejected at
+ * location registration cannot run a list-access call and be served
+ * another handset's lists.
  */
 void dect_cc_set_gate(struct dect_cc *cc, const uint8_t *port_id,
 		      size_t port_id_len);
@@ -378,7 +369,7 @@ uint8_t dect_cc_codec(const struct dect_cc *cc);
  *
  * Off: CALL-PROC and CONNECT at once, the digits arriving after CONNECT
  * (GAP figure 2, legal, but the Gigasets then show neither "connected"
- * nor a call timer -- bench test 2, 2026-10-25).
+ * nor a call timer; observed on hardware).
  *
  * Either way an internal call (call class 9) is never connected by CC:
  * with its number complete it waits in DECT_CC_ST_PROCEEDING until the
@@ -396,20 +387,6 @@ void dect_cc_set_overlap(struct dect_cc *cc, int on);
 void dect_cc_set_route_complete(struct dect_cc *cc, int on);
 
 /*
- * The steps of a handset-placed call, for an owner that has somewhere to
- * route it (EN 300 175-5 §9.3.1.6-8): dect_cc_proceed() sends
- * {CC-CALL-PROC} (dialling is complete), dect_cc_alert() {CC-ALERTING}
- * (the far end rings), dect_cc_connect() {CC-CONNECT} (it answered) and
- * enters ACTIVE -- no {CC-CONNECT-ACK} is expected. Each sends the
- * earlier ones it needs, once. dect_cc_accept() is dect_cc_connect().
- * They act on a speech call in DECT_CC_ST_OVERLAP or PROCEEDING and
- * return 0, else -1 (list access is never connected).
- *
- * §9.3.1.8 also has the FT confirm the U-plane before {CC-CONNECT}: an
- * owner can bind its audio after dect_cc_proceed() -- dect_cc_codec() is
- * known from the SETUP -- and connect once it is up.
- */
-/*
  * Call status in a handset-placed call (TS 102 527-3 §7.4.6.4.3): with it
  * on, our {CC-SETUP-ACK}, {CC-CALL-PROC}, {CC-ALERTING} and {CC-CONNECT}
  * carry <<CALL-INFORMATION>> with call id `call_id` and the matching call
@@ -426,6 +403,20 @@ void dect_cc_set_call_status(struct dect_cc *cc, int on, uint8_t call_id);
 size_t dect_cc_put_call_status(struct dect_cc *cc, uint8_t *b,
 			       size_t cap, size_t off, uint8_t status);
 
+/*
+ * The steps of a handset-placed call, for an owner that has somewhere to
+ * route it (EN 300 175-5 §9.3.1.6-8): dect_cc_proceed() sends
+ * {CC-CALL-PROC} (dialling is complete), dect_cc_alert() {CC-ALERTING}
+ * (the far end rings), dect_cc_connect() {CC-CONNECT} (it answered) and
+ * enters ACTIVE -- no {CC-CONNECT-ACK} is expected. Each sends the
+ * earlier ones it needs, once. dect_cc_accept() is dect_cc_connect().
+ * They act on a speech call in DECT_CC_ST_OVERLAP or PROCEEDING and
+ * return 0, else -1 (list access is never connected).
+ *
+ * §9.3.1.8 also has the FT confirm the U-plane before {CC-CONNECT}: an
+ * owner can bind its audio after dect_cc_proceed() -- dect_cc_codec() is
+ * known from the SETUP -- and connect once it is up.
+ */
 int dect_cc_proceed(struct dect_cc *cc);
 int dect_cc_alert(struct dect_cc *cc);
 int dect_cc_connect(struct dect_cc *cc);
@@ -444,8 +435,11 @@ void dect_cc_note_answered(struct dect_cc *cc, uint8_t msg_type);
 void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len);
 
 /*
- * Advance the clock. Expires F<CC.03> and queues the abnormal release the
- * specification requires. Call it alongside dect_lapc_tick().
+ * Advance the clock: F<CC.03> (our unanswered SETUP), F<CC.01> (overlap
+ * receiving), <CC.02> (our unanswered RELEASE) and the busy-system tone,
+ * each queueing the release the specification requires. A timer starts on
+ * the first tick after its procedure begins, so call it every loop pass,
+ * alongside dect_lapc_tick().
  */
 void dect_cc_tick(struct dect_cc *cc, uint64_t now_ms);
 
@@ -464,13 +458,9 @@ int dect_cc_peer_is_speech(const struct dect_cc *cc);
  * subscribed identity to contradict, so the caller decides.
  *
  * Call this before keeping anything a CC transaction tells you about "the"
- * handset. Measured 2026-10-24: one handset runs a CAT-iq list-access call
- * every ~22 s, and the daemon learned ITS identities into whichever
- * subscription store was open -- so the C430A and AS690H were registered with
- * the A540's portable identity, and every FP-originated {CC-SETUP} afterwards
- * offered the call to a handset that was not listening. Both handsets paged,
- * answered, and refused with "insufficient resources", which read as three
- * handsets agreeing when it was one handset being addressed three times.
+ * handset: a CAT-iq handset runs list-access calls on its own (observed on
+ * hardware: every ~22 s), and learning ITS identities into another
+ * handset's subscription would offer that handset's calls to the wrong one.
  */
 int dect_cc_peer_is(const struct dect_cc *cc, const uint8_t *port_id,
 		    size_t port_id_len);
@@ -490,8 +480,8 @@ void dect_cc_clear_keypad(struct dect_cc *cc);
  * which makes it ring. `port_id` is the PP's PORTABLE-IDENTITY contents as the
  * subscription stored them (`dect_mm.port_id`), `fixed_id` the FIXED-IDENTITY
  * contents identifying this base. `basic_service` is the <<BASIC-SERVICE>>
- * value octet: the low nibble is the service (8 = wideband speech, which is
- * what AVM handsets negotiate here), the high nibble the call class.
+ * value octet: the low nibble is the service (8 = wideband speech), the high
+ * nibble the call class (dect_basic_service_octet()).
  *
  * EN 300 444 makes PORTABLE-IDENTITY, FIXED-IDENTITY and BASIC-SERVICE
  * mandatory in an FP-originated SETUP. The handset answers ALERTING while it
@@ -518,10 +508,9 @@ int dect_cc_setup_id(struct dect_cc *cc, const uint8_t *port_id,
  * default from dect_cc_init(), DECT_SIGNAL_ALERT_PATTERN0 (0x40) marks an
  * internal call (EN 300 444 table 23).
  *
- * enable = 0 sends no IE. That is for tests only: EN 300 444 §8.14 makes
- * alerting the FT's job, and with no <<SIGNAL>> the Gigaset A540 displays
- * the call and blinks but makes no sound (run 18, 2026-10-24). This comment
- * used to say the handset would "choose"; it does not.
+ * enable = 0 sends no IE, which only makes sense to test a handset:
+ * EN 300 444 §8.14 makes alerting the FT's job, and with no <<SIGNAL>> the
+ * Gigaset A540 shows the call but makes no sound (observed on hardware).
  */
 void dect_cc_set_signal(struct dect_cc *cc, int enable, uint8_t value);
 
@@ -568,23 +557,18 @@ void dect_cc_set_default_line(struct dect_cc *cc, uint8_t line_id,
 uint8_t dect_cc_line(const struct dect_cc *cc);
 
 /*
- * Choose the transaction value the next FP-originated SETUP will use. Values
- * 0..6 are valid for the originating side (7 is the extended-TI escape).
- * dect_cc_init() leaves it at 0, and callers should normally leave it there.
+ * Choose the transaction value the next FP-originated SETUP will use, taken
+ * modulo 6: 0..5 are call values, 6 is the connectionless value and 7 the
+ * extended-TI escape (EN 300 175-5 §7.3). dect_cc_init() leaves it at 0.
  *
  * EN 300 444 §6.9.2: "The transaction identifier value for a CC call shall
  * always get assigned the lowest available free number." This entity runs
  * one call at a time, and the handset's own calls carry the other flag, so
- * the lowest free value for a call we originate is always 0.
- *
- * From 2026-10-20 the daemon rotated the value per call, after a call cut off
- * mid-media left a C4 discarding the next SETUP on the same value; this
- * comment then claimed rotating "is what the standard expects". It is not,
- * and it is why every Gigaset refused every incoming call with 0x32: run 15
- * (value 0) rang the A540, and the control in the same session, run 16
- * (value 1, otherwise identical), was refused (docs/call-g7.md, runs 14-16).
- * A transaction left open by a lost call is cleared by releasing it, not
- * dodged by picking another value. Use this only to override for a test.
+ * the lowest free value for a call we originate is always 0. Any other
+ * value is for testing a handset: the Gigasets refuse an incoming call on
+ * value 1 with "insufficient resources" (observed on hardware,
+ * docs/call-g7.md). A transaction left open by a lost call is cleared by
+ * releasing it, not dodged by picking another value.
  */
 void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti);
 
@@ -600,7 +584,6 @@ void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti);
  * dect_cc does not act on yet (it gets the negative acknowledgement).
  * -1 unless the call is ACTIVE with call status on, or ci has no new id.
  */
-struct dect_clip;
 int dect_cc_call_waiting(struct dect_cc *cc, const struct dect_callinfo *ci,
 			 const struct dect_clip *id);
 

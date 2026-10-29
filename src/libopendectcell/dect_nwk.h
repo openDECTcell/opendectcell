@@ -133,7 +133,7 @@
 #define DECT_IE_SENDING_COMPLETE	0xA1u	/* single octet, §7.6.2 */
 /*
  * <<BASIC-SERVICE>> value octet (§7.6.4): high nibble call class, low nibble
- * basic service. Call classes, which we had only half-written down:
+ * basic service. Call classes:
  *
  *   0x2 LiA service setup   0x3 ULE service     0x4 message call
  *   0x7 DECT/ISDN IIP       0x8 NORMAL call     0x9 internal call
@@ -143,19 +143,40 @@
  * Services: 0x0 basic speech defaults, 0x8 wideband speech defaults, 0x9/0xA
  * SUOTA, 0xB DTAM wideband, 0xF other.
  *
- * So our ring SETUP's 0x88 is "normal call, wideband speech", which is right,
- * and the class-3 SETUP that arrived silently in v33 was a ULE service call.
- * A Gigaset A540's own 0xE0 0x28 sessions are class 2 -- CAT-iq LIST ACCESS,
- * not voice calls -- which is what the <<IWU-TO-IWU>> dialog in dect_iwu.c
- * carries. See docs/tasks-2026-10-22.md.
+ * So 0x88 is "normal call, wideband speech". A CAT-iq handset's 0x28 is a
+ * list-access call (TS 102 527-3 §7.4.10), not a voice call: it carries the
+ * <<IWU-TO-IWU>> dialog of dect_iwu.c.
  */
+#define DECT_CALL_CLASS_LIA		0x2u	/* list access (CAT-iq) */
+#define DECT_CALL_CLASS_NORMAL		0x8u
+#define DECT_CALL_CLASS_INTERNAL	0x9u
+#define DECT_SERVICE_WIDEBAND		0x8u	/* wideband speech defaults */
+
+/* The call class nibble of a <<BASIC-SERVICE>> value octet. */
+static inline unsigned dect_call_class(uint8_t basic_service)
+{
+	return (unsigned)basic_service >> 4;
+}
+
+/* The basic service nibble of a <<BASIC-SERVICE>> value octet. */
+static inline unsigned dect_basic_service(uint8_t basic_service)
+{
+	return basic_service & 0x0Fu;
+}
+
+/* A <<BASIC-SERVICE>> value octet from its call class and service. */
+static inline uint8_t dect_basic_service_octet(unsigned call_class,
+					       unsigned service)
+{
+	return (uint8_t)((call_class & 0x0Fu) << 4 | (service & 0x0Fu));
+}
+
 #define DECT_IE_RELEASE_REASON		0xE2u	/* + reason code */
 /*
  * <<SIGNAL>> (§7.6.8): tells the portable part which tone or alerting pattern
  * to produce. Values 0x40..0x47 are "alerting on, pattern 0..7", 0x48 is the
  * continuous pattern and 0x4F is "alerting off"; 0x00..0x08 are tones.
- * Without it the handset falls back on whatever its call class implies, which
- * is why a call-class-3 SETUP arrived silently (v33).
+ * Without it the handset falls back on whatever its call class implies.
  */
 #define DECT_IE_SIGNAL			0xE4u	/* + signal value */
 #define DECT_SIGNAL_ALERT_PATTERN0	0x40u	/* GAP table 23: internal call */
