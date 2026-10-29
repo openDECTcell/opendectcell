@@ -122,8 +122,17 @@ after `015B 00`, `01` after radio-on, `00` after the park); `0x010C` and
 byte for byte, decay included. After a park, though, `0x010C`/`0x010B` keep
 the carrier and bearer while `0x010A` is 0 and `0xF623` stops, so it is open
 whether the park ends the transmission or the bytes go stale (Q-0010;
-`bench-7412.md` test 3 checks it with a handset). A-0009's
-`(0x0776 & 0x81) == 0x81` did not hold: `0x0776` read `0x80` throughout.
+`bench-7412.md` test 3 checks it with a handset). **[CR A-0010]:** stale --
+the `0x015B 00` path clears `0x010A`, removes both beacon bearers (the
+inverse of the radio-on path) and stops the MAC, but never writes
+`0x010B`/`0x010C`. Use `0x010A` == 0 plus the absence of `0xF623` as "parked".
+It does not rewrite the RF registers the radio-on path sets, so "no RF" rests
+on no bearer being scheduled; the handset test stays. Our chip-side
+cross-check was inconclusive: `0x08A0`-`0x08DF` looks like a timer list (a
+100 Hz counter at `0x08B1` runs at boot and while on, frozen after the park),
+not the bearer table A-0010 named (Q-0011). `0x0776` read
+`0x80` throughout: bit 7 is set at boot, and bit 0 (eco on) follows bit 7 of
+the `0x0153` parameter, which our `00` leaves clear [CR A-0010].
 A-0009 also explains X2: in the boot state (`0x010A` = 1) every
 configuration mail brings the beacon up on a default carrier, after which
 radio-on does not scan. So **any configuration or registration mail in the
