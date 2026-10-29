@@ -2608,6 +2608,46 @@ static void test_internal_call_waits_for_the_owner(void)
 }
 
 /*
+ * An internal call names a line as stock does, from CALL-PROC on in every
+ * status message, so the A540 starts its call timer [CR 7412 A-0016]:
+ * 7e 0c 00 00 81 00 05 81 01 00 81 02 01 85 in the CONNECT.
+ */
+static void test_internal_call_names_a_line(void)
+{
+	static const uint8_t want[] = { 0x7e, 0x0c, 0x00, 0x00, 0x81,
+					0x00, 0x05, 0x81, 0x01, 0x00, 0x81,
+					0x02, 0x01, 0x85 };	/* CS call connect */
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	dect_cc_set_call_status(&cc, 1, 1);
+	dect_cc_set_default_line(&cc, 1, DECT_CALLINFO_NDT_DELAY);
+	n = pp_setup_svc(buf, sizeof(buf), 0, 0x98);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_SETUP_ACK);
+	CHECK_EQ(n, 2u + 8u);			/* no line in the SETUP-ACK */
+	n = pp_info(buf, sizeof(buf), "2", 1);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	CHECK(n >= 2u + sizeof(want) && out[n - 14u] == 0x7e &&
+	      out[n - 13u] == 0x0c && out[n - 1u] == 0x83);
+	CHECK_EQ(dect_cc_alert(&cc), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_ALERTING);
+	CHECK(n >= 16u && out[n - 13u] == 0x0c && out[n - 1u] == 0x84);
+	CHECK_EQ(dect_cc_connect(&cc), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CONNECT);
+	CHECK(n >= sizeof(want) &&
+	      memcmp(out + n - sizeof(want), want, sizeof(want)) == 0);
+}
+
+/*
  * The internal-call key 0x17 makes a call internal (EN 300 444 §8.19): on
  * a list-access call, as the A540 sends it after reading the Internal
  * Names List (TS 102 527-3 figure C.21, bench test 19), and on a normal
@@ -2818,6 +2858,7 @@ int main(void)
 	test_handset_call_in_steps();
 	test_call_status_in_our_answers();
 	test_internal_call_waits_for_the_owner();
+	test_internal_call_names_a_line();
 	test_int_key_makes_an_internal_call();
 	test_second_call_on_the_same_link();
 	test_info_on_the_call();

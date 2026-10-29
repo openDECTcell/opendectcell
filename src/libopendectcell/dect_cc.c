@@ -87,6 +87,21 @@ size_t dect_cc_put_call_status(struct dect_cc *cc, uint8_t *b,
 		ci.line_type = cc->default_line_type;
 		cc->line_confirmed = 1;
 	}
+	/*
+	 * An internal call has no line, but stock names one all the same,
+	 * from {CC-CALL-PROC} on in every status message: the A540 starts
+	 * its call timer only on a CS call connect that carries a line id
+	 * and type [CR 7412 A-0016, capture 14]. The handset chose none:
+	 * our default line.
+	 */
+	if (!ci.has_line && !cc->incoming && cls == 0x9u &&
+	    status != DECT_CS_CALL_SETUP_ACK && cc->default_line_set) {
+		ci.has_line = 1;
+		ci.line_id = line != DECT_CC_LINE_UNSET ? line
+							: cc->default_line;
+		ci.has_line_type = 1;
+		ci.line_type = cc->default_line_type;
+	}
 	ci.has_call_id = 1;
 	ci.call_id = cc->status_call_id;
 	ci.has_call_status = 1;
