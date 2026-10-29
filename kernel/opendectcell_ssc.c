@@ -414,7 +414,13 @@ int dect_ssc_init(struct dect_ssc *p, const struct dect_ssc_board *board,
 void dect_ssc_teardown(struct dect_ssc *p)
 {
 	ssc_engine_stop(p);
-	if (p->base)
+	/*
+	 * Only stop a controller this engine took over (step 1 or later). At
+	 * step 0 the SSC may be run by another driver -- the generic SSC PCM
+	 * transport on the 7412 -- and closing /dev/dect0 after dect-fwload
+	 * used to switch it off (observed on a 7412, 2026-10-29).
+	 */
+	if (p->base && p->step != DECT_PCM_STEP_OFF)
 		ssc_set_run(p, false, 20000);
 	kfree(p->block_buf);
 	p->block_buf = NULL;
