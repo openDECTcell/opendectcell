@@ -9324,7 +9324,6 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 	    dect_cc_busy(cc) && (a >= 0 || s->audio.auth_first) &&
 	    (s->audio.auth_first ||
 	     ((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
-	     cc->state == DECT_CC_ST_CONNECT_PENDING ||
 	     cc->state == DECT_CC_ST_ACTIVE)) {
 		const uint8_t *uak = a < 0 || (unsigned)a >= s->n_hs ? NULL :
 			(unsigned)a == s->cur
@@ -9953,8 +9952,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	if (!s->reg.call_bound && !s->reg.nonspeech_noted &&
 	    !s->reg.link.cc.incoming &&
 	    !dect_cc_peer_is_speech(&s->reg.link.cc) &&
-	    (s->reg.link.cc.state == DECT_CC_ST_CONNECT_PENDING ||
-	     s->reg.link.cc.state == DECT_CC_ST_ACTIVE)) {
+	    s->reg.link.cc.state == DECT_CC_ST_ACTIVE) {
 		s->reg.nonspeech_noted = 1;
 		printf("call: not a speech call (<<BASIC-SERVICE>> %02x) -- "
 		       "no audio path bound\n",
@@ -9962,8 +9960,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	}
 
 	if (!s->reg.call_bound && call_auth_ok(s, &s->reg.link) &&
-	    (s->reg.link.cc.state == DECT_CC_ST_CONNECT_PENDING ||
-	     s->reg.link.cc.state == DECT_CC_ST_ACTIVE ||
+	    (s->reg.link.cc.state == DECT_CC_ST_ACTIVE ||
 	     (s->audio.bind_first && s->reg.connect_staged &&
 	      s->reg.link.cc.state == DECT_CC_ST_PROCEEDING)) &&
 	    (s->reg.link.cc.incoming ||

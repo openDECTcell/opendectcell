@@ -221,4 +221,4 @@ Outcomes written before the run:
 | 10. A540 in a call: second call out (the handset's "external call" / R key, then a number) | the first goes on hold, the second rings and connects | a negative tone: the 1CH 15H path, `par_control()` |
 | 11. Call a voicemail or any IVR, press keys | the menu reacts | nothing: `digit` events in the log? if yes, the profile's DTMF mode |
 | 12. Voicemail notification on in the profile, leave a message | the A540 shows the message indicator (count); after listening it goes | nothing: `mwi:` lines in the log? the provider must send message-summary NOTIFYs |
-| 13. Switch the A540 and the C430A off and on | both show the date and time | `the clock is not known to be right`: /var/run/opendectcell/time-valid missing or stale |
+| 13. Switch the A540 and the C430A off and on | the A540 shows the date and time; the C430A does not (a Part 1 handset: date and time is Part 3, TS 102 527-3 §7.4.20; the base sends it anyway, log `sent the date and time` for both) | `the clock is not known to be right`: /var/run/opendectcell/time-valid missing or stale |

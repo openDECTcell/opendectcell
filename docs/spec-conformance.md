@@ -20,7 +20,7 @@ to be ordinary non-conformance that one handset tolerated and another did not.
 **substantially conformant**, which is better than the project's running
 narrative suggested. We model seven states --
 
-    NULL, PROCEEDING, CALL_PRESENT, RINGING, CONNECT_PENDING, ACTIVE, RELEASED
+    NULL, PROCEEDING, OVERLAP, CALL_PRESENT, RINGING, ACTIVE, RELEASED
 
 -- against the spec's ten per side, and the incoming-call sequence maps
 correctly:

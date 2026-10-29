@@ -33,12 +33,6 @@
 enum dect_cc_state {
 	DECT_CC_ST_NULL,		/* no call */
 	DECT_CC_ST_PROCEEDING,		/* SETUP seen, CALL-PROC/CONNECT queued */
-	/*
-	 * Never entered: our {CC-CONNECT} to a handset-placed call goes
-	 * straight to ACTIVE (EN 300 175-5 §9.3.1.8). Kept while dect-stubd
-	 * still names it.
-	 */
-	DECT_CC_ST_CONNECT_PENDING,
 	DECT_CC_ST_ACTIVE,		/* call up: bind audio */
 	DECT_CC_ST_RELEASED,		/* call released */
 	/* Incoming call (we originate towards the handset). */

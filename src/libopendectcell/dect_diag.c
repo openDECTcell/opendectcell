@@ -170,7 +170,6 @@ static const char *call_state_name(enum dect_cc_state st)
 	switch (st) {
 	case DECT_CC_ST_NULL:		 return "idle";
 	case DECT_CC_ST_PROCEEDING:	 return "proceeding";
-	case DECT_CC_ST_CONNECT_PENDING: return "connecting";
 	case DECT_CC_ST_ACTIVE:		 return "active";
 	case DECT_CC_ST_RELEASED:	 return "released";
 	case DECT_CC_ST_CALL_PRESENT:	 return "calling";
