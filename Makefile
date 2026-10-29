@@ -15,7 +15,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 
 # Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
@@ -30,7 +30,8 @@ STUBD_SRC := src/stubd/dect-stubd.c src/stubd/ssc_align.c src/libopendectcell/de
 	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c \
 	src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_audio.c \
 	src/libopendectcell/dect_g722.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c \
-	src/libopendectcell/dect_diag.c src/libopendectcell/dect_profile.c src/libopendectcell/dect_ctl.c
+	src/libopendectcell/dect_diag.c src/libopendectcell/dect_profile.c src/libopendectcell/dect_ctl.c \
+	src/libopendectcell/dect_cell.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
 .PHONY: all check cross clean baresip-mod
@@ -155,6 +156,10 @@ $(BUILD)/test_profile: tests/test_profile.c src/libopendectcell/dect_profile.c s
 $(BUILD)/test_ctl: tests/test_ctl.c src/libopendectcell/dect_ctl.c src/libopendectcell/dect_ctl.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_ctl.c src/libopendectcell/dect_ctl.c
+
+$(BUILD)/test_cell: tests/test_cell.c src/libopendectcell/dect_cell.c src/libopendectcell/dect_cell.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_cell.c src/libopendectcell/dect_cell.c
 
 # The baresip module (src/baresip/opendectcell.c), for the box: needs the
 # baresip and libre sources of the version on it for their headers, e.g.

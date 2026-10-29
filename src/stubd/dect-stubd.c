@@ -58,6 +58,7 @@
 #include "dect_callinfo.h"
 #include "dect_clip.h"
 #include "dect_ctl.h"
+#include "dect_cell.h"
 #include "opendectcell_version.h"
 
 /* Headroom left for the log and anything else sharing the filesystem. */
@@ -625,6 +626,25 @@ struct stubd {
 
 	/* GAP registration (-g): the host-side C-plane stack per connection. */
 	int do_register;
+	/*
+	 * Cell mode (-K): the box is a cell of an openDECTcell controller; no stack
+	 * here, every mail goes through dect-cell (cell_tick()).
+	 */
+	int cell_mode;
+	struct {
+		int      lfd, cfd;	/* listening, dect-cell's; -1 = none */
+		uint64_t lost_at;	/* the controller link went, 0 = up */
+		int      released;	/* §6.4: links released after grace */
+		int      orphan_parked;	/* ... and the radio parked after orphan */
+		int      start_parked;	/* parked once the chip answered */
+		int      radio_on;	/* the controller turned it on */
+		int      sess_up;	/* the chip session, as last reported */
+		uint8_t  flow;		/* §9.3 FLOW state last sent */
+		uint32_t epoch;		/* chip sessions since start */
+		uint8_t  handles;	/* links up, bit per handle 0..7 */
+		uint32_t up, down, rejected, lost_up;
+		uint32_t txq_drops_seen;
+	} cell;
 	const char *pin;	/* registration PIN / AC */
 	/*
 	 * Wrong PINs in the System Settings List across all connections, and
@@ -10644,6 +10664,355 @@ static void sub_check_tick(struct stubd *s, uint64_t now)
  * block with a transmit block, drive the session and every timer, and
  * (re)send the contact. Parks the radio before it returns.
  */
+/* -------------------------------------------------------------------------
+ * Cell mode (-K): the box is a cell of an openDECTcell controller
+ * (opendectcell-controller docs/cell-protocol.md). The controller runs the DECT
+ * stack; here every chip mail goes up verbatim and every MAIL_DOWN goes to
+ * the chip. dect-cell holds the TLS link and talks to us on a local socket
+ * in the protocol's own frames (§14.2). Nothing here turns the radio on:
+ * it is parked once the chip answers, and only a MAIL_DOWN from the
+ * controller switches it on (§6.4, §7.4).
+ */
+#define CELL_PATH		"/var/run/opendectcell-cell.sock"
+#define CELL_GRACE_MS		7000u	/* §6.4 grace_ms */
+#define CELL_ORPHAN_MS		60000u	/* §6.4 orphan_s */
+#define CELL_FLOW_HIGH		2048u	/* §9.3: FLOW state 1 above this */
+#define CELL_STATE_PATH		DECT_RUN_DIR "/cell.json"
+
+static void cell_open(struct stubd *s)
+{
+	struct sockaddr_un a;
+	mode_t old;
+	int fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+
+	s->cell.cfd = -1;
+	s->cell.lfd = -1;
+	if (fd < 0) {
+		perror("cell: socket");
+		return;
+	}
+	memset(&a, 0, sizeof(a));
+	a.sun_family = AF_UNIX;
+	strcpy(a.sun_path, CELL_PATH);
+	(void)unlink(CELL_PATH);
+	old = umask(077);		/* the mails carry keys (§7.3): root only */
+	if (bind(fd, (struct sockaddr *)&a, sizeof(a)) || listen(fd, 1)) {
+		umask(old);
+		perror("cell: " CELL_PATH);
+		close(fd);
+		return;
+	}
+	umask(old);
+	(void)fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+	s->cell.lfd = fd;
+	s->cell.lost_at = mono_ms();	/* no controller until dect-cell says */
+	printf("cell: cell mode, waiting for dect-cell on " CELL_PATH "\n");
+}
+
+static void cell_close(struct stubd *s)
+{
+	if (s->cell.cfd >= 0)
+		close(s->cell.cfd);
+	if (s->cell.lfd >= 0) {
+		close(s->cell.lfd);
+		(void)unlink(CELL_PATH);
+	}
+	s->cell.cfd = s->cell.lfd = -1;
+	(void)unlink(CELL_STATE_PATH);
+}
+
+/* One frame to dect-cell; -1 if it has none or its queue is full. */
+static int cell_send(struct stubd *s, uint16_t type, uint16_t corr,
+		     const uint8_t *body, size_t len)
+{
+	uint8_t f[DECT_CELL_HDR + 512];
+	size_t n = dect_cell_put(f, sizeof(f), type, corr, body, len);
+
+	if (s->cell.cfd < 0 || !n)
+		return -1;
+	return send(s->cell.cfd, f, n, MSG_DONTWAIT | MSG_NOSIGNAL) ==
+	       (ssize_t)n ? 0 : -1;
+}
+
+/* §10 STATUS: the radio, the chip session, the build in detail. */
+static void cell_status(struct stubd *s, uint64_t now)
+{
+	uint8_t b[160];
+	struct dect_cell_tlv t;
+	const char *detail = s->stub_build == STUB_UNKNOWN ? "unknown" :
+			     s->stub_name;
+
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u8(&t, 1, s->cell.radio_on ? 1 : 0);
+	dect_cell_tlv_u8(&t, 2, s->sess.state == DECT_SESS_UP ? 2 : 1);
+	dect_cell_tlv_u32(&t, 3, s->cell.epoch);
+	dect_cell_tlv_u32(&t, 4, (uint32_t)((now - g_start) / 1000u));
+	dect_cell_tlv_str(&t, 5, detail);
+	if (!t.err)
+		(void)cell_send(s, DECT_CELL_STATUS, 0, b, t.len);
+}
+
+static void cell_reject(struct stubd *s, uint16_t corr, uint8_t why)
+{
+	uint8_t b[3] = { (uint8_t)(corr >> 8), (uint8_t)corr, why };
+
+	s->cell.rejected++;
+	if (corr)
+		(void)cell_send(s, DECT_CELL_MAIL_REJECT, 0, b, sizeof(b));
+}
+
+static void cell_park(struct stubd *s, const char *why)
+{
+	const uint8_t closed = 0x01, off = 0x00;
+
+	chip_mail_to(s, DECT_TASK_CONTACT_DST, 0x022Cu, &closed, 1);
+	chip_mail_to(s, DECT_TASK_CONTACT_DST, 0x015Bu, &off, 1);
+	s->cell.radio_on = 0;
+	printf("cell: radio parked (%s)\n", why);
+}
+
+/* Every mail from the chip, up as it came (§7.1), with the links it opens. */
+static void cell_mail_up(struct stubd *s, const struct dect_mail *m,
+			 uint64_t now)
+{
+	struct dect_cell_mail cm = { (uint32_t)(now * 1000u), m->src, m->dst,
+				     m->prim, m->param, m->param_len };
+	uint8_t b[9u + DECT_CELL_MAIL_PARAM_MAX];
+	size_t n = dect_cell_mail_up(b, sizeof(b), &cm);
+	uint8_t h = m->param_len ? m->param[0] : 0xFFu;
+
+	if (h < 8u && m->prim == DECT_PRIM_CONN_UP)
+		s->cell.handles |= (uint8_t)(1u << h);
+	else if (h < 8u && m->prim == DECT_PRIM_CONN_DOWN)
+		s->cell.handles &= (uint8_t)~(1u << h);
+	if (n && cell_send(s, DECT_CELL_MAIL_UP, 0, b, n) == 0)
+		s->cell.up++;
+	else
+		s->cell.lost_up++;	/* no dect-cell, or it is not reading */
+}
+
+/* A MAIL_DOWN from the controller, to the chip as it came. */
+static void cell_mail_down(struct stubd *s, const struct dect_cell_frame *f)
+{
+	struct dect_cell_mail cm;
+	struct dect_mail m;
+
+	if (dect_cell_mail_parse(f->body, f->len, 0, &cm)) {
+		cell_reject(s, f->corr, DECT_CELL_REJ_CHIP_REFUSED);
+		return;
+	}
+	if (s->sess.state != DECT_SESS_UP || s->tx_slot < 0) {
+		cell_reject(s, f->corr, DECT_CELL_REJ_CHIP_DOWN);
+		return;
+	}
+	memset(&m, 0, sizeof(m));
+	m.src = cm.src;
+	m.dst = cm.dst;
+	m.prim = cm.prim;
+	m.param_len = (uint16_t)cm.plen;
+	memcpy(m.param, cm.param, cm.plen);
+	if (send_mail(s, (unsigned int)s->tx_slot, &m)) {
+		cell_reject(s, f->corr, DECT_CELL_REJ_QUEUE_FULL);
+		return;
+	}
+	s->cell.down++;
+	if (s->verbose)
+		log_mail(&m, "tx C", s->show_params);
+	if (m.prim == 0x015Bu && m.param_len) {
+		s->cell.radio_on = m.param[0] != 0;
+		printf("cell: the controller turned the radio %s\n",
+		       s->cell.radio_on ? "on" : "off");
+	}
+}
+
+/* CELL_STATE: the controller's state for us, or dect-cell's link-lost. */
+static void cell_state(struct stubd *s, const struct dect_cell_frame *f,
+		       uint64_t now)
+{
+	uint8_t st;
+	size_t rn = 0;
+	const uint8_t *r;
+
+	if (dect_cell_tlv_check(f->body, f->len) ||
+	    dect_cell_tlv_get_u8(f->body, f->len, 1, &st))
+		return;
+	r = dect_cell_tlv_get(f->body, f->len, 2, &rn);
+	if (r && rn == 9 && !memcmp(r, "link-lost", 9)) {
+		if (!s->cell.lost_at) {
+			s->cell.lost_at = now;
+			printf("cell: the controller link is down\n");
+		}
+		return;
+	}
+	if (s->cell.lost_at)
+		printf("cell: the controller link is up\n");
+	s->cell.lost_at = 0;
+	s->cell.released = s->cell.orphan_parked = 0;
+	if ((st == DECT_CELL_ST_DISABLED || st == DECT_CELL_ST_REVOKED) &&
+	    s->sess.state == DECT_SESS_UP)
+		cell_park(s, st == DECT_CELL_ST_REVOKED ? "revoked" :
+						      "disabled");
+}
+
+/* What dect-cell sent us, one frame per message. */
+static void cell_frame(struct stubd *s, const uint8_t *buf, size_t n,
+		       uint64_t now)
+{
+	struct dect_cell_frame f;
+	uint8_t b[16];
+	struct dect_cell_tlv t;
+
+	if (dect_cell_parse(buf, n, &f) != (long)n)
+		return;			/* one frame per message, whole */
+	switch (f.type) {
+	case DECT_CELL_MAIL_DOWN:
+		cell_mail_down(s, &f);
+		break;
+	case DECT_CELL_CELL_STATE:
+		cell_state(s, &f, now);
+		break;
+	case DECT_CELL_STATUS_REQUEST:
+		cell_status(s, now);
+		break;
+	case DECT_CELL_MEDIA_OPEN: {
+		/* media is not built yet (§14.3): status 4 */
+		uint32_t id = 0;
+
+		if (!dect_cell_tlv_check(f.body, f.len))
+			(void)dect_cell_tlv_get_u32(f.body, f.len, 1, &id);
+		dect_cell_tlv_init(&t, b, sizeof(b));
+		dect_cell_tlv_u32(&t, 1, id);
+		dect_cell_tlv_u16(&t, 2, 4);
+		(void)cell_send(s, DECT_CELL_MEDIA_OPEN_ACK, f.corr, b, t.len);
+		break;
+	}
+	default:
+		dect_cell_tlv_init(&t, b, sizeof(b));
+		dect_cell_tlv_u16(&t, 1, DECT_CELL_ERR_UNSUPPORTED);
+		dect_cell_tlv_u16(&t, 2, f.type);
+		dect_cell_tlv_u16(&t, 3, f.corr);
+		(void)cell_send(s, DECT_CELL_ERROR, 0, b, t.len);
+	}
+}
+
+/* For Status > DECT in cell mode: the chip side; dect-cell writes the link. */
+static void cell_state_write(struct stubd *s, uint64_t now)
+{
+	char tmp[sizeof(CELL_STATE_PATH) + 4];
+	FILE *f;
+
+	if (now < s->state_next)
+		return;
+	s->state_next = now + STATE_EVERY_MS;
+	snprintf(tmp, sizeof(tmp), "%s.tmp", CELL_STATE_PATH);
+	f = fopen(tmp, "w");
+	if (!f)
+		return;
+	fprintf(f, "{\"mode\":\"cell\",\"uptime_ms\":%llu,\"radio\":\"%s\","
+		"\"chip\":\"%s\",\"stub\":",
+		(unsigned long long)(now - g_start),
+		s->cell.radio_on ? "up" : "parked",
+		s->sess.state == DECT_SESS_UP ? "running" : "starting");
+	json_str(f, s->stub_build == STUB_UNKNOWN ? "unknown" : s->stub_name);
+	fprintf(f, ",\"dect_cell\":%s,\"controller\":%s,\"links\":%u,"
+		"\"mails_up\":%u,\"mails_down\":%u,\"rejected\":%u,"
+		"\"not_forwarded\":%u,\"queue_bytes\":%zu,\"queue_drops\":%u}\n",
+		s->cell.cfd >= 0 ? "true" : "false",
+		s->cell.lost_at ? "false" : "true",
+		(unsigned)__builtin_popcount(s->cell.handles), s->cell.up,
+		s->cell.down, s->cell.rejected, s->cell.lost_up, s->txq_len,
+		s->txq_drops);
+	if (fclose(f) == 0)
+		(void)rename(tmp, CELL_STATE_PATH);
+}
+
+static void cell_tick(struct stubd *s, uint64_t now)
+{
+	uint8_t buf[DECT_CELL_FRAME_MAX];
+	int c;
+	uint8_t flow;
+
+	if (s->cell.lfd < 0)
+		return;
+	/* dect-cell, again after a restart: the newer one wins */
+	c = accept(s->cell.lfd, NULL, NULL);
+	if (c >= 0) {
+		if (s->cell.cfd >= 0)
+			close(s->cell.cfd);
+		(void)fcntl(c, F_SETFL, fcntl(c, F_GETFL) | O_NONBLOCK);
+		s->cell.cfd = c;
+		s->cell.flow = 0;
+		printf("cell: dect-cell connected\n");
+		cell_status(s, now);
+	}
+	while (s->cell.cfd >= 0) {
+		ssize_t n = recv(s->cell.cfd, buf, sizeof(buf), MSG_DONTWAIT);
+
+		if (n > 0) {
+			cell_frame(s, buf, (size_t)n, now);
+			continue;
+		}
+		if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+			      errno == EINTR))
+			break;
+		/* dect-cell has gone: as good as a lost controller link */
+		close(s->cell.cfd);
+		s->cell.cfd = -1;
+		printf("cell: dect-cell went away\n");
+		if (!s->cell.lost_at)
+			s->cell.lost_at = now;
+	}
+
+	/* the chip answered: park first, whatever its build boots with */
+	if (s->sess.state == DECT_SESS_UP && !s->cell.sess_up) {
+		s->cell.epoch++;
+		if (!s->cell.start_parked) {
+			cell_park(s, "the chip is up; the controller decides");
+			s->cell.start_parked = 1;
+		}
+		cell_status(s, now);
+	}
+	s->cell.sess_up = s->sess.state == DECT_SESS_UP;
+
+	/* §6.4: links released after grace_ms, the radio parked after orphan_s */
+	if (s->cell.lost_at && s->sess.state == DECT_SESS_UP) {
+		if (!s->cell.released && now - s->cell.lost_at >= CELL_GRACE_MS) {
+			unsigned h;
+
+			for (h = 0; h < 8u; h++) {
+				const uint8_t link = (uint8_t)h;
+
+				if (!(s->cell.handles & (1u << h)))
+					continue;
+				send_audio_disconnect(s, link);
+				chip_mail_to(s, DECT_TASK_CONTACT_DST, 0x0202u,
+					     &link, 1);	/* [CR A-0127] */
+			}
+			printf("cell: no controller for %u ms: links released\n",
+			       CELL_GRACE_MS);
+			s->cell.released = 1;
+		}
+		if (!s->cell.orphan_parked && s->cell.radio_on &&
+		    now - s->cell.lost_at >= CELL_ORPHAN_MS) {
+			cell_park(s, "no controller");
+			s->cell.orphan_parked = 1;
+		}
+	}
+
+	/* §9.3 FLOW, on every change */
+	flow = s->txq_drops != s->cell.txq_drops_seen ? 2 :
+	       s->txq_len > CELL_FLOW_HIGH ? 1 : 0;
+	s->cell.txq_drops_seen = s->txq_drops;
+	if (flow != s->cell.flow) {
+		uint8_t b[3] = { (uint8_t)(s->txq_len >> 8),
+				 (uint8_t)s->txq_len, flow };
+
+		if (cell_send(s, DECT_CELL_FLOW, 0, b, sizeof(b)) == 0)
+			s->cell.flow = flow;
+	}
+	cell_state_write(s, now);
+}
+
 static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 {
 	size_t block = s->slots * 2u * fpb;
@@ -10666,6 +11035,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 	s->tx_ring = 1;		/* from here on, mails are paced by tx_block() */
 	g_start = start;
 	ctl_open(s);
+	if (s->cell_mode)
+		cell_open(s);
 	for (;;) {
 		struct pollfd pfd = { .fd = s->fd, .events = POLLIN };
 		uint64_t now = mono_ms();
@@ -10689,7 +11060,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		 */
 		if (!park_at && (stop || (run_seconds &&
 		    now - start >= (uint64_t)run_seconds * 1000u))) {
-			if (!s->do_register || s->tx_slot < 0)
+			if ((!s->do_register && !s->cell_mode) ||
+			    s->tx_slot < 0)
 				break;
 			send_mail_spec(s, "0x22:0x02:0x022c:01"); /* close reg */
 			send_mail_spec(s, "0x22:0x02:0x015b:00"); /* radio off */
@@ -10766,6 +11138,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 					dect_session_rx(&s->sess, &m, now);
 					if (s->do_register)
 						handle_reg_mail(s, &m, now);
+					else if (s->cell_mode)
+						cell_mail_up(s, &m, now);
 				}
 			}
 		}
@@ -10802,6 +11176,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			ctl_tick(s, now);
 			bridge_tick(s, now);
 			ab_tick(s, now);
+			if (s->cell_mode)
+				cell_tick(s, now);
 		}
 		if (s->do_register) {
 			audio_connect_fallback(s, now);
@@ -10908,6 +11284,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		}
 	}
 	ctl_close(s);
+	if (s->cell_mode)
+		cell_close(s);
 	if (s->ssc && s->ssc_w_off != -2) {
 		char is[200];
 
@@ -11404,6 +11782,10 @@ static void usage(void)
 		"           not share such logs) -- implies -v\n"
 		"  -M SRC:DST:PRIM[:HEX]  after contact, send this mail (repeatable,\n"
 		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n"
+		"  -K       cell mode: a cell of an openDECTcell controller. No stack and\n"
+		"           no handsets here: every chip mail goes to dect-cell on\n"
+		"           " CELL_PATH ", the radio stays parked\n"
+		"           until the controller turns it on (not with -g)\n"
 		"  -g       base mode: bring up the radio (registration closed\n"
 		"           unless -a regopen) and run the host C-plane stack for\n"
 		"           the handsets (parks the radio on exit)\n"
@@ -11956,7 +12338,7 @@ int main(int argc, char **argv)
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
 	s.pin = "0000";		/* the lab's; the library has no default */
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:Ca:h")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gKP:s:k:w:V:Ca:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -11979,6 +12361,7 @@ int main(int argc, char **argv)
 			s.xmail[s.n_xmail++] = optarg;
 			break;
 		case 'g': s.do_register = 1; break;
+		case 'K': s.cell_mode = 1; break;
 		case 'P':
 			/*
 			 * @FILE: the PIN from a root-only file, so it is not on
@@ -12100,7 +12483,7 @@ int main(int argc, char **argv)
 		else
 			s.xmail[s.n_xmail++] = "0x22:0x02:0x022c:01";	/* closed */
 	}
-	if (optind != argc) {
+	if (optind != argc || (s.cell_mode && s.do_register)) {
 		usage();
 		return 2;
 	}

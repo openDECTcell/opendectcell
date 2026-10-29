@@ -645,3 +645,11 @@ by call id), DECT_CC_NO_REASON, DECT_CC_NO_SIGNAL, and DECT_EVENT_VOICE
 in dect_time.h (§7.4.1.2 message waiting). **Behaviour change, only in
 parallel mode:** a {CC-INFO} with a call-control code and the digits after
 1C15 (a second external call) no longer reach the keypad.
+
+**84.** dect_cell.h, the cell <-> controller wire protocol v1
+(opendectcell-controller `docs/cell-protocol.md`), 2026-10-29: frames
+(dect_cell_parse(), dect_cell_put(), dect_cell_body_max()), TLV bodies
+(struct dect_cell_tlv and its writers, dect_cell_tlv_check(),
+dect_cell_tlv_get(), dect_cell_tlv_next(), the fixed-width getters) and
+the mail tunnel's layouts (struct dect_cell_mail, dect_cell_mail_up(),
+dect_cell_mail_down(), dect_cell_mail_parse()). Purely additive.
