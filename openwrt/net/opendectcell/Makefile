@@ -73,7 +73,8 @@ define Package/opendectcell-cell/description
   dect-cell: makes the box a cell of an openDECTcell controller (TLS 1.3 with
   mutual authentication, enrolment with a one-time token). In cell mode
   the box runs no DECT stack and no SIP of its own: the controller does.
-  Switched on with option mode 'cell' in /etc/config/opendectcell.
+  Switched on with option role 'cell' in /etc/config/opendectcell, or by
+  /etc/init.d/opendectcell enroll '<enrollment string>'.
 endef
 
 define KernelPackage/opendectcell-ipq40xx
