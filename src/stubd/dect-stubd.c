@@ -39,6 +39,7 @@
 #include <unistd.h>
 
 #include "opendectcell.h"
+#include "ssc_pcm.h"
 #include "dect_mail.h"
 #include "dect_session.h"
 #include "dect_proto.h"
@@ -343,6 +344,19 @@ struct stubd {
 	int fd;
 	unsigned int slots;
 	unsigned int fpb;		/* frames per DMA block (32 = 4 ms) */
+	/*
+	 * Transport. 0: openDECTcell's own PCM interface on /dev/dect0 (the 7520's
+	 * ADSS TDM). 1: the generic SSC PCM transport, /dev/ssc-pcm0 (the
+	 * 7412). The SSC has no frame sync, so its words start at an
+	 * arbitrary bit offset into the chip's frame, and it delivers bytes
+	 * in bus order. ssc_rx_fix() and pcm_write() turn both directions
+	 * into the 7520's layout, so nothing above them differs.
+	 */
+	int ssc;
+	unsigned int ssc_off;		/* bit offset of the chip's 16-bit lanes */
+	int ssc_aligned;		/* ssc_off is measured: fix what we read */
+	uint8_t ssc_rx_carry[2], ssc_tx_carry[2];
+	uint64_t ssc_tx_sent_prev, ssc_tx_idle_prev;
 	/*
 	 * Downlink starvation, sampled once a second. The driver refills a
 	 * transmit block when the chip's clock asks for one and fills any
@@ -1648,6 +1662,119 @@ static void verify_report(const struct stubd *s)
 	fflush(stdout);
 }
 
+/* ---- SSC transport (7412): bit alignment and byte order ---- */
+
+/* Both transports' block headers are read through the same code. */
+_Static_assert(sizeof(struct ssc_pcm_block) == sizeof(struct dect_pcm_block),
+	       "block headers differ in size");
+_Static_assert(SSC_PCM_BF_DROPPED == DECT_PCM_BF_DROPPED,
+	       "dropped flags differ");
+
+static int pcm_block_ok(const struct stubd *s, const void *hdr)
+{
+	const struct dect_pcm_block *h = hdr;
+
+	return h->magic == (s->ssc ? SSC_PCM_BLOCK_MAGIC : DECT_PCM_BLOCK_MAGIC);
+}
+
+static void swap_pairs(uint8_t *p, size_t len)
+{
+	size_t i;
+
+	for (i = 0; i + 1u < len; i += 2u) {
+		uint8_t t = p[i];
+
+		p[i] = p[i + 1u];
+		p[i + 1u] = t;
+	}
+}
+
+/* dst[i] = the 8 bits of src starting at bit 8 * i + bit (MSB first). */
+static void bit_window(uint8_t *dst, const uint8_t *src, size_t len,
+		       unsigned int bit)
+{
+	unsigned int by = bit / 8u, bi = bit % 8u;
+	size_t i;
+
+	for (i = 0; i < len; i++)
+		dst[i] = bi ? (uint8_t)(src[i + by] << bi |
+					src[i + by + 1u] >> (8u - bi))
+			    : src[i + by];
+}
+
+/*
+ * Receive, in place: advance the stream by ssc_off bits so the chip's
+ * 16-bit lanes start on slot boundaries, then swap each slot's two bytes.
+ * The SSC delivers bus order, high byte first; the 7520's DMA buffers, and
+ * everything in this file, hold a slot as a little-endian 16-bit sample.
+ * The head comes from the last two bytes of the previous block, which
+ * delays the stream by one slot; slot probing does not mind.
+ */
+static void ssc_rx_fix(struct stubd *s, uint8_t *fr, size_t len)
+{
+	uint8_t *t;
+
+	if (!s->ssc || !s->ssc_aligned || len < 2u)
+		return;
+	t = malloc(len + 2u);
+	if (!t)
+		return;
+	t[0] = s->ssc_rx_carry[0];
+	t[1] = s->ssc_rx_carry[1];
+	memcpy(t + 2, fr, len);
+	s->ssc_rx_carry[0] = fr[len - 2u];
+	s->ssc_rx_carry[1] = fr[len - 1u];
+	bit_window(fr, t, len, s->ssc_off);
+	swap_pairs(fr, len);
+	free(t);
+}
+
+/*
+ * Write whole frames. On the SSC transport, the inverse of ssc_rx_fix():
+ * swap each slot's bytes, then delay the stream by ssc_off bits, its head
+ * taken from the last two bytes sent before. burst: a one-off write between
+ * the driver's idle frames (probing, before the block loop runs); its head
+ * then comes from the idle frame, and one idle frame is appended so the
+ * bits the shift pushes past the end are idle bits too. Returns the bytes
+ * of frames taken, as write() would.
+ */
+static ssize_t pcm_write(struct stubd *s, const uint8_t *frames, size_t len,
+			 int burst)
+{
+	size_t fb = s->slots * 2u, tail = burst ? fb : 0u, n = len + tail;
+	uint8_t *t, *out;
+	ssize_t w;
+
+	if (!s->ssc)
+		return write(s->fd, frames, len);
+	t = malloc(n + 2u);
+	out = malloc(n);
+	if (!t || !out) {
+		free(t);
+		free(out);
+		errno = ENOMEM;
+		return -1;
+	}
+	if (burst)
+		memset(s->ssc_tx_carry, 0xff, sizeof(s->ssc_tx_carry));
+	t[0] = s->ssc_tx_carry[0];
+	t[1] = s->ssc_tx_carry[1];
+	memcpy(t + 2, frames, len);
+	memset(t + 2 + len, 0xff, tail);
+	swap_pairs(t + 2, len);
+	bit_window(out, t, n, 16u - s->ssc_off);
+	w = write(s->fd, out, n);
+	if (w >= 2) {
+		s->ssc_tx_carry[0] = t[w];
+		s->ssc_tx_carry[1] = t[w + 1];
+	}
+	free(t);
+	free(out);
+	if (w > (ssize_t)len)
+		w = (ssize_t)len;
+	return w;
+}
+
 static int send_mail(struct stubd *s, unsigned int tx_slot,
 		     const struct dect_mail *m)
 {
@@ -1686,7 +1813,7 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 	memset(frames, 0xff, nf * fb);
 	for (k = 0; k < nf; k++)
 		memcpy(frames + k * fb + tx_slot * 2u, el + 2u * k, 2);
-	w = write(s->fd, frames, nf * fb);
+	w = pcm_write(s, frames, nf * fb, 1);
 	free(frames);
 	if (w != (ssize_t)(nf * fb))
 		return -1;
@@ -2237,7 +2364,7 @@ lane_done:
 		}
 	}
 	taken = s->txq_len - ql;
-	wr = write(s->fd, frames, fpb * fb);
+	wr = pcm_write(s, frames, fpb * fb, 0);
 	if (wr == (ssize_t)(fpb * fb)) {
 		owed = taken;
 	} else {
@@ -2314,12 +2441,15 @@ static int send_mail_spec(struct stubd *s, const char *spec)
 	return 0;
 }
 
-/* Read up to max_blocks of raw frame data into buf (block payload only). */
-static ssize_t read_frames(int fd, unsigned int slots, unsigned int fpb,
-			   unsigned int max_blocks, uint8_t *buf, size_t cap,
-			   unsigned int timeout_ms)
+/*
+ * Read up to max_blocks of frame data into buf (block payload only), in the
+ * 7520's layout once the SSC transport is aligned.
+ */
+static ssize_t read_frames(struct stubd *s, unsigned int max_blocks,
+			   uint8_t *buf, size_t cap, unsigned int timeout_ms)
 {
-	size_t block = slots * 2u * fpb;
+	int fd = s->fd;
+	size_t block = s->slots * 2u * s->fpb;
 	size_t slot = (sizeof(struct dect_pcm_block) + block + 7u) & ~(size_t)7u;
 	uint8_t *tmp = malloc(slot * 16u);
 	size_t got = 0;
@@ -2348,11 +2478,12 @@ static ssize_t read_frames(int fd, unsigned int slots, unsigned int fpb,
 		     off += slot) {
 			const struct dect_pcm_block *h = (const void *)(tmp + off);
 
-			if (h->magic != DECT_PCM_BLOCK_MAGIC || h->len != block)
+			if (!pcm_block_ok(s, h) || h->len != block)
 				continue;
 			if (got + block > cap)
 				goto done;
 			memcpy(buf + got, tmp + off + sizeof(*h), block);
+			ssc_rx_fix(s, buf + got, block);
 			got += block;
 			blocks++;
 		}
@@ -2405,7 +2536,7 @@ static int find_control_slot(struct stubd *s, unsigned int fpb)
 				fprintf(stderr, "probe: send in slot %u failed\n", tx);
 			continue;
 		}
-		n = read_frames(s->fd, s->slots, fpb, PROBE_BLOCKS, data, cap, 500);
+		n = read_frames(s, PROBE_BLOCKS, data, cap, 500);
 		if (n <= 0)
 			continue;
 		frames = (size_t)n / (s->slots * 2u);
@@ -2445,14 +2576,129 @@ out:
 	return ret;
 }
 
+/*
+ * Measure the bit offset of the chip's 16-bit lanes in the SSC's stream:
+ * the offset at which the most lanes read 0xFEFE, the chip's idle pattern
+ * (three such lanes per frame on the 7412's 06.88 STUB in mode 0x119,
+ * observed 2026-10-29). Where two idle lanes are adjacent the pattern also
+ * matches 8 bits later (two per frame there), so the control-slot search
+ * retries at offset + 8 before it gives up (ssc_flip()).
+ */
+static int ssc_measure(struct stubd *s)
+{
+	size_t block = s->slots * 2u * s->fpb, cap = block * 16u, nb, b;
+	uint8_t *d = malloc(cap);
+	unsigned int cnt[16], o, best = 0;
+	ssize_t n = 0;
+	int tries;
+
+	if (!d)
+		return -1;
+	/* The chip clocks the bus once its STUB runs; give it 10 s. */
+	for (tries = 0; tries < 50 && n <= 0 && !stop; tries++)
+		n = read_frames(s, 16, d, cap, 200);
+	if (n <= 0) {
+		fprintf(stderr, "ssc: no frames -- the chip is not clocking "
+			"the bus\n");
+		free(d);
+		return -1;
+	}
+	memset(cnt, 0, sizeof(cnt));
+	nb = (size_t)n * 8u;
+	for (o = 0; o < 16u; o++)
+		for (b = o; b + 24u <= nb; b += 16u) {
+			const uint8_t *p = d + b / 8u;
+			uint32_t v = (uint32_t)p[0] << 16 |
+				     (uint32_t)p[1] << 8 | p[2];
+
+			cnt[o] += ((v >> (8u - b % 8u)) & 0xffffu) == 0xfefeu;
+		}
+	free(d);
+	for (o = 1; o < 16u; o++)
+		if (cnt[o] > cnt[best])
+			best = o;
+	if (!cnt[best]) {
+		fprintf(stderr, "ssc: no idle lane (0xFEFE) in %zd bytes -- "
+			"is the STUB running?\n", n);
+		return -1;
+	}
+	s->ssc_off = best;
+	s->ssc_aligned = 1;
+	memset(s->ssc_rx_carry, 0xff, sizeof(s->ssc_rx_carry));
+	memset(s->ssc_tx_carry, 0xff, sizeof(s->ssc_tx_carry));
+	printf("ssc: lane bit offset %u (%u idle lanes; %u at offset %u)\n",
+	       best, cnt[best], cnt[(best + 8u) % 16u], (best + 8u) % 16u);
+	return 0;
+}
+
+/* The other offset at which the idle pattern reads (see ssc_measure()). */
+static void ssc_flip(struct stubd *s)
+{
+	s->ssc_off = (s->ssc_off + 8u) % 16u;
+	memset(s->ssc_rx_carry, 0xff, sizeof(s->ssc_rx_carry));
+	memset(s->ssc_tx_carry, 0xff, sizeof(s->ssc_tx_carry));
+	printf("ssc: trying lane bit offset %u\n", s->ssc_off);
+}
+
+#define SSC_N_DESC	16u	/* 64 ms of blocks queued for read() */
+
+/*
+ * The generic SSC PCM transport (7412). The chip's frame has cfg->slots
+ * 16-bit slots (-c; 36 on the 7412 in mode 0x119). Starting it after
+ * dect-fwload, with the chip already clocking, works as well as starting
+ * it before; only the bit offset is new each time (observed on a 7412,
+ * 2026-10-29), and ssc_measure() finds it.
+ */
+static int ssc_bring_up(struct stubd *s, struct dect_pcm_config *cfg,
+			const struct ssc_pcm_info *si)
+{
+	struct ssc_pcm_config sc;
+	struct ssc_pcm_tx_idle idle;
+	unsigned int step;
+
+	memset(&sc, 0, sizeof(sc));
+	sc.slots = cfg->slots;
+	sc.frames_per_block = cfg->frames_per_block;
+	sc.n_desc = cfg->n_desc ? cfg->n_desc : SSC_N_DESC;
+	if (ioctl(s->fd, SSC_PCM_IOC_CONFIG, &sc)) {
+		perror("SSC_PCM_CONFIG");
+		return -1;
+	}
+	s->ssc = 1;
+	cfg->slots = sc.slots;
+	cfg->frames_per_block = sc.frames_per_block;
+	cfg->n_desc = sc.n_desc;
+	s->slots = sc.slots;
+	s->fpb = sc.frames_per_block;
+	printf("config: %.32s (uapi %u), slots %u frames %u desc %u tx\n",
+	       si->name, si->version, sc.slots, sc.frames_per_block, sc.n_desc);
+	/* What the driver sends when no frame is queued: all ones, idle. */
+	memset(&idle, 0xff, sizeof(idle));
+	if (ioctl(s->fd, SSC_PCM_IOC_TX_IDLE, &idle)) {
+		perror("SSC_PCM_TX_IDLE");
+		return -1;
+	}
+	for (step = 1; step <= SSC_PCM_STEP_DMA; step++) {
+		if (ioctl(s->fd, SSC_PCM_IOC_STEP, &step)) {
+			fprintf(stderr, "step %u: %s\n", step, strerror(errno));
+			return -1;
+		}
+	}
+	return ssc_measure(s);
+}
+
 static int bring_up(struct stubd *s, struct dect_pcm_config *cfg)
 {
 	struct dect_ioc_info info;
+	struct ssc_pcm_info si;
 	unsigned int step;
 
 	memset(&info, 0, sizeof(info));
-	if (ioctl(s->fd, DECT_IOC_INFO, &info) || info.version < 2 ||
-	    !(info.features & DECT_FEATURE_PCM_RX)) {
+	memset(&si, 0, sizeof(si));
+	if (ioctl(s->fd, DECT_IOC_INFO, &info) &&
+	    !ioctl(s->fd, SSC_PCM_IOC_INFO, &si))
+		return ssc_bring_up(s, cfg, &si);
+	if (info.version < 2 || !(info.features & DECT_FEATURE_PCM_RX)) {
 		fprintf(stderr, "module without PCM receive (version %u)\n",
 			info.version);
 		return -1;
@@ -2480,6 +2726,12 @@ static void tear_down(struct stubd *s)
 {
 	unsigned int step = DECT_PCM_STEP_OFF;
 
+	if (s->ssc) {
+		step = SSC_PCM_STEP_OFF;
+		if (ioctl(s->fd, SSC_PCM_IOC_STEP, &step))
+			perror("SSC_PCM_STEP 0");
+		return;
+	}
 	if (ioctl(s->fd, DECT_IOC_PCM_STEP, &step))
 		perror("PCM_STEP 0");
 }
@@ -9405,6 +9657,31 @@ static void report_tx_starvation(struct stubd *s)
 	struct dect_pcm_stats ps;
 	uint32_t d_blocks, d_frames, want, idle;
 
+	if (s->ssc) {
+		/* The SSC driver counts idle frames itself. */
+		struct ssc_pcm_stats st;
+
+		memset(&st, 0, sizeof(st));
+		if (!s->fpb || ioctl(s->fd, SSC_PCM_IOC_STATS, &st))
+			return;
+		if (s->pcm_tx_primed) {
+			idle = (uint32_t)(st.tx_idle - s->ssc_tx_idle_prev);
+			want = idle + (uint32_t)(st.tx_frames -
+						 s->ssc_tx_sent_prev);
+			if (want)
+				printf("call: downlink starvation: %u of %u "
+				       "frames idle-filled (%u.%02u%%), %u "
+				       "blocks\n", idle, want,
+				       idle * 100u / want,
+				       (unsigned)((uint64_t)idle * 10000u /
+						  want % 100u),
+				       want / s->fpb);
+		}
+		s->pcm_tx_primed = 1;
+		s->ssc_tx_idle_prev = st.tx_idle;
+		s->ssc_tx_sent_prev = st.tx_frames;
+		return;
+	}
 	if (!s->fpb || ioctl(s->fd, DECT_IOC_PCM_STATS, &ps))
 		return;
 	if (!s->pcm_tx_primed) {
@@ -9668,12 +9945,13 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			     off += slot) {
 				const struct dect_pcm_block *h =
 					(const void *)(buf + off);
-				const uint8_t *fr = buf + off + sizeof(*h);
+				uint8_t *fr = buf + off + sizeof(*h);
 				struct dect_mail m;
 				unsigned int f;
 
-				if (h->magic != DECT_PCM_BLOCK_MAGIC)
+				if (!pcm_block_ok(s, h))
 					continue;
+				ssc_rx_fix(s, fr, block);
 				if (h->flags & DECT_PCM_BF_DROPPED)
 					fprintf(stderr, "warning: dropped blocks before seq %u\n",
 						h->seq);
@@ -11449,6 +11727,8 @@ int main(int argc, char **argv)
 			}
 			fprintf(stderr, "control slot not found yet (pass %d of "
 				"3) -- the chip may still be starting\n", pass);
+			if (s.ssc)
+				ssc_flip(&s);
 			sleep(1);
 		}
 	} else {
