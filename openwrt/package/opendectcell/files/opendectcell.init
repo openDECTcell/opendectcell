@@ -94,11 +94,11 @@ console_claim() {
 }
 
 load_chip() {
-	local dir first second uart mtd off mode unverified f extra
+	local dir first second tty mtd off mode unverified f extra
 	config_get dir main firmware_dir /etc/opendectcell/firmware
 	config_get first main first "$fw_firstlevel"
 	config_get second main second "$fw_secondlevel"
-	config_get uart main uart "$uart"
+	config_get tty main uart "$uart"
 	config_get mtd main factory_mtd "$factory_mtd"
 	config_get off main factory_offset "$factory_offset"
 	config_get mode main mode "$dect_mode"
@@ -133,12 +133,12 @@ load_chip() {
 	}
 	# Already booted since the last module load: keep it.
 	[ -s /tmp/dect-stub.second ] && return 0
-	console_claim "$uart"
+	console_claim "$tty"
 	extra=""
 	[ -n "$mtd" ] && extra="$extra --factory-mtd $mtd --factory-offset $off"
 	[ "$strapv" = 0 ] && extra="$extra --no-strap"
 	# shellcheck disable=SC2086
-	/usr/sbin/dect-fwload --uart "$uart" --dect-dev /dev/dect0 \
+	/usr/sbin/dect-fwload --uart "$tty" --dect-dev /dev/dect0 \
 		--first "$dir/$first" --second "$dir/$second" --mode "$mode" \
 		$extra \
 		>/tmp/dect-fwload.log 2>&1 || {
