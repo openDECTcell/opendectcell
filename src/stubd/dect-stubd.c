@@ -307,6 +307,7 @@ struct side_link {
 	size_t   dial_len;	/* overlap receiving, as on the main link */
 	uint64_t dial_change_ms;
 	int      cipher_done;	/* DCK to the chip, or the failure logged */
+	int      auth_refused;	/* authfirst: call ended, no key to prove */
 	/* the chip's 0xF625 for this link's call, as the main link's */
 	struct dect_diag_status last_status;
 	struct dect_diag_frames frames;
@@ -804,6 +805,7 @@ struct stubd {
 		unsigned reg_window_s;	/* regopen=SECS: close after; 0 = never */
 		int      two_calls;	/* twocalls: speech on side links */
 		int      locauth;	/* locauth: authenticate on locating */
+		int      auth_first;	/* authfirst: no service before proof */
 		uint8_t  lane_ch[XLANE_MAX], lane_word[XLANE_MAX];
 		unsigned reg_signal_s;	/* regwindow=SECS for SIGUSR1, 120 */
 		unsigned holdback_ms;	/* holdback=MS, multi-cell test M2 */
@@ -1356,6 +1358,7 @@ struct stubd {
 		uint64_t sweep_ms;	/* when the current source was routed */
 		int sweep_done;
 		int cipher_started;	/* call-time authentication kicked off */
+		int auth_refused;	/* authfirst: call ended, no proof */
 		int cipher_done;	/* cipher outcome already reported */
 		int cipher_reject_seen;	/* CIPHER-REJECT already reported */
 		int cipher_timeout_seen;	/* <MM_cipher.1> already reported */
@@ -3228,7 +3231,8 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
 	struct handset *h;
 	int i;
 
-	if (!l->mm.port_id_len)
+	/* what a handset says of itself counts once it is proved (A3) */
+	if (!l->mm.port_id_len || !l->mm.authenticated)
 		return;
 	i = hs_by_ipui(s, l->mm.port_id, l->mm.port_id_len);
 	if (i < 0)
@@ -3510,6 +3514,20 @@ static void dial_route(struct stubd *s, uint64_t now)
 	}
 }
 
+/*
+ * Authenticate first (security audit 2026-10-29, A1). A handset is taken
+ * for the one it names, and an IPUI travels in clear: until the handset on
+ * this connection has answered our challenge with the key we hold for that
+ * IPUI, its call goes nowhere -- not to SIP, not to another handset -- and
+ * its answer to our call is not passed on. The challenge itself starts as
+ * soon as the call exists (the authfirst block in the call tick). -C (no
+ * cipher, a lab option) keeps the old order, as does -a noauthfirst.
+ */
+static int call_auth_ok(const struct stubd *s, const struct dect_link *l)
+{
+	return !s->audio.auth_first || s->no_cipher || l->mm.authenticated;
+}
+
 static void dial_tick(struct stubd *s, uint64_t now)
 {
 	const uint8_t *k;
@@ -3519,7 +3537,8 @@ static void dial_tick(struct stubd *s, uint64_t now)
 	if (s->reg.active && s->reg.link.cc.state == DECT_CC_ST_PROCEEDING &&
 	    !s->reg.link.cc.incoming && !s->reg.ic_tried &&
 	    !s->reg.link.cc.busy_notified &&	/* §7.4.8.3: busy tone */
-	    (s->reg.link.cc.peer_basic_service >> 4) == 0x9u) {
+	    (s->reg.link.cc.peer_basic_service >> 4) == 0x9u &&
+	    call_auth_ok(s, &s->reg.link)) {
 		s->reg.ic_tried = 1;
 		(void)ic_start(s, -1, now);
 		dect_link_drain(&s->reg.link, now);
@@ -3528,7 +3547,8 @@ static void dial_tick(struct stubd *s, uint64_t now)
 	/* a number picked from a list (1C15H, TS 102 527-3 7.4.10.6.2) */
 	if (s->reg.active && s->reg.link.cc.list_number &&
 	    s->reg.link.cc.state == DECT_CC_ST_PROCEEDING &&
-	    !s->reg.link.cc.incoming && !s->reg.ic_tried) {
+	    !s->reg.link.cc.incoming && !s->reg.ic_tried &&
+	    call_auth_ok(s, &s->reg.link)) {
 		k = dect_cc_keypad(&s->reg.link.cc, &len);
 		printf("call: dialled \"%.*s\" from a list, connecting\n",
 		       (int)len, (const char *)k);
@@ -3550,6 +3570,8 @@ static void dial_tick(struct stubd *s, uint64_t now)
 	}
 	if (!len || now - s->reg.dial_change_ms < s->audio.dial_wait_ms)
 		return;		/* no digit yet: F<CC.01> covers it */
+	if (!call_auth_ok(s, &s->reg.link))
+		return;		/* the number waits for the proof */
 	printf("call: dialled \"%.*s\" -- complete after %u ms without a "
 	       "digit, connecting\n", (int)len, (const char *)k,
 	       s->audio.dial_wait_ms);
@@ -6076,6 +6098,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
 	s->reg.cipher_reject_seen = 0;
+	s->reg.auth_refused = 0;
 	s->reg.cipher_timeout_seen = 0;
 	s->reg.handle = handle;
 	dect_link_init(&s->reg.link, handle, &mcfg);
@@ -6793,6 +6816,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 	sl->handle = handle;
 	sl->adopted = -1;
 	sl->cipher_done = 0;
+	sl->auth_refused = 0;
 	memset(&sl->last_status, 0, sizeof(sl->last_status));
 	memset(&sl->frames, 0, sizeof(sl->frames));
 	sl->status_ms = 0;
@@ -6961,7 +6985,8 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 				 lanes_available(s, sl) <= 0);
 	if (cc->state == DECT_CC_ST_PROCEEDING && !cc->incoming &&
 	    !sl->ic_tried && !cc->busy_notified &&
-	    (cc->peer_basic_service >> 4) == 0x9u) {
+	    (cc->peer_basic_service >> 4) == 0x9u &&
+	    call_auth_ok(s, &sl->link)) {
 		sl->ic_tried = 1;	/* sent complete: route it now */
 		(void)ic_start(s, (int)(sl - s->side), now);
 		dect_link_drain(&sl->link, now);
@@ -6977,7 +7002,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 			sl->dial_len = len;
 			sl->dial_change_ms = now;
 		} else if (len && now - sl->dial_change_ms >=
-			   s->audio.dial_wait_ms) {
+			   s->audio.dial_wait_ms && call_auth_ok(s, &sl->link)) {
 			printf("side: dialled on handle %u -- connecting\n",
 			       sl->handle);
 			sl->ic_tried = 1;
@@ -6992,7 +7017,8 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 		sl->dial_change_ms = 0;
 	}
 	if (sl->lane < 0 && cc->state == DECT_CC_ST_ACTIVE &&
-	    (cc->incoming || dect_cc_peer_is_speech(cc))) {
+	    (cc->incoming || dect_cc_peer_is_speech(cc)) &&
+	    call_auth_ok(s, &sl->link)) {
 		int i = xlane_free(s);
 
 		if (i >= 0)
@@ -7953,7 +7979,8 @@ static void bridge_tick(struct stubd *s, uint64_t now)
 			s->bc.rang = 1;
 			bridge_event(s, "ringing", NULL, NULL);
 		}
-		if (!s->bc.answered && cc->state == DECT_CC_ST_ACTIVE) {
+		if (!s->bc.answered && cc->state == DECT_CC_ST_ACTIVE &&
+		    call_auth_ok(s, &s->reg.link)) {
 			s->bc.answered = 1;
 			printf("bridge: call %u answered on DECT %u\n",
 			       s->bc.id, main_hs_slot(s));
@@ -8482,7 +8509,9 @@ static void ic_tick(struct stubd *s, uint64_t now)
 		if (s->ic.name_info)
 			ic_name_info(s, t, now);
 	}
-	if (s->ic.st != IC_UP && t->state == DECT_CC_ST_ACTIVE) {
+	if (s->ic.st != IC_UP && t->state == DECT_CC_ST_ACTIVE &&
+	    call_auth_ok(s, s->ic.tside < 0 ? &s->reg.link
+					    : &s->side[s->ic.tside].link)) {
 		(void)dect_cc_connect(c);
 		s->ic.st = IC_UP;
 		printf("intern: the target answered -- connected, bridging\n");
@@ -8618,6 +8647,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 		s->reg.link.mm.cipher_state == DECT_MM_CIPHER_FAILED;
 	sl->cipher_done = 1;	/* the old main's was the main link's to do */
 	s->reg.cipher_reject_seen = 0;
+	s->reg.auth_refused = 0;
 	s->reg.cipher_timeout_seen = 0;
 	s->reg.audio_connected = 0;
 	s->reg.time_sent_for = 0;
@@ -8647,17 +8677,30 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 	int a = l->mm.adopted;
 
 	if (l->mm.cipher_state == DECT_MM_CIPHER_NONE && !s->no_cipher &&
-	    dect_cc_busy(cc) && a >= 0 && (unsigned)a < s->n_hs &&
-	    (((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
+	    dect_cc_busy(cc) && (a >= 0 || s->audio.auth_first) &&
+	    (s->audio.auth_first ||
+	     ((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
 	     cc->state == DECT_CC_ST_CONNECT_PENDING ||
 	     cc->state == DECT_CC_ST_ACTIVE)) {
-		const uint8_t *uak = (unsigned)a == s->cur
+		const uint8_t *uak = a < 0 || (unsigned)a >= s->n_hs ? NULL :
+			(unsigned)a == s->cur
 			? (s->uak_valid ? s->uak : NULL)
 			: (s->hs[a].uak_valid ? s->hs[a].uak : NULL);
 		uint8_t crand[8], crs[16];
 
-		if (!uak)
+		if (!uak) {
+			/* authfirst: nothing to prove it against (A1) */
+			if (s->audio.auth_first && !sl->auth_refused) {
+				sl->auth_refused = 1;
+				(void)dect_cc_release_reason(&l->cc, 0x09u);
+				printf("side: released -- no key to "
+				       "authenticate the handset on handle "
+				       "%u with\n", sl->handle);
+				dect_link_drain(l, now);
+				side_pump(s, sl);
+			}
 			return;
+		}
 		gen_rand(s, crand, sizeof(crand));
 		gen_rand(s, crs, sizeof(crs));
 		dect_mm_start_cipher(&l->mm, uak, crand, crs);
@@ -8683,7 +8726,8 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 		       : l->mm.stats.auth_mismatch ? "WRONG RES"
 		       : "the handset refused");
 		/* EN 300 444 8.23.2.3, as on the main link */
-		if (l->mm.stats.auth_mismatch && dect_cc_busy(cc)) {
+		if ((l->mm.stats.auth_mismatch || s->audio.auth_first) &&
+		    dect_cc_busy(cc)) {
 			(void)dect_cc_release_reason(&l->cc, 0x09u);
 			printf("side: released -- the handset failed "
 			       "authentication (EN 300 444 8.23.2.3)\n");
@@ -9074,7 +9118,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			fflush(stdout);
 		}
 	} else if (ind.cc_message && !s->cc_id_learned &&
-		   s->reg.link.cc.peer_fixed_id_len) {
+		   s->reg.link.cc.peer_fixed_id_len &&
+		   /* not from whoever named its IPUI (audit A3) */
+		   s->reg.link.mm.authenticated) {
 		memcpy(s->cc_port_id, s->reg.link.cc.peer_port_id,
 		       sizeof(s->cc_port_id));
 		s->cc_port_id_len = s->reg.link.cc.peer_port_id_len;
@@ -9296,7 +9342,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		       s->reg.link.cc.peer_basic_service);
 	}
 
-	if (!s->reg.call_bound &&
+	if (!s->reg.call_bound && call_auth_ok(s, &s->reg.link) &&
 	    (s->reg.link.cc.state == DECT_CC_ST_CONNECT_PENDING ||
 	     s->reg.link.cc.state == DECT_CC_ST_ACTIVE ||
 	     (s->audio.bind_first && s->reg.connect_staged &&
@@ -9370,6 +9416,31 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	}
 
 	/*
+	 * Authenticate first (A1, call_auth_ok()): challenge the handset as
+	 * soon as a call exists on the link, in either direction, as a
+	 * list-access call always was (below). Nothing is routed or passed on
+	 * until it answers. Without a key for the identity it claims there is
+	 * nothing to check it against, so the call ends.
+	 */
+	if (s->audio.auth_first && !s->no_cipher && !s->reg.cipher_started &&
+	    !s->reg.auth_refused && s->reg.active &&
+	    dect_cc_busy(&s->reg.link.cc)) {
+		if (s->uak_valid) {
+			printf("call: authenticating the handset before the "
+			       "call goes anywhere\n");
+			start_call_cipher(s, now);
+		} else {
+			s->reg.auth_refused = 1;
+			(void)dect_cc_release_reason(&s->reg.link.cc,
+						     0x09u /* auth failed */);
+			printf("call: released -- no key to authenticate this "
+			       "handset with\n");
+			dect_link_drain(&s->reg.link, now);
+			pump_lapc(s);
+		}
+	}
+
+	/*
 	 * A list-access call is ciphered as well. TS 102 527-3 C.7.2 shows the
 	 * FP's {CIPHER-REQUEST} right after the LiA {CC-SETUP}, and the PIN
 	 * fields of the System Settings List travel only on a ciphered link
@@ -9409,9 +9480,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * A wrong RES means the handset is not the one subscribed
 		 * under that identity: EN 300 444 §8.23.2.3, "any failure ...
 		 * shall result on the interruption of any call in progress".
-		 * We let the call go on unciphered (spec sweep, N.9).
+		 * We let the call go on unciphered (spec sweep, N.9) -- and
+		 * so did anyone who named a held IPUI and then ignored or
+		 * refused the challenge. With authfirst any failure ends it:
+		 * no reply, a refusal or a missing RES as well (A1).
 		 */
-		if (s->reg.link.mm.stats.auth_mismatch &&
+		if ((s->reg.link.mm.stats.auth_mismatch ||
+		     s->audio.auth_first) &&
 		    dect_cc_busy(&s->reg.link.cc)) {
 			(void)dect_cc_release_reason(&s->reg.link.cc,
 						     0x09u /* auth failed */);
@@ -10351,6 +10426,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->locauth = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "nolocauth", 9))
 			a->locauth = 0;
+		else if (!eq && klen == 9 && !memcmp(key, "authfirst", 9))
+			a->auth_first = 1;
+		else if (!eq && klen == 11 && !memcmp(key, "noauthfirst", 11))
+			a->auth_first = 0;
 		else if (!eq && klen == 5 && !memcmp(key, "noctl", 5))
 			a->no_ctl = 1;
 		else if (eq && klen == 5 && (!memcmp(key, "lane2", 5) ||
@@ -10922,6 +11001,10 @@ static void usage(void)
 		"           locauth      authenticate a handset with its UAK inside its\n"
 		"                        location registration (the default;\n"
 		"                        nolocauth switches it off)\n"
+		"           authfirst    authenticate a handset with its UAK before\n"
+		"                        its call goes anywhere or an answer is\n"
+		"                        passed on, and end the call on any failure\n"
+		"                        (the default; noauthfirst: the old order)\n"
 		"           linename=NAME the line's name in the Line Settings\n"
 		"                        List (\"Line 1\"; no commas)\n"
 		"           ctl=PATH     the control socket, default\n"
@@ -11446,6 +11529,7 @@ int main(int argc, char **argv)
 	s.audio.signal_value = DECT_SIGNAL_ALERT_PATTERN1;
 	s.audio.nlr = 1;		/* bench 2026-10-28, vNLR: harmless */
 	s.audio.locauth = 1;	/* bench 2026-10-28, test 19: all three answer */
+	s.audio.auth_first = 1;	/* security audit 2026-10-29, A1 */
 	s.audio.sweep_dst = -1;		/* no GenDSP source sweep */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
