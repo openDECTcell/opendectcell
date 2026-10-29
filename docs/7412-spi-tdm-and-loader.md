@@ -74,12 +74,42 @@ Same box and software as §1a, 06.88 STUB, mode 0x119.
 | Service run (R1) | `/etc/init.d/opendectcell start` with the 7412 profile (`56a2d33`): `lantiq_ssc_pcm` and `opendectcell` loaded, 06.88 uploaded, `dect-stubd -d /dev/ssc-pcm0 -c 36 -g` started. Control slot found on the third pass, 6 s after the upload, as on the 7520 ("the chip may still be starting"). Bring-up mails `0x0153`, `0x0169`, `0x0157` (src 0x14), `0x015B 01`, `0x022C 01` sent. Session up for 39 s, 0 deaths, 0 sequence gaps or checksum errors; stop parked the radio (`0x022C 01`, `0x015B 00`, on the wire within 6 ms). |
 | Radio run (R2) | The same by hand with `-v`, 30 s: after the bring-up mails one `0xF602` (23 octets), and one after each park mail; periodic reports throughout. The chip then went back into reset. **Not verified:** that the radio beacons. `0xF602` carries the beacon content, not the radio state (docs/mac-bringup.md), and no handset was at hand. |
 
+### Command check (2026-10-29, observed on hardware)
+
+One short `dect-stubd -p` run per command, 06.88 STUB, mode 0x119, no handset.
+
+| Command | Answer on 06.88 | Against 08.25 / A-0007 |
+|---|---|---|
+| `0xF600` contact | `0xF601` (5 octets) and `0xF602` (23) | same. The chip answered only 30 to 60 s after its upload in several runs; the `0xFFF2` build stamp of the first contact was not caught |
+| `0xFFF1/07` memory read | `0xFFF1/08` echoing address and count, 32 bytes; repeated reads identical; a full 64 KiB sweep answered 5489 of 5490 requests | same |
+| `0xF624 {h,0A}` status poll | `0xF625`, **44** octets, for handles 0 and 1 with no link; ten RSSI octets at offsets 6-15 | 45 octets on 08.25 |
+| `0x0169 07`, `0x0157 00`, `0x0153 00` (src 0x14), radio off | **no reply** | A-0007 expected `0xF602`/`0xF623` (*derived*) |
+| `0x022B 41`, then `0x022C 01` | `0xF602` byte 1 `00` -> `08` -> `00` | same (capability a44) |
+| `0x020A` idx 1 with a marker record | the marker appears at **`0x067F`**, flag at +0x10, idx 2 at `0x0690` | 08.25: `0x9518`. Confirms A-0007's displacement `0x067F` |
+| `0x015B 00` | `0xF602` byte 2 `01` -> `02`; `0xF623` stops | byte 2 reads `01` from boot on |
+
+**Radio start.** In the 7520's bring-up order the first radio-on after a boot
+left the `0xF623` scan report flat (every carrier `0x1B`) for 26, 30 and 120 s,
+header `00 02`/`01 02`. With `0x015B 00` before the configuration (or after a
+park in an earlier run) it showed levels up to `0x3B`, strongest on carriers
+5-7, within 1-2 s, five runs of five; radio-off sent after the configuration
+did not help. `dect-stubd` now starts the 06.88 bring-up with radio-off
+(`143c5fd`). In the validation run the levels fell back to the floor after
+about 15 s while the header stayed `04 02`. Whether the levels are our own
+beacon or a neighbour that the scan sees only while it runs is **open**
+(asked as Q-0008); a handset decides (`bench-7412.md`).
+
+The daemon's log masks key bytes of memory reads in the 08.25 table range
+(`0x9518`) whatever the build; on 06.88 the table is at `0x067F` and is not
+masked, so do not memory-dump that range with `-p` once handsets are
+registered.
+
 ### 06.88 against 08.25 [CR A-0007]
 
 *Derived statically* from both STUB blobs' mail dispatch tables:
 
 - Every bring-up, registration and subscription mail `dect-stubd` sends has a 06.88 handler with the same dispatch flags. Dispatch is by primitive, not by source task. The `0x020A` record handler is the same routine (16-byte record plus flag, stride 0x11, six slots).
-- The UAK record table is **not** at 0x9518 on 06.88; the address is not known. `dect-stubd` treats 06.88 as an unknown build and skips its table reads.
+- The UAK record table is **not** at 0x9518 on 06.88; A-0007 gave only the displacement `0x067F`, and the command check found it there. `dect-stubd` still treats 06.88 as an unknown build and skips its table reads; using `0x067F` is open.
 - Missing on 06.88: `0x0251` (channel parameter, sent at call set-up, presumably ignored), `0x015E` and `0x015F` (sent only by the optional paging sequence or not at all), `0x0159`, `0x015C`.
 
 ## 2. STUB firmware patching (the first-stage loader, `the loader routine`)
