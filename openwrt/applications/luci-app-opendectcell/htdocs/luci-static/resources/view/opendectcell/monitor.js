@@ -22,9 +22,17 @@
  * time [CR A-0121, A-0123]; plus the levels of all ten carriers and a live
  * graph of level and quality, kept in the browser while the page is open.
  * Deliberately not a debugging console: raw mails stay in dect-stubd -v.
+ *
+ * In cell mode (option role 'cell') the box is a cell of an openDECTcell
+ * controller, which has the handsets, the calls and the lines; the page
+ * then shows the cell's own side instead: the controller link from
+ * dect-cell (cell-link.json) and the chip and its mail tunnel from
+ * dect-stubd -K (cell.json).
  */
 var STATE = '/var/run/opendectcell/state.json';
 var VOIP = '/var/run/opendectcell/voip.json';
+var CELL = '/var/run/opendectcell/cell.json';
+var LINK = '/var/run/opendectcell/cell-link.json';
 var HISTORY_S = 300;		/* the graph's span */
 var history = {};		/* handle -> [{t, dbm, q}] */
 
@@ -102,6 +110,9 @@ function loadSettings() {
 function readFor(tab) {
 	var status = tab != 'log';
 
+	if (tab == 'cell')
+		return Promise.all([ readJson(CELL), readJson(LINK), readServices(),
+				     null, loadSettings() ]);
 	return Promise.all([
 		readState(),
 		tab == 'voip' ? readJson(VOIP) : null,
@@ -542,7 +553,7 @@ function renderDect(st, inst) {
  * (logger tag openDECTcell) and procd's about either instance.
  */
 var LOG_KIND = [
-	[ /\bdect-stubd\[\d+\]:|procd: .*opendectcell::instance1/, 'dect' ],
+	[ /\bdect-(stubd|cell)\[\d+\]:|procd: .*opendectcell::(instance1|cell)/, 'dect' ],
 	[ /\bbaresip\[\d+\]:|procd: .*opendectcell::baresip/, 'voip' ],
 	[ /\bopendectcell(\[\d+\])?:/, 'both' ]
 ];
@@ -614,6 +625,70 @@ function renderLogTab(lines) {
 	]);
 }
 
+function isCell() {
+	return uci.get('opendectcell', 'main', 'role') == 'cell';
+}
+
+var LINK_STATE = {
+	'up': _('up'),
+	'connecting': _('connecting'),
+	'not enrolled': _('not enrolled: Network > DECT, Enrol'),
+	'revoked': _('revoked by the controller: enrol again'),
+	'stopped: protocol version': _('stopped: the controller speaks another protocol version'),
+	'stopped: certificate refused': _('stopped: the controller refused this cell\'s certificate'),
+	'starting': _('starting')
+};
+
+var CELL_STATE = {
+	'active': _('active'), 'pending': _('waiting for an admin to approve it'),
+	'disabled': _('disabled by the controller'), 'revoked': _('revoked')
+};
+
+/* The cell: the controller link (dect-cell) and the chip side (dect-stubd -K). */
+function renderCell(cell, link, inst) {
+	var on = uci.get('opendectcell', 'main', 'enabled') == '1';
+	var d = inst.instance1, c = inst.cell;
+	var run = function(i) {
+		return i && i.running ? E('strong', {}, _('running')) :
+			!on ? _('switched off (Network > DECT: Enable)') :
+			i ? _('stopped after repeated failures: see the Log tab') :
+			    _('not running: see the Log tab');
+	};
+	var rows = [], chip = [];
+
+	rows.push([ _('Chip and radio (dect-stubd)'), run(d) ]);
+	rows.push([ _('Controller link (dect-cell)'), run(c) ]);
+	if (link) {
+		rows.push([ _('Controller'), link.controller || '-' ]);
+		rows.push([ _('Link'), LINK_STATE[link.state] || link.state ]);
+		if (link.cell_state)
+			rows.push([ _('This cell at the controller'),
+				CELL_STATE[link.cell_state] || link.cell_state ]);
+		if (link.cell_id)
+			rows.push([ _('Cell ID'), link.cell_id ]);
+		rows.push([ _('Round trip'), link.rtt_ms ? '%d ms'.format(link.rtt_ms) : '-' ]);
+		rows.push([ _('Reconnects'), String(link.reconnects) ]);
+	}
+	if (cell) {
+		chip.push([ _('Radio'), cell.radio == 'up' ? E('strong', {}, _('on')) :
+			_('parked: the controller turns it on') ]);
+		chip.push([ _('Chip'), cell.chip == 'running' ? _('running') : _('starting') ]);
+		chip.push([ _('Chip firmware'), cell.stub ]);
+		chip.push([ _('Radio links up'), String(cell.links) ]);
+		chip.push([ _('Mails to the controller'), String(cell.mails_up) ]);
+		chip.push([ _('Mails from the controller'), String(cell.mails_down) ]);
+		chip.push([ _('Mails the chip could not take'), String(cell.rejected) ]);
+		chip.push([ _('Mails lost without a controller'), String(cell.not_forwarded) ]);
+		chip.push([ _('Control queue'), _('%d bytes, %d dropped').format(cell.queue_bytes, cell.queue_drops) ]);
+	}
+	return E('div', {}, [
+		E('div', { 'class': 'cbi-section' }, [ E('h3', {}, _('Cell')), table(null, rows) ]),
+		cell ? E('div', { 'class': 'cbi-section' }, [ E('h3', {}, _('Chip')), table(null, chip) ]) : '',
+		E('p', { 'class': 'cbi-value-description' },
+			_('The handsets, their calls and the phone lines are the controller\'s: see its web interface.'))
+	]);
+}
+
 function fill(node, child) {
 	if (!node)
 		return;
@@ -628,21 +703,33 @@ return view.extend({
 		uciAt = Date.now();	/* the view loads the settings fresh */
 		return Promise.all([
 			readState(), readJson(VOIP), readServices(), readLog(),
-			uci.load('opendectcell'), readModelNames()
+			uci.load('opendectcell'), readModelNames(), readJson(CELL),
+			readJson(LINK)
 		]);
 	},
 
 	render: function(r) {
+		var cellMode = isCell();
+		var dect, voip, cell, panes;
+
 		track(r[0]);
 
-		var dect = E('div', {}, renderDect(r[0], r[2]));
-		var voip = E('div', {}, renderVoip(r[0], r[1], r[2]));
 		var log = renderLogTab(r[3]);
-		var panes = [
-			E('div', { 'data-tab': 'dect', 'data-tab-title': _('DECT') }, [ dect ]),
-			E('div', { 'data-tab': 'voip', 'data-tab-title': _('VoIP') }, [ voip ]),
-			E('div', { 'data-tab': 'log', 'data-tab-title': _('Log') }, [ log ])
-		];
+		if (cellMode) {
+			cell = E('div', {}, renderCell(r[6], r[7], r[2]));
+			panes = [
+				E('div', { 'data-tab': 'cell', 'data-tab-title': _('Cell') }, [ cell ]),
+				E('div', { 'data-tab': 'log', 'data-tab-title': _('Log') }, [ log ])
+			];
+		} else {
+			dect = E('div', {}, renderDect(r[0], r[2]));
+			voip = E('div', {}, renderVoip(r[0], r[1], r[2]));
+			panes = [
+				E('div', { 'data-tab': 'dect', 'data-tab-title': _('DECT') }, [ dect ]),
+				E('div', { 'data-tab': 'voip', 'data-tab-title': _('VoIP') }, [ voip ]),
+				E('div', { 'data-tab': 'log', 'data-tab-title': _('Log') }, [ log ])
+			];
+		}
 		var tabs = E('div', {}, panes);
 		var area = log.querySelector('textarea');
 
@@ -651,9 +738,13 @@ return view.extend({
 			var pane = panes.filter(function(p) {
 				return p.getAttribute('data-tab-active') == 'true';
 			})[0];
-			var tab = pane ? pane.getAttribute('data-tab') : 'dect';
+			var tab = pane ? pane.getAttribute('data-tab') : cellMode ? 'cell' : 'dect';
 
 			return readFor(tab).then(function(x) {
+				if (tab == 'cell') {
+					fill(cell, renderCell(x[0], x[1], x[2]));
+					return;
+				}
 				track(x[0]);
 				if (tab == 'dect')
 					fill(dect, renderDect(x[0], x[2]));
@@ -672,7 +763,8 @@ return view.extend({
 		/* the tab menu goes before the panes' parent: it needs one */
 		var page = E('div', {}, [
 			E('h2', {}, _('DECT Monitor')),
-			E('div', { 'class': 'cbi-map-descr' },
+			E('div', { 'class': 'cbi-map-descr' }, cellMode ?
+				_('This box is a cell of an openDECTcell controller: its link to the controller and its chip, and their log, refreshed every 2 seconds.') :
 				_('Live figures of the DECT base and its phone lines, and their log, refreshed every 2 seconds. Settings, handsets and registration: Network > DECT.')),
 			tabs
 		]);

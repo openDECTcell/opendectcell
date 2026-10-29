@@ -23,12 +23,20 @@
  * VoIP Profiles: one 'config voip' section per SIP account; a handset's
  * option line1/line2 names one. A profile may be a line of several
  * handsets -- a call to it rings them all -- but not both lines of one.
+ *
+ * Cell mode (option role 'cell', package opendectcell-cell): the box is a cell
+ * of an openDECTcell controller, which runs the base, its handsets and lines.
+ * The page then shows only the controller link and how to leave; the
+ * base's own settings stay in the config, unused, for when it does.
  */
 var STATE = '/var/run/opendectcell/state.json';
 var VOIP = '/var/run/opendectcell/voip.json';
 var CTL = '/usr/sbin/dect-stubd';
 var PROFILES = '/etc/opendectcell/profiles';
 var BOARDS = '/usr/share/opendectcell/boards/';
+var INIT = '/etc/init.d/opendectcell';
+var CELL_BIN = '/usr/sbin/dect-cell';
+var LINK = '/var/run/opendectcell/cell-link.json';
 
 function readState() {
 	return fs.read(STATE).then(function(text) {
@@ -182,6 +190,126 @@ function ago(ms) {
 	if (s < 3600)
 		return _('%d min ago').format(Math.round(s / 60));
 	return _('%d h ago').format(Math.round(s / 3600));
+}
+
+function readLink() {
+	return L.resolveDefault(fs.read(LINK), '').then(function(text) {
+		try { return JSON.parse(text); } catch (e) { return null; }
+	});
+}
+
+/* After enrolling or leaving: the page as the new role has it. */
+function reloadSoon() {
+	window.setTimeout(function() { location.reload(); }, 3000);
+}
+
+/*
+ * Enrol with a controller: its enrollment string (its web interface makes
+ * one per cell), then cell mode. The service restarts as a cell.
+ */
+function enrollDialog() {
+	var input = E('input', {
+		'class': 'cbi-input-text', 'type': 'text', 'style': 'width:100%',
+		'placeholder': 'opendectcell-enroll:v1?h=…&t=…&ca=…'
+	});
+
+	ui.showModal(_('Make this box a cell of a controller'), [
+		E('p', {}, _('The controller then runs the DECT base: its handsets, calls and phone lines. This box\'s own handsets, VoIP profiles and settings stay saved but unused, and its SIP client does not run. Leaving cell mode brings them back.')),
+		E('p', {}, _('Paste the enrollment string from the controller\'s web interface:')),
+		input,
+		E('div', { 'class': 'right', 'style': 'margin-top:1em' }, [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
+			E('button', {
+				'class': 'btn cbi-button-action',
+				'click': function() {
+					var v = input.value.trim();
+
+					if (v.indexOf('opendectcell-enroll:v1?') != 0) {
+						input.classList.add('cbi-input-invalid');
+						return;
+					}
+					ui.showModal(_('Enrolling'), [ E('p', { 'class': 'spinning' },
+						_('Asking the controller; this can take up to a minute.')) ]);
+					return fs.exec(INIT, [ 'enroll', v ]).then(function(r) {
+						ui.hideModal();
+						if (r.code != 0) {
+							ui.addNotification(null, E('p', {}, [ _('Not enrolled: %s').format(
+								(r.stderr || r.stdout || String(r.code)).trim()) ]), 'warning');
+							return;
+						}
+						ui.addNotification(null, E('p', {}, _('Enrolled: this box is now a cell. The page reloads.')), 'info');
+						reloadSoon();
+					});
+				}
+			}, _('Enrol'))
+		])
+	]);
+}
+
+function leaveDialog() {
+	ui.showModal(_('Leave cell mode?'), [
+		E('p', {}, _('This box forgets the controller: its key and certificate are erased, and it runs as a DECT base again with its own handsets and settings. To be a cell again it needs a new enrollment string.')),
+		E('div', { 'class': 'right' }, [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
+			E('button', {
+				'class': 'btn cbi-button-negative',
+				'click': function() {
+					ui.hideModal();
+					return fs.exec(INIT, [ 'cell_leave' ]).then(function(r) {
+						if (r.code != 0)
+							ui.addNotification(null, E('p', {}, [ _('Could not leave cell mode: %s').format(
+								(r.stderr || String(r.code)).trim()) ]), 'warning');
+						else
+							reloadSoon();
+					});
+				}
+			}, _('Leave cell mode'))
+		])
+	]);
+}
+
+/* Cell mode: the controller link, and nothing of the base. */
+function renderCell(link) {
+	var m, s, o;
+	var state = link ? link.state : null;
+
+	m = new form.Map('opendectcell', _('DECT'),
+		_('This box is a cell of an openDECTcell controller: the controller runs the DECT base, its handsets and its phone lines. Live figures are on Status > DECT.'));
+	s = m.section(form.NamedSection, 'main', 'opendectcell');
+	s.addremove = false;
+
+	o = s.option(form.Flag, 'enabled', _('Enable the cell'),
+		_('Boots the DECT chip and connects to the controller. The controller turns the radio on.'));
+	o.rmempty = false;
+
+	o = s.option(form.DummyValue, '_controller', _('Controller'));
+	o.cfgvalue = function() { return link && link.controller || _('not enrolled'); };
+	o = s.option(form.DummyValue, '_link', _('Link'));
+	o.cfgvalue = function() {
+		return !state ? _('not running') : state == 'up' ? _('up') :
+			state == 'connecting' ? _('connecting') :
+			state == 'not enrolled' ? _('not enrolled') : state;
+	};
+	if (link && link.cell_state) {
+		o = s.option(form.DummyValue, '_cstate', _('This cell at the controller'));
+		o.cfgvalue = function() {
+			return { active: _('active'), pending: _('waiting for an admin to approve it'),
+				 disabled: _('disabled'), revoked: _('revoked') }[link.cell_state] || link.cell_state;
+		};
+	}
+	if (!link || !link.controller) {
+		o = s.option(form.Button, '_enroll', _('Enrolment'));
+		o.inputtitle = _('Enrol…');
+		o.inputstyle = 'action';
+		o.onclick = enrollDialog;
+	}
+	o = s.option(form.Button, '_leave', _('Cell mode'),
+		_('Run this box as its own DECT base again.'));
+	o.inputtitle = _('Leave cell mode…');
+	o.inputstyle = 'negative';
+	o.onclick = leaveDialog;
+
+	return m.render();
 }
 
 function deregisterDialog(h) {
@@ -604,7 +732,9 @@ return view.extend({
 			readProfiles(),
 			readKeys(),
 			readVoip(),
-			readBoard()
+			readBoard(),
+			readLink(),
+			L.resolveDefault(fs.stat(CELL_BIN), null)
 		]).then(function(r) {
 			var st = r[1], profiles = r[2], voip = r[4];
 
@@ -623,14 +753,17 @@ return view.extend({
 					return (t || '').trim();
 				});
 			})).then(function(choices) {
-				return [ st, profiles, choices, r[3], voip, r[5] ];
+				return [ st, profiles, choices, r[3], voip, r[5], r[6], r[7] ];
 			});
 		});
 	},
 
 	render: function(data) {
 		var st = data[0], profiles = data[1], choices = data[2], keys = data[3], voip = data[4];
-		var board = data[5];
+		var board = data[5], cellInstalled = !!data[7];
+
+		if (uci.get('opendectcell', 'main', 'role') == 'cell')
+			return renderCell(data[6]);
 		var running = st && st.radio === 'up';
 		var bySlot = {}, choiceBySlot = {};
 		var m, s, o, ss;
@@ -693,6 +826,14 @@ return view.extend({
 			_('Hours between sending the date and time to all handsets. Each handset also gets it whenever it reports in to the base; 0 sends it only then.'));
 		o.datatype = 'range(0,720)';
 		o.placeholder = '24';
+
+		if (cellInstalled) {
+			o = s.taboption('general', form.Button, '_cell', _('Controller'),
+				_('Make this box a cell of an openDECTcell controller, which then runs the base for several boxes.'));
+			o.inputtitle = _('Make this box a cell…');
+			o.inputstyle = 'action';
+			o.onclick = enrollDialog;
+		}
 
 		/* Handsets: one row each, edited in a pop-up */
 		o = s.taboption('handsets', form.SectionValue, '_handsets', form.GridSection, 'handset',

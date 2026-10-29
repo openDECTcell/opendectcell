@@ -13,7 +13,12 @@
 				"/tmp/sysinfo/board_name": [ "read" ],
 				"/usr/share/opendectcell/boards/*": [ "read" ],
 				"/sbin/logread": [ "exec" ],
-				"/sbin/logread -l *": [ "exec" ]
+				"/sbin/logread -l *": [ "exec" ],
+				"/var/run/opendectcell/cell.json": [ "read" ],
+				"/var/run/opendectcell/cell-link.json": [ "read" ],
+				"/tmp/run/opendectcell/cell.json": [ "read" ],
+				"/tmp/run/opendectcell/cell-link.json": [ "read" ],
+				"/usr/sbin/dect-cell": [ "list" ]
 			},
 			"ubus": {
 				"service": [ "list" ]
@@ -25,7 +30,9 @@
 				"/etc/init.d/opendectcell forget *": [ "exec" ],
 				"/usr/sbin/dect-stubd --ctl *": [ "exec" ],
 				"/usr/sbin/dect-stubd --profile-keys": [ "exec" ],
-				"/etc/opendectcell-sub.*.profile": [ "write" ]
+				"/etc/opendectcell-sub.*.profile": [ "write" ],
+				"/etc/init.d/opendectcell enroll *": [ "exec" ],
+				"/etc/init.d/opendectcell cell_leave": [ "exec" ]
 			},
 			"uci": [ "opendectcell" ]
 		}
