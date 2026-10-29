@@ -1681,6 +1681,67 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 	return 0;
 }
 
+/*
+ * A command to the chip from our PCM task, on the control slot: to task dst
+ * (the contact task for every command but the 0xFFF1 debug requests), with
+ * n parameter bytes p. Logged under -v; log_mail() masks key bytes.
+ */
+static void chip_mail_to(struct stubd *s, uint8_t dst, uint16_t prim,
+			 const uint8_t *p, uint16_t n)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = dst;
+	m.prim = prim;
+	if (n > sizeof(m.param))
+		n = sizeof(m.param);
+	memcpy(m.param, p, n);
+	m.param_len = n;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+}
+
+static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
+		      uint16_t n)
+{
+	chip_mail_to(s, DECT_TASK_CONTACT_DST, prim, p, n);
+}
+
+/*
+ * Read n bytes of chip memory at addr: 0xFFF1 sub 0x07 to the debug task
+ * [CR COMMAND_SET 7.1], answered by 0xFFF1 sub 0x08 with the address and
+ * the bytes. Read only.
+ */
+static void chip_mem_read(struct stubd *s, uint32_t addr, uint16_t n)
+{
+	const uint8_t p[7] = {
+		0x07u,				/* MEM_READ */
+		(uint8_t)addr, (uint8_t)(addr >> 8),
+		(uint8_t)(addr >> 16), (uint8_t)(addr >> 24),
+		(uint8_t)n, (uint8_t)(n >> 8),
+	};
+
+	chip_mail_to(s, DECT_TASK_PCM_REMOTE, 0xFFF1u, p, sizeof(p));
+}
+
+/*
+ * 0x0230 ASSIGN_AUDIO_CHANNEL in its full form: {link, mode byte, TDM slot
+ * mask (LE), master, extra} [CR A-CodecModes-1]; the -a keys call the mode
+ * byte flags, the master byte mode and the extra byte codec.
+ */
+static void chip_assign(struct stubd *s, uint8_t handle, uint8_t flags,
+			uint16_t mask, uint8_t mode, uint8_t codec)
+{
+	const uint8_t p[6] = {
+		handle, flags, (uint8_t)mask, (uint8_t)(mask >> 8), mode, codec,
+	};
+
+	chip_mail(s, 0x0230u, p, sizeof(p));
+}
+
 /* A received lane word that carries bearer data rather than a fill. */
 static int lane_word_live(uint32_t v)
 {
@@ -3128,7 +3189,6 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 {
 	struct dect_link *l = &s->reg.link;
 	int busy = s->reg.active && dect_cc_busy(&l->cc);
-	struct dect_mail m;
 
 	if (busy || !s->reg.active) {
 		s->reg.nlr_armed = 0;
@@ -3163,15 +3223,7 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 	if (s->reg.nlr_lia && now - s->reg.nlr_disc_at < 100u)
 		return;			/* let the DISC reach the air */
 	s->reg.nlr_armed = 0;
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0202u;		/* release the link [CR A-0127] */
-	m.param[0] = s->reg.handle;
-	m.param_len = 1;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mail(s, 0x0202u, &s->reg.handle, 1);	/* release [CR A-0127] */
 	printf("link: released after the %s (0x0202 on handle %u, nlr)\n",
 	       s->reg.nlr_lia ? "list session, DISC first" : "call",
 	       (unsigned int)s->reg.handle);
@@ -3438,23 +3490,14 @@ static void sub_audit_send(struct stubd *s, uint8_t mine);
 static void clear_foreign_slots(struct stubd *s, uint8_t keep,
 				unsigned keep_mask)
 {
-	struct dect_mail m;
 	uint8_t slot;
 
 	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
 		if (keep_mask & (1u << slot))
 			continue;
-		memset(&m, 0, sizeof(m));
-		m.src = DECT_TASK_PCM;
-		m.dst = DECT_TASK_CONTACT_DST;
-		m.prim = 0x0247u;
-		m.param[0] = slot;
-		m.param[1] = 0x00u;	/* op: clear */
-		m.param[2] = 0x00u;
-		m.param_len = 3;
-		send_mail(s, (unsigned int)s->tx_slot, &m);
-		if (s->verbose)
-			log_mail(&m, "tx M", s->show_params);
+		const uint8_t p[3] = { slot, 0x00u /* op: clear */, 0x00u };
+
+		chip_mail(s, 0x0247u, p, sizeof(p));
 	}
 	printf("sub: cleared chip subscription slots other than");
 	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++)
@@ -3510,24 +3553,18 @@ static void send_subscription(struct stubd *s)
 static void install_subscription(struct stubd *s, uint8_t slot,
 				 const uint8_t uak[DECT_MM_UAK_LEN])
 {
-	struct dect_mail m;
+	uint8_t p[2 + DECT_MM_UAK_LEN];
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0247u;
-	m.param[0] = slot;		/* slot */
-	m.param[1] = 0x01u;		/* op: install/refresh */
 	/*
-	 * Third byte: [CR A-0113] stock sends bit 0 = 1 (A540 = 0x03); the
-	 * op=1 handler tests bit 0 and clears a per-slot mask bit on 1, sets
-	 * it on 0. Historical default 0x00; -a attflag= overrides.
+	 * {slot, op 1: install/refresh, flag}. The flag: [CR A-0113] stock
+	 * sends bit 0 = 1 (A540 = 0x03); the op=1 handler tests bit 0 and
+	 * clears a per-slot mask bit on 1, sets it on 0. Ours is 0x00 unless
+	 * -a attflag= sets it.
 	 */
-	m.param[2] = s->audio.att_flag;
-	m.param_len = 3;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	p[0] = slot;
+	p[1] = 0x01u;
+	p[2] = s->audio.att_flag;
+	chip_mail(s, 0x0247u, p, 3);
 
 	/*
 	 * Slot 7 would address the start of the 0xF605 table and the chip-side
@@ -3540,25 +3577,17 @@ static void install_subscription(struct stubd *s, uint8_t slot,
 		return;
 	}
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x020Au;
-	m.param[0] = slot;		/* one-based, 17-byte record stride */
-	memcpy(&m.param[1], uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
+	p[0] = slot;			/* one-based, 17-byte record stride */
+	memcpy(&p[1], uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
 	/*
 	 * Config byte after the UAK: [CR A-0113] stock sends 0x01 per Gigaset
 	 * (0x02 for the C4). The 0x020A handler stores it at UAK-slot +0x10
 	 * and the CC state machine copies it into conn+0x21, the per-connection
-	 * auth/capability word the ring progression uses. Our historical 0x00
-	 * seeds the wrong security class and a GAP handset then refuses the
-	 * call with 0x32. -a attcfg= sets it.
+	 * auth/capability word the ring progression uses. Ours is 0x00 unless
+	 * -a attcfg= sets it; the Gigasets ring with it all the same.
 	 */
-	m.param[1 + DECT_MM_UAK_LEN] = s->audio.att_cfg;	/* [CR A-0113] */
-	m.param_len = (uint16_t)(2 + DECT_MM_UAK_LEN);
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)			/* log_mail() masks the UAK */
-		log_mail(&m, "tx M", s->show_params);
+	p[1 + DECT_MM_UAK_LEN] = s->audio.att_cfg;	/* [CR A-0113] */
+	chip_mail(s, 0x020Au, p, sizeof(p));	/* the log masks the UAK */
 }
 
 /*
@@ -3583,7 +3612,6 @@ static uint8_t live_slot_mask(const struct stubd *s)
 
 static void send_subscription_tail(struct stubd *s)
 {
-	struct dect_mail m;
 	uint8_t mask = s->audio.slot_mask_fixed ? s->audio.slot_mask
 						: live_slot_mask(s);
 
@@ -3596,16 +3624,9 @@ static void send_subscription_tail(struct stubd *s)
 	 * enough. The handler takes the second payload byte into 0xdb3.
 	 */
 	if (!s->audio.no_slot_cfg) {
-		memset(&m, 0, sizeof(m));
-		m.src = DECT_TASK_PCM;
-		m.dst = DECT_TASK_CONTACT_DST;
-		m.prim = 0x017Cu;
-		m.param[0] = 0x00u;		/* unused by the handler */
-		m.param[1] = mask;
-		m.param_len = 2;
-		send_mail(s, (unsigned int)s->tx_slot, &m);
-		if (s->verbose)
-			log_mail(&m, "tx M", s->show_params);
+		const uint8_t p[2] = { 0x00u /* unused by the handler */, mask };
+
+		chip_mail(s, 0x017Cu, p, sizeof(p));
 		printf("sub: locked-in handset mask 0x017c 00 %02x%s "
 		       "[CR A-0129]\n", mask,
 		       s->audio.slot_mask_fixed ? " (pinned by slotmask=)" : "");
@@ -3658,7 +3679,6 @@ static int sub_check_defer(struct stubd *s)
 
 static void uak_verify_send(struct stubd *s, uint8_t slot)
 {
-	struct dect_mail m;
 	uint32_t addr;
 
 	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
@@ -3676,23 +3696,9 @@ static void uak_verify_send(struct stubd *s, uint8_t slot)
 	}
 	addr = SUB_UAK_BASE + (uint32_t)(slot - 1u) * SUB_UAK_STRIDE;
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_PCM_REMOTE;
-	m.prim = 0xFFF1u;
-	m.param[0] = 0x07u;			/* MEM_READ */
-	m.param[1] = (uint8_t)(addr & 0xFFu);
-	m.param[2] = (uint8_t)((addr >> 8) & 0xFFu);
-	m.param[3] = (uint8_t)((addr >> 16) & 0xFFu);
-	m.param[4] = (uint8_t)((addr >> 24) & 0xFFu);
-	m.param[5] = SUB_UAK_STRIDE;		/* 16 key bytes + the flag */
-	m.param[6] = 0x00u;
-	m.param_len = 7;
 	s->uak_check_addr = addr;
 	s->uak_check_slot = slot;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mem_read(s, addr, SUB_UAK_STRIDE);	/* 16 key bytes + the flag */
 }
 
 /*
@@ -3707,23 +3713,7 @@ static void uak_verify_send(struct stubd *s, uint8_t slot)
 
 static void park_read(struct stubd *s, uint32_t addr)
 {
-	struct dect_mail m;
-
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_PCM_REMOTE;
-	m.prim = 0xFFF1u;
-	m.param[0] = 0x07u;		/* MEM_READ */
-	m.param[1] = (uint8_t)(addr & 0xFFu);
-	m.param[2] = (uint8_t)((addr >> 8) & 0xFFu);
-	m.param[3] = (uint8_t)((addr >> 16) & 0xFFu);
-	m.param[4] = (uint8_t)((addr >> 24) & 0xFFu);
-	m.param[5] = 1u;		/* one byte */
-	m.param[6] = 0u;
-	m.param_len = 7;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mem_read(s, addr, 1);
 }
 
 /* After the park mails are out: read the park back, where we know how. */
@@ -3868,24 +3858,11 @@ static void sub_audit_send(struct stubd *s, uint8_t mine)
 		return;
 	}
 	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
-		struct dect_mail m;
 		uint32_t addr = SUB_UAK_BASE
 			      + (uint32_t)(slot - 1u) * SUB_UAK_STRIDE;
 
-		memset(&m, 0, sizeof(m));
-		m.src = DECT_TASK_PCM;
-		m.dst = DECT_TASK_PCM_REMOTE;
-		m.prim = 0xFFF1u;
-		m.param[0] = 0x07u;		/* MEM_READ */
-		m.param[1] = (uint8_t)(addr & 0xFFu);
-		m.param[2] = (uint8_t)((addr >> 8) & 0xFFu);
-		m.param[3] = (uint8_t)((addr >> 16) & 0xFFu);
-		m.param[4] = (uint8_t)((addr >> 24) & 0xFFu);
-		m.param[5] = SUB_UAK_STRIDE;
-		m.param[6] = 0x00u;
-		m.param_len = 7;
 		s->sub_audit_pending |= (uint8_t)(1u << (slot - 1u));
-		send_mail(s, (unsigned int)s->tx_slot, &m);
+		chip_mem_read(s, addr, SUB_UAK_STRIDE);
 	}
 }
 
@@ -3964,41 +3941,18 @@ static void sub_audit_reply(struct stubd *s, uint32_t addr,
 static void send_audio_bind(struct stubd *s, uint8_t handle)
 {
 	const struct audio_cfg *a = &s->audio;
-	struct dect_mail m;
-	int wb;
-
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0251u;	/* SET_CHANNEL_PARAM, before the assign */
-	m.param[0] = handle;
-	m.param[1] = a->sel;	/* selector, valid 1..6 [CR A-CodecModes-3] */
-	m.param[2] = a->gain;	/* stored as value << 8 in the DSP block */
-	m.param_len = 3;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
-
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0230u;		/* ASSIGN_AUDIO_CHANNEL, full form */
+	/* selector valid 1..6 [CR A-CodecModes-3]; the STUB stores gain << 8 */
+	const uint8_t p[3] = { handle, a->sel, a->gain };
 	/* a wideband call: stock's bind, flags 0x41 and codec byte 0 */
-	wb = s->reg.call_wideband;
-	m.param[0] = handle;
-	m.param[1] = wb ? (uint8_t)(a->flags | 0x40u) : a->flags;
-	m.param[2] = (uint8_t)(a->mask & 0xFFu);	/* slot mask (LE) */
-	m.param[3] = (uint8_t)(a->mask >> 8);
-	m.param[4] = a->mode;		/* master */
-	m.param[5] = wb ? 0u : a->codec;	/* extra */
-	m.param_len = 6;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	int wb = s->reg.call_wideband;
+	uint8_t flags = wb ? (uint8_t)(a->flags | 0x40u) : a->flags;
+	uint8_t codec = wb ? 0u : a->codec;
 
+	chip_mail(s, 0x0251u, p, sizeof(p));	/* SET_CHANNEL_PARAM */
+	chip_assign(s, handle, flags, a->mask, a->mode, codec);
 	printf("call: audio assign: 0x0251 (sel %u gain 0x%02x), "
 	       "0x0230 {%02x %04x %02x %02x} -- 0x022D waits for 0x0242\n",
-	       a->sel, a->gain, m.param[1], a->mask, a->mode, m.param[5]);
+	       a->sel, a->gain, flags, a->mask, a->mode, codec);
 }
 
 /*
@@ -4030,42 +3984,24 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
  */
 static void send_audio_disconnect(struct stubd *s, uint8_t handle)
 {
-	struct dect_mail m;
+	const uint8_t p[2] = { handle, 0x01u /* [3] must be non-zero */ };
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0233u;
-	m.param[0] = handle;
-	m.param[1] = 0x01u;	/* [3] must be non-zero */
-	m.param_len = 2;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mail(s, 0x0233u, p, sizeof(p));
 	printf("call: audio disconnected (0x0233 on handle %u)\n", handle);
 }
 
 static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 {
 	const struct audio_cfg *a = &s->audio;
-	struct dect_mail m;
+	const uint8_t p[2] = { handle, 0x00u };	/* bit 7 clear: connect */
 
 	if (s->reg.audio_connected)
 		return;
 	s->reg.audio_connected = 1;
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x022Du;		/* AUDIO_PATH_ON_OFF */
-	m.param[0] = handle;
-	m.param[1] = 0x00u;		/* bit 7 = 0: connect */
 	s->reg.remode_handle = handle;
 	if (a->remode_ms)
 		s->reg.remode_at = mono_ms() + a->remode_ms;
-	m.param_len = 2;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mail(s, 0x022Du, p, sizeof(p));	/* AUDIO_PATH_ON_OFF */
 	printf("call: audio connect: 0x022D on channel %u\n", chan);
 }
 
@@ -4110,46 +4046,27 @@ static void audio_connect_fallback(struct stubd *s, uint64_t now)
 static void remode_tick(struct stubd *s, uint64_t now)
 {
 	const struct audio_cfg *a = &s->audio;
-	struct dect_mail m;
+	uint8_t flags = (uint8_t)(a->flags & ~0x40u);
 
 	if (!s->reg.remode_at || now < s->reg.remode_at)
 		return;
 	s->reg.remode_at = 0;
 	s->reg.remode_done = 1;
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0230u;
-	m.param[0] = s->reg.remode_handle;
-	m.param[1] = (uint8_t)(a->flags & ~0x40u);
-	m.param[2] = (uint8_t)(a->mask & 0xFFu);
-	m.param[3] = (uint8_t)(a->mask >> 8);
-	m.param[4] = a->mode;
-	m.param[5] = a->codec;
-	m.param_len = 6;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_assign(s, s->reg.remode_handle, flags, a->mask, a->mode, a->codec);
 	printf("call: re-assign for mode 2: 0x0230 {%02x %04x %02x %02x}\n",
-	       m.param[1], a->mask, a->mode, m.param[5]);
+	       flags, a->mask, a->mode, a->codec);
 	fflush(stdout);
 }
 
 /*
- * Walk the seqstep list, one 0x0230 per window. See audio_cfg.seq_ms.
- *
- * The handle comes from the bind, not from a literal. vF418 sent every window
- * to handle 1 while the call was on handle 0 -- handle 0 is a valid handle and
- * the old fallback could not tell it from "no call" -- and the chip answered
- * 0x0242 with channel 0x0f each time. Two rows of that run's codec table are
- * unusable because of it. seq_t0 is only nonzero while a call is bound, so by
- * the time we get here remode_handle is always the handle of that call.
+ * Walk the seqstep list, one 0x0230 per window. See audio_cfg.seq_ms. The
+ * handle is the call's own (remode_handle, set with its 0x022D), never a
+ * literal: handle 0 is a valid handle.
  */
 static void seq_tick(struct stubd *s, uint64_t now)
 {
 	const struct audio_cfg *a = &s->audio;
-	struct dect_mail m;
 	unsigned int flags, codec;
 
 	if (!a->seq_ms || !s->reg.seq_t0 || s->reg.seq_idx >= a->n_seq)
@@ -4165,30 +4082,17 @@ static void seq_tick(struct stubd *s, uint64_t now)
 		return;
 	}
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0230u;
-	m.param[0] = s->reg.remode_handle;
-	m.param[1] = (uint8_t)flags;
-	m.param[2] = (uint8_t)(a->mask & 0xFFu);
-	m.param[3] = (uint8_t)(a->mask >> 8);
-	m.param[4] = a->mode;
-	m.param[5] = (uint8_t)codec;
-	m.param_len = 6;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_assign(s, s->reg.remode_handle, (uint8_t)flags, a->mask, a->mode,
+		    (uint8_t)codec);
 	printf("call: seq window %u begins (t+%u ms): 0x0230 {%02x %04x %02x %02x}\n",
 	       s->reg.seq_idx + 1u, (unsigned)((s->reg.seq_idx + 1u) * a->seq_ms),
-	       m.param[1], a->mask, a->mode, m.param[5]);
+	       flags & 0xFFu, a->mask, a->mode, codec & 0xFFu);
 	fflush(stdout);
 	s->reg.seq_idx++;
 }
 
 static void mem_dump_tick(struct stubd *s, uint64_t now)
 {
-	struct dect_mail m;
 	uint32_t addr, left;
 	uint16_t count;
 
@@ -4202,21 +4106,7 @@ static void mem_dump_tick(struct stubd *s, uint64_t now)
 	left = s->audio.memdump[s->md_idx].len - s->md_off;
 	count = (uint16_t)(left > 32u ? 32u : left);
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_PCM_REMOTE;	/* debug/management task, as for sub 0x09/0x0A */
-	m.prim = 0xFFF1u;		/* DEBUG_REQUEST */
-	m.param[0] = 0x07u;		/* MEM_READ */
-	m.param[1] = (uint8_t)(addr & 0xFFu);
-	m.param[2] = (uint8_t)((addr >> 8) & 0xFFu);
-	m.param[3] = (uint8_t)((addr >> 16) & 0xFFu);
-	m.param[4] = (uint8_t)((addr >> 24) & 0xFFu);
-	m.param[5] = (uint8_t)(count & 0xFFu);
-	m.param[6] = (uint8_t)(count >> 8);
-	m.param_len = 7;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mem_read(s, addr, count);
 
 	s->md_off += count;
 	if (s->md_off >= s->audio.memdump[s->md_idx].len) {
@@ -4258,18 +4148,10 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 
 static void send_conn_status_one(struct stubd *s, uint8_t handle)
 {
-	struct dect_mail m;
+	/* 0x0A: the selector AVM's monitor uses */
+	const uint8_t p[2] = { handle, 0x0Au };
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0xF624u;		/* connection status request */
-	m.param[0] = handle;
-	m.param[1] = 0x0Au;		/* the selector AVM's monitor uses */
-	m.param_len = 2;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mail(s, 0xF624u, p, sizeof(p));	/* connection status request */
 }
 
 /*
@@ -4400,13 +4282,8 @@ static void ring_target_tpui(const struct stubd *s, uint8_t tpui[3])
 
 static void send_page(struct stubd *s)
 {
-	struct dect_mail m;
-	uint8_t tpui[3];
+	uint8_t tpui[3], p[3];
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0300u;
 	/*
 	 * The page carries the low 16 bits of the TPUI we assigned, so take
 	 * them from MM rather than rebuilding them from the slot. With a
@@ -4414,13 +4291,10 @@ static void send_page(struct stubd *s)
 	 * built from the slot would address the wrong handset.
 	 */
 	ring_target_tpui(s, tpui);
-	m.param[0] = ring_page_info(s);
-	m.param[1] = tpui[1];
-	m.param[2] = tpui[2];
-	m.param_len = 3;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	p[0] = ring_page_info(s);
+	p[1] = tpui[1];
+	p[2] = tpui[2];
+	chip_mail(s, 0x0300u, p, sizeof(p));
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
 	       s->ring_pages, RING_PAGE_RETRIES, ring_page_info(s),
@@ -6394,7 +6268,7 @@ static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
 {
 	struct xlane *x = &s->xl[i];
 	const struct audio_cfg *a = &s->audio;
-	struct dect_mail m;
+	uint8_t p[3], flags, codec;
 	uint16_t mask;
 
 	memset(x, 0, sizeof(*x));
@@ -6407,58 +6281,29 @@ static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
 	sl->lane = i;
 	mask = (uint16_t)(1u << x->channel);
 
-	{
-		memset(&m, 0, sizeof(m));
-		m.src = DECT_TASK_PCM;
-		m.dst = DECT_TASK_CONTACT_DST;
-		m.prim = 0x0251u;
-		m.param[0] = x->handle;
-		m.param[1] = x->channel;	/* selector */
-		m.param[2] = a->gain;
-		m.param_len = 3;
-		send_mail(s, (unsigned int)s->tx_slot, &m);
-		if (s->verbose)
-			log_mail(&m, "tx M", s->show_params);
-	}
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0230u;
-	m.param[0] = x->handle;
-	m.param[1] = (uint8_t)((a->flags & 0xB0u) |
-			       (1u << (x->channel - 1u)) |
-			       (x->wideband ? 0x40u : 0u));
-	m.param[2] = (uint8_t)(mask & 0xFFu);
-	m.param[3] = (uint8_t)(mask >> 8);
-	m.param[4] = a->mode;
-	m.param[5] = x->wideband ? 0u : a->codec;
-	m.param_len = 6;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	p[0] = x->handle;
+	p[1] = x->channel;		/* selector */
+	p[2] = a->gain;
+	chip_mail(s, 0x0251u, p, sizeof(p));
+	flags = (uint8_t)((a->flags & 0xB0u) | (1u << (x->channel - 1u)) |
+			  (x->wideband ? 0x40u : 0u));
+	codec = x->wideband ? 0u : a->codec;
+	chip_assign(s, x->handle, flags, mask, a->mode, codec);
 	printf("side: second call on handle %u: lane %d, channel %u, TDM word "
 	       "%u, %s -- 0x0230 {%02x %04x %02x %02x}\n", x->handle, i,
 	       x->channel, x->word, x->wideband ? "wideband" : "narrowband",
-	       m.param[1], mask, m.param[4], m.param[5]);
+	       flags, mask, a->mode, codec);
 }
 
 static void xlane_connect(struct stubd *s, struct xlane *x)
 {
-	struct dect_mail m;
+	uint8_t p[2] = { 0, 0x00u };
 
 	if (x->connected)
 		return;
 	x->connected = 1;
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x022Du;
-	m.param[0] = x->handle;
-	m.param[1] = 0x00u;
-	m.param_len = 2;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	p[0] = x->handle;
+	chip_mail(s, 0x022Du, p, sizeof(p));	/* bit 7 clear: connect */
 	printf("side: audio connect: 0x022D on handle %u (channel %u)\n",
 	       x->handle, x->channel);
 }
@@ -6590,19 +6435,11 @@ static int ic_has_lane(const struct stubd *s, int p)
 
 static void ic_page(struct stubd *s)
 {
-	struct dect_mail m;
+	const uint8_t p[3] = {
+		RING_PAGE_CC | RING_PAGE_WIDEBAND, s->ic.tpui[1], s->ic.tpui[2],
+	};
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0300u;
-	m.param[0] = RING_PAGE_CC | RING_PAGE_WIDEBAND;
-	m.param[1] = s->ic.tpui[1];
-	m.param[2] = s->ic.tpui[2];
-	m.param_len = 3;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mail(s, 0x0300u, p, sizeof(p));
 	s->ic.pages++;
 	printf("intern: paged %s, attempt %u of %u\n", s->hs[s->ic.target].path,
 	       s->ic.pages, IC_PAGES);
@@ -6820,22 +6657,6 @@ static int ic_wideband(const struct stubd *s, int p);
 #define DEREG_PAGES	10u		/* 3 s apart: 30 s to reach it */
 #define DEREG_PAGE_MS	3000u
 #define DEREG_REQ_PATH	DECT_RUN_DIR "/deregister"
-
-static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
-		      uint16_t n)
-{
-	struct dect_mail m;
-
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = prim;
-	memcpy(m.param, p, n);
-	m.param_len = n;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
-}
 
 /*
  * Erase handset i from the base, as stock does after the handset's
@@ -7725,19 +7546,9 @@ static void ring_main(struct stubd *s, struct bcall *b, unsigned t)
  */
 static void sr_page(struct stubd *s, struct bcall *b)
 {
-	struct dect_mail m;
+	const uint8_t p[3] = { ring_page_info(s), b->tpui[1], b->tpui[2] };
 
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0300u;
-	m.param[0] = ring_page_info(s);
-	m.param[1] = b->tpui[1];
-	m.param[2] = b->tpui[2];
-	m.param_len = 3;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	chip_mail(s, 0x0300u, p, sizeof(p));
 	b->pages++;
 	printf("bridge: paged DECT %u for call %u, attempt %u of %u\n",
 	       hs_slot(s, (unsigned)b->target), b->id, b->pages, IC_PAGES);
@@ -10510,6 +10321,19 @@ static int audio_word_key(const char *key, size_t klen)
 	return 0;
 }
 
+/* The value of an -a key=value pair as a string: eq is its '=', end its end. */
+static char *audio_value(const char *eq, const char *end)
+{
+	size_t n = (size_t)(end - (eq + 1));
+	char *v = malloc(n + 1);
+
+	if (v) {
+		memcpy(v, eq + 1, n);
+		v[n] = '\0';
+	}
+	return v;
+}
+
 static int parse_audio(struct audio_cfg *a, const char *spec)
 {
 	while (*spec) {
@@ -10741,13 +10565,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if ((klen == 4 && !memcmp(key, "clip", 4))
 			 || (klen == 4 && !memcmp(key, "cnip", 4))) {
 			/* text, not a number: take the value verbatim */
-			size_t n = (size_t)(spec - (eq + 1));
-			char *text = malloc(n + 1);
+			char *text = audio_value(eq, spec);
 
 			if (!text)
 				return -1;
-			memcpy(text, eq + 1, n);
-			text[n] = '\0';
 			if (key[1] == 'l')
 				a->clip_number = text;
 			else
@@ -10757,13 +10578,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			 || (klen == 7 && !memcmp(key, "playpcm", 7))
 			 || (klen == 7 && !memcmp(key, "playraw", 7))) {
 			/* value is a path, not a number: take it verbatim */
-			size_t n = (size_t)(spec - (eq + 1));
-			char *path = malloc(n + 1);
+			char *path = audio_value(eq, spec);
 
 			if (!path)
 				return -1;
-			memcpy(path, eq + 1, n);
-			path[n] = '\0';
 			a->play_path = path;
 			a->play_pcm = (klen == 7 && key[4] == 'p');
 			a->play_raw = (klen == 7 && key[4] == 'r');
@@ -10776,49 +10594,34 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->remode_ms = (unsigned)v;
 			a->remode_set = 1;
 		} else if (eq && klen == 8 && !memcmp(key, "linename", 8)) {
-			size_t n = (size_t)(spec - (eq + 1));
-			char *name = malloc(n + 1);
+			char *name = audio_value(eq, spec);
 
 			if (!name)
 				return -1;
-			memcpy(name, eq + 1, n);
-			name[n] = '\0';
 			a->line_name = name;
 		} else if (eq && klen == 3 && !memcmp(key, "ctl", 3)) {
-			size_t n = (size_t)(spec - (eq + 1));
-			char *path = malloc(n + 1);
+			char *path = audio_value(eq, spec);
 
 			if (!path)
 				return -1;
-			memcpy(path, eq + 1, n);
-			path[n] = '\0';
 			a->ctl_path = path;
 		} else if (eq && klen == 8 && !memcmp(key, "profiles", 8)) {
-			size_t n = (size_t)(spec - (eq + 1));
-			char *path = malloc(n + 1);
+			char *path = audio_value(eq, spec);
 
 			if (!path)
 				return -1;
-			memcpy(path, eq + 1, n);
-			path[n] = '\0';
 			a->profile_dir = path;
 		} else if (eq && klen == 9 && !memcmp(key, "statefile", 9)) {
-			size_t n = (size_t)(spec - (eq + 1));
-			char *path = malloc(n + 1);
+			char *path = audio_value(eq, spec);
 
 			if (!path)
 				return -1;
-			memcpy(path, eq + 1, n);
-			path[n] = '\0';
 			a->state_path = path;
 		} else if (eq && klen == 6 && !memcmp(key, "remote", 6)) {
-			size_t n = (size_t)(spec - (eq + 1));
-			char *path = malloc(n + 1);
+			char *path = audio_value(eq, spec);
 
 			if (!path)
 				return -1;
-			memcpy(path, eq + 1, n);
-			path[n] = '\0';
 			a->remote_path = path;
 		} else if (klen == 10 && !memcmp(key, "fetchdelay", 10)) {
 			a->fetch_delay_ms = (unsigned)v;
@@ -10833,13 +10636,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		} else if (!eq && klen == 11 && !memcmp(key, "nostatefile", 11)) {
 			a->no_state = 1;
 		} else if (eq && klen == 3 && !memcmp(key, "led", 3)) {
-			size_t n = (size_t)(spec - (eq + 1));
-			char *path = malloc(n + 1);
+			char *path = audio_value(eq, spec);
 
 			if (!path)
 				return -1;
-			memcpy(path, eq + 1, n);
-			path[n] = '\0';
 			a->led_path = path;
 		} else if (!eq && klen == 5 && !memcmp(key, "noled", 5)) {
 			a->no_led = 1;
