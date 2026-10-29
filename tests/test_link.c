@@ -160,12 +160,6 @@ static void tx_seen(void *ctx, const uint8_t *msg, size_t len)
 }
 
 /*
- * A page response from a handset we did not page gets {LCE-PAGE-REJECT}:
- * LCE, the PT's transaction value with our flag, type 0x72, and its full
- * IPUI (TS 102 527-1 §7.3.8.3.1, table 20). It goes out before anything
- * MM or CC has queued.
- */
-/*
  * EN 300 175-5 §17.6.5: a page response without its mandatory identity
  * is cleared with {LCE-PAGE-REJECT}, when the link knows whom to name.
  */
@@ -234,6 +228,12 @@ static void test_page_response_with_a_bad_ti_is_ignored(void)
 	}
 }
 
+/*
+ * A page response from a handset we did not page gets {LCE-PAGE-REJECT}:
+ * LCE, the PT's transaction value with our flag, type 0x72, and its full
+ * IPUI (TS 102 527-1 §7.3.8.3.1, table 20). It goes out before anything
+ * MM or CC has queued.
+ */
 static void test_page_reject_is_built_from_the_response(void)
 {
 	static const uint8_t ipui[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33, 0x44 };
@@ -468,7 +468,67 @@ static void test_ciss_queue(void)
 	CHECK_EQ(l.ciss_n, DECT_LINK_CISS_MAX - 1u);
 }
 
-/* A fresh link owns its own state and has nothing to send. */
+/*
+ * The date and time after a location registration (TS 102 527-3
+ * §7.4.20.2): the {FACILITY} dect_time_build_facility() makes, queued
+ * behind what MM and CC have to say, refused out of range or when the
+ * CISS queue is full.
+ */
+static void test_send_time(void)
+{
+	static const uint8_t port_id[] = { 0x10, 0x20, 0x30 };
+	static const uint8_t fixed_id[] = { 0x11, 0x22, 0x33, 0x44, 0x55 };
+	struct dect_time t = { .year = 26, .month = 10, .day = 29, .hour = 14,
+			       .minute = 5, .second = 9, .tz_valid = 1,
+			       .tz_quarters = 4 };
+	struct dect_time bad = t;
+	uint8_t want[DECT_LAPC_MSG_MAX];
+	size_t want_len = dect_time_build_facility(want, sizeof(want), &t);
+	struct dect_nwk_hdr h;
+	const uint8_t *ies;
+	size_t ies_len;
+	struct dect_link l;
+	struct dect_mail m;
+	unsigned i;
+
+	CHECK(want_len > 0 && want_len <= sizeof(tx_seen_buf));
+	init(&l);
+	dect_link_set_tx_log(&l, tx_seen, NULL);
+	CHECK_EQ(dect_cc_setup_id(&l.cc, port_id, sizeof(port_id), fixed_id,
+				  sizeof(fixed_id), 0x88, NULL), 0);
+	CHECK_EQ(dect_link_send_time(&l, &t), 0);
+	CHECK_EQ(l.ciss_n, 1u);
+	bad.month = 13;
+	CHECK_EQ(dect_link_send_time(&l, &bad), -1);
+	CHECK_EQ(l.ciss_n, 1u);
+
+	/* CC first: its SETUP is the one LAPC carries now */
+	tx_seen_len = 0;
+	dect_link_drain(&l, 0);
+	CHECK(tx_seen_len > 0);
+	CHECK_EQ(dect_nwk_parse(tx_seen_buf, tx_seen_len, &h, &ies,
+				&ies_len), 0);
+	CHECK_EQ(h.pd, DECT_PD_CC);
+	CHECK_EQ(l.ciss_n, 1u);
+	CHECK_EQ(dect_link_poll_append_mail(&l, &m), 1);
+
+	/* the {FACILITY} goes once nothing else is waiting */
+	init(&l);
+	dect_link_set_tx_log(&l, tx_seen, NULL);
+	tx_seen_len = 0;
+	CHECK_EQ(dect_link_send_time(&l, &t), 0);
+	dect_link_drain(&l, 0);
+	CHECK_EQ(tx_seen_len, want_len);
+	CHECK(memcmp(tx_seen_buf, want, want_len) == 0);
+	CHECK_EQ(l.ciss_n, 0u);
+	CHECK_EQ(dect_link_poll_append_mail(&l, &m), 1);
+	CHECK_EQ(m.prim, 0x0244u);
+
+	for (i = 0; i < DECT_LINK_CISS_MAX; i++)
+		CHECK_EQ(dect_link_send_time(&l, &t), 0);
+	CHECK_EQ(dect_link_send_time(&l, &t), -1);	/* full */
+}
+
 static int cs_answer;
 
 static int cs_for(void *ctx, const uint8_t *ipui, size_t len)
@@ -561,6 +621,7 @@ static void test_call_id_is_asked_per_call(void)
 	CHECK_EQ(found, 1);
 }
 
+/* A fresh link owns its own state and has nothing to send. */
 static void test_init_is_quiet(void)
 {
 	struct dect_link l;
@@ -774,6 +835,7 @@ int main(void)
 	test_page_response_without_identity_is_rejected();
 	test_page_response_with_a_bad_ti_is_ignored();
 	test_ciss_queue();
+	test_send_time();
 	test_handset_sends_its_clock();
 	test_call_id_is_asked_per_call();
 	test_init_is_quiet();

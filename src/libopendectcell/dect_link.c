@@ -17,25 +17,18 @@ void dect_link_init(struct dect_link *l, uint8_t handle,
 }
 
 /*
- * Hand queued NWK messages to LAPC, one at a time.
- *
- * **MM before CC, and only while nothing is outstanding.** Both parts are
- * protocol behaviour rather than taste: LAPC class A has a window of one, so
- * a second message queued before the first is acknowledged would be lost, and
- * MM carries the authentication and ciphering exchanges that CC depends on.
- */
-/*
  * Answer a {CC-SETUP} we hold while its record is fetched, so the handset
- * is not left waiting out its 20 s P<CC.03> with "---" on the display
- * (bench test 7, 2026-10-25). {CC-SETUP-ACK} when CC will collect the
- * digits (overlap receiving, a speech call without <<SENDING-COMPLETE>>),
- * {CC-CALL-PROC} otherwise -- what CC itself would have sent first.
+ * is not left waiting out its 20 s P<CC.03> with "---" on the display.
+ * {CC-SETUP-ACK} when CC will collect the digits (overlap receiving, a
+ * speech call without <<SENDING-COMPLETE>>), {CC-CALL-PROC} otherwise --
+ * what CC itself would have sent first.
  */
 static void answer_held_setup(struct dect_link *l, const uint8_t *ies,
 			      size_t ies_len)
 {
 	int svc = dect_nwk_find_fixed_ie(ies, ies_len, DECT_IE_BASIC_SERVICE);
-	int lia = svc >= 0 && ((unsigned)svc >> 4) == 0x2u;
+	int lia = svc >= 0 &&
+		  dect_call_class((uint8_t)svc) == DECT_CALL_CLASS_LIA;
 	int complete = dect_nwk_find_fixed_ie(ies, ies_len,
 					      DECT_IE_SENDING_COMPLETE) >= 0;
 	uint8_t type = (l->cc.overlap && !lia && !complete) ?
@@ -58,6 +51,12 @@ static void answer_held_setup(struct dect_link *l, const uint8_t *ies,
 	l->setup_answered = type;
 }
 
+/*
+ * A message on the transaction of the held {CC-SETUP}: kept for the replay,
+ * up to DECT_LINK_HELD of them (later ones are dropped; the handset
+ * retransmits nothing LAPC has acknowledged, so the replay is best effort).
+ * A release from the handset ends the hold instead.
+ */
 static void hold_follow_up(struct dect_link *l, const struct dect_nwk_hdr *h,
 			   const uint8_t *msg, size_t len)
 {
@@ -77,14 +76,22 @@ static void hold_follow_up(struct dect_link *l, const struct dect_nwk_hdr *h,
 		l->held_n = 0;
 		return;
 	}
-	if (l->held_n >= DECT_LINK_HELD || len > sizeof(l->held[0])) {
-		l->held_dropped++;
+	if (l->held_n >= DECT_LINK_HELD || len > sizeof(l->held[0]))
 		return;
-	}
 	memcpy(l->held[l->held_n], msg, len);
 	l->held_len[l->held_n++] = len;
 }
 
+/*
+ * Hand queued NWK messages to LAPC, one at a time: the LCE slot first (a
+ * {LCE-PAGE-REJECT} or the answer to a held SETUP), then MM, then CC, then
+ * CISS, and only while nothing is outstanding.
+ *
+ * Both parts are protocol behaviour rather than taste: LAPC class A has a
+ * window of one, so a second message queued before the first is
+ * acknowledged would be lost, and MM carries the authentication and
+ * ciphering exchanges that CC depends on.
+ */
 static void drain_nwk(struct dect_link *l, uint64_t now)
 {
 	uint8_t msg[DECT_LAPC_MSG_MAX];
@@ -173,7 +180,7 @@ void dect_link_tick(struct dect_link *l, uint64_t now)
 {
 	dect_lapc_tick(&l->lapc, now);
 	dect_cc_tick(&l->cc, now);
-	dect_mm_tick(&l->mm, now);	/* <MM_ident.1> */
+	dect_mm_tick(&l->mm, now);
 	drain_nwk(l, now);
 }
 
@@ -198,12 +205,163 @@ int dect_link_poll_append_mail(struct dect_link *l, struct dect_mail *out)
 	return 1;
 }
 
+/*
+ * LCE: the peer's answer to our page. Reported, never acted on: when an
+ * FP-originated {CC-SETUP} may go out is the caller's decision.
+ *
+ * Only {LCE-PAGE-RESPONSE} counts, and only with its mandatory
+ * <<PORTABLE-IDENTITY>> (EN 300 175-5 table 64), which is handed up so the
+ * caller can check who answered. Without the identity §17.6.5 wants
+ * clearing by {LCE-PAGE-REJECT}, whose mandatory identity is "the full IPUI
+ * of the PT that is rejected" (table 65): we can only send it when the link
+ * already knows that IPUI, and ignore the response otherwise.
+ *
+ * The handset originates its page response, so F = 0, and LCE has the one
+ * transaction value 0 (§7.3 table 68). F = 1 is ignored (§17.3.2.6),
+ * another value is illegal and ignored (§17.3.1); both are counted.
+ */
+static void rx_lce(struct dect_link *l, const struct dect_nwk_hdr *h,
+		   const uint8_t *ies, size_t ies_len,
+		   struct dect_link_ind *ind)
+{
+	int ti_ok = h->ti_flag == DECT_TI_ORIGINATOR && h->ti_value == 0u;
+	const uint8_t *pid;
+	size_t pid_len;
+
+	if (!ti_ok) {
+		l->lce_bad_ti++;
+		return;
+	}
+	if (h->msg_type != DECT_LCE_PAGE_RESPONSE)
+		return;
+	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+			       &pid_len);
+	if (!pid) {
+		if (l->mm.port_id_len)
+			(void)dect_link_page_reject(l, l->mm.port_id,
+						    l->mm.port_id_len,
+						    h->ti_value);
+		return;
+	}
+	if (pid_len <= sizeof(ind->page_id)) {
+		memcpy(ind->page_id, pid, pid_len);
+		ind->page_id_len = pid_len;
+		ind->page_ti = h->ti_value;
+		ind->page_response = 1;
+	}
+}
+
+/*
+ * A {CC-SETUP} arrives: ask the owner about call status and the call id
+ * before anything answers it, held or not. Returns 1 if the SETUP was taken
+ * (held, or the repeat of the held one), 0 if it goes on to CC.
+ */
+static int rx_cc_setup(struct dect_link *l, const struct dect_nwk_hdr *h,
+		       const uint8_t *ies, size_t ies_len,
+		       const uint8_t *msg, size_t len)
+{
+	size_t pid_len = 0;
+	const uint8_t *pid = dect_nwk_find_ie(ies, ies_len,
+					      DECT_IE_PORTABLE_IDENTITY,
+					      &pid_len);
+	int cs = (pid && l->call_status_for) ?
+		 l->call_status_for(l->call_status_ctx, pid, pid_len) : -1;
+
+	if (cs >= 0 && !dect_cc_busy(&l->cc))
+		dect_cc_set_call_status(&l->cc, cs, l->cc.status_call_id);
+	if (l->call_id_for && !dect_cc_busy(&l->cc)) {
+		uint8_t id = l->call_id_for(l->call_status_ctx, l);
+
+		if (id)
+			dect_cc_set_call_status(&l->cc, l->cc.call_status, id);
+	}
+
+	/*
+	 * Only the handset MM would accept is served. A held handset placing
+	 * a call on a fresh link has not located on it, so adopt it here as
+	 * LOCATE would. A roamer that did not locate here (same location
+	 * area) calls straight away: hold its SETUP while the owner fetches
+	 * the record, as MM holds a LOCATE-REQUEST.
+	 */
+	if (!dect_mm_adopt(&l->mm, pid, pid_len) && pid &&
+	    l->mm.cfg.defer_unknown && !l->setup_len &&
+	    len <= sizeof(l->setup) && pid_len <= sizeof(l->setup_id)) {
+		memcpy(l->setup, msg, len);
+		l->setup_len = len;
+		memcpy(l->setup_id, pid, pid_len);
+		l->setup_id_len = pid_len;
+		l->setup_ti = h->ti_value;
+		l->held_n = 0;
+		answer_held_setup(l, ies, ies_len);
+		return 1;
+	}
+	return l->setup_len && pid && pid_len == l->setup_id_len &&
+	       !memcmp(pid, l->setup_id, pid_len);	/* its repeat */
+}
+
+static void rx_cc(struct dect_link *l, const struct dect_nwk_hdr *h,
+		  const uint8_t *ies, size_t ies_len,
+		  struct dect_link_ind *ind)
+{
+	uint32_t kp_before = l->cc.stats.keypad;
+
+	ind->cc_message = 1;
+	if (l->setup_len && h->msg_type != DECT_CC_SETUP &&
+	    h->ti_value == l->setup_ti && h->ti_flag == DECT_TI_ORIGINATOR) {
+		hold_follow_up(l, h, ind->nwk, ind->nwk_len);
+		return;
+	}
+	if (h->msg_type == DECT_CC_SETUP &&
+	    rx_cc_setup(l, h, ies, ies_len, ind->nwk, ind->nwk_len))
+		return;
+	dect_cc_set_gate(&l->cc, l->mm.port_id, l->mm.port_id_len);
+	dect_cc_rx(&l->cc, ind->nwk, ind->nwk_len);
+	/*
+	 * Report that dialled digits arrived, so the caller does not have to
+	 * poll. What they mean -- a number to dial, a feature code, a control
+	 * character -- is policy and stays with the caller; read them with
+	 * dect_cc_keypad().
+	 */
+	if (l->cc.stats.keypad != kp_before)
+		ind->keypad = 1;
+}
+
+/*
+ * CISS: the PT-initiated date and time (TS 102 527-3 §7.4.2.2), a
+ * {FACILITY} with <<PORTABLE-IDENTITY>> and <<TIME-DATE>>. Checked against
+ * the identity the link holds and handed up; whether to use it is the
+ * owner's (the "Clock master"). Other CISS messages are ignored.
+ */
+static void rx_ciss(struct dect_link *l, const struct dect_nwk_hdr *h,
+		    const uint8_t *ies, size_t ies_len,
+		    struct dect_link_ind *ind)
+{
+	const uint8_t *pid, *td;
+	size_t pid_len, td_len;
+
+	if (h->msg_type != DECT_CISS_FACILITY)
+		return;
+	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
+			       &pid_len);
+	td = dect_nwk_find_ie(ies, ies_len, DECT_IE_TIME_DATE, &td_len);
+	if (!td || dect_time_get(td, td_len, &ind->pp_time_value))
+		return;
+	if (pid && l->mm.port_id_len && pid_len == l->mm.port_id_len &&
+	    !memcmp(pid, l->mm.port_id, pid_len))
+		ind->pp_time = 1;
+	else
+		ind->pp_time_unknown = 1;
+}
+
 int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			 uint64_t now, const uint8_t *rand_f,
 			 const uint8_t *rs, struct dect_link_ind *ind)
 {
 	struct dect_link_ind local;
 	struct dect_cs_seg seg;
+	struct dect_nwk_hdr h;
+	const uint8_t *ies;
+	size_t ies_len;
 	uint8_t lapcbuf[DECT_LC_LAPC_MAX];
 	int lapc_len, nwk_len;
 
@@ -217,15 +375,10 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 	/*
 	 * A link serves ONE connection. A segment carrying a different handle
 	 * is another handset's traffic and must not reach this link's Lc
-	 * reassembly, LAPC sequence numbers or NWK state machines.
-	 *
-	 * The handle was always decoded here and never checked. With one
-	 * handset on the bench that is invisible; with several it is not. On
-	 * 2026-10-24, three handsets and a FRITZ!Fon C4 in range produced
-	 * 26-30 connections in 170 s, all feeding one link, and an
-	 * FP-originated {CC-SETUP} was never acknowledged by anyone. Reject
-	 * the segment and say whose it was, so the caller can route it or
-	 * ignore it deliberately rather than by accident.
+	 * reassembly, LAPC sequence numbers or NWK state machines: with
+	 * several handsets in range the chip runs many connections at once.
+	 * Reject the segment and say whose it was, so the caller can route it
+	 * or ignore it deliberately rather than by accident.
 	 */
 	ind->seg_handle = seg.handle;
 	if (seg.handle != l->handle) {
@@ -238,9 +391,8 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 				       sizeof(lapcbuf));
 	ind->lc_rc = lapc_len;
 	/*
-	 * A segment we cannot use must not stall our own queue. An incoming
-	 * call queues its {CC-SETUP} before the peer's first frame arrives,
-	 * and an early return left it sitting there for ever.
+	 * A segment we cannot use must not stall our own queue: an incoming
+	 * call queues its {CC-SETUP} before the peer's first frame arrives.
 	 */
 	if (lapc_len <= 0) {
 		drain_nwk(l, now);
@@ -254,176 +406,26 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 
 	nwk_len = dect_lapc_rx(&l->lapc, &ind->frame, now, ind->nwk,
 			       sizeof(ind->nwk));
-	if (nwk_len > 0) {
-		struct dect_nwk_hdr h;
-		const uint8_t *ies;
-		size_t ies_len;
-
+	if (nwk_len > 0)
 		ind->nwk_len = (size_t)nwk_len;
-		if (dect_nwk_parse(ind->nwk, ind->nwk_len, &h, &ies,
-				   &ies_len) == 0 && h.pd == DECT_PD_LCE) {
-			/*
-			 * The peer's answer to our page. Reported, never acted
-			 * on: when an FP-originated {CC-SETUP} may go out is
-			 * the caller's decision.
-			 *
-			 * Only {LCE-PAGE-RESPONSE} counts, and only with its
-			 * mandatory <<PORTABLE-IDENTITY>> (EN 300 175-5 table
-			 * 64), which is handed up so the caller can check who
-			 * answered. Any LCE message used to count, from any
-			 * handset (external review, the clean-room record/
-			 * an external review-24102026.md, finding 10).
-			 *
-			 * Without the identity §17.6.5 wants clearing by
-			 * {LCE-PAGE-REJECT}, whose mandatory identity is "the
-			 * full IPUI of the PT that is rejected" (table 65): we
-			 * can only send it when the link already knows that
-			 * IPUI, and ignore the response otherwise. This comment
-			 * used to quote the "ignore" half alone (spec sweep).
-			 */
-			const uint8_t *pid;
-			size_t pid_len;
-			/*
-			 * The handset originates its page response, so F = 0,
-			 * and LCE has the one transaction value 0 (§7.3 table
-			 * 68). F = 1 is ignored (§17.3.2.6), another value is
-			 * illegal and ignored (§17.3.1); both counted (spec
-			 * sweep, LCE7). Every saved log has F = 0, TV 0.
-			 */
-			int ti_ok = h.ti_flag == DECT_TI_ORIGINATOR &&
-				    h.ti_value == 0u;
-
-			if (!ti_ok)
-				l->lce_bad_ti++;
-			pid = dect_nwk_find_ie(ies, ies_len,
-					       DECT_IE_PORTABLE_IDENTITY, &pid_len);
-			if (ti_ok && h.msg_type == DECT_LCE_PAGE_RESPONSE &&
-			    !pid && l->mm.port_id_len)
-				(void)dect_link_page_reject(l, l->mm.port_id,
-							    l->mm.port_id_len,
-							    h.ti_value);
-			if (ti_ok && h.msg_type == DECT_LCE_PAGE_RESPONSE &&
-			    pid && pid_len <= sizeof(ind->page_id)) {
-				memcpy(ind->page_id, pid, pid_len);
-				ind->page_id_len = pid_len;
-				ind->page_ti = h.ti_value;
-				ind->page_response = 1;
-			}
-		} else if (dect_nwk_parse(ind->nwk, ind->nwk_len, &h, &ies,
-					  &ies_len) == 0 && h.pd == DECT_PD_CC) {
-			uint32_t kp_before = l->cc.stats.keypad;
-
-			ind->cc_message = 1;
-			/*
-			 * The handset MM would accept, and no other. A held
-			 * handset placing a call on a fresh link has not
-			 * located on it, so adopt it here as LOCATE would.
-			 */
-			/*
-			 * The rest of a held call: keep it for the replay. A
-			 * release from the handset ends the hold instead.
-			 */
-			if (l->setup_len && h.msg_type != DECT_CC_SETUP &&
-			    h.ti_value == l->setup_ti &&
-			    h.ti_flag == DECT_TI_ORIGINATOR) {
-				hold_follow_up(l, &h, ind->nwk, ind->nwk_len);
-				goto drained;
-			}
-			if (h.msg_type == DECT_CC_SETUP) {
-				size_t pid_len;
-				const uint8_t *pid = dect_nwk_find_ie(
-					ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
-					&pid_len);
-				int cs = (pid && l->call_status_for) ?
-					 l->call_status_for(l->call_status_ctx,
-							    pid, pid_len) : -1;
-
-				/* before anything answers it, held or not */
-				if (cs >= 0 && !dect_cc_busy(&l->cc))
-					dect_cc_set_call_status(
-						&l->cc, cs,
-						l->cc.status_call_id);
-				if (l->call_id_for && !dect_cc_busy(&l->cc)) {
-					uint8_t id = l->call_id_for(
-						l->call_status_ctx, l);
-
-					if (id)
-						dect_cc_set_call_status(
-							&l->cc,
-							l->cc.call_status, id);
-				}
-
-				/*
-				 * A roamer that did not locate here (same
-				 * location area) calls straight away: hold
-				 * its SETUP while the owner fetches the
-				 * record, as MM holds a LOCATE-REQUEST.
-				 */
-				if (!dect_mm_adopt(&l->mm, pid, pid_len) &&
-				    pid && l->mm.cfg.defer_unknown &&
-				    !l->setup_len &&
-				    ind->nwk_len <= sizeof(l->setup) &&
-				    pid_len <= sizeof(l->setup_id)) {
-					memcpy(l->setup, ind->nwk, ind->nwk_len);
-					l->setup_len = ind->nwk_len;
-					memcpy(l->setup_id, pid, pid_len);
-					l->setup_id_len = pid_len;
-					l->setup_ti = h.ti_value;
-					l->held_n = 0;
-					answer_held_setup(l, ies, ies_len);
-					goto drained;
-				}
-				if (l->setup_len && pid &&
-				    pid_len == l->setup_id_len &&
-				    !memcmp(pid, l->setup_id, pid_len))
-					goto drained;	/* its repeat */
-			}
-			dect_cc_set_gate(&l->cc, l->mm.port_id,
-					 l->mm.port_id_len);
-			dect_cc_rx(&l->cc, ind->nwk, ind->nwk_len);
-			/*
-			 * Report that dialled digits arrived, so the caller
-			 * does not have to poll. What they mean -- a number to
-			 * dial, a feature code, a control character -- is
-			 * policy and stays with the caller; read them with
-			 * dect_cc_keypad().
-			 */
-			if (l->cc.stats.keypad != kp_before)
-				ind->keypad = 1;
-		} else if (dect_nwk_parse(ind->nwk, ind->nwk_len, &h, &ies,
-					  &ies_len) == 0 && h.pd == DECT_PD_CISS) {
-			/*
-			 * The PT-initiated date and time (§7.4.2.2): a
-			 * {FACILITY} with <<PORTABLE-IDENTITY>> and
-			 * <<TIME-DATE>>. Checked against the identity the link
-			 * holds and handed up; whether to use it is the
-			 * owner's (the "Clock master"). Other CISS: ignored.
-			 */
-			const uint8_t *pid, *td;
-			size_t pid_len, td_len;
-
-			if (h.msg_type != DECT_CISS_FACILITY)
-				goto drained;
-			pid = dect_nwk_find_ie(ies, ies_len,
-					       DECT_IE_PORTABLE_IDENTITY,
-					       &pid_len);
-			td = dect_nwk_find_ie(ies, ies_len, DECT_IE_TIME_DATE,
-					      &td_len);
-			if (!td || dect_time_get(td, td_len,
-						 &ind->pp_time_value))
-				goto drained;
-			if (pid && l->mm.port_id_len &&
-			    pid_len == l->mm.port_id_len &&
-			    !memcmp(pid, l->mm.port_id, pid_len))
-				ind->pp_time = 1;
-			else
-				ind->pp_time_unknown = 1;
-		} else {
-			ind->mm_message = 1;
+	/* route a complete NWK message by protocol discriminator */
+	if (ind->nwk_len &&
+	    dect_nwk_parse(ind->nwk, ind->nwk_len, &h, &ies, &ies_len) == 0) {
+		switch (h.pd) {
+		case DECT_PD_LCE:
+			rx_lce(l, &h, ies, ies_len, ind);
+			break;
+		case DECT_PD_CC:
+			rx_cc(l, &h, ies, ies_len, ind);
+			break;
+		case DECT_PD_CISS:
+			rx_ciss(l, &h, ies, ies_len, ind);
+			break;
+		default:	/* MM ignores what is not its own */
 			dect_mm_rx(&l->mm, ind->nwk, ind->nwk_len, rand_f, rs);
+			break;
 		}
 	}
-drained:
 	drain_nwk(l, now);
 	return 0;
 }
@@ -444,12 +446,11 @@ int dect_link_setup_resume(struct dect_link *l, uint64_t now)
 {
 	uint8_t msg[DECT_LAPC_MSG_MAX];
 	size_t n = l->setup_len;
+	unsigned i;
 	int known;
 
 	if (!n)
 		return 0;
-	unsigned i;
-
 	memcpy(msg, l->setup, n);
 	l->setup_len = 0;
 	known = dect_mm_adopt(&l->mm, l->setup_id, l->setup_id_len);

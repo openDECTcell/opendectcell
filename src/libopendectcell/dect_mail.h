@@ -52,8 +52,16 @@ struct dect_mail {
 int dect_mail_encode(const struct dect_mail *m, uint16_t seq,
 		     uint8_t *out, size_t out_cap);
 
-/* Transport byte order: some builds put the primitive field on the wire
- * big-endian (the 7412 STUB); the default is little-endian (7520). */
+/*
+ * Transport byte order. The 7412's STUB puts the length field and the
+ * primitive on the wire big-endian; the default is little-endian (7520).
+ * The element header, the sequence number and the checksum are the same
+ * either way.
+ *
+ * This is the one process-wide setting of the library: a process talks to
+ * one chip, so set it once at start-up, before the first mail is encoded
+ * or pulled. It applies to dect_mail_encode() and dect_rx_pull() alike.
+ */
 void dect_mail_set_swap(int on);
 
 /*

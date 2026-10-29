@@ -243,6 +243,60 @@ static void test_encode_limits(void)
 	CHECK_EQ(dect_mail_encode(&m, 0, out, 4), -1);
 }
 
+/*
+ * The big-endian transport (dect_mail_set_swap(1), the 7412's STUB): the
+ * length field and the primitive go on the wire most significant byte
+ * first, both ways; the element header, the sequence number and the
+ * checksum keep their order.
+ */
+static void test_swapped_byte_order(void)
+{
+	struct dect_mail m = { .src = 0x22, .dst = 0x02, .prim = 0x0244,
+			       .param_len = 3, .param = { 0x01, 0x02, 0x03 } };
+	static const uint8_t want[] = {
+		0x07, 0x00,		/* word count (9 + 5) / 2 */
+		0x05, 0x00,		/* seq 5 */
+		0x00, 0x05,		/* L = 5, big-endian */
+		0x22, 0x02,		/* src, dst */
+		0x02, 0x44,		/* prim 0x0244, big-endian */
+		0x01, 0x02, 0x03,
+		0x75, 0x00,		/* checksum 0x0075 LE */
+		0xff,			/* pad to even */
+	};
+	uint8_t out[DECT_TX_ELEM_MAX], frame[32];
+	struct dect_rx rx;
+	struct dect_mail got;
+	int n;
+
+	dect_mail_set_swap(1);
+	n = dect_mail_encode(&m, 5, out, sizeof(out));
+	CHECK_EQ(n, (int)sizeof(want));
+	CHECK(n == (int)sizeof(want) && memcmp(out, want, sizeof(want)) == 0);
+
+	/* A received frame in the same order: 0xAA, seq, then as above. */
+	frame[0] = 0xaa;
+	frame[1] = 0x09;
+	memcpy(frame + 2, want + 4, 9u + 2u);	/* mail and checksum */
+	dect_rx_init(&rx);
+	dect_rx_push(&rx, frame, 2u + 9u + 2u);
+	CHECK_EQ(dect_rx_pull(&rx, &got), 1);
+	CHECK_EQ(got.src, 0x22);
+	CHECK_EQ(got.dst, 0x02);
+	CHECK_EQ(got.prim, 0x0244);
+	CHECK_EQ(got.param_len, 3);
+	CHECK_EQ(memcmp(got.param, m.param, 3), 0);
+
+	/* The little-endian frame of the same mail is not read the same. */
+	n = (int)build_rx(frame, 0x0a, 0x22, 0x02, 0x0244, m.param, 3);
+	dect_rx_init(&rx);
+	dect_rx_push(&rx, frame, (size_t)n);
+	CHECK(dect_rx_pull(&rx, &got) == 0 || got.prim != 0x0244);
+
+	dect_mail_set_swap(0);
+	n = dect_mail_encode(&m, 5, out, sizeof(out));
+	CHECK(n > 5 && out[4] == 0x05 && out[5] == 0x00);	/* LE again */
+}
+
 int main(void)
 {
 	test_encode_contact();
@@ -254,5 +308,6 @@ int main(void)
 	test_short_length();
 	test_partial();
 	test_encode_limits();
+	test_swapped_byte_order();
 	return CHECK_DONE();
 }

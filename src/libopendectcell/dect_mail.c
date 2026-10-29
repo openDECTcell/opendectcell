@@ -18,7 +18,8 @@ static uint16_t sum16(const uint8_t *p, size_t n)
 	return (uint16_t)s;
 }
 
-static int mail_swap;	/* transport byte order: swap the primitive field */
+/* Big-endian length field and primitive, see dect_mail_set_swap(). */
+static int mail_swap;
 
 void dect_mail_set_swap(int on)
 {

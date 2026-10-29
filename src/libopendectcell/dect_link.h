@@ -2,24 +2,19 @@
 /*
  * dect_link: the per-connection C-plane stack.
  *
- * libopendectcell has always provided the layers -- Cs, Lc, LAPC, NWK, MM, CC --
- * but not the code that wires them together. That glue lived in
- * `dect-stubd.c` as `reg_segment()`, `drain_nwk()` and `pump_lapc()`,
- * operating on a single global connection. openDECTcell#67: **the glue is protocol
- * behaviour, not application code.** MM is drained before CC, one NWK message
- * is outstanding per LAPC window, the Lc signature is learned from the peer's
- * establishment frame. A second consumer reimplementing that from prose would
- * drift from this one, silently and in exactly the places that are hard to
- * test.
+ * The layers -- Cs, Lc, LAPC, NWK, MM, CC -- live in their own modules;
+ * this is the glue that wires them together, because the glue is protocol
+ * behaviour, not application code: MM is drained before CC, one NWK message
+ * is outstanding per LAPC window, the Lc signature is learned from the
+ * peer's establishment frame. Every consumer (dect-stubd, the controller)
+ * uses this one rather than reimplementing it.
  *
- * So it lives here, per connection, with no globals and no I/O: the caller
- * owns the transport and the randomness, this owns the protocol.
- *
- * Shape (agreed on openDECTcell#67):
+ * One link per connection, with no globals of its own and no I/O: the
+ * caller owns the transport and the randomness, this owns the protocol.
  *
  *   dect_link_init()              bring a connection up
  *   dect_link_rx_segment()        feed one received C-plane segment in
- *   dect_link_tick()              drive retransmission timers
+ *   dect_link_tick()              drive the timers
  *   dect_link_poll_append_mail()  take the next frame to transmit
  *
  * What stays with the caller, deliberately:
@@ -31,12 +26,10 @@
  *     dect_link_ind`; the link never decides what a page response or a
  *     learned identity *means*. Ringing, subscription storage and audio are
  *     the application's.
- *   - **the audio bind.** Explicitly out of scope for #67: it is chip
- *     specific and currently wrong, and moving it would standardise the
- *     defect across both consumers.
+ *   - **the audio bind.** It is chip specific, so it stays with the owner.
  */
-#ifndef DECT_LINK_H
-#define DECT_LINK_H
+#ifndef OPENDECTCELL_DECT_LINK_H
+#define OPENDECTCELL_DECT_LINK_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -51,9 +44,10 @@
 #include "dect_nwk.h"
 #include "dect_proto.h"
 
-/* One connection's stack. Treat the members as read-only from outside. */
 #define DECT_LINK_CISS_MAX	4u
+#define DECT_LINK_HELD		4u
 
+/* One connection's stack. Treat the members as read-only from outside. */
 struct dect_link {
 	uint8_t  handle;	/* chip connection handle this link rides on */
 	struct dect_lc_rx  lc;
@@ -61,14 +55,11 @@ struct dect_link {
 	struct dect_mm     mm;
 	struct dect_cc     cc;
 	/*
-	 * One pending CISS message. Today that is only the {FACILITY}
-	 * carrying <<TIME-DATE>> after a location registration
-	 * (TS 102 527-3 §7.4.2), which is a single message with no state
-	 * machine behind it, so a one-deep slot is the honest size. If CISS
-	 * ever grows a real entity this becomes its queue.
+	 * CISS {FACILITY}s waiting for LAPC: the date and time and the events
+	 * notifications that follow a location registration (TS 102 527-3
+	 * §7.4.2, §7.4.20). CISS has no state machine here, so a short FIFO
+	 * is all it needs.
 	 */
-	/* CISS {FACILITY}s waiting for LAPC: the date and time and the events
-	 * notifications that follow a location registration */
 	uint8_t  ciss[DECT_LINK_CISS_MAX][DECT_LAPC_MSG_MAX];
 	size_t   ciss_len[DECT_LINK_CISS_MAX];
 	unsigned ciss_n;
@@ -77,7 +68,8 @@ struct dect_link {
 	 * It is answered at once (setup_answered: {CC-SETUP-ACK} or
 	 * {CC-CALL-PROC}), which stops the handset's 20 s P<CC.03>; what the
 	 * handset sends on the call meanwhile -- its digits, a list-access
-	 * dialog -- is held too (up to DECT_LINK_HELD) and replayed after it.
+	 * dialog -- is held too (up to DECT_LINK_HELD, later ones are dropped)
+	 * and replayed after it.
 	 */
 	uint8_t  setup[DECT_LAPC_MSG_MAX];
 	size_t   setup_len;
@@ -85,11 +77,9 @@ struct dect_link {
 	size_t   setup_id_len;
 	uint8_t  setup_ti;
 	uint8_t  setup_answered;
-#define DECT_LINK_HELD	4u
 	uint8_t  held[DECT_LINK_HELD][DECT_LAPC_MSG_MAX];
 	size_t   held_len[DECT_LINK_HELD];
 	unsigned held_n;
-	uint32_t held_dropped;		/* follow-ups beyond DECT_LINK_HELD */
 	uint32_t lce_bad_ti;		/* LCE messages ignored: F = 1 or TV != 0 */
 	/*
 	 * Optional: may the handset with this IPUI get call status? Asked
@@ -107,21 +97,18 @@ struct dect_link {
 	 * the current id.
 	 */
 	uint8_t (*call_id_for)(void *ctx, const struct dect_link *l);
-	/* One pending LCE message: the {LCE-PAGE-REJECT}, sent first. */
+	/*
+	 * One message sent ahead of MM and CC: an {LCE-PAGE-REJECT}, or the
+	 * link's own answer to a held {CC-SETUP} ({CC-SETUP-ACK},
+	 * {CC-CALL-PROC}, or {CC-RELEASE-COM} when the handset gives up).
+	 */
 	uint8_t  lce[DECT_LAPC_MSG_MAX];
 	size_t   lce_len;
 
 	/*
-	 * Optional sink for every NWK message the link hands to the DLC.
-	 * Logging only -- the library still does no I/O of its own, it just
-	 * lets the caller see what went out.
-	 *
-	 * This exists because #67 moved the drain into the library and
-	 * silently took `reg: nwk out` out of the daemon's log with it. That
-	 * line is how every outbound message in this project has ever been
-	 * read, and losing it cost an hour chasing a protocol ghost: a run
-	 * that looked like "we never answered a LOCATE-REQUEST" was really
-	 * "we answered and no longer say so".
+	 * Optional sink for every NWK message the link hands to the DLC, for
+	 * the owner's log: the library does no I/O of its own, so this is how
+	 * the caller sees what went out.
 	 */
 	void   (*tx_log)(void *ctx, const uint8_t *msg, size_t len);
 	void    *tx_log_ctx;
@@ -144,7 +131,6 @@ struct dect_link_ind {
 	unsigned pp_time       : 1;
 	unsigned pp_time_unknown : 1;
 	struct dect_time pp_time_value;
-	unsigned mm_message    : 1;
 	unsigned lapc_parse_failed : 1;	/* a segment we could not use */
 	unsigned keypad        : 1;	/* the peer sent dialled digits */
 	/*
@@ -184,8 +170,8 @@ void dect_link_init(struct dect_link *l, uint8_t handle,
  * (16 bytes) are handed to MM for authentication challenges; either may be
  * NULL if the caller knows none is due.
  *
- * Returns 0 if the segment was consumed, -1 if it was not a C-plane segment.
- * `ind` may be NULL.
+ * Returns 0 if the segment was consumed, -1 if it was not a C-plane segment
+ * or belongs to another connection (ind->foreign). `ind` may be NULL.
  */
 int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
 			 uint64_t now, const uint8_t *rand_f,
@@ -198,7 +184,7 @@ int dect_link_rx_segment(struct dect_link *l, const struct dect_mail *m,
  */
 void dect_link_drain(struct dect_link *l, uint64_t now);
 
-/* Drive LAPC retransmission and CC timers. Call once per poll loop. */
+/* Drive the LAPC, CC and MM timers. Call once per poll loop. */
 void dect_link_tick(struct dect_link *l, uint64_t now);
 
 /*
@@ -209,9 +195,9 @@ void dect_link_tick(struct dect_link *l, uint64_t now);
  * indicate support" and "independently of the 'Clock master' setting".
  * The caller supplies the time, because the library has no clock.
  *
- * Returns 0 if queued, -1 if the time is out of range or a message is
- * already pending. Sending it is never essential: a handset with the wrong
- * clock still makes calls.
+ * Returns 0 if queued, -1 if the time is out of range or the CISS queue
+ * (DECT_LINK_CISS_MAX) is full. Sending it is never essential: a handset
+ * with the wrong clock still makes calls.
  */
 int dect_link_send_time(struct dect_link *l, const struct dect_time *t);
 
@@ -257,4 +243,4 @@ void dect_link_set_tx_log(struct dect_link *l,
  */
 int dect_link_poll_append_mail(struct dect_link *l, struct dect_mail *out);
 
-#endif /* DECT_LINK_H */
+#endif /* OPENDECTCELL_DECT_LINK_H */
