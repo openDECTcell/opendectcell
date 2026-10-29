@@ -36,14 +36,24 @@ static void test_checksum_lsig(void)
 	CHECK_EQ(cs[1], 0xB5 ^ 0x34);
 }
 
+/* The frame length dect_lc_build() gives a LAPC frame with info_len octets. */
+static size_t built_flen(size_t info_len)
+{
+	uint8_t lapc[DECT_LC_LAPC_MAX] = { 0 };
+	uint8_t frame[DECT_LC_FRAME_MAX];
+
+	lapc[2] = (uint8_t)(info_len << 2 | 1u);	/* LI, N = 1 */
+	return dect_lc_build(lapc, 3u + info_len, 0, frame, sizeof(frame));
+}
+
 /* FLEN rounds (info + 5 overhead) up to a multiple of 5, capped by the channel. */
 static void test_flen(void)
 {
-	CHECK_EQ(dect_lc_flen(0), 5);
-	CHECK_EQ(dect_lc_flen(1), 10);	/* 1+5 = 6 -> 10 */
-	CHECK_EQ(dect_lc_flen(5), 10);	/* 5+5 = 10 */
-	CHECK_EQ(dect_lc_flen(22), 30);	/* spec worked example */
-	CHECK_EQ(dect_lc_flen(63), 70);	/* 63+5 = 68 -> 70 (max) */
+	CHECK_EQ(built_flen(0), 5);
+	CHECK_EQ(built_flen(1), 10);	/* 1+5 = 6 -> 10 */
+	CHECK_EQ(built_flen(5), 10);	/* 5+5 = 10 */
+	CHECK_EQ(built_flen(22), 30);	/* spec worked example */
+	CHECK_EQ(built_flen(63), 70);	/* 63+5 = 68 -> 70 (max) */
 }
 
 /* Build a Cs frame, then reassemble it fragment by fragment back to the LAPC frame. */

@@ -241,10 +241,6 @@ void dect_iwu_clear_lines(struct dect_iwu *iwu);
 int dect_iwu_attached(const struct dect_iwu *iwu, uint8_t line_id,
 		      uint8_t terminal_id);
 
-/* The line with this id, or NULL. */
-const struct dect_iwu_line *dect_iwu_line(const struct dect_iwu *iwu,
-					  uint8_t line_id);
-
 /* Add a registered handset to the Internal Names List. Keeps the list
  * sorted by terminal id (7.4.10.3 default sorting); a repeated id replaces
  * the entry. Returns 0, or -1 when the list is full or the id invalid. */

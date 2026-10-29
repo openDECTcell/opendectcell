@@ -80,9 +80,6 @@ struct dect_time {
 	uint8_t tz_valid;	/* 0 => send the null value */
 };
 
-/* Is every field in range? Encoding refuses rather than emitting nonsense. */
-int dect_time_valid(const struct dect_time *t);
-
 /*
  * Read a received <<TIME-DATE>> value (without tag and length): the 8-octet
  * time-and-date form we send ourselves. 0 and *t filled if it is one and in

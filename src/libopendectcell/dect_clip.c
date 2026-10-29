@@ -54,7 +54,11 @@ static size_t utf8_step(const unsigned char *s, size_t avail)
 	return need;
 }
 
-size_t dect_clip_utf8_trunc(const char *s, size_t max_bytes)
+/*
+ * Largest prefix of `s` that is at most `max_bytes` long and ends on a
+ * complete, well-formed UTF-8 code point. Stops at the first malformed byte.
+ */
+static size_t utf8_trunc(const char *s, size_t max_bytes)
 {
 	const unsigned char *p = (const unsigned char *)s;
 	size_t len = strlen(s), off = 0;
@@ -211,7 +215,7 @@ size_t dect_clip_put_name(uint8_t *out, size_t cap, size_t off,
 		budget = DECT_CLIP_NAME_MAX;
 
 	if (id->name_alphabet == DECT_CLIP_ALPHABET_UTF8)
-		n = dect_clip_utf8_trunc(id->name, budget);
+		n = utf8_trunc(id->name, budget);
 	else if (n > budget)
 		n = budget;
 	if (n == 0)		/* the budget could not hold one character */

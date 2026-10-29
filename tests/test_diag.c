@@ -184,43 +184,59 @@ static void test_from_link_and_json(void)
  * Quality % from it and the error counters over CONNECTTIME [0x22]; the
  * 32-bit frame count at [0x24] (A-0123).
  */
+/*
+ * Decode `row` as the radio half of a link and render it: the dBm and the
+ * quality are what the JSON carries of them.
+ */
+static const char *radio_json(const uint8_t *row, size_t n)
+{
+	static char js[1024];
+	struct dect_diag_link d;
+
+	memset(&d, 0, sizeof(d));
+	d.basic_service = DECT_CC_SVC_NONE;
+	CHECK_EQ(dect_diag_decode_status(row, n, &d.radio), 0);
+	CHECK(dect_diag_json(&d, 0, js, sizeof(js)) > 0);
+	return js;
+}
+
 static void test_dbm_and_quality(void)
 {
 	uint8_t row[0x2D];
 	struct dect_diag_status st;
 
-	CHECK_EQ(dect_diag_rssi_dbm10(30), -884);	/* A-0121: -88.4 */
-	CHECK_EQ(dect_diag_rssi_dbm10(33), -819);	/* -81.9 */
-	CHECK_EQ(dect_diag_rssi_dbm10(59), -257);	/* -25.7 */
-	CHECK_EQ(dect_diag_rssi_dbm10(0), DECT_DIAG_NO_DBM);
-	CHECK_EQ(dect_diag_rssi_dbm10(255), DECT_DIAG_NO_DBM);
-
 	memset(row, 0, sizeof(row));
 	row[3] = 4;				/* carrier */
+	row[6 + 4] = 30;			/* A-0121: -88.4 dBm */
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"dbm\":-88.4") != NULL);
+	row[6 + 4] = 0;				/* 0 and 255 carry no value */
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"dbm\"") == NULL);
+	row[6 + 4] = 255;
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"dbm\"") == NULL);
+
 	row[6 + 4] = 59;			/* -25.7 dBm: q_rssi 100 */
 	row[0x22] = 0x20; row[0x23] = 0x03;	/* CONNECTTIME 800 */
 	row[0x24] = 0x01; row[0x26] = 0x01;	/* uptime 0x00010001 */
 	CHECK_EQ(dect_diag_decode_status(row, sizeof(row), &st), 0);
 	CHECK_EQ(st.connect_frames, 800u);
 	CHECK_EQ(st.uptime, 0x10001u);
-	CHECK_EQ(dect_diag_quality(&st), 100);	/* no errors */
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"dbm\":-25.7") != NULL);
+	/* no errors */
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"quality\":100,") != NULL);
 
 	row[0x10] = 8;				/* ACRC 8 of 800: 99 % good */
-	dect_diag_decode_status(row, sizeof(row), &st);
-	CHECK_EQ(dect_diag_quality(&st), 90);
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"quality\":90,") != NULL);
 
 	row[0x10] = 100;			/* 87 % good */
-	dect_diag_decode_status(row, sizeof(row), &st);
-	CHECK_EQ(dect_diag_quality(&st), 5);
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"quality\":5,") != NULL);
 
 	row[0x10] = 0;
 	row[6 + 4] = 33;			/* -81.9 dBm: q_rssi 20 */
-	dect_diag_decode_status(row, sizeof(row), &st);
-	CHECK_EQ(dect_diag_quality(&st), 20);
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"dbm\":-81.9") != NULL);
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"quality\":20,") != NULL);
 
 	row[0x22] = 0; row[0x23] = 0;		/* no frames: nothing to judge */
-	dect_diag_decode_status(row, sizeof(row), &st);
-	CHECK_EQ(dect_diag_quality(&st), -1);
+	CHECK(strstr(radio_json(row, sizeof(row)), "\"quality\"") == NULL);
 }
 
 int main(void)

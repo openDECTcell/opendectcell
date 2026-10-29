@@ -98,7 +98,6 @@ static void test_out_of_range_is_refused(void)
 	for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
 		uint8_t buf[32];
 
-		CHECK_EQ(dect_time_valid(&bad[i]), 0);
 		CHECK_EQ(dect_time_put(buf, sizeof(buf), 0, &bad[i]), 0u);
 		CHECK_EQ(dect_time_build_facility(buf, sizeof(buf), &bad[i]), 0u);
 	}

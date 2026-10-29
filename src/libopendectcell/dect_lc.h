@@ -48,9 +48,6 @@
 void dect_lc_checksum(const uint8_t *frame, size_t flen, uint16_t lsig,
 		      uint8_t out[2]);
 
-/* FLEN for a LAPC info length: round (LI + overhead) up to a multiple of 5. */
-size_t dect_lc_flen(size_t info_len);
-
 /*
  * Build the on-air Cs frame for a LAPC frame (addr, ctrl, LI octet, info).
  * lapc_len must be 3 + info_len (3 header octets + the information field) and at

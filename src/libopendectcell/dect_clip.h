@@ -191,11 +191,4 @@ size_t dect_clip_put_number(uint8_t *out, size_t cap, size_t off,
 size_t dect_clip_put_name(uint8_t *out, size_t cap, size_t off,
 			  const struct dect_clip *id, size_t budget);
 
-/*
- * Largest prefix of `s` that is at most `max_bytes` long and ends on a
- * complete, well-formed UTF-8 code point. Stops at the first malformed byte.
- * Exposed because the same rule applies anywhere a name meets a byte budget.
- */
-size_t dect_clip_utf8_trunc(const char *s, size_t max_bytes);
-
 #endif /* OPENDECTCELL_DECT_CLIP_H */

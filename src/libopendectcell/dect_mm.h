@@ -230,9 +230,6 @@ struct dect_term_cap {
 	uint8_t ng_part3;		/* PI_7 bit 3 */
 };
 
-/* 0 and *tc filled on a well-formed value, -1 otherwise (tc cleared). */
-int dect_term_cap_parse(const uint8_t *v, size_t n, struct dect_term_cap *tc);
-
 struct dect_mm {
 	struct dect_mm_cfg cfg;
 	enum dect_mm_state state;

@@ -83,15 +83,28 @@ int dect_diag_decode_status(const uint8_t *p, size_t n,
 	return 0;
 }
 
-int dect_diag_rssi_dbm10(uint8_t raw)
+/*
+ * The raw RSSI octet in tenths of a dBm, as FRITZ!OS converts it on the
+ * 7520 (clean room A-0121): (raw - 20) * 80/37 - 110 dBm. Raw 0 and 255
+ * carry no value: NO_DBM.
+ */
+#define NO_DBM	(-32768)
+
+static int rssi_dbm10(uint8_t raw)
 {
 	if (raw == 0u || raw == 0xFFu)
-		return DECT_DIAG_NO_DBM;
+		return NO_DBM;
 	/* (raw - 20) * 80/37 dB, in tenths, truncated toward zero */
 	return ((int)raw - 20) * 800 / 37 - 1100;
 }
 
-int dect_diag_quality(const struct dect_diag_status *st)
+/*
+ * FRITZ!OS's "Quality %" of a link (clean room A-0121): from the dBm of
+ * the call's carrier, discounted by ACRC + XCRC + ZCRC + QBIT1 + QBIT2
+ * over CONNECTTIME. -1 when there is nothing to judge (no counters, or
+ * no frames this interval).
+ */
+static int quality(const struct dect_diag_status *st)
 {
 	int dbm10, q, good;
 	unsigned errs, dur, i;
@@ -101,8 +114,8 @@ int dect_diag_quality(const struct dect_diag_status *st)
 	dur = st->connect_frames;
 	if (!dur)
 		return -1;
-	dbm10 = dect_diag_rssi_dbm10(st->rssi[st->carrier]);
-	if (dbm10 == DECT_DIAG_NO_DBM)
+	dbm10 = rssi_dbm10(st->rssi[st->carrier]);
+	if (dbm10 == NO_DBM)
 		q = 100;
 	else if (dbm10 > -400) q = 100;
 	else if (dbm10 > -450) q = 90;
@@ -151,7 +164,8 @@ const char *dect_diag_event_name(unsigned i)
 	return i < DECT_DIAG_EVENTS ? event_name[i] : "?";
 }
 
-const char *dect_diag_call_state_name(enum dect_cc_state st)
+/* A short name for a CC state: "idle", "ringing", "active", ... */
+static const char *call_state_name(enum dect_cc_state st)
 {
 	switch (st) {
 	case DECT_CC_ST_NULL:		 return "idle";
@@ -227,7 +241,7 @@ size_t dect_diag_json(const struct dect_diag_link *d, int with_identity,
 		put_hex(buf, cap, &off, &ok, d->codecs, d->codecs_len);
 	}
 	put(buf, cap, &off, &ok, ",\"call\":\"%s\",\"incoming\":%s",
-	    dect_diag_call_state_name(d->call_state),
+	    call_state_name(d->call_state),
 	    d->call_incoming ? "true" : "false");
 	if (d->basic_service != DECT_CC_SVC_NONE)
 		put(buf, cap, &off, &ok, ",\"basic_service\":%u",
@@ -252,15 +266,14 @@ size_t dect_diag_json(const struct dect_diag_link *d, int with_identity,
 				    d->radio.events[i]);
 			put(buf, cap, &off, &ok, "},\"call_frames\":%llu",
 			    (unsigned long long)d->call_frames);
-			if (dect_diag_quality(&d->radio) >= 0)
-				put(buf, cap, &off, &ok, ",\"quality\":%d",
-				    dect_diag_quality(&d->radio));
+			int q = quality(&d->radio);
+
+			if (q >= 0)
+				put(buf, cap, &off, &ok, ",\"quality\":%d", q);
 		}
 		if (d->radio.carrier < DECT_DIAG_CARRIERS &&
-		    dect_diag_rssi_dbm10(d->radio.rssi[d->radio.carrier]) !=
-		    DECT_DIAG_NO_DBM) {
-			int t = dect_diag_rssi_dbm10(
-				d->radio.rssi[d->radio.carrier]);
+		    rssi_dbm10(d->radio.rssi[d->radio.carrier]) != NO_DBM) {
+			int t = rssi_dbm10(d->radio.rssi[d->radio.carrier]);
 
 			put(buf, cap, &off, &ok, ",\"dbm\":%s%d.%d",
 			    t < 0 ? "-" : "", (t < 0 ? -t : t) / 10,

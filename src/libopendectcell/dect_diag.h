@@ -48,22 +48,6 @@ struct dect_diag_status {
 	uint32_t uptime;		/* 0x24: 32-bit frames since establishment */
 };
 
-/*
- * The raw RSSI octet in tenths of a dBm, as FRITZ!OS converts it on the
- * 7520 (clean room A-0121): (raw - 20) * 80/37 - 110 dBm. Raw 0 and 255
- * carry no value: returns DECT_DIAG_NO_DBM.
- */
-#define DECT_DIAG_NO_DBM	(-32768)
-int dect_diag_rssi_dbm10(uint8_t raw);
-
-/*
- * FRITZ!OS's "Quality %" of a link (clean room A-0121): from the dBm of
- * the call's carrier, discounted by ACRC + XCRC + ZCRC + QBIT1 + QBIT2
- * over CONNECTTIME. -1 when there is nothing to judge (no counters, or
- * no frames this interval).
- */
-int dect_diag_quality(const struct dect_diag_status *st);
-
 /* Frames since establishment, unwrapped across polls. Zero it per call. */
 struct dect_diag_frames {
 	uint64_t total;
@@ -112,13 +96,16 @@ uint64_t dect_diag_frames_update(struct dect_diag_frames *f,
 /* The trigger behind event counter i, e.g. "s12b6"; "?" out of range. */
 const char *dect_diag_event_name(unsigned i);
 
-/* A short name for a CC state: "idle", "ringing", "active", ... */
-const char *dect_diag_call_state_name(enum dect_cc_state st);
-
 /*
  * One JSON object for d, NUL-terminated, into buf. The IPUI is key-adjacent
  * personal data: it goes in only when with_identity is set. Returns the
  * length written, or 0 if buf is too small.
+ *
+ * The radio object carries the carrier's level as "dbm", converted as
+ * FRITZ!OS does on the 7520 (clean room A-0121), and, with the counters,
+ * FRITZ!OS's "Quality %" as "quality": from that level, discounted by
+ * ACRC + XCRC + ZCRC + QBIT1 + QBIT2 over CONNECTTIME. Either is left out
+ * when there is nothing to judge.
  */
 size_t dect_diag_json(const struct dect_diag_link *d, int with_identity,
 		      char *buf, size_t cap);

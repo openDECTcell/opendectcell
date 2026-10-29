@@ -744,10 +744,28 @@ static void test_locate(void)
 	}
 }
 
+/* What MM keeps of <<TERMINAL-CAPABILITY>> `v` in an {ACCESS-RIGHTS-REQUEST}. */
+static struct dect_term_cap cap_of(const uint8_t *v, size_t n)
+{
+	struct dect_mm_cfg cfg = { .pin = "1234" };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 0 }, rs[16] = { 0 };
+	uint8_t buf[64];
+	size_t off;
+
+	dect_mm_init(&mm, &cfg);
+	off = pp_access_request(buf, sizeof(buf), 0);
+	off = dect_nwk_put_ie(buf, sizeof(buf), off,
+			      DECT_IE_TERMINAL_CAPABILITY, v, n);
+	dect_mm_rx(&mm, buf, off, rand_f, rs);
+	CHECK_EQ(mm.stats.access_req, 1u);
+	return mm.peer_cap;
+}
+
 /*
  * <<TERMINAL-CAPABILITY>> as the three bench handsets send it in
- * {LOCATE-REQUEST} (bench logs 2026-10-28): the A540 is NG-DECT Part 3,
- * the C430A and AS690H Part 1 only.
+ * {LOCATE-REQUEST} (observed on hardware, 2026-10-28): the A540 is NG-DECT
+ * Part 3, the C430A and AS690H Part 1 only.
  */
 static void test_term_cap(void)
 {
@@ -760,7 +778,8 @@ static void test_term_cap(void)
 	static const uint8_t open3[] = { 0x25, 0x35, 0x0a };	/* never ends */
 	struct dect_term_cap tc;
 
-	CHECK_EQ(dect_term_cap_parse(a540, sizeof(a540), &tc), 0);
+	tc = cap_of(a540, sizeof(a540));
+	CHECK_EQ(tc.present, 1);
 	CHECK_EQ(tc.n_profile, 7u);
 	CHECK_EQ(tc.profile[0] & 0x02u, 0x02u);		/* GAP */
 	CHECK_EQ(tc.profile[6], 0x16u);
@@ -769,15 +788,18 @@ static void test_term_cap(void)
 	CHECK_EQ(tc.display, 5u);
 	CHECK_EQ(tc.tone, 2u);
 
-	CHECK_EQ(dect_term_cap_parse(c430a, sizeof(c430a), &tc), 0);
+	tc = cap_of(c430a, sizeof(c430a));
+	CHECK_EQ(tc.present, 1);
 	CHECK_EQ(tc.ng_part1, 1);
 	CHECK_EQ(tc.ng_part3, 0);
-	CHECK_EQ(dect_term_cap_parse(as690h, sizeof(as690h), &tc), 0);
+	tc = cap_of(as690h, sizeof(as690h));
+	CHECK_EQ(tc.present, 1);
 	CHECK_EQ(tc.ng_part3, 0);
 
-	CHECK_EQ(dect_term_cap_parse(open3, sizeof(open3), &tc), -1);
+	tc = cap_of(open3, sizeof(open3));
 	CHECK_EQ(tc.present, 0);
-	CHECK_EQ(dect_term_cap_parse(a540, 7, &tc), 0);	/* no PI group */
+	tc = cap_of(a540, 7);				/* no PI group */
+	CHECK_EQ(tc.present, 1);
 	CHECK_EQ(tc.n_profile, 0u);
 	CHECK_EQ(tc.ng_part3, 0);
 }

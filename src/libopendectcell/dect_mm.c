@@ -714,7 +714,8 @@ static void send_locate_reject(struct dect_mm *mm, uint8_t reason)
  * A GAP FP serves subscribed handsets. If the <<PORTABLE-IDENTITY>> does not
  * match the one we hold, reject it.
  */
-int dect_term_cap_parse(const uint8_t *v, size_t n, struct dect_term_cap *tc)
+/* 0 and *tc filled on a well-formed value, -1 otherwise (tc cleared). */
+static int term_cap_parse(const uint8_t *v, size_t n, struct dect_term_cap *tc)
 {
 	size_t i = 0;
 
@@ -750,7 +751,7 @@ static void learn_self_description(struct dect_mm *mm, const uint8_t *ies,
 	struct dect_term_cap tc;
 
 	p = dect_nwk_find_ie(ies, ies_len, DECT_IE_TERMINAL_CAPABILITY, &n);
-	if (p && !dect_term_cap_parse(p, n, &tc))
+	if (p && !term_cap_parse(p, n, &tc))
 		mm->peer_cap = tc;
 
 	p = dect_nwk_find_ie(ies, ies_len, DECT_IE_MODEL_IDENTIFIER, &n);

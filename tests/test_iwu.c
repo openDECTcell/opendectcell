@@ -304,9 +304,9 @@ static void test_line_pool(void)
 	CHECK_EQ(dect_iwu_add_line(&iwu, 2, "dup", 0), -1);	/* unique ids */
 	CHECK_EQ(dect_iwu_add_line(&iwu, 127, "big", 0), -1);
 	CHECK_EQ(iwu.n_lines, 2u);
-	CHECK(dect_iwu_line(&iwu, 1) == &iwu.lines[0]);	/* sorted */
-	CHECK_EQ(strcmp(dect_iwu_line(&iwu, 2)->name, "Line B"), 0);
-	CHECK(dect_iwu_line(&iwu, 3) == NULL);
+	CHECK_EQ(iwu.lines[0].id, 1u);			/* sorted */
+	CHECK_EQ(iwu.lines[1].id, 2u);
+	CHECK_EQ(strcmp(iwu.lines[1].name, "Line B"), 0);
 	handle(&iwu, start, sizeof(start));
 	handle(&iwu, read, sizeof(read));
 	CHECK_EQ(out.count, 2u);

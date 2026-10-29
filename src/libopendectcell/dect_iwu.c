@@ -33,6 +33,18 @@ void dect_iwu_init(struct dect_iwu *iwu)
 	strcpy(iwu->fw_version, "openDECTcell");
 }
 
+/* The line with this id, or NULL. */
+static const struct dect_iwu_line *find_line(const struct dect_iwu *iwu,
+					     uint8_t line_id)
+{
+	unsigned i;
+
+	for (i = 0; i < iwu->n_lines; i++)
+		if (iwu->lines[i].id == line_id)
+			return &iwu->lines[i];
+	return NULL;
+}
+
 static void line_name(struct dect_iwu_line *l, const char *name)
 {
 	memset(l->name, 0, sizeof(l->name));
@@ -66,7 +78,7 @@ int dect_iwu_add_line(struct dect_iwu *iwu, uint8_t line_id, const char *name,
 	unsigned i, at;
 
 	if (line_id > 126u || iwu->n_lines >= DECT_IWU_LINES ||
-	    dect_iwu_line(iwu, line_id))
+	    find_line(iwu, line_id))
 		return -1;
 	for (at = 0; at < iwu->n_lines && iwu->lines[at].id < line_id; at++)
 		;
@@ -83,24 +95,13 @@ int dect_iwu_add_line(struct dect_iwu *iwu, uint8_t line_id, const char *name,
 int dect_iwu_attached(const struct dect_iwu *iwu, uint8_t line_id,
 		      uint8_t terminal_id)
 {
-	const struct dect_iwu_line *l = dect_iwu_line(iwu, line_id);
+	const struct dect_iwu_line *l = find_line(iwu, line_id);
 
 	if (!l)
 		return 0;
 	if (l->all_handsets || !terminal_id || terminal_id > 32u)
 		return 1;
 	return (l->attached >> (terminal_id - 1u)) & 1u;
-}
-
-const struct dect_iwu_line *dect_iwu_line(const struct dect_iwu *iwu,
-					  uint8_t line_id)
-{
-	unsigned i;
-
-	for (i = 0; i < iwu->n_lines; i++)
-		if (iwu->lines[i].id == line_id)
-			return &iwu->lines[i];
-	return NULL;
 }
 
 int dect_iwu_remove_handset(struct dect_iwu *iwu, uint8_t terminal_id)

@@ -78,7 +78,8 @@ static int checksum_ok(const uint8_t *frame, size_t flen, uint16_t lsig)
 	return c0 == 0 && c1 == 0;
 }
 
-size_t dect_lc_flen(size_t info_len)
+/* FLEN for a LAPC info length: round (LI + overhead) up to a multiple of 5. */
+static size_t lc_flen(size_t info_len)
 {
 	size_t min = info_len + DECT_LC_OVERHEAD;
 
@@ -93,7 +94,7 @@ size_t dect_lc_build(const uint8_t *lapc, size_t lapc_len, uint16_t lsig,
 	if (lapc_len < 3 || lapc_len > DECT_LC_LAPC_MAX)
 		return 0;
 	info_len = lapc_len - 3;
-	flen = dect_lc_flen(info_len);
+	flen = lc_flen(info_len);
 	if (flen > DECT_LC_FRAME_MAX || out_cap < flen)
 		return 0;
 
@@ -140,7 +141,7 @@ int dect_lc_rx_fragment(struct dect_lc_rx *rx, const uint8_t seg[DECT_LC_FRAG_LE
 			rx->stats.length_errors++;
 			return -1;
 		}
-		rx->flen = dect_lc_flen(info_len);
+		rx->flen = lc_flen(info_len);
 	}
 
 	if (rx->len < rx->flen)

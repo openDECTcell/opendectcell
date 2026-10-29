@@ -42,7 +42,8 @@ static uint8_t tz_octet(const struct dect_time *t)
 	return (uint8_t)(sign | bcd((uint8_t)q));
 }
 
-int dect_time_valid(const struct dect_time *t)
+/* Is every field in range? Encoding refuses rather than emitting nonsense. */
+static int time_valid(const struct dect_time *t)
 {
 	if (!t)
 		return 0;
@@ -66,7 +67,7 @@ size_t dect_time_put(uint8_t *out, size_t cap, size_t off,
 {
 	uint8_t body[8];
 
-	if (!dect_time_valid(t))
+	if (!time_valid(t))
 		return off;
 
 	/* Octet 3: coding in bits 8-7, interpretation in bits 6-1. */
@@ -188,5 +189,5 @@ int dect_time_get(const uint8_t *v, size_t n, struct dect_time *t)
 		return -1;
 	t->tz_valid = v[7] != 0x00u;	/* 00H is the null value */
 	t->tz_quarters = (int16_t)((v[7] & 0x80u) ? -(int)q : (int)q);
-	return dect_time_valid(t) ? 0 : -1;
+	return time_valid(t) ? 0 : -1;
 }

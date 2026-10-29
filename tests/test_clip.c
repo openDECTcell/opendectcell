@@ -232,16 +232,16 @@ static void test_name_utf8_truncation(void)
 	uint8_t buf[32];
 	size_t off, i;
 
-	CHECK_EQ(dect_clip_utf8_trunc(aouss, 8), 8);
-	CHECK_EQ(dect_clip_utf8_trunc(aouss, 7), 6);
-	CHECK_EQ(dect_clip_utf8_trunc(aouss, 3), 2);
-	CHECK_EQ(dect_clip_utf8_trunc(aouss, 1), 0);
-	CHECK_EQ(dect_clip_utf8_trunc(aouss, 0), 0);
-
 	dect_clip_init(&id);
 	CHECK_EQ(dect_clip_set_name(&id, aouss, DECT_CLIP_ALPHABET_UTF8,
 				    DECT_CLIP_PRES_ALLOWED,
 				    DECT_CLIP_SCR_USER_UNSCREENED), 0);
+
+	/* The whole name fits in 8; 7 drops the last character, not a byte. */
+	off = dect_clip_put_name(buf, sizeof(buf), OFF0, &id, 8);
+	CHECK_EQ(buf[OFF0 + 1], 1 + 8);
+	off = dect_clip_put_name(buf, sizeof(buf), OFF0, &id, 7);
+	CHECK_EQ(buf[OFF0 + 1], 1 + 6);
 
 	/* A budget of 3 carries one complete character, not one and a half. */
 	memset(buf, 0, sizeof(buf));
@@ -266,7 +266,8 @@ static void test_name_utf8_truncation(void)
 			continue;
 		n = buf[OFF0 + 1] - 1u;		/* encoded name bytes */
 		CHECK_EQ(n % 2u, 0u);		/* every character is 2 bytes */
-		CHECK_EQ(dect_clip_utf8_trunc(aouss, n), n);
+		CHECK(n <= i);
+		CHECK_EQ(memcmp(buf + OFF0 + 3, aouss, n), 0);
 	}
 }
 

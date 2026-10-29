@@ -71,6 +71,10 @@ struct dect_lapc_frame {
 int dect_lapc_parse(const uint8_t *buf, size_t lapc_len, struct dect_lapc_frame *f);
 
 /*
+ * Frame builders. The link below uses them for its own frames; they are
+ * exported so that tests and simulators can build the peer's frames, with
+ * either C/R value.
+ *
  * Build an I-frame (addr, ctrl, LI, info) into out. cr/nlf/ns/nr/pf/more set the
  * fields; info_len <= DECT_LC_INFO_MAX. Returns the LAPC length (3 + info_len),
  * or 0 on a bad length. Wrap the result with dect_lc_build() before sending.
