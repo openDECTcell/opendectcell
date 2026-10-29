@@ -129,44 +129,65 @@ static void rs2_push(struct dect_rs2 *r, int16_t v)
 	r->x[DECT_RS2_TAPS - 1u] = v;
 }
 
-/* The filter at the history's centre, times gain (1 or 2), saturated. */
-static int16_t rs2_out(const struct dect_rs2 *r, int gain)
+static int16_t rs2_sat(int32_t v)
 {
-	const unsigned c = DECT_RS2_TAPS / 2u;
-	int32_t acc = 16384 * (int32_t)r->x[c];
+	return (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+}
+
+/*
+ * The odd taps around centre c, Q15: |sum| < 2^31 for any input (the taps'
+ * magnitudes add up to 16924, times two samples of 2^15).
+ */
+static int32_t rs2_odd(const int16_t *x, unsigned c)
+{
+	int32_t acc = 0;
 	unsigned k;
 
 	for (k = 0; k < 10u; k++)
-		acc += rs2_tap[k] * ((int32_t)r->x[c - 2u * k - 1u] +
-				     (int32_t)r->x[c + 2u * k + 1u]);
-	acc = (acc * gain) >> 15;
-	return (int16_t)(acc > 32767 ? 32767 : acc < -32768 ? -32768 : acc);
+		acc += rs2_tap[k] * ((int32_t)x[c - 2u * k - 1u] +
+				     (int32_t)x[c + 2u * k + 1u]);
+	return acc;
 }
 
 size_t dect_rs2_down(struct dect_rs2 *r, const int16_t *in, size_t n,
 		     int16_t *out)
 {
+	const unsigned c = DECT_RS2_TAPS / 2u;
 	size_t i;
 
 	for (i = 0; i + 1u < n; i += 2u) {
 		rs2_push(r, in[i]);
 		rs2_push(r, in[i + 1u]);
-		out[i / 2u] = rs2_out(r, 1);
+		out[i / 2u] = rs2_sat((16384 * (int32_t)r->x[c] +
+				       rs2_odd(r->x, c)) >> 15);
 	}
 	return n / 2u;
 }
 
-/* Zeros between the samples, then the low-pass at twice the gain. */
+/*
+ * Zeros between the samples, then the low-pass at twice the gain, in its
+ * two phases, so the zeros are never multiplied: the history holds the
+ * 8 kHz samples only, and x[] is its newest 20. Output at a sample is the
+ * sample itself (twice the centre tap); output between x[9] and x[10] is
+ * twice the odd taps over the ten samples either side.
+ */
 size_t dect_rs2_up(struct dect_rs2 *r, const int16_t *in, size_t n,
 		   int16_t *out)
 {
+	const int16_t *x = r->x + DECT_RS2_TAPS - 20u;
 	size_t i;
 
 	for (i = 0; i < n; i++) {
+		int32_t acc = 0;
+		unsigned k;
+
 		rs2_push(r, in[i]);
-		out[2u * i] = rs2_out(r, 2);
-		rs2_push(r, 0);
-		out[2u * i + 1u] = rs2_out(r, 2);
+		out[2u * i] = x[9];
+		/* between x[9] and x[10]: taps 1, 3, ... 19 away, both sides */
+		for (k = 0; k < 10u; k++)
+			acc += rs2_tap[k] * ((int32_t)x[9u - k] +
+					     (int32_t)x[10u + k]);
+		out[2u * i + 1u] = rs2_sat(acc >> 14);
 	}
 	return 2u * n;
 }

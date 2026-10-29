@@ -128,6 +128,31 @@ static void test_rs2(void)
 	CHECK(fabs(rs2_rms(1, 3400.0) / ref - 1.0) < 0.06);
 }
 
+/*
+ * Full scale, the worst case for the sums: 20 samples whose signs match
+ * the taps' around the point between the middle two, so every product
+ * adds (2 x 16924 x 32767, the code review's signed overflow). The output
+ * there saturates at +32767; a wrapped sum would come out negative.
+ */
+static void test_rs2_full_scale(void)
+{
+	int16_t in[20], out[40];
+	struct dect_rs2 r;
+	unsigned k;
+
+	for (k = 0; k < 10u; k++)	/* the taps alternate +, -, +, ... */
+		in[9u - k] = in[10u + k] = (int16_t)(k % 2u ? -32767 : 32767);
+	dect_rs2_init(&r);
+	CHECK_EQ(dect_rs2_up(&r, in, 20u, out), 40u);
+	CHECK_EQ(out[39], 32767);
+	CHECK_EQ(out[38], 32767);	/* the sample itself */
+	for (k = 0; k < 20u; k++)
+		in[k] = (int16_t)-in[k];
+	dect_rs2_init(&r);
+	(void)dect_rs2_up(&r, in, 20u, out);
+	CHECK_EQ(out[39], -32768);
+}
+
 int main(void)
 {
 	test_alaw_silence();
@@ -136,5 +161,6 @@ int main(void)
 	test_tone_detect();
 	test_tone_silence();
 	test_rs2();
+	test_rs2_full_scale();
 	return CHECK_DONE();
 }
