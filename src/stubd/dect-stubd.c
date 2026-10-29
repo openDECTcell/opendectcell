@@ -629,6 +629,8 @@ struct stubd {
 	uint32_t    txq_drops;		/* mails refused: control queue full */
 	uint32_t    tx_write_short;	/* block writes the driver did not take whole */
 	int         parked;		/* run_loop() drained the park mails */
+	uint64_t    park_check_at;	/* 06.88: park read-back sent at */
+	int         park_radio, park_timer;	/* its answers, -1 = none yet */
 	uint8_t     tx_idle;		/* filler for unmapped slots (-a txidle) */
 	uint8_t     tx_voice_idle;	/* filler for the voice lanes */
 	uint32_t    tx_blocks;
@@ -3878,6 +3880,78 @@ static void uak_verify_send(struct stubd *s, uint8_t slot)
 		log_mail(&m, "tx M", s->show_params);
 }
 
+/*
+ * The 7412's 06.88 STUB: what a park leaves in RAM [CR A-0009, A-0011]. The
+ * radio switch 0x010A reads 0 and the beacon timer's link 0x08B0 links to
+ * itself (0) once 0x015B 00 has cancelled it; the beacon carrier 0x010C does
+ * not tell, it keeps its last value. Both checked on a 7412, 2026-10-29.
+ */
+#define PARK_0688_RADIO		0x010Au
+#define PARK_0688_TIMER		0x08B0u
+#define PARK_CHECK_MS		1000u
+
+static void park_read(struct stubd *s, uint32_t addr)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_PCM_REMOTE;
+	m.prim = 0xFFF1u;
+	m.param[0] = 0x07u;		/* MEM_READ */
+	m.param[1] = (uint8_t)(addr & 0xFFu);
+	m.param[2] = (uint8_t)((addr >> 8) & 0xFFu);
+	m.param[3] = (uint8_t)((addr >> 16) & 0xFFu);
+	m.param[4] = (uint8_t)((addr >> 24) & 0xFFu);
+	m.param[5] = 1u;		/* one byte */
+	m.param[6] = 0u;
+	m.param_len = 7;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
+}
+
+/* After the park mails are out: read the park back, where we know how. */
+static int park_check_start(struct stubd *s, uint64_t now)
+{
+	if (strcmp(s->stub_name, DECT_STUB_0688) || s->tx_slot < 0)
+		return 0;
+	s->park_radio = s->park_timer = -1;
+	s->park_check_at = now;
+	park_read(s, PARK_0688_RADIO);
+	park_read(s, PARK_0688_TIMER);
+	return 1;
+}
+
+static void park_check_reply(struct stubd *s, uint32_t addr, uint8_t v)
+{
+	if (addr == PARK_0688_RADIO)
+		s->park_radio = v;
+	else if (addr == PARK_0688_TIMER)
+		s->park_timer = v;
+}
+
+/* Both answers in, or given up: say what the chip holds. Returns 1 then. */
+static int park_check_done(struct stubd *s, uint64_t now)
+{
+	if ((s->park_radio < 0 || s->park_timer < 0) &&
+	    now - s->park_check_at < PARK_CHECK_MS)
+		return 0;
+	if (s->park_radio == 0 && s->park_timer == 0)
+		printf("reg: park verified on the chip: radio switch "
+		       "0x%04X = 00, beacon timer cancelled (0x%04X = 00)\n",
+		       PARK_0688_RADIO, PARK_0688_TIMER);
+	else if (s->park_radio < 0 || s->park_timer < 0)
+		printf("reg: PARK NOT VERIFIED -- no read-back from the chip "
+		       "within %u ms\n", PARK_CHECK_MS);
+	else
+		printf("reg: PARK NOT VERIFIED -- radio switch 0x%04X = %02x, "
+		       "beacon timer 0x%04X = %02x (both should be 00)\n",
+		       PARK_0688_RADIO, (unsigned)s->park_radio,
+		       PARK_0688_TIMER, (unsigned)s->park_timer);
+	return 1;
+}
+
 /* Match a 0xFFF1 sub 0x08 reply against an outstanding read-back. */
 static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
 {
@@ -3887,6 +3961,8 @@ static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
 		return;
 	addr = (uint32_t)m->param[1] | ((uint32_t)m->param[2] << 8)
 	     | ((uint32_t)m->param[3] << 16) | ((uint32_t)m->param[4] << 24);
+	if (s->park_check_at && m->param_len > 7u)
+		park_check_reply(s, addr, m->param[7]);
 	if (s->sub_audit_pending)
 		sub_audit_reply(s, addr, &m->param[7],
 				(size_t)(m->param_len - 7u));
@@ -9855,15 +9931,20 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				drained_at = 0;
 			else if (!drained_at)
 				drained_at = now;
-			if (drained_at && now - drained_at >= PARK_FLUSH_MS) {
+			if (drained_at && now - drained_at >= PARK_FLUSH_MS &&
+			    !s->parked) {
 				s->parked = 1;
 				printf("reg: radio parked -- park mails on the "
 				       "wire %llu ms after queueing\n",
 				       (unsigned long long)(drained_at -
 							    park_at));
-				break;
+				if (!park_check_start(s, now))
+					break;
 			}
-			if (now - park_at >= PARK_DRAIN_MS) {
+			if (s->parked) {
+				if (park_check_done(s, now))
+					break;
+			} else if (now - park_at >= PARK_DRAIN_MS) {
 				printf("reg: RADIO NOT PARKED -- %zu control "
 				       "bytes still queued after %u ms\n",
 				       s->txq_len, PARK_DRAIN_MS);
