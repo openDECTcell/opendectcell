@@ -562,15 +562,6 @@ struct stubd {
 	char     reg_profile[DECT_PROFILE_ID_MAX];
 	unsigned int n_xmail;
 	unsigned int xmail_idx;	/* next extra mail to send (one per loop tick) */
-	/*
-	 * Mails to send once a CALL is bound, rather than once the session is
-	 * up (-N). The DSP probes need this: a cross-connect naming a wideband
-	 * channel is meaningless until the chip has allocated one for a call.
-	 * Re-armed on every call, so a sweep can be repeated by redialling.
-	 */
-	const char *cmail[20];
-	unsigned int n_cmail;
-	unsigned int cmail_idx;
 	struct dect_rx rx;
 	struct dect_session sess;
 
@@ -752,7 +743,6 @@ struct stubd {
 					   host derives it from the 0x0230 mode
 					   byte's low nibble [CR A-CodecModes-3] */
 		uint8_t  gain;		/* 0x0251 value (stored << 8 by the STUB) */
-		int      no_gain;	/* skip 0x0251 entirely */
 		/*
 		 * 0x0230 is {link, mode, mask_le16, master, extra}
 		 * [CR A-CodecModes-1]. The CLI keys below are the historical
@@ -772,8 +762,6 @@ struct stubd {
 		uint16_t mask;		/* 0x0230 TDM slot mask, little-endian */
 		uint8_t  mode;		/* 0x0230 master byte (not a mode) */
 		uint8_t  codec;		/* 0x0230 extra byte (not a codec id) */
-		int      send_f626;	/* also send 0xF626 (absent from AVM's bind) */
-		int      nowait;	/* send 0x022D immediately (old behaviour) */
 		/*
 		 * remode=MS: MS ms after 0x022D, send a SECOND 0x0230 for the
 		 * same handle and channel with flag bit 6 CLEAR.
@@ -892,31 +880,6 @@ struct stubd {
 		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
 		/*
-		 * remodebit6 keeps flag bit 6 SET in the re-assign, which asks
-		 * for mode 9 rather than mode 2: the channel's codec-side input
-		 * variant B (dest 11+k-1) instead of variant A (dest k).
-		 *
-		 * [CR A-0039] marks variant A as the likely G.726 encoder input
-		 * and variant B as the likely transparent (already-coded) path.
-		 * A wideband call cannot use the encoder: [CR A-DSP-8] found no
-		 * G.722 encoder in either STUB build, so wideband downlink audio
-		 * has to arrive on the lane already coded. Measured 2026-10-23:
-		 * with variant A routed and a G.722 lane we got white noise,
-		 * which is what an encoder fed coded octets would produce.
-		 */
-		int      remode_bit6;
-		/*
-		 * remodecodec=N overrides the codec byte in the re-assign only.
-		 * [CR A-0040] §5: with bit 6 set and the path on, the codec byte
-		 * picks the mode -- 1 gives mode 8, 2-3 give mode 9. Mode 8 is
-		 * the only mode that configures the 80-byte B-field our long-slot
-		 * bearer actually carries: transparent downlink on, uplink
-		 * deliberately off, enable word 0. A-0033 rejected codec 1
-		 * because the UPLINK lane stayed 0x0000, which is what mode 8
-		 * does by design, and never checked the downlink acoustically.
-		 */
-		int      remode_codec;	/* -1 = keep a->codec */
-		/*
 		 * seq=MS with repeated seqstep=FLAGS:CODEC walks a list of
 		 * 0x0230 configurations during one call, MS ms per window,
 		 * starting when the call binds -- the same instant playraw
@@ -939,14 +902,6 @@ struct stubd {
 		unsigned seq_ms;
 		const char *seq_step[16];
 		unsigned n_seq;
-		/*
-		 * noconnect: never send 0x022D. The stock connect sequence is
-		 * exactly 0x0251 then 0x0230 [CR A-0034]; 0x022D is the stock
-		 * mute control (0x80 = mute), never sent at connect. Whether
-		 * the chip reads more than bit 7 of its byte is not
-		 * established, so omitting it is the clean comparison.
-		 */
-		int      no_connect;
 		/*
 		 * toneword=N: the TDM word of lane 0, the main link's call, in
 		 * both directions. 0 on the 7520; on the SSC transport it
@@ -4111,50 +4066,32 @@ static void sub_audit_reply(struct stubd *s, uint32_t addr,
 }
 
 /*
- * Bind a connected call's voice path to DSP audio channel 1 [CR COMMAND_SET
- * §6.5]: assign the channel (0x0230), program the DSP route (0xF626 on), then
- * connect the audio path (0x022D). Reply 0x0242 confirms the channel. This sets
- * up the bearer; feeding actual voice (echo/tone) is a later step.
- */
-/*
  * Bind a connected call's voice path, in the order AVM's own bind routine uses
- * [CR A-0029 §1]: 0x0251 SET_CHANNEL_PARAM *first*, then 0x0230 in its full
- * six-parameter form. Our earlier sequence had three faults, all from A-0029:
- *
- *  - 0x0251 was never sent at all. AVM sends it before the channel is assigned,
- *    not after; its third byte is an EEPROM-derived value that A-0029 could not
- *    recover, so -a gain=N makes it settable.
- *  - 0x0230 was sent in the two-byte short form. The STUB defaults the missing
- *    fields, so it is not invalid, but it does not reproduce AVM's setup.
- *  - 0xF626 was sent between the two. A-0029 found it absent from the normal
- *    binding producer -- it lives in the transport's serialisation logic -- so
- *    it is off unless -a f626 asks for it.
- *
- * 0x022D stays last: A-0029 found it produced by separate state-dependent
- * paths (mute/unmute, audio-state events) rather than as a fixed third step,
- * but connecting the path explicitly is still what we want.
+ * [CR A-0029 §1]: 0x0251 SET_CHANNEL_PARAM first, then 0x0230 in its full
+ * six-parameter form. 0x0251's third byte is an EEPROM-derived value A-0029
+ * could not recover, so -a gain=N sets it. 0x022D, which connects the path,
+ * follows once the chip has answered the assign with 0x0242 (see the 0x0242
+ * case in handle_reg_mail(), and audio_connect_fallback()): the assignment
+ * is asynchronous, and AVM sends 0x022D from state-dependent paths rather
+ * than as a fixed third mail [CR A-0029 §2, A-0030 §2 Q6].
  */
-static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan);
-
 static void send_audio_bind(struct stubd *s, uint8_t handle)
 {
 	const struct audio_cfg *a = &s->audio;
 	struct dect_mail m;
 	int wb;
 
-	if (!a->no_gain) {
-		memset(&m, 0, sizeof(m));
-		m.src = DECT_TASK_PCM;
-		m.dst = DECT_TASK_CONTACT_DST;
-		m.prim = 0x0251u;	/* SET_CHANNEL_PARAM, before the assign */
-		m.param[0] = handle;
-		m.param[1] = a->sel;	/* selector, valid 1..6 [CR A-CodecModes-3] */
-		m.param[2] = a->gain;	/* stored as value << 8 in the DSP block */
-		m.param_len = 3;
-		send_mail(s, (unsigned int)s->tx_slot, &m);
-		if (s->verbose)
-			log_mail(&m, "tx M", s->show_params);
-	}
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0251u;	/* SET_CHANNEL_PARAM, before the assign */
+	m.param[0] = handle;
+	m.param[1] = a->sel;	/* selector, valid 1..6 [CR A-CodecModes-3] */
+	m.param[2] = a->gain;	/* stored as value << 8 in the DSP block */
+	m.param_len = 3;
+	send_mail(s, (unsigned int)s->tx_slot, &m);
+	if (s->verbose)
+		log_mail(&m, "tx M", s->show_params);
 
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
@@ -4173,30 +4110,15 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 
-	printf("call: audio assign: 0x0251 %s(sel %u gain 0x%02x), "
-	       "0x0230 {%02x %04x %02x %02x}%s\n",
-	       a->no_gain ? "SKIPPED " : "", a->sel, a->gain,
-	       m.param[1], a->mask, a->mode, m.param[5],
-	       a->nowait ? "" : " -- 0x022D waits for 0x0242");
-
-	/*
-	 * 0x022D connects the path of a connection "whose channel is already
-	 * assigned" [CR COMMAND_SET §6.5]. The assignment is asynchronous: the
-	 * 0x0242 confirmation arrives tens of milliseconds after 0x0230, while a
-	 * 0x022D queued here is on the wire within a few. AVM sends 0x022D from
-	 * state-dependent paths rather than as a fixed third mail [CR A-0029 §2,
-	 * A-0030 §2 Q6], so we wait for the confirmation too -- see the 0x0242
-	 * case in handle_reg_mail() -- unless -a nowait asks for the old order.
-	 */
-	if (a->nowait)
-		send_audio_connect(s, handle, a->flags & 0x0Fu);
+	printf("call: audio assign: 0x0251 (sel %u gain 0x%02x), "
+	       "0x0230 {%02x %04x %02x %02x} -- 0x022D waits for 0x0242\n",
+	       a->sel, a->gain, m.param[1], a->mask, a->mode, m.param[5]);
 }
 
 /*
- * Connect the assigned channel: optionally route it (0xF626, not part of
- * AVM's bind), then 0x022D with bit 7 clear. `chan` is the channel the chip
- * confirmed in 0x0242 -- A-0032 Q9: trust the returned channel, not the one
- * we asked for.
+ * Connect the assigned channel: 0x022D with bit 7 clear. `chan` is the
+ * channel the chip confirmed in 0x0242 -- A-0032 Q9: trust the returned
+ * channel, not the one we asked for.
  *
  * CAVEAT, 2026-10-23 [CR A-0075 §0]: "confirmed" is too strong. 0x0242 is
  * emitted on EVERY path through the handler, including the early-out that
@@ -4245,27 +4167,6 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 	if (s->reg.audio_connected)
 		return;
 	s->reg.audio_connected = 1;
-	if (a->no_connect) {
-		printf("call: audio connect: 0x022D omitted (-a noconnect)\n");
-		return;
-	}
-
-	if (a->send_f626) {
-		memset(&m, 0, sizeof(m));
-		m.src = DECT_TASK_PCM;
-		m.dst = DECT_TASK_CONTACT_DST;
-		m.prim = 0xF626u;	/* SET_AUDIO_ROUTE */
-		m.param[0] = handle;
-		m.param[1] = 0x01u;	/* enable */
-		m.param[2] = chan;	/* chan_cfg */
-		m.param[3] = 0x00u;	/* param (LE) */
-		m.param[4] = 0x00u;
-		m.param_len = 5;
-		send_mail(s, (unsigned int)s->tx_slot, &m);
-		if (s->verbose)
-			log_mail(&m, "tx M", s->show_params);
-	}
-
 	memset(&m, 0, sizeof(m));
 	m.src = DECT_TASK_PCM;
 	m.dst = DECT_TASK_CONTACT_DST;
@@ -4279,8 +4180,7 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
-	printf("call: audio connect: %s0x022D on channel %u\n",
-	       a->send_f626 ? "0xF626, " : "", chan);
+	printf("call: audio connect: 0x022D on channel %u\n", chan);
 }
 
 /*
@@ -4336,19 +4236,16 @@ static void remode_tick(struct stubd *s, uint64_t now)
 	m.dst = DECT_TASK_CONTACT_DST;
 	m.prim = 0x0230u;
 	m.param[0] = s->reg.remode_handle;
-	m.param[1] = a->remode_bit6 ? a->flags
-				    : (uint8_t)(a->flags & ~0x40u);
+	m.param[1] = (uint8_t)(a->flags & ~0x40u);
 	m.param[2] = (uint8_t)(a->mask & 0xFFu);
 	m.param[3] = (uint8_t)(a->mask >> 8);
 	m.param[4] = a->mode;
-	m.param[5] = a->remode_codec >= 0 ? (uint8_t)a->remode_codec
-					  : a->codec;
+	m.param[5] = a->codec;
 	m.param_len = 6;
 	send_mail(s, (unsigned int)s->tx_slot, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
-	printf("call: re-assign for mode %d: 0x0230 {%02x %04x %02x %02x}\n",
-	       a->remode_bit6 ? (m.param[5] == 1 ? 8 : 9) : 2,
+	printf("call: re-assign for mode 2: 0x0230 {%02x %04x %02x %02x}\n",
 	       m.param[1], a->mask, a->mode, m.param[5]);
 	fflush(stdout);
 }
@@ -6692,7 +6589,7 @@ static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
 	sl->lane = i;
 	mask = (uint16_t)(1u << x->channel);
 
-	if (!a->no_gain) {
+	{
 		memset(&m, 0, sizeof(m));
 		m.src = DECT_TASK_PCM;
 		m.dst = DECT_TASK_CONTACT_DST;
@@ -9842,7 +9739,6 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		memset(&s->reg.last_status, 0, sizeof(s->reg.last_status));
 		s->reg.frames_total = 0;
 		s->reg.frames_last = 0;
-		s->cmail_idx = 0;	/* re-arm the -N sweep for this call */
 		s->reg.seq_t0 = mono_ms();	/* window 0 starts now */
 		s->reg.seq_idx = 0;
 		/*
@@ -10676,16 +10572,6 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			else if (s->verbose)
 				log_mail(&cm, "tx  ", s->show_params);
 		}
-		/* Call-bound mails (-N), one per tick, re-armed per call. */
-		if (s->reg.call_bound && s->cmail_idx < s->n_cmail) {
-			if (send_mail_spec(s, s->cmail[s->cmail_idx]))
-				fprintf(stderr, "call mail %u (%s) failed\n",
-					s->cmail_idx, s->cmail[s->cmail_idx]);
-			else
-				printf("call: sent call-bound mail %u: %s\n",
-				       s->cmail_idx, s->cmail[s->cmail_idx]);
-			s->cmail_idx++;
-		}
 		/*
 		 * Once up, send the extra mails in order, one per tick
 		 * (~100 ms) -- but not before xmail_ms, if one is given.
@@ -10846,7 +10732,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 
 /*
  * Parse -a key=value[,key=value...]: the audio bind fields (see struct
- * audio_cfg). Bare keys "f626" and "nogain" take no value. Returns 0 on
+ * audio_cfg). Returns 0 on
  * success, -1 on a malformed spec.
  */
 /*
@@ -10903,10 +10789,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->att_cfg = (uint8_t)v;
 		else if (eq && klen == 7 && !memcmp(key, "attflag", 7))
 			a->att_flag = (uint8_t)v;
-		else if (!eq && klen == 4 && !memcmp(key, "f626", 4))
-			a->send_f626 = 1;
-		else if (!eq && klen == 6 && !memcmp(key, "nogain", 6))
-			a->no_gain = 1;
 		else if (!eq && klen == 11 && !memcmp(key, "nocodeclist", 11))
 			a->nocodeclist = 1;
 		else if (!eq && klen == 9 && !memcmp(key, "noregopen", 9))
@@ -10997,10 +10879,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 				return -1;	/* at least one element */
 			a->info_ie_len = n;
 		}
-		else if (!eq && klen == 9 && !memcmp(key, "noconnect", 9))
-			a->no_connect = 1;
-		else if (!eq && klen == 6 && !memcmp(key, "nowait", 6))
-			a->nowait = 1;
 		else if (!eq && klen == 6 && !memcmp(key, "capall", 6))
 			a->cap_all = 1;
 		else if (!eq && klen == 8 && !memcmp(key, "loopback", 8))
@@ -11275,10 +11153,6 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->remode_ms = 0;
 			a->remode_set = 1;
 		}
-		else if (!eq && klen == 10 && !memcmp(key, "remodebit6", 10))
-			a->remode_bit6 = 1;
-		else if (klen == 11 && !memcmp(key, "remodecodec", 11))
-			a->remode_codec = (int)v;
 		else if (klen == 3 && !memcmp(key, "seq", 3))
 			a->seq_ms = (unsigned)v;
 		else if (klen == 7 && !memcmp(key, "seqstep", 7)) {
@@ -11344,10 +11218,6 @@ static void usage(void)
 		"  -p       also log parameter bytes (may hold identity data; do\n"
 		"           not share such logs) -- implies -v\n"
 		"  -M SRC:DST:PRIM[:HEX]  after contact, send this mail (repeatable,\n"
-		"  -N SRC:DST:PRIM[:HEX]  send this mail once a CALL is bound\n"
-		"           (repeatable, one per ~100 ms tick, re-armed on every call).\n"
-		"           For DSP probes that name a channel the chip only allocates\n"
-		"           when a call exists, e.g. the Testton cross-connect.\n"
 		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n"
 		"  -g       GAP registration mode: bring up the radio + open\n"
 		"           registration, then run the host C-plane stack so a\n"
@@ -11377,8 +11247,7 @@ static void usage(void)
 		"           = 0x0230 {link, mode, mask, master, extra}: flags is the\n"
 		"           mode byte (low nibble = channel, 0x40 = wideband class;\n"
 		"           0x41 works, 0x40 alone binds nothing), mode is master and\n"
-		"           codec is extra. nogain = skip 0x0251, f626 = send 0xF626,\n"
-		"           nowait = send 0x022D at once instead of after 0x0242\n"
+		"           codec is extra\n"
 		"           timesync=auto|force|off  send <<TIME-DATE>> after a\n"
 		"                    location registration. auto (default) only when\n"
 		"                    the kernel says the clock is disciplined;\n"
@@ -11387,8 +11256,6 @@ static void usage(void)
 		"                    MIN minutes, paging the ones without a\n"
 		"                    link (0, the default: only after a location\n"
 		"                    registration)\n"
-		"           noconnect = never send 0x022D (the stock connect is\n"
-		"           0x0251 then 0x0230 and nothing else)\n"
 		"           toneword=N the TDM word of the main call's speech\n"
 		"           (default 0; on the SSC transport the lane after the\n"
 		"           control lane)\n"
@@ -11507,14 +11374,6 @@ static void usage(void)
 		"           format and mode aligned. Window 0 is left as the bind\n"
 		"           left it. Pair with memdump of the route words so every\n"
 		"           window carries proof of the state it was really in.\n"
-		"           remodecodec=N overrides the codec byte in the re-assign;\n"
-		"           with bit 6 set, N=1 selects mode 8 (the only mode with\n"
-		"           the 80-byte B-field a long slot carries: transparent\n"
-		"           downlink on, uplink off by design) [CR A-0040]\n"
-		"           remodebit6 keeps bit 6 set instead: mode 9, which uses\n"
-		"           the channel's input variant B (the transparent path a\n"
-		"           wideband call needs, since the chip has no G.722\n"
-		"           encoder) rather than variant A (the G.726 encoder)\n"
 		"           playraw=FILE replays a verbatim TDM lane instead (two\n"
 		"           bytes per frame, 16000 B/s, as -w captures it): no\n"
 		"           cadence logic, nothing interpreted\n"
@@ -11869,7 +11728,7 @@ int main(int argc, char **argv)
 	};
 	const char *dev = "/dev/dect0";
 	unsigned int run_seconds = 0, fpb;
-	struct dect_mail spec_check;	/* -M / -N validated at startup */
+	struct dect_mail spec_check;	/* -M validated at startup */
 	int c, ret = 1, sub_off = 0, auto_bringup = 0, passes;
 
 	memset(&s, 0, sizeof(s));
@@ -11910,7 +11769,6 @@ int main(int argc, char **argv)
 	s.audio.page_hdr = -1;
 	s.audio.ti_fixed = -1;
 	ab_init(&s);
-	s.audio.remode_codec = -1;	/* keep the bind's codec byte unless asked */
 	/*
 	 * The mode-2 re-assign. Since 2026-10-25 it is sent only when the
 	 * first 0x0230 had flag bit 6 set (the 0x41 wideband bind every lab
@@ -11951,7 +11809,7 @@ int main(int argc, char **argv)
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
 	s.pin = "0000";		/* the lab's; the library has no default */
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:N:gP:s:k:w:V:Ca:h")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gP:s:k:w:V:Ca:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -11960,19 +11818,6 @@ int main(int argc, char **argv)
 		case 't': run_seconds = (unsigned int)strtoul(optarg, NULL, 0); break;
 		case 'v': s.verbose = 1; break;
 		case 'p': s.verbose = 1; s.show_params = 1; break;
-		case 'N':
-			if (s.n_cmail >= sizeof(s.cmail) / sizeof(s.cmail[0])) {
-				fprintf(stderr, "too many -N mails\n");
-				return 2;
-			}
-			if (parse_mail_spec(optarg, &spec_check)) {
-				fprintf(stderr, "bad -N mail spec: %s "
-					"(SRC:DST:PRIM[:HEX], hex in pairs)\n",
-					optarg);
-				return 2;
-			}
-			s.cmail[s.n_cmail++] = optarg;
-			break;
 		case 'M':
 			if (s.n_xmail >= sizeof(s.xmail) / sizeof(s.xmail[0])) {
 				usage();
