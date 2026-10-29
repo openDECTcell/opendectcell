@@ -14,6 +14,14 @@
  *     same breath one frame is pulled from baresip's player and sent to
  *     the handset. Each call's audio device is named after its slot here
  *     (audio_set_devicename()), so its source and player find it;
+ *   - "G722" as a codec of its own that passes the coded octets through:
+ *     the handset's G.722 goes to RTP as it is, and the far end's to the
+ *     handset, so a wideband call is coded by the two phones alone.
+ *     baresip's sample pipeline carries each octet as two equal samples
+ *     (so a frame split at any sample still yields whole octets), and the
+ *     audio connection carries the octets (call=N codec=g722); dect-stubd
+ *     codes G.722 itself only for a narrowband handset. baresip's g722
+ *     module is not loaded;
  *   - codecs matched end to end where signalling allows, so neither the
  *     box nor baresip converts (docs/bridge-interface.md §3): a
  *     narrowband handset's call offers G.711 only, a caller who offers
@@ -95,6 +103,7 @@ struct bcall {
 	/* its speech: the audio socket connection, baresip's two ends */
 	int              afd;		/* -1 = none */
 	unsigned         rate;		/* the connection's: 8000 or 16000 */
+	bool             g722;		/* ... carries G.722 octets, 16 kHz */
 	struct re_fhs   *afhs;
 	struct ausrc_st *src;
 	struct auplay_st *play;
@@ -400,6 +409,128 @@ static void aud_close(struct bcall *bc)
 }
 
 /*
+ * G.722 as it is, carried through baresip's sample pipeline: each octet
+ * as two equal samples (frames split at any sample still give whole
+ * octets), and back by taking every other sample.
+ */
+#define G722_OCTETS	160u		/* 20 ms */
+#define G722_GAP	1		/* a message of one octet: nothing */
+
+static void aud_read_g722(struct bcall *bc, const uint8_t *in, ssize_t n)
+{
+	int16_t s[2u * G722_OCTETS];
+	uint8_t out[G722_OCTETS];
+	struct auframe af;
+	unsigned i;
+	bool gap = true;
+
+	if (n != (ssize_t)G722_OCTETS)
+		return;
+	if (bc->src) {
+		for (i = 0; i < G722_OCTETS; i++)
+			s[2u * i] = s[2u * i + 1u] = in[i];
+		auframe_init(&af, AUFMT_S16LE, s, 2u * G722_OCTETS, 16000u, 1);
+		af.timestamp = bc->src->ts;
+		bc->src->ts += 20000u;
+		bc->src->rh(&af, bc->src->arg);
+	}
+	memset(s, 0, sizeof(s));
+	if (bc->play) {
+		auframe_init(&af, AUFMT_S16LE, s, 2u * G722_OCTETS, 16000u, 1);
+		bc->play->wh(&af, bc->play->arg);
+	}
+	/*
+	 * A frame of zeros is the player's silence (nothing received), not
+	 * 160 octets of 00H: dect-stubd fills the gap with coded silence.
+	 */
+	for (i = 0; i < G722_OCTETS; i++) {
+		out[i] = (uint8_t)s[2u * i];
+		gap = gap && !s[2u * i];
+	}
+	(void)send(bc->afd, out, gap ? G722_GAP : sizeof(out),
+		   MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
+struct auenc_state {
+	int unused;
+};
+
+struct audec_state {
+	int unused;
+};
+
+static int g722_encupd(struct auenc_state **aesp, const struct aucodec *ac,
+		       struct auenc_param *prm, const char *fmtp)
+{
+	(void)ac;
+	(void)prm;
+	(void)fmtp;
+	if (!*aesp)
+		*aesp = mem_zalloc(sizeof(**aesp), NULL);
+	return *aesp ? 0 : ENOMEM;
+}
+
+static int g722_decupd(struct audec_state **adsp, const struct aucodec *ac,
+		       const char *fmtp)
+{
+	(void)ac;
+	(void)fmtp;
+	if (!*adsp)
+		*adsp = mem_zalloc(sizeof(**adsp), NULL);
+	return *adsp ? 0 : ENOMEM;
+}
+
+static int g722_enc(struct auenc_state *aes, bool *marker, uint8_t *buf,
+		    size_t *len, int fmt, const void *sampv, size_t sampc)
+{
+	const int16_t *s = sampv;
+	size_t i, n = sampc / 2u;
+
+	(void)aes;
+	(void)marker;
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
+	if (n > *len)
+		return EOVERFLOW;
+	for (i = 0; i < n; i++)
+		buf[i] = (uint8_t)s[2u * i];
+	*len = n;
+	return 0;
+}
+
+static int g722_dec(struct audec_state *ads, int fmt, void *sampv,
+		    size_t *sampc, bool marker, const uint8_t *buf, size_t len)
+{
+	int16_t *s = sampv;
+	size_t i;
+
+	(void)ads;
+	(void)marker;
+	if (fmt != AUFMT_S16LE)
+		return ENOTSUP;
+	if (2u * len > *sampc)
+		return EOVERFLOW;
+	for (i = 0; i < len; i++)
+		s[2u * i] = s[2u * i + 1u] = buf[i];
+	*sampc = 2u * len;
+	return 0;
+}
+
+/* RFC 3551: payload type 9, clock 8000 for a 16 kHz codec. */
+static struct aucodec g722_through = {
+	.pt      = "9",
+	.name    = "G722",
+	.srate   = 16000,
+	.crate   = 8000,
+	.ch      = 1,
+	.pch     = 1,
+	.encupdh = g722_encupd,
+	.ench    = g722_enc,
+	.decupdh = g722_decupd,
+	.dech    = g722_dec,
+};
+
+/*
  * One 20 ms frame from the handset: the microphone, then the player's
  * frame back. Whole frames whatever the packet time: baresip buffers
  * both ways (an aubuf before the encoder and after the decoder).
@@ -416,6 +547,10 @@ static void aud_read(int flags, void *arg)
 	n = recv(bc->afd, up, sizeof(up), MSG_DONTWAIT);
 	if (n == 0 || (n < 0 && errno != EAGAIN && errno != EINTR)) {
 		aud_close(bc);
+		return;
+	}
+	if (bc->g722) {
+		aud_read_g722(bc, (const uint8_t *)up, n);
 		return;
 	}
 	if (n != (ssize_t)(sampc * sizeof(up[0])))
@@ -485,11 +620,16 @@ static void narrow_end(struct account *acc, const char *saved)
 		warning("openDECTcell: could not restore the account's codecs\n");
 }
 
+/* The call's SIP codec, once one is chosen. */
+static const struct aucodec *call_codec(const struct call *call)
+{
+	return call_audio(call) ? audio_codec(call_audio(call), true) : NULL;
+}
+
 /* The rate of the call's SIP codec, 16000 until one is chosen. */
 static unsigned call_rate(const struct call *call)
 {
-	const struct aucodec *ac = call_audio(call) ?
-		audio_codec(call_audio(call), true) : NULL;
+	const struct aucodec *ac = call_codec(call);
 
 	return ac && ac->srate == 8000u ? 8000u : 16000u;
 }
@@ -510,8 +650,11 @@ static void aud_open(struct bcall *bc, const char *path)
 	a.sun_family = AF_UNIX;
 	str_ncpy(a.sun_path, path, sizeof(a.sun_path));
 	bc->rate = call_rate(bc->call);
-	n = re_snprintf(hello, sizeof(hello), "call=%u rate=%u", bc->id,
-			bc->rate);
+	bc->g722 = call_codec(bc->call) == &g722_through;
+	n = bc->g722 ? re_snprintf(hello, sizeof(hello), "call=%u codec=g722",
+				   bc->id)
+		     : re_snprintf(hello, sizeof(hello), "call=%u rate=%u",
+				   bc->id, bc->rate);
 	fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
 	if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a)) ||
 	    send(fd, hello, (size_t)n, MSG_NOSIGNAL) != n) {
@@ -526,7 +669,8 @@ static void aud_open(struct bcall *bc, const char *path)
 		return;
 	}
 	bc->afd = fd;
-	info("openDECTcell: call %u's audio connected (%u Hz)\n", bc->id, bc->rate);
+	info("openDECTcell: call %u's audio connected (%s)\n", bc->id,
+	     bc->g722 ? "G.722 as it is" : bc->rate == 8000u ? "8 kHz" : "16 kHz");
 }
 
 /*
@@ -1340,6 +1484,7 @@ static int module_init(void)
 	unsigned i;
 	int err;
 
+	aucodec_register(baresip_aucodecl(), &g722_through);
 	err  = ausrc_register(&ausrc, baresip_ausrcl(), "opendectcell", src_alloc);
 	err |= auplay_register(&auplay, baresip_auplayl(), "opendectcell",
 			       play_alloc);
@@ -1376,6 +1521,7 @@ static int module_close(void)
 	bevent_unregister(event_handler);
 	ausrc = mem_deref(ausrc);
 	auplay = mem_deref(auplay);
+	aucodec_unregister(&g722_through);
 	return 0;
 }
 

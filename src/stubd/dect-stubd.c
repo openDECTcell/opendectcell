@@ -421,10 +421,11 @@ struct bcall {
  * One lane's speech on the audio socket: lane 0 is the main link's, 1 + i
  * extra lane i's. The lane carries G.722 octets (wideband, a word held two
  * frames) or one 16-bit linear sample per frame (narrowband, 8 kHz); the
- * socket carries linear PCM at the rate the bridge asked for, its SIP
- * codec's. Matched -- narrowband to 8 kHz -- the samples pass as they
- * are; otherwise they are coded or resampled here. down[] holds what goes
- * to the handset in the lane's own format.
+ * socket carries what the bridge asked for, its SIP codec's: G.722 octets
+ * as they are, or linear PCM at 8 or 16 kHz. Matched -- G.722 to G.722,
+ * narrowband to 8 kHz -- nothing is coded here; otherwise the lane's speech
+ * is coded or resampled. down[] holds what goes to the handset in the
+ * lane's own format.
  */
 #define AB_LANES	(1u + XLANE_MAX)
 
@@ -433,7 +434,9 @@ struct ab_lane {
 	unsigned call;		/* announced for this call id, 0 = none */
 	int      wideband;
 	unsigned rate;		/* the socket's: 8000 or 16000 */
-	struct dect_g722_state enc, dec;
+	int      g722;		/* ... G.722 octets (16 kHz) */
+	struct dect_g722_state enc, dec;	/* the lane's G.722, coded here */
+	struct dect_g722_state sip_enc, sip_dec;	/* the socket's */
 	struct dect_g722_state sil;	/* the fill's own: enc codes the speech */
 	struct dect_rs2 rs_up, rs_down;	/* towards the bridge, from it */
 	uint8_t  down[8192];
@@ -1815,14 +1818,15 @@ static void ab_pop(struct ab_lane *l)
 }
 
 /*
- * One word from the handset; every 20 ms a frame to the bridge, at its
- * rate. Nothing is decoded while no bridge is connected.
+ * One word from the handset; every 20 ms a frame to the bridge in the
+ * socket's format. Nothing is decoded while no bridge is connected.
  */
 static void ab_up(struct ab_lane *l, const uint8_t *w)
 {
 	int16_t wb[AB_FRAME / 2u], nb[AB_FRAME / 4u];
-	const int16_t *out;
-	size_t n;
+	uint8_t g[AB_FRAME / 4u];
+	const void *out;
+	size_t n, len;
 
 	l->up[l->un++] = w[0];
 	l->up[l->un++] = w[1];
@@ -1831,13 +1835,15 @@ static void ab_up(struct ab_lane *l, const uint8_t *w)
 	l->un = 0;
 	if (l->cfd < 0)
 		return;
+	if (l->wideband && l->g722) {
+		out = l->up;			/* the octets as they are */
+		len = 160u;
+		goto send;
+	}
+	/* linear: 16 kHz from a wideband lane, 8 kHz from a narrowband one */
 	if (l->wideband) {
 		n = dect_g722_decode(&l->dec, l->up, 160u, wb);
 		out = wb;
-		if (l->rate == 8000u) {
-			n = dect_rs2_down(&l->rs_up, wb, n, nb);
-			out = nb;
-		}
 	} else {
 		unsigned i;
 
@@ -1846,45 +1852,68 @@ static void ab_up(struct ab_lane *l, const uint8_t *w)
 					  (l->up[2u * i + 1u] << 8));
 		n = 160u;
 		out = nb;
-		if (l->rate != 8000u) {
-			n = dect_rs2_up(&l->rs_up, nb, n, wb);
-			out = wb;
-		}
 	}
-	if (send(l->cfd, out, n * sizeof(out[0]), MSG_DONTWAIT | MSG_NOSIGNAL) ==
-	    (ssize_t)(n * sizeof(out[0])))
+	if (l->wideband && l->rate == 8000u) {
+		n = dect_rs2_down(&l->rs_up, wb, n, nb);
+		out = nb;
+	} else if (!l->wideband && l->rate != 8000u) {
+		n = dect_rs2_up(&l->rs_up, nb, n, wb);
+		out = wb;
+	}
+	len = n * sizeof(int16_t);
+	if (l->g722) {
+		len = dect_g722_encode(&l->sip_enc, out, n, g);
+		out = g;
+	}
+send:
+	if (send(l->cfd, out, len, MSG_DONTWAIT | MSG_NOSIGNAL) ==
+	    (ssize_t)len)
 		l->frames_up++;
 	else
 		l->dropped++;
 }
 
 /*
- * A frame from the bridge (pcm, n samples at the lane's rate) into the
- * lane's own format, appended to down[].
+ * A frame from the bridge into the lane's own format, appended to
+ * down[]: buf, len octets, in the socket's format.
  */
-static void ab_down(struct ab_lane *l, int16_t *pcm, size_t n)
+static void ab_down(struct ab_lane *l, const void *buf, size_t len)
 {
 	int16_t wb[AB_FRAME / 2u], nb[AB_FRAME / 4u];
 	uint8_t d[AB_FRAME / 2u];
-	size_t k, j, cap = sizeof(l->down);
+	const int16_t *pcm;
+	size_t n, k, j, cap = sizeof(l->down);
 
+	if (l->g722 && l->wideband) {
+		memcpy(d, buf, len);		/* the octets as they are */
+		k = len;
+		goto queue;
+	}
+	if (l->g722) {
+		n = dect_g722_decode(&l->sip_dec, buf, len, wb);
+		pcm = wb;
+	} else {
+		n = len / sizeof(int16_t);
+		pcm = buf;
+	}
+	/* the socket's rate (16 kHz for G.722) to the lane's */
+	if (l->wideband && l->rate == 8000u && !l->g722) {
+		n = dect_rs2_up(&l->rs_down, pcm, n, wb);
+		pcm = wb;
+	} else if (!l->wideband && (l->rate != 8000u || l->g722)) {
+		n = dect_rs2_down(&l->rs_down, pcm, n, nb);
+		pcm = nb;
+	}
 	if (l->wideband) {
-		if (l->rate == 8000u) {
-			n = dect_rs2_up(&l->rs_down, pcm, n, wb);
-			pcm = wb;
-		}
 		k = dect_g722_encode(&l->enc, pcm, n, d);
 	} else {
-		if (l->rate != 8000u) {
-			n = dect_rs2_down(&l->rs_down, pcm, n, nb);
-			pcm = nb;
-		}
 		for (j = 0; j < n; j++) {
 			d[2u * j] = (uint8_t)(pcm[j] & 0xFF);
 			d[2u * j + 1u] = (uint8_t)((uint16_t)pcm[j] >> 8);
 		}
 		k = 2u * n;
 	}
+queue:
 	if (l->dn + k > cap) {
 		l->dropped++;		/* 1 s (wideband) or 0.25 s behind */
 		return;
@@ -8235,6 +8264,7 @@ static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
 {
 	char buf[32];
 	unsigned i, id = 0, rate = 16000u;
+	int g722 = 0;
 	ssize_t n = recv(s->ab.pend[j], buf, sizeof(buf) - 1u, MSG_DONTWAIT);
 
 	if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
@@ -8244,7 +8274,8 @@ static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
 		buf[n] = '\0';
 		if (sscanf(buf, "call=%u rate=%u", &id, &rate) < 1)
 			id = 0;
-		if (rate != 8000u)
+		g722 = strstr(buf, " codec=g722") != NULL;
+		if (rate != 8000u || g722)
 			rate = 16000u;
 	}
 	for (i = 0; id && i < AB_LANES; i++) {
@@ -8254,13 +8285,17 @@ static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
 			continue;
 		l->cfd = s->ab.pend[j];
 		l->rate = rate;
+		l->g722 = g722;
 		s->ab.pend[j] = -1;
-		printf("audio: the bridge connected for call %u at %u Hz -- %s\n",
-		       id, rate, l->wideband ? (rate == 8000u ?
+		printf("audio: the bridge connected for call %u (%s) -- %s\n",
+		       id, g722 ? "G.722" : rate == 8000u ? "8 kHz" : "16 kHz",
+		       l->wideband ? (g722 ? "G.722 passed as it is" :
+				      rate == 8000u ?
 		       "G.722 decoded and resampled here (no common codec)" :
-		       "G.722 coded here") : rate == 8000u ?
-		       "narrowband, passed as it is" :
-		       "narrowband, resampled here (no common codec)");
+		       "G.722 decoded here") : rate == 8000u ?
+		       "narrowband, passed as it is" : g722 ?
+		       "narrowband, resampled and G.722 coded here (no common "
+		       "codec)" : "narrowband, resampled here (no common codec)");
 		return;
 	}
 	close(s->ab.pend[j]);
@@ -8297,6 +8332,8 @@ static void ab_tick(struct stubd *s, uint64_t now)
 		l->rx_prev = 0xFFFFFFFFu;
 		dect_g722_init(&l->enc);
 		dect_g722_init(&l->dec);
+		dect_g722_init(&l->sip_enc);
+		dect_g722_init(&l->sip_dec);
 		dect_g722_init(&l->sil);
 		dect_rs2_init(&l->rs_up);
 		dect_rs2_init(&l->rs_down);
@@ -8340,9 +8377,14 @@ static void ab_tick(struct stubd *s, uint64_t now)
 					ab_end(l, "read failed");
 				break;
 			}
-			/* 20 ms at the lane's rate, anything else is not ours */
-			if ((size_t)n == l->rate / 50u * sizeof(pcm[0]))
-				ab_down(l, pcm, (size_t)n / sizeof(pcm[0]));
+			/*
+			 * 20 ms in the socket's format; one octet is the
+			 * bridge saying it has nothing (the fill covers it),
+			 * anything else is not ours.
+			 */
+			if ((size_t)n == (l->g722 ? 160u :
+					  l->rate / 50u * sizeof(pcm[0])))
+				ab_down(l, pcm, (size_t)n);
 		}
 	}
 }

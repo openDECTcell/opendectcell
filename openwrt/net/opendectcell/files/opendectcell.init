@@ -470,12 +470,13 @@ baresip_write() {
 	} > "$BS_DIR/config"
 	# auresamp: baresip's core drops frames whose rate is not the
 	# codec's; the bridge's are, unless a codec changes mid-call or the
-	# two ends share no codec
-	for v in auresamp.so g711.so g722.so stun.so turn.so ice.so srtp.so dtls_srtp.so mwi.so; do
+	# two ends share no codec. opendectcell.so is the G.722 codec too (the
+	# octets passed as they are, not baresip's g722.so), so it loads
+	# before account.so, whose accounts name it.
+	for v in auresamp.so g711.so opendectcell.so stun.so turn.so ice.so srtp.so dtls_srtp.so mwi.so; do
 		bs_module module "$v"
 	done
 	bs_module module_app account.so
-	bs_module module_app opendectcell.so
 	return 0
 }
 

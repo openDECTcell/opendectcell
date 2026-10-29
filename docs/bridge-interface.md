@@ -99,25 +99,32 @@ the audio socket runs at each call's SIP rate.
 - One listening `SOCK_SEQPACKET` socket, `/var/run/opendectcell-audio.sock`
   (mode 0600), and one connection per call: once a call's speech is
   bound, dect-stubd announces it as `audio call=5 path=...`; the bridge
-  connects and sends `call=5 rate=8000` (or `16000`) as its first message,
-  the rate of the call's SIP codec, and the call's lane takes the
-  connection. A connection that names no waiting call within 2 s is
-  closed.
-- Frames of 20 ms of linear 16-bit PCM at that rate (320 or 640 octets),
-  in the host's byte order (both ends run on the box), both directions on
-  the same connection. What dect-stubd does with them:
+  connects and sends its first message: `call=5 codec=g722` when the
+  call's SIP codec is G.722, else `call=5 rate=8000` (or `16000`), and
+  the call's lane takes the connection. A connection that names no
+  waiting call within 2 s is closed.
+- Frames of 20 ms both directions on the same connection: 160 G.722
+  octets, or linear 16-bit PCM at the rate (320 or 640 octets, host byte
+  order: both ends run on the box). A message of one octet from the
+  bridge says it has nothing for this frame (dect-stubd fills with
+  silence). What dect-stubd does with them:
 
-  | DECT lane | socket rate | in dect-stubd | when |
+  | DECT lane | socket | in dect-stubd | when |
   |---|---|---|---|
-  | narrowband (linear, 8 kHz) | 8000 | nothing: the samples pass | G.726 handset, G.711 far end: the matched case |
-  | wideband (G.722 octets) | 16000 | G.722 decode and encode (`dect_g722`) | G.722 at both ends (pass-through without coding is planned) |
-  | narrowband | 16000 | 2:1 resampling (`dect_rs2`) | a far end with G.722 and no G.711, a narrowband handset |
-  | wideband | 8000 | G.722 and resampling | only if the codecs could not be matched |
+  | wideband (G.722 octets) | G.722 | nothing: the octets pass | G.722 at both ends: the matched case |
+  | narrowband (linear, 8 kHz) | 8 kHz | nothing: the samples pass | G.726 handset, G.711 far end: the matched case |
+  | narrowband | G.722 | resampling and G.722 coding | a far end with G.722 only, a narrowband handset |
+  | wideband | 8 kHz | G.722 decoding and resampling | a handset that offered G.722 only, a far end with G.711 only |
+  | either | 16 kHz | G.722 coding or resampling | a 16 kHz codec other than G.722 |
 
 - The bridge feeds them to its baresip audio module (`ausrc`/`auplay`
   named `opendectcell`, the device named per call), which runs at the call's
-  codec rate (the config sets no `ausrc_srate`); baresip codes for the
-  SIP side. `auresamp` is loaded for a codec that changes mid-call.
+  codec rate (the config sets no `ausrc_srate`). The module is baresip's
+  "G722" codec as well: it passes the octets through, each carried as two
+  equal samples in baresip's pipeline, so a wideband call is coded by the
+  two phones alone (baresip's g722 module and spandsp are not used).
+  G.711 is baresip's, a table lookup. `auresamp` is loaded for a codec
+  that changes mid-call.
 - The bridge picks the SIP codecs to match the handsets: a narrowband
   handset's INVITE offers G.711 only, an account whose handsets are all
   narrowband answers with G.711 only (`account_set_audio_codecs()` around
