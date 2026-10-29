@@ -107,7 +107,7 @@ pre-committed outcomes are in the agent's notes for that session.
    read back MATCHES. **Test 3:** the park was verified on the chip and the
    A540 lost the base within two minutes: the park silences the 7412.
 
-**Open: the control channel slips.** In three of six runs the chip went
+**The control channel slipped (fixed, see below).** In three of six runs the chip went
 silent on the SSC link after 23 to 60 s (once before any handset link),
 the session died, and the stop's park could not be verified. The radio
 kept running (the A540 showed signal, "Synchronisiere"), and restarting
