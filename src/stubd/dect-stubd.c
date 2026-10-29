@@ -7925,18 +7925,23 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			ctl_send_bridge(s, &o);
 			return 1;
 		}
+		/*
+		 * A SIP From is whatever the caller wrote: user provided, not
+		 * screened -- "network provided" told the handset the
+		 * network vouched for it (security audit 2026-10-29, S1).
+		 */
 		dect_clip_init(&s->clip);
 		if (num && *num)
 			(void)dect_clip_set_number(&s->clip, num,
 					DECT_CLIP_TON_UNKNOWN,
 					DECT_CLIP_NPI_UNKNOWN,
 					DECT_CLIP_PRES_ALLOWED,
-					DECT_CLIP_SCR_NETWORK);
+					DECT_CLIP_SCR_USER_UNSCREENED);
 		if (name && *name)
 			(void)dect_clip_set_name(&s->clip, name,
 					DECT_CLIP_ALPHABET_UTF8,
 					DECT_CLIP_PRES_ALLOWED,
-					DECT_CLIP_SCR_NETWORK);
+					DECT_CLIP_SCR_USER_UNSCREENED);
 		memset(&s->bc, 0, sizeof(s->bc));
 		s->bc.id = bridge_new_id(s);
 		s->bc.since = now;
