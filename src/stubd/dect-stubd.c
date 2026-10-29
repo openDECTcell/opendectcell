@@ -7390,19 +7390,22 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 }
 
 static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how);
+static int page_adopt(struct stubd *s, struct side_link *sl,
+		      const struct dect_link_ind *ind, int i, const char *why);
 
 /* The target answered our page on side link sl (NULL: the main link). */
 static void ic_target_link(struct stubd *s, struct side_link *sl,
 			   const struct dect_link_ind *ind, uint64_t now)
 {
-	const uint8_t *port, *fixed;
-	size_t plen, flen;
-
-	if (s->ic.st != IC_PAGING)
-		return;
-	hs_cc_ids(s, (unsigned)s->ic.target, &port, &plen, &fixed, &flen);
-	if (!plen || ind->page_id_len != plen ||
-	    memcmp(ind->page_id, port, plen))
+	/*
+	 * The link adopts the target, as for a deregistration's or the date
+	 * and time's page (page_adopt()): authfirst authenticates the call
+	 * with the key of the handset the link adopted, and a link that
+	 * adopted no one was released with "no key" -- the target rang for
+	 * a moment and stopped (7412, 2026-10-29).
+	 */
+	if (s->ic.st != IC_PAGING ||
+	    !page_adopt(s, sl, ind, s->ic.target, " (internal call)"))
 		return;
 	ic_setup(s, sl ? (int)(sl - s->side) : -1, now, "answered the page");
 }
