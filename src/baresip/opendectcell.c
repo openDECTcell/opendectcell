@@ -34,6 +34,7 @@
 #include <rem.h>
 #include <baresip.h>
 #include "dect_ctl.h"
+#include "dect_clip.h"
 
 #define CTL_PATH	"/var/run/opendectcell.sock"
 #define LINES_PATH	"/var/run/opendectcell/lines"
@@ -44,6 +45,7 @@
 #define RETRY_MS	2000u
 #define MAX_LINES	12u
 #define MAX_CALLS	4u
+#define RING_MS		90000u	/* a call-in's limit, above dect-stubd's 75 s */
 
 struct line {
 	unsigned hs, line;
@@ -53,15 +55,24 @@ struct line {
 	char     why[96];		/* the server's answer to a failure */
 };
 
+/*
+ * A slot is taken while it has a SIP call or waits for dect-stubd's answer
+ * to its call-in: a caller who gives up before call-in-ok leaves the slot
+ * waiting (call NULL), so that call can still be released when the answer
+ * comes.
+ */
 struct bcall {
 	unsigned     id;		/* dect-stubd's call id, 0 = not yet */
 	unsigned     hs;
-	struct call *call;
+	struct call *call;		/* NULL once the SIP side has ended */
 	struct ua   *ua;
 	int          out;		/* the handset called out */
 	int          rang, hung;	/* remote-ringing sent; we hung up */
 	int          answered;		/* the handset took a call-in */
+	int          wait;		/* call-in sent, no answer yet */
+	unsigned     seq;		/* the call-in's place in the order sent */
 	char         tok[16];		/* our sip= token for a call-in */
+	struct tmr   ring;		/* a call-in's RING_MS limit */
 };
 
 struct ausrc_st {
@@ -81,6 +92,7 @@ static struct line lines[MAX_LINES];
 static unsigned n_lines;
 static struct bcall calls[MAX_CALLS];
 static unsigned next_tok;
+static bool any_source;		/* config opendectcell_any_source: see sip_origin_ok() */
 
 static struct {
 	int            fd;
@@ -88,6 +100,8 @@ static struct {
 	char           in[2 * DECT_CTL_LINE_MAX];
 	size_t         il;
 	struct tmr     retry;
+	struct tmr     lost;		/* drops it from the main loop */
+	int            broken;		/* half a line went out */
 } ctl = { .fd = -1 };
 
 static struct {
@@ -187,14 +201,28 @@ static struct bcall *bc_by_call(const struct call *call)
 	return NULL;
 }
 
+/* A call-in waiting for its answer, by its sip= token. */
 static struct bcall *bc_by_tok(const char *tok)
 {
 	unsigned i;
 
 	for (i = 0; tok && i < MAX_CALLS; i++)
-		if (calls[i].call && !strcmp(calls[i].tok, tok))
+		if (calls[i].wait && !strcmp(calls[i].tok, tok))
 			return &calls[i];
 	return NULL;
+}
+
+/* The call-in sent first of those still waiting for an answer. */
+static struct bcall *bc_oldest_wait(void)
+{
+	struct bcall *bc = NULL;
+	unsigned i;
+
+	for (i = 0; i < MAX_CALLS; i++)
+		if (calls[i].wait &&
+		    (!bc || (int)(calls[i].seq - bc->seq) < 0))
+			bc = &calls[i];
+	return bc;
 }
 
 static struct bcall *bc_new(void)
@@ -202,27 +230,76 @@ static struct bcall *bc_new(void)
 	unsigned i;
 
 	for (i = 0; i < MAX_CALLS; i++)
-		if (!calls[i].call) {
+		if (!calls[i].call && !calls[i].wait) {
 			memset(&calls[i], 0, sizeof(calls[i]));
 			return &calls[i];
 		}
 	return NULL;
 }
 
-/* ---- the control socket -------------------------------------------------- */
-
-static void ctl_send(struct dect_ctl_out *o)
+static void bc_free(struct bcall *bc)
 {
-	int n = dect_ctl_end(o);
-
-	if (ctl.fd < 0 || n < 0)
-		return;
-	if (send(ctl.fd, o->buf, (size_t)n, MSG_NOSIGNAL) != n)
-		warning("openDECTcell: control socket write failed\n");
+	tmr_cancel(&bc->ring);
+	bc->call = NULL;
+	bc->wait = 0;
 }
 
-static void ctl_call(const char *verb, unsigned id, const char *k,
-		     const char *v)
+/*
+ * Ends the SIP side, if there still is one, and frees the slot, telling
+ * dect-stubd nothing. The slot goes first, so the CALL_CLOSED that
+ * ua_hangup() emits at once no longer finds it.
+ */
+static void bc_end(struct bcall *bc, uint16_t scode, const char *reason)
+{
+	struct call *call = bc->call;
+	struct ua *ua = bc->ua;
+
+	bc->hung = 1;
+	bc_free(bc);
+	if (call)
+		ua_hangup(ua, call, scode, reason);
+}
+
+/* ---- the control socket -------------------------------------------------- */
+
+static void ctl_drop(void);
+
+static void ctl_lost(void *arg)
+{
+	(void)arg;
+	ctl_drop();
+}
+
+/*
+ * 0 when the whole line went out, -1 when none of it did (no socket, the
+ * line over DECT_CTL_LINE_MAX, the socket full). Half a line leaves the
+ * stream without a line boundary: nothing more is sent, and the socket is
+ * dropped from the main loop, not under the caller's feet.
+ */
+static int ctl_send(struct dect_ctl_out *o)
+{
+	int n = dect_ctl_end(o);
+	ssize_t w;
+
+	if (ctl.fd < 0 || ctl.broken || n < 0) {
+		if (n < 0)
+			warning("openDECTcell: a control line over %u octets -- "
+				"not sent\n", DECT_CTL_LINE_MAX);
+		return -1;
+	}
+	w = send(ctl.fd, o->buf, (size_t)n, MSG_NOSIGNAL);
+	if (w == n)
+		return 0;
+	warning("openDECTcell: control socket write failed\n");
+	if (w > 0) {
+		ctl.broken = 1;
+		tmr_start(&ctl.lost, 0, ctl_lost, NULL);
+	}
+	return -1;
+}
+
+static int ctl_call(const char *verb, unsigned id, const char *k,
+		    const char *v)
 {
 	struct dect_ctl_out o;
 
@@ -230,7 +307,7 @@ static void ctl_call(const char *verb, unsigned id, const char *k,
 	dect_ctl_add_uint(&o, "call", id);
 	if (k)
 		dect_ctl_add(&o, k, v);
-	ctl_send(&o);
+	return ctl_send(&o);
 }
 
 /* The SIP status of a closed call as remote-released's reason. */
@@ -377,19 +454,49 @@ static void ctl_line(const char *line, size_t len)
 		call_out(id, hs, dect_ctl_get(&m, "number"));
 	} else if (!strcmp(m.verb, "call-in-ok")) {
 		bc = bc_by_tok(dect_ctl_get(&m, "sip"));
-		if (bc)
+		if (bc && bc->call) {
 			bc->id = id;
+			bc->wait = 0;
+		} else if (id) {
+			/*
+			 * The caller gave up before this came (an INVITE and
+			 * its CANCEL at once), or the call is not ours: stop
+			 * the paging now, not after dect-stubd's 75 s.
+			 */
+			(void)ctl_call("remote-released", id, "reason", "normal");
+			if (bc)
+				bc_free(bc);
+		}
 	} else if (!strcmp(m.verb, "busy")) {
 		bc = bc_by_tok(dect_ctl_get(&m, "sip"));
-		if (bc) {
-			bc->hung = 1;
-			ua_hangup(bc->ua, bc->call, 486, "Busy Here");
-			bc->call = NULL;
+		if (bc)
+			bc_end(bc, 486, "Busy Here");
+	} else if (!strcmp(m.verb, "error")) {
+		const char *verb = dect_ctl_get(&m, "verb");
+		const char *why = dect_ctl_get(&m, "reason");
+
+		/*
+		 * A refused call-in carries no sip= token, but dect-stubd
+		 * answers every command in the order it came: the error is
+		 * the oldest call-in still waiting. "?" is a line it could
+		 * not parse; of ours only a call-in carries the caller's
+		 * text, so that is a call-in too.
+		 */
+		if (verb && (!strcmp(verb, "call-in") || !strcmp(verb, "?")) &&
+		    (bc = bc_oldest_wait()) != NULL) {
+			int gone = why && (!strcmp(why, "no-handset") ||
+					   !strcmp(why, "bad-hs"));
+
+			warning("openDECTcell: call for DECT %u refused by the "
+				"base (%s)\n", bc->hs, why ? why : "?");
+			bc_end(bc, gone ? 480 : 503, gone ?
+			       "Temporarily Unavailable" : "Service Unavailable");
 		}
 	} else if (!strcmp(m.verb, "answered")) {
 		bc = bc_by_id(id);
 		if (bc && !bc->out) {
 			bc->answered = 1;
+			tmr_cancel(&bc->ring);
 			(void)ua_answer(bc->ua, bc->call, VIDMODE_OFF);
 		}
 	} else if (!strcmp(m.verb, "released")) {
@@ -405,11 +512,8 @@ static void ctl_line(const char *line, size_t len)
 			uint16_t sc = bc->out || bc->answered ? 0 :
 				      by && !strcmp(by, "base") ? 480 : 486;
 
-			bc->hung = 1;
-			ua_hangup(bc->ua, bc->call, sc,
-				  sc == 480 ? "Temporarily Unavailable" :
-				  sc == 486 ? "Busy Here" : NULL);
-			bc->call = NULL;
+			bc_end(bc, sc, sc == 480 ? "Temporarily Unavailable" :
+				       sc == 486 ? "Busy Here" : NULL);
 		}
 		if (aud.call == id)
 			aud_close();
@@ -423,20 +527,19 @@ static void ctl_drop(void)
 {
 	unsigned i;
 
+	tmr_cancel(&ctl.lost);
 	if (ctl.fd < 0)
 		return;
 	ctl.fhs = fd_close(ctl.fhs);
 	close(ctl.fd);
 	ctl.fd = -1;
 	ctl.il = 0;
+	ctl.broken = 0;
 	aud_close();
 	/* the handsets' side is gone: so are their calls */
 	for (i = 0; i < MAX_CALLS; i++)
-		if (calls[i].call) {
-			calls[i].hung = 1;
-			ua_hangup(calls[i].ua, calls[i].call, 503, NULL);
-			calls[i].call = NULL;
-		}
+		if (calls[i].call || calls[i].wait)
+			bc_end(&calls[i], 503, NULL);
 	warning("openDECTcell: control socket lost -- reconnecting\n");
 	tmr_start(&ctl.retry, RETRY_MS, ctl_connect, NULL);
 }
@@ -501,13 +604,72 @@ static void ctl_connect(void *arg)
 
 /* ---- baresip's events ---------------------------------------------------- */
 
+/*
+ * An INVITE only from where the account registers: the address the last
+ * 2xx to its REGISTER came from (the registrar, or the outbound proxy the
+ * REGISTER went through), for each of its registrations. That is
+ * baresip's own check, ua_req_check_origin(); it runs only for the
+ * transports in the config's filter_registrar, and setting that there
+ * would also stop listening on TCP and TLS, so it is switched on for this
+ * one call. An account that does not register has no such address and is
+ * not checked. `opendectcell_any_source yes` in the config turns the check off,
+ * for a provider whose INVITEs come from elsewhere.
+ */
+static int sip_origin_ok(const struct ua *ua, const struct sip_msg *msg)
+{
+	struct config *cfg = conf_config();
+	uint32_t keep;
+	int ok;
+
+	if (any_source || !cfg || !account_regint(ua_account(ua)))
+		return 1;
+	keep = cfg->sip.reg_filt;
+	cfg->sip.reg_filt = UINT32_MAX;
+	ok = ua_req_check_origin(ua, msg);
+	cfg->sip.reg_filt = keep;
+	return ok;
+}
+
+/* s, cut to at most max octets without splitting a UTF-8 sequence. */
+static void utf8_cut(char *dst, const char *s, size_t max)
+{
+	size_t n = strlen(s);
+
+	if (n > max) {
+		n = max;
+		while (n && ((unsigned char)s[n] & 0xC0u) == 0x80u)
+			n--;
+	}
+	memcpy(dst, s, n);
+	dst[n] = '\0';
+}
+
+/*
+ * A call-in nobody took in RING_MS: dect-stubd gives up after 75 s and
+ * says so, this is for the answer or the release that never came.
+ */
+static void ring_timeout(void *arg)
+{
+	struct bcall *bc = arg;
+
+	warning("openDECTcell: call %u for DECT %u: no answer in %u s -- ended\n",
+		bc->id, bc->hs, RING_MS / 1000u);
+	if (bc->id) {
+		(void)ctl_call("remote-released", bc->id, "reason", "normal");
+		if (aud.call == bc->id)
+			aud_close();
+	}
+	bc_end(bc, 480, "Temporarily Unavailable");
+}
+
 static void call_in(struct ua *ua, struct call *call)
 {
 	struct dect_ctl_out o;
 	struct bcall *bc;
 	unsigned hs = ua_hs(ua);
 	const char *peer = call_peeruri(call), *at, *colon;
-	char num[64] = "";
+	/* what dect-stubd puts into the CLIP: longer, it drops the field */
+	char num[DECT_CLIP_NUMBER_MAX + 1] = "", name[DECT_CLIP_NAME_MAX + 1];
 
 	if (!hs)
 		return;			/* not one of the handsets' accounts */
@@ -523,15 +685,30 @@ static void call_in(struct ua *ua, struct call *call)
 	bc->call = call;
 	bc->ua = ua;
 	bc->hs = hs;
-	re_snprintf(bc->tok, sizeof(bc->tok), "b%u", ++next_tok);
+	bc->seq = ++next_tok;
+	re_snprintf(bc->tok, sizeof(bc->tok), "b%u", bc->seq);
 	dect_ctl_begin(&o, "call-in");
 	dect_ctl_add_uint(&o, "line", 1);
 	dect_ctl_add_uint(&o, "hs", hs);
 	dect_ctl_add(&o, "number", num);
-	if (call_peername(call))
-		dect_ctl_add(&o, "name", call_peername(call));
+	if (call_peername(call)) {
+		/*
+		 * The caller's display name, at most the CLIP's 64 octets:
+		 * longer, the value would be over DECT_CTL_VAL_MAX or the
+		 * line over DECT_CTL_LINE_MAX, and the call-in refused.
+		 */
+		utf8_cut(name, call_peername(call), DECT_CLIP_NAME_MAX);
+		dect_ctl_add(&o, "name", name);
+	}
 	dect_ctl_add(&o, "sip", bc->tok);
-	ctl_send(&o);
+	if (ctl_send(&o)) {
+		warning("openDECTcell: call from %s for DECT %u: not handed to the "
+			"base\n", peer ? peer : "?", hs);
+		bc_end(bc, 503, "Service Unavailable");
+		return;
+	}
+	bc->wait = 1;
+	tmr_start(&bc->ring, RING_MS, ring_timeout, bc);
 	info("openDECTcell: call from %s for DECT %u\n", peer ? peer : "?", hs);
 }
 
@@ -737,6 +914,14 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 			bevent_stop(event);
 			break;
 		}
+		if (!sip_origin_ok(ua, msg)) {
+			info("openDECTcell: INVITE from %J is not from the "
+			     "account's server -- 403\n", &msg->src);
+			(void)sip_treply(NULL, uag_sip(), msg, 403,
+					 "Forbidden");
+			bevent_stop(event);
+			break;
+		}
 		if (ctl.fd < 0) {
 			(void)sip_treply(NULL, uag_sip(), msg, 503,
 					 "Service Unavailable");
@@ -755,22 +940,25 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 	case UA_EVENT_CALL_PROGRESS:
 		if (bc && bc->out && !bc->rang) {
 			bc->rang = 1;
-			ctl_call("remote-ringing", bc->id, NULL, NULL);
+			(void)ctl_call("remote-ringing", bc->id, NULL, NULL);
 		}
 		break;
 	case UA_EVENT_CALL_ESTABLISHED:
 		if (bc && bc->out)
-			ctl_call("remote-answered", bc->id, NULL, NULL);
+			(void)ctl_call("remote-answered", bc->id, NULL, NULL);
 		break;
 	case UA_EVENT_CALL_CLOSED:
 		if (!bc)
 			break;
 		if (!bc->hung && bc->id)
-			ctl_call("remote-released", bc->id, "reason",
-				 reason_of(call_scode(call)));
+			(void)ctl_call("remote-released", bc->id, "reason",
+				       reason_of(call_scode(call)));
 		if (aud.call && aud.call == bc->id)
 			aud_close();
-		bc->call = NULL;
+		if (bc->wait)
+			bc->call = NULL;	/* call-in-ok will release it */
+		else
+			bc_free(bc);
 		break;
 	default:
 		break;
@@ -852,8 +1040,13 @@ static int module_init(void)
 	err |= bevent_register(event_handler, NULL);
 	if (err)
 		return err;
+	(void)conf_get_bool(conf_cur(), "opendectcell_any_source", &any_source);
+	if (any_source)
+		warning("openDECTcell: opendectcell_any_source -- INVITEs taken from "
+			"any address\n");
 	lines_load();
 	tmr_init(&ctl.retry);
+	tmr_init(&ctl.lost);
 	ctl_connect(NULL);
 	tmr_init(&status_tmr);
 	status_tick(NULL);
@@ -862,11 +1055,15 @@ static int module_init(void)
 
 static int module_close(void)
 {
+	unsigned i;
+
 	tmr_cancel(&status_tmr);
 	(void)unlink(STATUS_PATH);
 	tmr_cancel(&ctl.retry);
 	ctl_drop();
 	tmr_cancel(&ctl.retry);
+	for (i = 0; i < MAX_CALLS; i++)
+		tmr_cancel(&calls[i].ring);	/* none may fire unloaded */
 	bevent_unregister(event_handler);
 	ausrc = mem_deref(ausrc);
 	auplay = mem_deref(auplay);

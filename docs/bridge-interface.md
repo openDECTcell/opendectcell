@@ -146,6 +146,20 @@ while the daemon runs (`-g`) and is removed on exit.
    486 (the handset declined). Checked on the box with an INVITE from a
    test peer to an invented handset: 180 at once, the base paged it,
    480 after 60 s.
+   Hardened 2026-10-29 (built, not yet tested on SIP): the caller's name
+   goes out cut to the CLIP's 64 octets (at a UTF-8 boundary) and the
+   number to its 32, so a call-in always fits the line format. A call-in
+   that dect-stubd answers with `error verb=call-in` (or `error verb=?`)
+   is the oldest one still waiting, since answers come in command order:
+   its SIP call gets 480 (`no-handset`, `bad-hs`) or 503, and its slot is
+   freed; a call-in that cannot be sent gets 503 at once. A caller who
+   hangs up before `call-in-ok` keeps the slot until it comes, and the
+   bridge then sends `remote-released` for that call (as for any
+   `call-in-ok` it has no caller for). Each call-in has a 90 s limit in
+   the bridge (480, `remote-released`), above dect-stubd's 75 s. An
+   INVITE to an account that registers is taken only from the address
+   its last REGISTER 2xx came from (baresip's `ua_req_check_origin()`),
+   else 403; `opendectcell_any_source yes` in baresip's config turns that off.
 5. `lines` and the pool: two lines, ringing all attached handsets
    (lines-and-calls.md step 4).
 6. Wideband audio over the socket (the G.722 path).

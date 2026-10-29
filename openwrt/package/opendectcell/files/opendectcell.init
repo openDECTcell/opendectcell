@@ -429,6 +429,10 @@ baresip_write() {
 		echo "ausrc_channels 1"
 		echo "auplay_channels 1"
 		echo "module_path $BS_MODS"
+		# INVITEs only from where an account registers (its REGISTER's
+		# 2xx); sip_any_source '1' for a provider calling from elsewhere
+		config_get_bool v main sip_any_source 0
+		[ "$v" = 1 ] && echo "opendectcell_any_source yes"
 	} > "$BS_DIR/config"
 	for v in g711.so g722.so stun.so turn.so ice.so srtp.so dtls_srtp.so mwi.so; do
 		bs_module module "$v"
