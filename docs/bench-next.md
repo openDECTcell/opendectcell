@@ -745,3 +745,18 @@ Afterwards remove `,timeupdate=2` from options again (LuCI, Advanced, or
 | "update round skipped -- the clock is not disciplined" | NTP has not synchronised: check System > Time Synchronization, then repeat |
 | a handset shows "base not available" or loses its link after the round | the link release went wrong: send the log at once |
 | an incoming call during the round rings normally | the round yields to calls, as intended (only if you happen to try it) |
+
+### 37. A fresh registration (5 minutes; `3907ee2`)
+
+Since `-a locauth` became the default (`e05fd56`, 2026-10-28), every
+*fresh* registration was answered `LOCATE-REJECT` "authentication failed"
+and never saved: the location registration was challenged with a key the
+daemon stores only after it. Found on a 7412 (2026-10-29), fixed in
+`3907ee2`; the same code runs here, and no handset has registered from
+scratch on the 7520 since. Re-register one Gigaset (same base number) with
+the registration window open.
+
+| you see | meaning |
+|---|---|
+| "handset registered", then "subscription persisted + registration closed", the handset shows its name | **works** on the 7520 too |
+| "handset registered", then `nwk out --> 85 57 60 01 10` and no "persisted" | the box runs a daemon older than `3907ee2` |

@@ -87,3 +87,32 @@ cat /sys/class/gpio/gpio545/value   # 0: chip in reset, nothing transmits
 ```
 
 Tell the agent what you saw; it reads the log and records the result here.
+
+## Results, 2026-10-29 evening (A540)
+
+All three tests pass, after two fixes made at the bench. Logs and the
+pre-committed outcomes are in the agent's notes for that session.
+
+1. **The radio beacons on 06.88.** The A540 found the base at once and
+   opened a link, but nothing reached the daemon: the 06.88 STUB sends
+   `0x0203` as 7 bytes `{handle, 01, seg[5]}` (08.25: 13 or 15, with tag
+   and handle copy), and the decoder dropped them. Fixed in `d917c9b`.
+2. **Registration** then ran through (DSAA, "handset registered"), but the
+   handset's location registration was rejected "authentication failed":
+   a regression for every fresh registration since `e05fd56`, on both
+   boxes. Fixed in `3907ee2`. With both, the A540 registered, the store was
+   saved, `UAK read-back slot 1 at 0x0067F: MATCHES`, audit `1=OURS`, and
+   it ran a ciphered list session (its name "DECT 1").
+3. **Test 2:** after a restart it came back on its own within 6.4 s, the key
+   read back MATCHES. **Test 3:** the park was verified on the chip and the
+   A540 lost the base within two minutes: the park silences the 7412.
+
+**Open: the control channel slips.** In three of six runs the chip went
+silent on the SSC link after 23 to 60 s (once before any handset link),
+the session died, and the stop's park could not be verified. The radio
+kept running (the A540 showed signal, "Synchronisiere"), and restarting
+the daemon alone, with no upload, found the control slot again at once:
+the chip is alive and the PCM/TDM alignment was lost. Until the daemon
+re-hunts the slot on silence, a 7412 whose session died must be put in
+reset by hand after the stop (the "After the tests" block above); the
+service's stop does not reset the chip.
