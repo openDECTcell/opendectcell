@@ -52,7 +52,7 @@ define Package/opendectcell-baresip
   $(call Package/opendectcell/Default)
   TITLE:=SIP for the opendectcell DECT base (baresip module)
   DEPENDS:=+opendectcell +baresip +baresip-mod-g711 +baresip-mod-g722 \
-	+baresip-mod-srtp
+	+baresip-mod-auresamp +baresip-mod-srtp
 endef
 
 define Package/opendectcell-baresip/description

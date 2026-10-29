@@ -469,7 +469,9 @@ baresip_write() {
 		config_get_bool v main sip_any_source 0
 		[ "$v" = 1 ] && echo "opendectcell_any_source yes"
 	} > "$BS_DIR/config"
-	for v in g711.so g722.so stun.so turn.so ice.so srtp.so dtls_srtp.so mwi.so; do
+	# auresamp: the bridge's speech is 16 kHz, G.711 is 8 kHz, and
+	# baresip's core drops frames whose rate is not the codec's
+	for v in auresamp.so g711.so g722.so stun.so turn.so ice.so srtp.so dtls_srtp.so mwi.so; do
 		bs_module module "$v"
 	done
 	bs_module module_app account.so
