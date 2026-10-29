@@ -79,9 +79,6 @@ Things a reviewer would raise that this layout cannot fix by itself:
   register addresses (`kernel/opendectcell_ipq40xx.c`, `kernel/opendectcell_lantiq.c`);
   reviewers will ask for device-tree nodes in the boards' DTS, which is a
   change to OpenWrt's core repository.
-- `kmod-opendectcell-lantiq` still carries the old SSC engine
-  (`kernel/opendectcell_ssc.c`), which nothing uses since the 7412 moved to
-  `kmod-lantiq-ssc-pcm`.
 - `files/opendectcell.uci-defaults` comments out the console getty in
   `/etc/inittab`, and the init script stops a running one, because the
   DECT chip's UART is the serial console on these boxes; that belongs in
