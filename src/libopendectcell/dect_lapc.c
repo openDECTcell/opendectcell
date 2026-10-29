@@ -196,13 +196,11 @@ static void queue_ua(struct dect_lapc *l, uint8_t pf)
 /*
  * Queue a DISC command -- release the acknowledged link.
  *
- * We have always parsed DISC and never sent one, which turned out to matter
- * far beyond the link layer. [CR A-0052]/[CR A-0053]: a handset that holds a
- * link does not answer a page, and the page is what makes the chip allocate a
- * call's traffic bearer, so a handset we never release is a handset we can
- * never give audio to. Our daemon held the C4's link open from the moment it
- * attached (vF420b: still up after 70 s) and every call we placed went out on
- * that stale link with an audio path the chip never configured.
+ * This matters far beyond the link layer. [CR A-0052]/[CR A-0053]: a handset
+ * that holds a link does not answer a page, and the page is what makes the
+ * chip allocate a call's traffic bearer, so a handset we never release is a
+ * handset we can never give audio to: a call placed on a stale link gets an
+ * audio path the chip never configured.
  *
  * DISC is a U-frame, same shape as the UA we already send, and it is a
  * COMMAND, so it carries CR_CMD rather than CR_RSP.

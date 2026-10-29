@@ -243,12 +243,10 @@ struct dect_mm {
 	 * **10 s**), stop it on {TEMPORARY-IDENTITY-ASSIGN-ACK}, and on expiry
 	 * "abort the procedure and release the transaction".
 	 *
-	 * We ran neither until 2026-10-23: the handset's ack arrived as the
-	 * unidentified `05 5d` and we ignored it, so an assignment was treated
-	 * as successful the moment we sent it. That matters because we page by
-	 * the assigned TPUI -- if a handset never took it, every page goes to
-	 * an identity it is not listening for, which is silent and looks
-	 * exactly like a handset that will not answer.
+	 * That matters because we page by the assigned TPUI: if a handset
+	 * never took it, every page goes to an identity it is not listening
+	 * for, which is silent and looks exactly like a handset that will not
+	 * answer.
 	 */
 	uint64_t ident_deadline_ms;		/* 0 = not running */
 	uint64_t key_deadline_ms;		/* <MM_key.1>, 0 = not running */
@@ -373,10 +371,10 @@ void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg);
  * the owner chooses. Returns 0, or -1 if the table is full or the entry
  * invalid. dect_mm_init() empties the table, so hold them after each init.
  *
- * A base serves every handset subscribed to it. With port_id alone it knew
- * one: on 2026-10-25 a daemon serving the AS690H turned away the A540, which
- * IS subscribed here, twenty times a minute (`{LOCATE-REJECT}`, then every
- * list-access call), and the A540 lost its name and kept resynchronising.
+ * A base serves every handset subscribed to it, on whichever link it
+ * attaches: a link that knew only port_id would turn away a subscribed
+ * handset (`{LOCATE-REJECT}`, then every list-access call), and that
+ * handset loses its name and keeps resynchronising (observed on hardware).
  */
 int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
 		 uint8_t slot, const uint8_t tpui[3], int tag);
