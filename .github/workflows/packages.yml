@@ -9,6 +9,11 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# The token reads the repository and nothing more; the release job asks
+# for what it needs itself (security audit 2026-10-29, C1).
+permissions:
+  contents: read
+
 env:
   OPENWRT: 25.12.5
 
@@ -54,6 +59,9 @@ jobs:
             echo "::warning::no signing key: these packages install only with apk add --allow-untrusted"
           fi
           tools/release/build.sh '${{ matrix.target }}' out
+          # the private key, and the copy build.sh made, gone before
+          # the steps that follow
+          rm -f "$RUNNER_TEMP/sign.pem" build/release/*/private-key.pem
 
       - uses: actions/upload-artifact@v4
         with:
