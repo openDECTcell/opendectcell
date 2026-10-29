@@ -13,8 +13,15 @@
  * Everything is integer arithmetic on `int`. The Recommendation specifies the
  * arithmetic exactly, so a conforming encoder and decoder are bit-exact; the
  * tests rely on that.
+ *
+ * Its right shifts are arithmetic: a negative value keeps its sign. C leaves
+ * `>>` of a negative value implementation-defined (C11 6.5.7); GCC and Clang
+ * define it as the arithmetic shift, and the assertion below refuses a
+ * compiler that does not.
  */
 #include "dect_g722.h"
+
+_Static_assert((-3 >> 1) == -2, "G.722 needs an arithmetic right shift");
 
 /*
  * QMF coefficients, the 24-tap symmetric half-band filter of clause 3.1
@@ -106,11 +113,16 @@ static int sgn(int v)
 	return (v < 0) ? -1 : 0;
 }
 
-/* Arithmetic right shift by 15 of a product, written so it cannot depend on
- * the implementation's choice for negative values. */
+/*
+ * (coeff * v) >> 15, the Recommendation's scaled product. Every caller passes
+ * 16-bit quantities -- table entries, sat16() results, the clamped pole
+ * coefficients, the scale factor det (at most 4008 << 1 << 2 = 32064) and
+ * the constants 32512 and 32640 -- so |coeff * v| <= 2^15 * 2^15 = 2^30 and
+ * the product fits a 32-bit integer.
+ */
 static int mul15(int coeff, int v)
 {
-	long long p = (long long)coeff * (long long)v;
+	int32_t p = (int32_t)coeff * (int32_t)v;
 
 	return (int)(p >> 15);
 }
@@ -310,18 +322,30 @@ size_t dect_g722_encode(struct dect_g722_state *st, const int16_t *pcm,
 	for (i = 0; i + 1 < n; i += 2) {
 		struct dect_g722_band *lo = &st->band[0];
 		struct dect_g722_band *hi = &st->band[1];
-		int xlow, xhigh, el, eh, wd, wd1, ilow, ihigh, mih, j;
+		int xlow, xhigh, el, eh, wd, wd1, ilow, ihigh, mih, j, top;
 		int ril, dlow, dhigh;
 
 		qmf_analyse(st, pcm[i], pcm[i + 1], &xlow, &xhigh);
 
-		/* Low sub-band: SUBTRA then QUANTL. */
+		/*
+		 * Low sub-band: SUBTRA then QUANTL. The Recommendation's
+		 * QUANTL takes the first decision level j in 1..29 with
+		 * wd < (q6[j] * det) >> 12, else 30. The levels grow with j
+		 * and det > 0, so the test is false up to some j and true
+		 * from there on: a binary search finds the same j in five
+		 * steps instead of up to 29.
+		 */
 		el = sat16(xlow - lo->s);
 		wd = (el >= 0) ? el : -(el + 1);
-		for (j = 1; j < 30; j++) {
-			wd1 = (q6[j] * lo->det) >> 12;
-			if (wd < wd1)
-				break;
+		j = 1;
+		top = 30;
+		while (j < top) {
+			int mid = (j + top) >> 1;
+
+			if (wd < ((q6[mid] * lo->det) >> 12))
+				top = mid;
+			else
+				j = mid + 1;
 		}
 		ilow = (el < 0) ? iln[j] : ilp[j];
 
