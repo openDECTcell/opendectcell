@@ -28,6 +28,7 @@ var STATE = '/var/run/opendectcell/state.json';
 var VOIP = '/var/run/opendectcell/voip.json';
 var CTL = '/usr/sbin/dect-stubd';
 var PROFILES = '/etc/opendectcell/profiles';
+var BOARDS = '/usr/share/opendectcell/boards/';
 
 function readState() {
 	return fs.read(STATE).then(function(text) {
@@ -77,6 +78,37 @@ function readProfiles() {
 		}));
 	}).then(function(list) {
 		return list.sort(function(a, b) { return a.name.localeCompare(b.name); });
+	});
+}
+
+/*
+ * The chip settings the service takes when Advanced leaves them empty, as
+ * the init script finds them: its own defaults (the 7520's) with the box's
+ * board profile, /usr/share/opendectcell/boards/<board_name>, over them.
+ */
+var CHIP_DEFAULTS = {
+	fw_firstlevel: 'dectfw_firstlevel_441_slow.hex',
+	fw_secondlevel: 'dectfw_secondlevel_441-07.56.hex',
+	uart: '/dev/ttyMSM0',
+	factory_mtd: '/dev/mtd5',
+	factory_offset: '0x3d000',
+	dect_mode: '0x105'
+};
+
+function readBoard() {
+	return L.resolveDefault(fs.read('/tmp/sysinfo/board_name'), '').then(function(name) {
+		name = (name || '').trim();
+		return name ? L.resolveDefault(fs.read(BOARDS + name), '') : '';
+	}).then(function(text) {
+		var b = {};
+
+		Object.keys(CHIP_DEFAULTS).forEach(function(k) { b[k] = CHIP_DEFAULTS[k]; });
+		(text || '').split('\n').forEach(function(l) {
+			var m = l.match(/^([a-z0-9_]+)="?([^"]*)"?\s*$/);
+			if (m && b.hasOwnProperty(m[1]))
+				b[m[1]] = m[2];
+		});
+		return b;
 	});
 }
 
@@ -571,7 +603,8 @@ return view.extend({
 			readState(),
 			readProfiles(),
 			readKeys(),
-			readVoip()
+			readVoip(),
+			readBoard()
 		]).then(function(r) {
 			var st = r[1], profiles = r[2], voip = r[4];
 
@@ -590,13 +623,14 @@ return view.extend({
 					return (t || '').trim();
 				});
 			})).then(function(choices) {
-				return [ st, profiles, choices, r[3], voip ];
+				return [ st, profiles, choices, r[3], voip, r[5] ];
 			});
 		});
 	},
 
 	render: function(data) {
 		var st = data[0], profiles = data[1], choices = data[2], keys = data[3], voip = data[4];
+		var board = data[5];
 		var running = st && st.radio === 'up';
 		var bySlot = {}, choiceBySlot = {};
 		var m, s, o, ss;
@@ -1033,30 +1067,30 @@ return view.extend({
 		o.placeholder = '/etc/ssl/certs/ca-certificates.crt';
 		o.depends('tls_verify', '1');
 
-		/* Advanced */
+		/* Advanced; a placeholder is what the service takes when it is empty */
 		o = s.taboption('advanced', form.Value, 'firmware_dir', _('Chip firmware directory'),
 			_('Where the two DECT chip firmware files from a FRITZ!OS image are kept (never shipped with opendectcell).'));
 		o.placeholder = '/etc/opendectcell/firmware';
 		o = s.taboption('advanced', form.Value, 'first', _('First-stage firmware'));
-		o.placeholder = 'dectfw_firstlevel_441_slow.hex';
+		o.placeholder = board.fw_firstlevel;
 		o = s.taboption('advanced', form.Value, 'second', _('Second-stage firmware'));
-		o.placeholder = 'dectfw_secondlevel_441-07.56.hex';
+		o.placeholder = board.fw_secondlevel;
 		o = s.taboption('advanced', form.Flag, 'fw_allow_unverified', _('Allow unknown firmware'),
 			_('Run a chip firmware build opendectcell does not know. For developers.'));
 		o = s.taboption('advanced', form.Value, 'uart', _('DECT UART'));
-		o.placeholder = '/dev/ttyMSM0';
+		o.placeholder = board.uart;
 		o = s.taboption('advanced', form.Value, 'factory_mtd', _('Factory partition'),
 			_('Holds the base\'s DECT identity and calibration.'));
-		o.placeholder = '/dev/mtd5';
+		o.placeholder = board.factory_mtd;
 		o = s.taboption('advanced', form.Value, 'factory_offset', _('Factory offset'));
-		o.placeholder = '0x3d000';
+		o.placeholder = board.factory_offset;
 		o = s.taboption('advanced', form.Value, 'mode', _('Chip mode word'));
-		o.placeholder = '0x105';
+		o.placeholder = board.dect_mode;
 		o = s.taboption('advanced', form.Value, 'stores', _('Handset stores'),
 			_('One file per registered handset.'));
 		o.placeholder = '/etc/opendectcell-sub.*';
 		o = s.taboption('advanced', form.Value, 'options', _('Extra options'),
-			_('Further dect-stubd -a options, comma-separated.'));
+			_('Further dect-stubd -a options, comma-separated, for developers. They follow the service\'s own, so a key set here wins.'));
 
 		return m.render();
 	}

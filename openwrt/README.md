@@ -85,8 +85,9 @@ Things a reviewer would raise that this layout cannot fix by itself:
   the boards' definitions in the core repository.
 - The LuCI ACL lets the app run `dect-stubd --ctl` with any argument; LuCI
   prefers an rpcd/ubus plugin with fixed methods.
-- The translation template was made with gettext's `xgettext` and LuCI's
-  keywords, not with LuCI's `build/i18n-scan.pl`; the LuCI repository
+- The translation template holds every `_('…')` of the JavaScript files
+  and the ACL's description, in the order `xgettext --sort-by-file` gives,
+  but is not made with LuCI's `build/i18n-scan.pl`; the LuCI repository
   regenerates templates with its own tools anyway.
 - OpenWrt takes new packages on its main branch only, which builds a newer
   kernel (6.18) than the 25.12 releases this feed is built and tested for.

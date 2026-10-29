@@ -10,7 +10,10 @@
 				"/etc/opendectcell/profiles": [ "list" ],
 				"/etc/opendectcell-sub.*.profile": [ "read" ],
 				"/etc/opendectcell/profiles/*.profile": [ "read" ],
-				"/sbin/logread": [ "exec" ]
+				"/tmp/sysinfo/board_name": [ "read" ],
+				"/usr/share/opendectcell/boards/*": [ "read" ],
+				"/sbin/logread": [ "exec" ],
+				"/sbin/logread -l *": [ "exec" ]
 			},
 			"ubus": {
 				"service": [ "list" ]

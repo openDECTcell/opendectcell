@@ -14,6 +14,7 @@
  * baresip module writes every 2 s; both start with their service's state
  * from procd, so a stopped service is told apart from anything else that
  * goes wrong. Log shows the system log's lines of both, for when it does.
+ * Each refresh reads and redraws only the tab in view.
  *
  * Per connection it shows what AVM's DECT Monitor shows and we have
  * decoded from the chip's connection status: carrier and frequency, time
@@ -70,19 +71,44 @@ function readModelNames() {
 	});
 }
 
-/* everything one refresh needs: [state, voip, procd's instances] */
-function readAll() {
+function readServices() {
+	return L.resolveDefault(callServices('opendectcell'), {}).then(function(r) {
+		return (r && r.opendectcell && r.opendectcell.instances) || {};
+	});
+}
+
+/*
+ * The settings (whether the service is on, the handsets' lines and their
+ * profiles' names), read again every UCI_MS: they change only when
+ * someone saves Network > DECT, not with every refresh.
+ */
+var UCI_MS = 30000;
+var uciAt = 0;
+
+function loadSettings() {
+	if (Date.now() - uciAt < UCI_MS)
+		return Promise.resolve();
+	uciAt = Date.now();
+	return Promise.resolve(uci.unload('opendectcell')).then(function() {
+		return uci.load('opendectcell');
+	}).catch(function() {});
+}
+
+/*
+ * What one refresh of a tab needs: [state, voip, procd's instances, log],
+ * null where that tab does not show it. The state is read for every tab,
+ * so the graphs keep their history while another tab is open.
+ */
+function readFor(tab) {
+	var status = tab != 'log';
+
 	return Promise.all([
 		readState(),
-		readJson(VOIP),
-		L.resolveDefault(callServices('opendectcell'), {}).then(function(r) {
-			return (r && r.opendectcell && r.opendectcell.instances) || {};
-		}),
-		/* the settings as they are now, not as when the page opened */
-		Promise.resolve(uci.unload('opendectcell')).then(function() {
-			return uci.load('opendectcell');
-		}).catch(function() {}),
-		readModelNames()
+		tab == 'voip' ? readJson(VOIP) : null,
+		status ? readServices() : null,
+		tab == 'log' ? readLog() : null,
+		status ? loadSettings() : null,
+		tab == 'dect' ? readModelNames() : null
 	]);
 }
 
@@ -259,17 +285,29 @@ function historyChart(hist) {
 	]);
 }
 
-function remember(l) {
-	var r = l.radio, now = Date.now() / 1000, hist;
+/*
+ * Each connection's level and quality, at every refresh of any tab; the
+ * graphs of connections that are gone are forgotten.
+ */
+function track(st) {
+	var now = Date.now() / 1000, live = {};
 
-	if (!r)
-		return [];
-	hist = history[l.handle] = (history[l.handle] || []).filter(function(p) {
-		return now - p.t <= HISTORY_S;
+	if (st && st.radio === 'up')
+		(st.links || []).forEach(function(l) {
+			var r = l.radio;
+
+			if (!r)
+				return;
+			live[l.handle] = true;
+			history[l.handle] = (history[l.handle] || []).filter(function(p) {
+				return now - p.t <= HISTORY_S;
+			}).concat([ { t: now, dbm: r.dbm != null ? r.dbm : null,
+				      q: r.quality != null ? r.quality : null } ]);
+		});
+	Object.keys(history).forEach(function(k) {
+		if (!live[k])
+			delete history[k];
 	});
-	hist.push({ t: now, dbm: r.dbm != null ? r.dbm : null,
-		    q: r.quality != null ? r.quality : null });
-	return hist;
 }
 
 function handsetName(st, l) {
@@ -306,7 +344,7 @@ function connection(st, l) {
 		})));
 	if (r) {
 		cards.push(E('div', { 'style': 'display:flex;flex-wrap:wrap;gap:2em;margin-top:1em' }, [
-			carrierChart(r), historyChart(remember(l))
+			carrierChart(r), historyChart(history[l.handle] || [])
 		]));
 	}
 	return E('div', { 'class': 'cbi-section' }, [
@@ -372,12 +410,6 @@ function renderState(st) {
 			if (l.call != 'idle' || l.radio)
 				out.push(connection(st, l));
 		});
-
-	/* forget the graphs of connections that are gone */
-	Object.keys(history).forEach(function(k) {
-		if (!on || !(st.links || []).some(function(l) { return String(l.handle) == k && l.radio; }))
-			delete history[k];
-	});
 	return E('div', {}, out);
 }
 
@@ -504,20 +536,22 @@ function renderDect(st, inst) {
 
 /*
  * The log lines of the base and its SIP side. logread has no "this or
- * that" filter, so the whole system log is read and these kept: the
- * daemons, the service's own messages (logger tag openDECTcell) and procd's
- * about either instance.
+ * that" filter, so the newest LOG_READ lines of the system log are read
+ * (a bound on each refresh's cost, above what OpenWrt's default 64 KiB
+ * log holds) and these kept: the daemons, the service's own messages
+ * (logger tag openDECTcell) and procd's about either instance.
  */
 var LOG_KIND = [
 	[ /\bdect-stubd\[\d+\]:|procd: .*opendectcell::instance1/, 'dect' ],
 	[ /\bbaresip\[\d+\]:|procd: .*opendectcell::baresip/, 'voip' ],
 	[ /\bopendectcell(\[\d+\])?:/, 'both' ]
 ];
+var LOG_READ = 2000;		/* system log lines read */
 var LOG_MAX = 1000;		/* lines kept on the page */
 var logWhich = 'all';
 
 function readLog() {
-	return L.resolveDefault(fs.exec_direct('/sbin/logread'), '').then(function(text) {
+	return L.resolveDefault(fs.exec_direct('/sbin/logread', [ '-l', String(LOG_READ) ]), '').then(function(text) {
 		var out = [];
 
 		(text || '').split('\n').forEach(function(l) {
@@ -554,7 +588,7 @@ function showLog(area, lines) {
 
 function renderLogTab(lines) {
 	var area = E('textarea', {
-		'id': 'opendectcell-log', 'readonly': 'readonly', 'wrap': 'off',
+		'readonly': 'readonly', 'wrap': 'off',
 		'style': 'width:100%;height:32em;font-family:monospace;font-size:12px'
 	});
 	var which = E('select', {
@@ -589,40 +623,51 @@ function fill(node, child) {
 }
 
 return view.extend({
+	/* everything once, so each tab has its content from the start */
 	load: function() {
-		return Promise.all([ readAll(), readLog() ]).then(function(r) {
-			return r[0].concat([ r[1] ]);	/* readAll()'s five, then the log */
-		});
+		uciAt = Date.now();	/* the view loads the settings fresh */
+		return Promise.all([
+			readState(), readJson(VOIP), readServices(), readLog(),
+			uci.load('opendectcell'), readModelNames()
+		]);
 	},
 
 	render: function(r) {
-		var dect = E('div', { 'id': 'opendectcell-monitor' }, renderDect(r[0], r[2]));
-		var voip = E('div', { 'id': 'opendectcell-voip' }, renderVoip(r[0], r[1], r[2]));
-		var logs = E('div', { 'data-tab': 'log', 'data-tab-title': _('Log') },
-			[ renderLogTab(r[5]) ]);
-		var tabs = E('div', {}, [
+		track(r[0]);
+
+		var dect = E('div', {}, renderDect(r[0], r[2]));
+		var voip = E('div', {}, renderVoip(r[0], r[1], r[2]));
+		var log = renderLogTab(r[3]);
+		var panes = [
 			E('div', { 'data-tab': 'dect', 'data-tab-title': _('DECT') }, [ dect ]),
 			E('div', { 'data-tab': 'voip', 'data-tab-title': _('VoIP') }, [ voip ]),
-			logs
-		]);
+			E('div', { 'data-tab': 'log', 'data-tab-title': _('Log') }, [ log ])
+		];
+		var tabs = E('div', {}, panes);
+		var area = log.querySelector('textarea');
 
-		poll.add(function() {
-			var area = document.getElementById('opendectcell-log');
+		/* Every 2 s, and at once on a tab switch: only the tab in view. */
+		function refresh() {
+			var pane = panes.filter(function(p) {
+				return p.getAttribute('data-tab-active') == 'true';
+			})[0];
+			var tab = pane ? pane.getAttribute('data-tab') : 'dect';
 
-			return Promise.all([
-				readAll(),
-				logs.getAttribute('data-tab-active') == 'true' ? readLog() : null
-			]).then(function(x) {
-				var r = x[0];
-
-				fill(document.getElementById('opendectcell-monitor'), renderDect(r[0], r[2]));
-				fill(document.getElementById('opendectcell-voip'), renderVoip(r[0], r[1], r[2]));
-				if (x[1] && area) {
-					area._lines = x[1];
-					showLog(area, x[1]);
+			return readFor(tab).then(function(x) {
+				track(x[0]);
+				if (tab == 'dect')
+					fill(dect, renderDect(x[0], x[2]));
+				else if (tab == 'voip')
+					fill(voip, renderVoip(x[0], x[1], x[2]));
+				else {
+					area._lines = x[3];
+					showLog(area, x[3]);
 				}
 			});
-		}, 2);
+		}
+
+		panes.forEach(function(p) { p.addEventListener('cbi-tab-active', refresh); });
+		poll.add(refresh, 2);
 
 		/* the tab menu goes before the panes' parent: it needs one */
 		var page = E('div', {}, [
