@@ -34,7 +34,7 @@ STUBD_SRC := src/stubd/dect-stubd.c src/stubd/ssc_align.c src/libopendectcell/de
 	src/libopendectcell/dect_cell.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
-.PHONY: all check cross clean baresip-mod
+.PHONY: all check cross clean baresip-mod dect-cell
 all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap $(BUILD)/dect-stubd $(BUILD)/dect-maildump
 
 $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
@@ -172,6 +172,18 @@ baresip-mod: src/baresip/opendectcell.c src/libopendectcell/dect_ctl.c src/libop
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -fPIC -shared \
 		-DHAVE_INTTYPES_H -I$(RE_SRC)/include -I$(BARESIP_SRC)/include -Isrc/libopendectcell \
 		-o $(BUILD)/opendectcell.so src/baresip/opendectcell.c src/libopendectcell/dect_ctl.c
+
+# dect-cell, the link to an openDECTcell controller: needs mbedTLS 3.6, e.g. for
+# the 7412 with the OpenWrt SDK (MBEDTLS = its staging_dir/target-*/usr):
+#   make dect-cell CC=<SDK gcc> MBEDTLS=<...>/usr STAGING_DIR=<SDK>/staging_dir
+# The OpenWrt package opendectcell-cell builds it against the feed's mbedTLS.
+MBEDTLS ?= /usr
+dect-cell: $(BUILD)/dect-cell
+$(BUILD)/dect-cell: src/cell/dect-cell.c src/libopendectcell/dect_cell.c src/libopendectcell/dect_cell.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) -Isrc/libopendectcell -I$(MBEDTLS)/include \
+		-L$(MBEDTLS)/lib -o $@ src/cell/dect-cell.c src/libopendectcell/dect_cell.c \
+		-lmbedtls -lmbedx509 -lmbedcrypto
 
 check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done

@@ -20,6 +20,12 @@ them with `python3 -I`.
 | [release/notes.md](release/notes.md) | The standard text of a release; a release can have its own `notes-<version>.md` |
 | [github/seed_issues.py](github/seed_issues.py) | Creates GitHub milestones and issues from `ROADMAP.md` |
 
+## For the cell mode
+
+| Tool | What it does |
+|---|---|
+| [cell-testpeer.py](cell-testpeer.py) | A stand-in controller for testing a cell (`dect-cell`, `dect-stubd -K`): its own CA, enrolment, mutual TLS 1.3, HELLO and heartbeats, optional harmless MAIL_DOWNs. Needs the `cryptography` package (the only tool here that is not standard library only) |
+
 ## For development and analysis
 
 These helped bring up the chip and the calls. They read captures and logs

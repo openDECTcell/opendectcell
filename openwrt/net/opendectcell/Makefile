@@ -14,8 +14,8 @@ PKG_LICENSE:=GPL-2.0-or-later GPL-2.0-only
 PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=ctandi <amo@ct.de>
 
-PKG_BUILD_DEPENDS:=PACKAGE_opendectcell-baresip:baresip
-PKG_CONFIG_DEPENDS:=CONFIG_PACKAGE_opendectcell-baresip
+PKG_BUILD_DEPENDS:=PACKAGE_opendectcell-baresip:baresip PACKAGE_opendectcell-cell:mbedtls
+PKG_CONFIG_DEPENDS:=CONFIG_PACKAGE_opendectcell-baresip CONFIG_PACKAGE_opendectcell-cell
 PKG_BUILD_PARALLEL:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -61,6 +61,19 @@ define Package/opendectcell-baresip/description
   DECT) becomes one baresip account, shared by every handset that has
   it as a line; the DECT service starts baresip when at least one
   handset has a line.
+endef
+
+define Package/opendectcell-cell
+  $(call Package/opendectcell/Default)
+  TITLE:=opendectcell cell: the link to an openDECTcell controller
+  DEPENDS:=+opendectcell +libmbedtls
+endef
+
+define Package/opendectcell-cell/description
+  dect-cell: makes the box a cell of an openDECTcell controller (TLS 1.3 with
+  mutual authentication, enrolment with a one-time token). In cell mode
+  the box runs no DECT stack and no SIP of its own: the controller does.
+  Switched on with option mode 'cell' in /etc/config/opendectcell.
 endef
 
 define KernelPackage/opendectcell-ipq40xx
@@ -115,6 +128,11 @@ define Build/Compile
 		VERSION="$(PKG_VERSION)" \
 		build/dect-stubd build/dect-fwload
 	$(if $(CONFIG_PACKAGE_opendectcell-baresip),$(call Build/Compile/baresip))
+	$(if $(CONFIG_PACKAGE_opendectcell-cell),+$(MAKE) -C $(PKG_BUILD_DIR) \
+		CC="$(TARGET_CC)" \
+		CFLAGS="$(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -std=c11 -Wall -Wextra" \
+		LDFLAGS="$(TARGET_LDFLAGS)" VERSION="$(PKG_VERSION)" \
+		MBEDTLS="$(STAGING_DIR)/usr" build/dect-cell)
 	+$(KERNEL_MAKE) $(PKG_JOBS) M="$(PKG_BUILD_DIR)/kernel" \
 		$(OPENDECTCELL_KMOD_ARGS) modules
 endef
@@ -152,6 +170,12 @@ define Package/opendectcell-baresip/install
 endef
 
 $(eval $(call BuildPackage,opendectcell))
+define Package/opendectcell-cell/install
+	$(INSTALL_DIR) $(1)/usr/sbin
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/build/dect-cell $(1)/usr/sbin/
+endef
+
 $(eval $(call BuildPackage,opendectcell-baresip))
+$(eval $(call BuildPackage,opendectcell-cell))
 $(eval $(call KernelPackage,opendectcell-ipq40xx))
 $(eval $(call KernelPackage,opendectcell-lantiq))

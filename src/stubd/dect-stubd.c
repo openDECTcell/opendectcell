@@ -10734,13 +10734,37 @@ static int cell_send(struct stubd *s, uint16_t type, uint16_t corr,
 	       (ssize_t)n ? 0 : -1;
 }
 
+/*
+ * The chip firmware build, "06.88", from the second stage's file name
+ * (dectfw_secondlevel_441-06.88-7412.hex): the controller tells the builds
+ * apart by it (§7.1, §7.4). The whole name if it has none.
+ */
+static const char *stub_version(const struct stubd *s, char out[8])
+{
+	const char *p;
+
+	if (s->stub_build == STUB_UNKNOWN)
+		return "unknown";
+	for (p = s->stub_name; *p; p++)
+		if ((p[0] == '-' || p[0] == '_') &&
+		    isdigit((unsigned char)p[1]) &&
+		    isdigit((unsigned char)p[2]) && p[3] == '.' &&
+		    isdigit((unsigned char)p[4]) &&
+		    isdigit((unsigned char)p[5])) {
+			memcpy(out, p + 1, 5);
+			out[5] = '\0';
+			return out;
+		}
+	return s->stub_name;
+}
+
 /* §10 STATUS: the radio, the chip session, the build in detail. */
 static void cell_status(struct stubd *s, uint64_t now)
 {
 	uint8_t b[160];
 	struct dect_cell_tlv t;
-	const char *detail = s->stub_build == STUB_UNKNOWN ? "unknown" :
-			     s->stub_name;
+	char ver[8];
+	const char *detail = stub_version(s, ver);
 
 	dect_cell_tlv_init(&t, b, sizeof(b));
 	dect_cell_tlv_u8(&t, 1, s->cell.radio_on ? 1 : 0);
@@ -11138,8 +11162,13 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 					dect_session_rx(&s->sess, &m, now);
 					if (s->do_register)
 						handle_reg_mail(s, &m, now);
-					else if (s->cell_mode)
+					else if (s->cell_mode) {
 						cell_mail_up(s, &m, now);
+						/* our own park's read-back */
+						if (m.prim == 0xFFF1u &&
+						    s->park_check_at)
+							uak_verify_reply(s, &m);
+					}
 				}
 			}
 		}
