@@ -10302,6 +10302,17 @@ static char *audio_value(const char *eq, const char *end)
  * Parse -a key[=value][,key[=value]...] into struct audio_cfg. Returns 0 on
  * success, -1 on a malformed spec.
  */
+/*
+ * An -a key we do not know is ignored, not fatal: a key an older release
+ * took (a lab option since removed) may linger in the UCI options, and
+ * must not keep the base off the air.
+ */
+static void audio_unknown(const char *key, size_t klen)
+{
+	fprintf(stderr, "dect-stubd: -a %.*s: unknown key, ignored\n",
+		(int)klen, key);
+}
+
 static int parse_audio(struct audio_cfg *a, const char *spec)
 {
 	while (*spec) {
@@ -10624,7 +10635,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->seq_step[a->n_seq++] = eq + 1;
 		}
 		else if (!eq)
-			return -1;
+			audio_unknown(key, klen);	/* or its value missing */
 		else if (klen == 3 && !memcmp(key, "sel", 3)) {
 			if (v < 1u || v > 6u)	/* [CR A-CodecModes-3] */
 				return -1;
@@ -10647,7 +10658,7 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 		else if (klen == 6 && !memcmp(key, "status", 6))
 			a->status_ms = (unsigned)v;
 		else
-			return -1;
+			audio_unknown(key, klen);
 		if (*spec == ',')
 			spec++;
 	}
