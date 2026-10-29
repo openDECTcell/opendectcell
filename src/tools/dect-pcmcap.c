@@ -140,6 +140,30 @@ struct hunt {
 	unsigned int len[MAX_SHOW];
 };
 
+/*
+ * Is there a STUB -> host mail at s[i]? (docs/stub-pcm-control-channel.md:
+ * 0xAA, seq, length L, body of L + 2 bytes, 16-bit sum of length and body,
+ * all little-endian.) Returns its total length with *len = L, or 0. Unlike
+ * dect_rx_pull() this looks at one position of a buffer, so the callers can
+ * say where each mail sits in the capture.
+ */
+static size_t mail_at(const uint8_t *s, size_t n, size_t i, unsigned int *len)
+{
+	unsigned int sum = 0, want;
+	size_t total, k;
+
+	if (i + 10 > n || s[i] != 0xaa)
+		return 0;
+	*len = s[i + 2] | (unsigned int)s[i + 3] << 8;
+	total = 4u + *len + 2u + 2u;
+	if (*len > 0xfb || i + total > n)
+		return 0;
+	for (k = i + 2; k < i + total - 2u; k++)
+		sum += s[k];
+	want = s[i + total - 2] | (unsigned int)s[i + total - 1] << 8;
+	return (sum & 0xffffu) == want ? total : 0;
+}
+
 static void hunt_mails(const uint8_t *s, size_t n, struct hunt *h)
 {
 	size_t i = 0;
@@ -147,23 +171,10 @@ static void hunt_mails(const uint8_t *s, size_t n, struct hunt *h)
 
 	memset(h, 0, sizeof(*h));
 	while (i + 10 <= n) {
-		unsigned int len, sum = 0, want;
-		size_t total, k;
+		unsigned int len;
+		size_t total = mail_at(s, n, i, &len);
 
-		if (s[i] != 0xaa) {
-			i++;
-			continue;
-		}
-		len = s[i + 2] | (unsigned int)s[i + 3] << 8;
-		total = 4u + len + 2u + 2u;
-		if (len > 0xfb || i + total > n) {
-			i++;
-			continue;
-		}
-		for (k = i + 2; k < i + 4 + len + 2; k++)
-			sum += s[k];
-		want = s[i + total - 2] | (unsigned int)s[i + total - 1] << 8;
-		if ((sum & 0xffffu) != want) {
+		if (!total) {
 			i++;
 			continue;
 		}
@@ -266,9 +277,7 @@ out:
 
 /*
  * STUB -> host mails in the control slot, two bytes per frame in buffer
- * order (docs/stub-pcm-control-channel.md): 0xAA, seq, length L, body of
- * L + 2 bytes (source task, destination task, primitive, parameters),
- * 16-bit sum of length and body.
+ * order: see mail_at().
  */
 static void print_mails(const uint8_t *data, size_t frames,
 			unsigned int slots, unsigned int slot, int show_params)
@@ -284,23 +293,10 @@ static void print_mails(const uint8_t *data, size_t frames,
 	for (f = 0; f < frames; f++)
 		memcpy(s + 2u * f, data + (f * slots + slot) * 2u, 2);
 	while (i + 10 <= n) {
-		unsigned int len, sum = 0, want, k;
-		size_t total;
+		unsigned int len, k;
+		size_t total = mail_at(s, n, i, &len);
 
-		if (s[i] != 0xaa) {
-			i++;
-			continue;
-		}
-		len = s[i + 2] | (unsigned int)s[i + 3] << 8;
-		total = 4u + len + 2u + 2u;
-		if (len > 0xfb || i + total > n) {
-			i++;
-			continue;
-		}
-		for (k = 2; k < 4 + len + 2; k++)
-			sum += s[i + k];
-		want = s[i + total - 2] | (unsigned int)s[i + total - 1] << 8;
-		if ((sum & 0xffffu) != want) {
+		if (!total) {
 			i++;
 			continue;
 		}
