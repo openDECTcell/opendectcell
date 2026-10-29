@@ -191,7 +191,19 @@ DECT 1 (A540) and DECT 2 (C430A). Outcomes written before the run:
 | 6. Redial from the A540's list | the call goes out over SIP | a silent local call: `number_complete()` |
 | 7. A G.711 call: G.722 off in the VoIP profile's codecs (Media), or a far end without G.722; one call each way | audio both ways | silence: baresip dropping 16 kHz frames for an 8 kHz codec ("Use module auresamp!" in the log); fixed in `2b8e268`, every earlier SIP test negotiated G.722 |
 
-Since the card was written: the code review's fixes are on the box
-(`3a012fa`, `ee452cf`, `87eb3c7`; dect-stubd md5 `62958b3e`, `opendectcell.so`
-md5 `fc260df6`), and `baresip-mod-auresamp` is installed.
+Since the card was written: the code review's fixes, the cleanup of
+lab leftovers and the codec matching are on the box (`9aeca07`;
+dect-stubd md5 `b3f969f0`, `opendectcell.so` md5 `65a96417`, init script,
+LuCI views and ACL of the same commit), and `baresip-mod-auresamp` is
+installed. What tests 5 and 7 should now show in the log (`logread`):
+
+| call | expected |
+|---|---|
+| 5, wideband off, call out | `call-out ... codec=nb`, the INVITE offers G.711 only, `audio: the bridge connected for call N at 8000 Hz -- narrowband, passed as it is` |
+| 7, G.722 off in the profile, call out from the A540 | `answered by the far end -- narrowband, G.726 to the handset`, then `at 8000 Hz -- narrowband, passed as it is` |
+| 7, a caller without G.722, call in | the page without the wideband flag, `call: codec ... narrowband`, `at 8000 Hz -- narrowband, passed as it is` |
+| any G.722 call (1-4) | `at 16000 Hz -- G.722 coded here` (pass-through without coding not built yet) |
+
+Anything "resampled here" or "decoded and resampled" in tests 5 and 7
+means the codecs were not matched.
 
