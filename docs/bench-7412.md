@@ -141,3 +141,20 @@ clean room's frame-sync facts [CR A-0014] (FSC as EXIN5, interrupt line
 A 7412 whose park could not be verified must still be put in reset by
 hand after the stop (the "After the tests" block above); the service's
 stop does not reset the chip.
+
+## First calls, 2026-10-29 evening (A540, SIP through baresip)
+
+Signalling worked both ways at once; audio did not, either way: the daemon
+used lane 0 for speech, the 7520's layout, which on the 7412 is whatever
+lane the alignment put first, and it used one lane index for both
+directions although the control lane sat at different indices in received
+and sent frames. Since `d1d2c8f` the receive stream is delayed by whole
+lanes so both directions share one numbering, and the speech lane is the
+control lane + 1 [CR A-0015]. The next call had clean wideband audio both
+ways. During it, lane +1 changed 4000 times a second (a G.722 word held
+for two frames, as on the 7520), lanes +2 and +3 stayed idle (one lane per
+call), and lane +4 (0xD5D5 when idle) changed about 2000 times a second:
+not explained, no effect on the call.
+
+Open: an incoming call with audio; a second simultaneous call (its lane
+would be control + 2, not yet wired for the SSC); narrowband.

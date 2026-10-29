@@ -77,7 +77,7 @@ Two facts drive the design:
 | `pcm_kmod` | Transport module loaded before the chip boots, where another module than openDECTcell's carries the bus (it holds the PCM clock enable); empty: none | `lantiq_ssc_pcm` |
 | `pcm_dev` | PCM device `dect-stubd` opens (`-d`); empty: `/dev/dect0` | `/dev/ssc-pcm0` |
 | `pcm_slots` | 16-bit slots per frame (`-c`); empty: the module's default | `36` (mode 0x119, *observed* 2026-10-28) |
-| `pcm_words_per_frame`, `pcm_ctrl_slot`, `pcm_voice_slots` | Frame layout | *open* (M3, gate G2) |
+| `pcm_words_per_frame`, `pcm_ctrl_slot`, `pcm_voice_slots` | Frame layout | 36 lanes (`pcm_slots`); control lane found by probing, every run elsewhere (no frame sync); speech of call *n* in control lane + *n*, same lane both ways [CR A-0015], set by the daemon (2026-10-29, `d1d2c8f`) |
 | `factory_cfg` | Where the factory DECT config block is stored | *open* (M1) |
 | `rfpi_fallback` | Source for the RFPI if the factory block holds the placeholder | *open* (M1) |
 | `max_calls` | Parallel calls the STUB supports in this mode | *open* (about 3) |
