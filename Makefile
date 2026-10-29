@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Host build and tests. OpenWrt packages use their own Makefiles (openwrt/).
+# Host build and tests. The OpenWrt packages build from openwrt/ (see
+# openwrt/README.md), with CC, CFLAGS, LDFLAGS and VERSION from the SDK.
 
 CC      ?= cc
 CFLAGS  ?= -std=c11 -O1 -g -Wall -Wextra -Werror -Wshadow -Wconversion -Wno-sign-conversion
 SAN     ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 BUILD   := build
+# The release, for --version: PKG_VERSION of the OpenWrt package.
+VERSION ?= $(shell sed -n 's/^PKG_VERSION:=//p' openwrt/net/opendectcell/Makefile)
+DEFS    := -DOPENDECTCELL_VERSION='"$(VERSION)"'
 
 # Local AVM files for the optional real-file tests (never in git).
 FW7520  := work/7520/rootfs/lib/firmware
@@ -36,12 +40,12 @@ all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap $(BUILD)/dect-stubd $(BU
 
 $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -o $@ $(FWLOAD_SRC)
+	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) -o $@ $(FWLOAD_SRC)
 
 # Host build of dect-pcmcap for offline analysis (-S FILE) of captures.
 $(BUILD)/dect-pcmcap: src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c src/libopendectcell/dect_audio.h kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Ikernel/include/uapi -Isrc/libopendectcell -o $@ src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
+	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) -Ikernel/include/uapi -Isrc/libopendectcell -o $@ src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
 
 # Host build of dect-stubd: compiles everywhere, runs only on the box.
 # Offline: recover the full mail stream from a `dect-stubd -w` capture. The
@@ -52,22 +56,22 @@ $(BUILD)/dect-maildump: src/tools/dect-maildump.c src/libopendectcell/dect_mail.
 
 $(BUILD)/dect-stubd: $(STUBD_SRC) src/stubd/ssc_align.h src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC) -lm
+	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC) -lm
 
 # Result: build/dect-fwload.arm (stripped), ready to copy to the box.
 cross: $(FWLOAD_SRC)
 	@test -x "$(XCC)" || { echo "OpenWrt SDK not found: set SDK="; exit 1; }
 	@mkdir -p $(BUILD)
-	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Wshadow \
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Wshadow $(DEFS) \
 		-o $(BUILD)/dect-fwload.arm.dbg $(FWLOAD_SRC)
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip -o $(BUILD)/dect-fwload.arm $(BUILD)/dect-fwload.arm.dbg
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi \
 		-o $(BUILD)/dect-sla.arm src/tools/dect-sla.c
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-sla.arm
-	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi -Isrc/libopendectcell \
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -Ikernel/include/uapi -Isrc/libopendectcell $(DEFS) \
 		-o $(BUILD)/dect-pcmcap.arm src/tools/dect-pcmcap.c src/libopendectcell/dect_audio.c -lm
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-pcmcap.arm
-	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror $(STUBD_INC) \
+	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror $(STUBD_INC) $(DEFS) \
 		-o $(BUILD)/dect-stubd.arm $(STUBD_SRC) -lm
 	$(TCBIN)/arm-openwrt-linux-muslgnueabi-strip $(BUILD)/dect-stubd.arm
 

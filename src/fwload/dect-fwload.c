@@ -11,6 +11,7 @@
 #include "../../kernel/include/uapi/opendectcell.h"
 #include "fwimage.h"
 #include "loader.h"
+#include "../libopendectcell/opendectcell_version.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -345,6 +346,10 @@ static int probe(const char *path, unsigned baud, unsigned seconds)
 
 int main(int argc, char **argv)
 {
+	if (argc >= 2 && !strcmp(argv[1], "--version")) {
+		printf("dect-fwload %s\n", OPENDECTCELL_VERSION);
+		return 0;
+	}
 	if (argc >= 3 && !strcmp(argv[1], "--probe"))
 		return probe(argv[2], argc > 3 ? (unsigned)strtoul(argv[3], NULL, 0) : 115200, 3);
 

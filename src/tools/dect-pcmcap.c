@@ -26,6 +26,7 @@
 
 #include "opendectcell.h"
 #include "dect_audio.h"
+#include "opendectcell_version.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -881,6 +882,10 @@ int main(int argc, char **argv)
 	unsigned int v;
 	int c;
 
+	if (argc >= 2 && !strcmp(argv[1], "--version")) {
+		printf("dect-pcmcap %s\n", OPENDECTCELL_VERSION);
+		return 0;
+	}
 	memset(&o, 0, sizeof(o));
 	o.last_step = DECT_PCM_STEP_DMA;
 	o.wait_ms = 1000;

@@ -58,6 +58,7 @@
 #include "dect_callinfo.h"
 #include "dect_clip.h"
 #include "dect_ctl.h"
+#include "opendectcell_version.h"
 
 /* Longest -a loopdelay ring, in frames (1 s at 8 kHz). */
 /* How long to wait for a lingering link to clear before ringing anyway. */
@@ -11817,6 +11818,10 @@ static int check_profile(const char *path, const char *fw)
 
 int main(int argc, char **argv)
 {
+	if (argc >= 2 && !strcmp(argv[1], "--version")) {
+		printf("dect-stubd %s\n", OPENDECTCELL_VERSION);
+		return 0;
+	}
 	if (argc >= 2 && !strcmp(argv[1], "--ctl"))
 		return ctl_client(argc - 2, argv + 2);
 	if (argc >= 2 && !strcmp(argv[1], "--profile-keys")) {
