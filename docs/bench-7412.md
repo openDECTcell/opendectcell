@@ -156,5 +156,18 @@ for two frames, as on the 7520), lanes +2 and +3 stayed idle (one lane per
 call), and lane +4 (0xD5D5 when idle) changed about 2000 times a second:
 not explained, no effect on the call.
 
-Open: an incoming call with audio; a second simultaneous call (its lane
-would be control + 2, not yet wired for the SSC); narrowband.
+An incoming call (19:09) had audio both ways as well. A C430A registered
+as DECT 2 (located and saved: `3907ee2` holds for a second model). An
+internal call A540 -> C430A first rang for a moment and stopped: the
+target's link never adopted the paged handset, so the authentication
+every call now needs found no key (`4b08aff` fixes it; the 7520 had the
+same fault). With `-a twocalls` and the side lanes counted from the
+control lane (`03d4107`), the next internal call had audio both ways:
+lane +1 (A540, channel 1) and +2 (C430A, channel 2) each changed 4000
+times a second, so call *n* is in control lane + *n* [CR A-0015].
+
+Open: two external calls at once (the SIP bridge carries one call; call
+waiting is not built), narrowband over SIP (the bridge is wideband only),
+the A540's call timer (none on the internal call; stock draws it as
+display text for some Gigasets [CR A-0125], `cc.timer` in
+docs/handset-profiles.md, not built).
