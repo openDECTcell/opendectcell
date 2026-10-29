@@ -674,6 +674,11 @@ return view.extend({
 		o.placeholder = '3000';
 		o.depends('overlap', '1');
 
+		o = s.taboption('general', form.Value, 'time_update', _('Time update interval'),
+			_('Hours between sending the date and time to all handsets. Each handset also gets it whenever it reports in to the base; 0 sends it only then.'));
+		o.datatype = 'range(0,720)';
+		o.placeholder = '24';
+
 		/* Handsets: one row each, edited in a pop-up */
 		o = s.taboption('handsets', form.SectionValue, '_handsets', form.GridSection, 'handset',
 			null, running ? null :

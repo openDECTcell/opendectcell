@@ -470,7 +470,7 @@ baresip_write() {
 
 start_service() {
 	local enabled pin stores options reg wb ov dw ci nocipher="" rw n spare f args=""
-	local la tc
+	local la tc tu
 	config_load opendectcell
 	config_get_bool enabled main enabled 0
 	[ "$enabled" = 1 ] || return 0
@@ -506,6 +506,16 @@ start_service() {
 	[ "$la" = 1 ] || options="${options:+$options,}nolocauth"
 	config_get_bool tc main twocalls 0
 	[ "$tc" = 1 ] && options="${options:+$options,}twocalls"
+	# Hours between date and time updates to every handset (0: only when
+	# one reports in); the daemon counts minutes. A timeupdate= in
+	# options wins, for a bench run in minutes.
+	uci_get tu time_update 24 '0-9'
+	tu=${tu#"${tu%%[!0]*}"}
+	{ [ ${#tu} -le 3 ] && [ "${tu:-0}" -le 720 ]; } || tu=24
+	case ",$options," in
+	*,timeupdate=*) ;;
+	*) options="${options:+$options,}timeupdate=$((${tu:-0} * 60))" ;;
+	esac
 	# The DECT LED path is a board-profile detail (e.g. green:fon on the
 	# 7520, green:dect on the 7412). The user can turn the LED off with
 	# 'noled' or point it elsewhere with 'led=PATH' in options.
