@@ -1390,6 +1390,56 @@ static void test_location_registration_authenticated(void)
 }
 
 /*
+ * A handset's location registration right after its registration, on the
+ * same link, is challenged with the key it was just allocated: the owner's
+ * lookup does not know that key yet. This was rejected "authentication
+ * failed" on the A540's first registration to a 7412 (2026-10-29).
+ */
+static void test_locate_after_registration(void)
+{
+	static const uint8_t asked[7] = { 0x80, 0xB4, 0x00, 0x11, 0x22,
+					  0x33, 0x44 };	/* pp_access_request() */
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1,
+				   .rfpi = { 1, 2, 3, 4, 5 },
+				   .auth_locate = 1 };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 0xde, 0xad, 0xbe, 0xef, 0x12, 0x34, 0x56, 0x78 };
+	uint8_t rand_p[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rs[8] = { 0 };
+	uint8_t rs16[16] = { 0 };
+	uint8_t buf[256], out[256], ks[16], dck[8], res[4];
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_set_uak_lookup(&mm, lookup, NULL);	/* knows only "ours" */
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	(void)dect_mm_poll(&mm, out, sizeof(out));	/* KEY-ALLOCATE */
+	n = pp_auth_request(buf, sizeof(buf), 0, "1234", rand_f, rs, rand_p, 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	while (dect_mm_poll(&mm, out, sizeof(out)))
+		;					/* reply, accept */
+	CHECK_EQ(mm.subscribed, 1u);
+
+	n = locate_from(buf, sizeof(buf), asked, sizeof(asked));
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_AUTHENTICATION_REQUEST);
+
+	dect_dsaa_a11(mm.uak, rs16, ks);
+	dect_dsaa_a12(ks, rand_f, dck, res);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM,
+			       DECT_TI_RESPONDER, 0,
+			       DECT_MM_AUTHENTICATION_REPLY);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RES, res, 4);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+	CHECK_EQ(mm.stats.locate_auth_ok, 1u);
+	CHECK_EQ(mm.stats.located, 1u);
+}
+
+/*
  * Security audit 2026-10-29, A2: a LOCATE-REQUEST that arrives while
  * another challenge of ours is in flight (here the one for its access-
  * rights termination) used to fall through to LOCATE-ACCEPT unchallenged;
@@ -1724,6 +1774,7 @@ int main(void)
 	test_handset_deregisters_itself();
 	test_location_registration_authenticated();
 	test_locate_cannot_skip_the_challenge();
+	test_locate_after_registration();
 	test_key_allocation_fails_on_timeout_or_refusal();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();

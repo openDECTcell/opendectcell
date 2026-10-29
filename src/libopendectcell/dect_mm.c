@@ -827,8 +827,20 @@ static void on_locate_request(struct dect_mm *mm, const uint8_t *ies,
 		 */
 		if (mm->pt_auth)
 			return;
-		/* a held identity without a key cannot prove itself */
-		if (mm->uak_lookup(mm->uak_lookup_ctx, pid, pid_len, uak)) {
+		/*
+		 * A handset that registered on this link proves the key it
+		 * was just allocated: the owner stores keys only after its
+		 * location registration, so the lookup cannot know it yet,
+		 * and every fresh registration was rejected "authentication
+		 * failed" since locauth became the default (A540 on a 7412,
+		 * 2026-10-29). A held identity without a key cannot prove
+		 * itself.
+		 */
+		if (mm->subscribed && pid_len == mm->uak_id_len &&
+		    !memcmp(pid, mm->uak_id, pid_len)) {
+			memcpy(uak, mm->uak, DECT_MM_UAK_LEN);
+		} else if (mm->uak_lookup(mm->uak_lookup_ctx, pid, pid_len,
+					  uak)) {
 			mm->stats.locate_auth_failed++;
 			send_locate_reject(mm, DECT_MM_REJECT_AUTH_FAILED);
 			return;
@@ -1069,6 +1081,8 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 	/* Authenticated: the requested identity is now the one we hold. */
 	memcpy(mm->port_id, mm->pend_id, mm->pend_id_len);
 	mm->port_id_len = mm->pend_id_len;
+	memcpy(mm->uak_id, mm->pend_id, mm->pend_id_len);
+	mm->uak_id_len = mm->pend_id_len;
 	mm->authenticated = 1;
 
 	send_auth_reply(mm, res2);

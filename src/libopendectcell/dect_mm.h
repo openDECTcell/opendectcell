@@ -323,6 +323,9 @@ struct dect_mm {
 	 */
 	uint8_t uak[DECT_MM_UAK_LEN];
 	uint8_t subscribed;			/* 1 = authenticated, uak valid */
+	/* the identity that registration allocated uak for */
+	uint8_t uak_id[DECT_MM_PORTID_MAX];
+	size_t  uak_id_len;
 	/* dect_mm_set_uak(): the stored UAK, for the handset's
 	 * authentication of us (EN 300 444 §8.23) */
 	uint8_t uak_known;
