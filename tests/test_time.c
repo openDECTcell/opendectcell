@@ -145,6 +145,25 @@ static void test_small_buffer_yields_nothing(void)
  * "relating to" (TS 102 527-3 table 39, §7.4.10.2.1 note 1); and two events
  * with a two-octet multiplicity and no line.
  */
+/* Voice message waiting, 3 messages on line 2 (TS 102 527-3 table 14). */
+static void test_message_waiting(void)
+{
+	static const uint8_t want[] = {
+		0x64, 0x62,			/* CISS, TI 6, {FACILITY} */
+		0x7D, 0x03, 0x00, 0x81, 0x83,	/* message waiting, voice, 3 */
+		0x7E, 0x03, 0x00, 0x00, 0x82,	/* line 2, external call */
+	};
+	const struct dect_event ev = { DECT_EVENT_MESSAGE_WAITING,
+				       DECT_EVENT_VOICE, 3 };
+	uint8_t buf[64];
+	size_t n;
+
+	n = dect_events_build_facility(buf, sizeof(buf), &ev, 1, 2,
+				       DECT_EVENT_LINE_EXTERNAL);
+	CHECK_EQ(n, sizeof(want));
+	CHECK(memcmp(buf, want, sizeof(want)) == 0);
+}
+
 static void test_events_notification(void)
 {
 	static const uint8_t want[] = {
@@ -217,6 +236,7 @@ static void test_time_round_trip(void)
 int main(void)
 {
 	test_events_notification();
+	test_message_waiting();
 	test_time_round_trip();
 	test_the_standards_own_examples();
 	test_time_zone_sign_and_magnitude();

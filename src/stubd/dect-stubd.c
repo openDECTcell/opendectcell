@@ -133,7 +133,16 @@ static uint64_t fs_free_bytes(const char *path)
  * a handset we confidently told the wrong date is worse, because the user has
  * no reason to doubt it -- and TS 102 527-3 7.4.20.2 makes our duty to send
  * conditional on our own time being valid, which is exactly this question.
+ *
+ * On OpenWrt the flag alone is not enough the other way round: busybox ntpd
+ * never lowers the kernel's error estimate, which grows until the kernel
+ * sets STA_UNSYNC again, some hours after boot, on a clock ntpd keeps right
+ * (the 7412, 2026-10-29: status 0x41, maxerror 16 s, no date to any
+ * handset). The package's ntp hotplug script keeps CLOCK_NTP_FILE fresh
+ * while ntpd reports a stratum; younger than CLOCK_NTP_MAX_S, it counts.
  */
+#define CLOCK_NTP_FILE		"/var/run/opendectcell/time-valid"
+#define CLOCK_NTP_MAX_S		(25 * 60)	/* ntpd reports every 11 min */
 #define TIMESYNC_AUTO	0u
 #define TIMESYNC_FORCE	1u
 #define TIMESYNC_OFF	2u
@@ -153,9 +162,15 @@ static int clock_is_trustworthy(time_t now_s, uint8_t mode)
 	if (mode == TIMESYNC_FORCE)
 		return 1;
 	memset(&tx, 0, sizeof(tx));
-	if (adjtimex(&tx) < 0)
-		return 0;		/* cannot tell: assume not */
-	return (tx.status & STA_UNSYNC) == 0;
+	if (adjtimex(&tx) >= 0 && !(tx.status & STA_UNSYNC))
+		return 1;
+	{
+		struct stat st;
+
+		return stat(CLOCK_NTP_FILE, &st) == 0 &&
+		       now_s >= st.st_mtime &&
+		       now_s - st.st_mtime <= CLOCK_NTP_MAX_S;
+	}
 }
 
 /*
@@ -303,6 +318,13 @@ struct handset {
 	char     prof_id[DECT_PROFILE_ID_MAX];
 	char     prof_fw[24];
 	struct dect_hs_profile prof;
+	/*
+	 * Voice messages waiting per line (TS 102 527-3 §7.4.1.2), as the
+	 * bridge reported its accounts' message summaries: the counts, the
+	 * lines we have one for, and those the handset has not heard yet.
+	 */
+	unsigned mwi[2];
+	uint8_t  mwi_known, mwi_due;	/* bit n-1: line n */
 };
 
 /*
@@ -328,6 +350,7 @@ struct side_link {
 	size_t   dial_len;	/* overlap receiving, as on the main link */
 	uint64_t dial_change_ms;
 	int      cipher_done;	/* DCK to the chip, or the failure logged */
+	uint32_t located_seen;	/* mm.stats.located already answered */
 	int      auth_refused;	/* authfirst: call ended, no key to prove */
 	/* the chip's 0xF625 for this link's call, as the main link's */
 	struct dect_diag_status last_status;
@@ -529,6 +552,8 @@ struct stubd {
 		uint64_t page_at;
 		int      answered;	/* it came up for our page: release it */
 		uint64_t sent_at;
+		int      with_time;	/* this round sends the date and time */
+		uint32_t want;		/* handsets to visit for a notice (bit i) */
 	} tu;
 	/*
 	 * The control socket (docs/bridge-interface.md §2): one message per
@@ -5932,6 +5957,55 @@ static void locate_notify(const struct stubd *s, struct dect_link *l)
 }
 
 /*
+ * Voice message waiting notifications (TS 102 527-3 §7.4.1.2, table 14)
+ * to handset i on link l, for the lines in its mwi_due: the count with
+ * the line, "external call" subtype. Part 3 handsets only, as the other
+ * notifications (notify_ok()). Returns the number queued.
+ */
+static unsigned mwi_send(struct stubd *s, struct dect_link *l, unsigned i)
+{
+	unsigned n, sent = 0;
+
+	if (!notify_ok(s, l)) {
+		s->hs[i].mwi_due = 0;
+		return 0;
+	}
+	for (n = 1; n <= 2u; n++) {
+		struct dect_event ev = { DECT_EVENT_MESSAGE_WAITING,
+					 DECT_EVENT_VOICE, s->hs[i].mwi[n - 1u] };
+		uint8_t msg[DECT_LAPC_MSG_MAX], bit = (uint8_t)(1u << (n - 1u));
+		size_t len;
+
+		if (!(s->hs[i].mwi_due & bit))
+			continue;
+		len = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
+						 (uint8_t)n,
+						 DECT_EVENT_LINE_EXTERNAL);
+		if (!len || dect_link_send_ciss(l, msg, len))
+			continue;	/* the queue is full: next time */
+		s->hs[i].mwi_due &= (uint8_t)~bit;
+		sent++;
+		printf("mwi: DECT %u, line %u: %u message(s) waiting\n",
+		       hs_slot(s, i), n, ev.multiplicity);
+	}
+	return sent;
+}
+
+/*
+ * After a location registration: the waiting messages again, once per
+ * line we know them for (§7.4.1.2, "notification update").
+ */
+static void mwi_locate(struct stubd *s, struct dect_link *l)
+{
+	int i = hs_of_link(s, l);
+
+	if (i < 0 || !s->hs[i].mwi_known)
+		return;
+	s->hs[i].mwi_due = s->hs[i].mwi_known;
+	(void)mwi_send(s, l, (unsigned)i);
+}
+
+/*
  * The Internal Names List changed -- a name saved, a handset added: tell
  * every handset that is up (§7.4.10.2.2: "at least ... that other PP", and
  * to all on an addition), no line, the number of entries.
@@ -6251,6 +6325,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 	sl->handle = handle;
 	sl->adopted = -1;
 	sl->cipher_done = 0;
+	sl->located_seen = 0;
 	sl->auth_refused = 0;
 	memset(&sl->last_status, 0, sizeof(sl->last_status));
 	memset(&sl->frames, 0, sizeof(sl->frames));
@@ -7093,7 +7168,11 @@ static void time_next(struct stubd *s)
  * One handset at a time, and only while the base is otherwise idle
  * (time_base_busy); a handset that does not answer TIME_PAGES pages is off
  * or out of range and is skipped until the next round. The same clock gate
- * as after a location registration: no trustworthy clock, no round.
+ * as after a location registration: no trustworthy clock, no time.
+ *
+ * The same round visits a handset with no link that has a voice message
+ * waiting notification to hear (tu.want, mwi_send(): §7.4.1.2 wants it
+ * sent to every attached handset); outside a time round, only those.
  */
 static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 {
@@ -7103,32 +7182,45 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 	long off_s;
 	int i;
 
-	if (!every || !radio_on)
+	if (!radio_on)
 		return;
-	if (!s->tu.next_round)
+	if (every && !s->tu.next_round)
 		s->tu.next_round = now + every;
 	if (!s->tu.in_round) {
-		if (now < s->tu.next_round)
+		int time_due = every && now >= s->tu.next_round;
+
+		if (!time_due && !s->tu.want)
 			return;
-		s->tu.next_round = now + every;
-		if (!clock_now(s->audio.timesync, &dt, &off_s)) {
-			printf("time: update round skipped -- the clock is "
-			       "not disciplined (STA_UNSYNC or pre-2020)\n");
-			return;
+		s->tu.with_time = 0;
+		if (time_due) {
+			s->tu.next_round = now + every;
+			if (clock_now(s->audio.timesync, &dt, &off_s))
+				s->tu.with_time = 1;
+			else
+				printf("time: update round skipped -- the "
+				       "clock is not known to be right (no "
+				       "NTP sync reported)\n");
+			if (!s->tu.with_time && !s->tu.want)
+				return;
 		}
 		s->tu.in_round = 1;
 		s->tu.next = 0;
 		s->tu.st = TIME_IDLE;
-		printf("time: update round, every %u min\n",
-		       s->audio.time_every_min);
+		if (s->tu.with_time)
+			printf("time: update round, every %u min\n",
+			       s->audio.time_every_min);
 	}
 
 	if (s->tu.st == TIME_IDLE) {
-		while (s->tu.next < s->n_hs && !s->hs[s->tu.next].loaded)
+		while (s->tu.next < s->n_hs &&
+		       (!s->hs[s->tu.next].loaded ||
+			(!s->tu.with_time &&
+			 !(s->tu.want & (1u << s->tu.next)))))
 			s->tu.next++;
 		if (s->tu.next >= s->n_hs) {
 			s->tu.in_round = 0;
-			printf("time: update round done\n");
+			if (s->tu.with_time)
+				printf("time: update round done\n");
 			return;
 		}
 		if (time_base_busy(s))
@@ -7158,22 +7250,26 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 
 	if (s->tu.st == TIME_PAGING) {
 		if (l) {
-			if (!clock_now(s->audio.timesync, &dt, &off_s) ||
-			    dect_link_send_time(l, &dt) != 0) {
+			s->tu.want &= ~(1u << i);
+			(void)mwi_send(s, l, (unsigned)i);
+			if (s->tu.with_time &&
+			    clock_now(s->audio.timesync, &dt, &off_s) &&
+			    dect_link_send_time(l, &dt) == 0) {
+				printf("time: DECT %u: sent the date and time "
+				       "(20%02u-%02u-%02u %02u:%02u:%02u, "
+				       "GMT%+ld:%02ld)%s\n",
+				       hs_slot(s, (unsigned)i), dt.year,
+				       dt.month, dt.day, dt.hour, dt.minute,
+				       dt.second, off_s / 3600,
+				       labs(off_s % 3600) / 60,
+				       s->tu.answered ? "" : " on its link");
+			} else if (s->tu.with_time) {
 				printf("time: DECT %u: could not queue the "
 				       "date and time\n",
 				       hs_slot(s, (unsigned)i));
-				time_next(s);
-				return;
 			}
 			time_pump(s, l, now);
-			printf("time: DECT %u: sent the date and time "
-			       "(20%02u-%02u-%02u %02u:%02u:%02u, "
-			       "GMT%+ld:%02ld)%s\n", hs_slot(s, (unsigned)i),
-			       dt.year, dt.month, dt.day, dt.hour, dt.minute,
-			       dt.second, off_s / 3600,
-			       labs(off_s % 3600) / 60,
-			       s->tu.answered ? "" : " on its link");
+			/* a link we paged up is ours to release, sent or not */
 			if (!s->tu.answered) {
 				time_next(s);
 				return;
@@ -7191,8 +7287,9 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 			return;
 		if (s->tu.pages >= TIME_PAGES) {
 			printf("time: DECT %u did not answer %u pages -- "
-			       "skipped until the next round\n",
+			       "skipped until it reports in\n",
 			       hs_slot(s, (unsigned)i), TIME_PAGES);
+			s->tu.want &= ~(1u << i);	/* mwi_locate() then */
 			time_next(s);
 			return;
 		}
@@ -7796,6 +7893,44 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		printf("bridge: client %d carries external calls\n",
 		       s->ctl.cur + 1);
 		ctl_reply(s, m->verb, NULL, NULL, 0);
+		return 1;
+	}
+	if (!strcmp(m->verb, "mwi")) {
+		unsigned want, line, count, t;
+		uint8_t bit;
+
+		if (s->ctl.cur != s->ctl.bridge) {
+			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
+			return 1;
+		}
+		if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, &want) ||
+		    dect_ctl_get_uint(m, "line", 1, 2, &line) ||
+		    dect_ctl_get_uint(m, "count", 0, 16383, &count)) {
+			ctl_reply(s, m->verb, "malformed", NULL, 0);
+			return 1;
+		}
+		for (t = 0; t < s->n_hs; t++)
+			if (ctl_listed(s, t) && hs_slot(s, t) == want)
+				break;
+		if (t == s->n_hs) {
+			ctl_reply(s, m->verb, "no-handset", "hs", want);
+			return 1;
+		}
+		bit = (uint8_t)(1u << (line - 1u));
+		if (!(s->hs[t].mwi_known & bit) || s->hs[t].mwi[line - 1u] != count) {
+			struct dect_link *l = link_known_hs(s, (int)t);
+
+			s->hs[t].mwi[line - 1u] = count;
+			s->hs[t].mwi_known |= bit;
+			s->hs[t].mwi_due |= bit;
+			if (l) {
+				(void)mwi_send(s, l, t);
+				time_pump(s, l, now);
+			} else {
+				s->tu.want |= 1u << t;	/* time_tick() pages it */
+			}
+		}
+		ctl_reply(s, m->verb, NULL, "hs", want);
 		return 1;
 	}
 	if (!strcmp(m->verb, "call-in")) {
@@ -8831,6 +8966,11 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 		printf("side: handle %u serves %s (slot %u)\n", sl->handle,
 		       s->hs[a].path, hs_slot(s, (unsigned)a));
 	}
+	/* a location registration here: the waiting messages again */
+	if (sl->link.mm.stats.located != sl->located_seen) {
+		sl->located_seen = sl->link.mm.stats.located;
+		mwi_locate(s, &sl->link);
+	}
 	if (sl->link.cc.stats.rejected_identity != sl->rejected_seen) {
 		sl->rejected_seen = sl->link.cc.stats.rejected_identity;
 		printf("side: turned away a call from a handset we are not "
@@ -9296,13 +9436,14 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 				printf("reg: could not queue the date and "
 				       "time\n");
 		} else {
-			printf("reg: clock not disciplined (STA_UNSYNC or "
-			       "pre-2020) -- sending no date and time. "
-			       "TS 102 527-3 7.4.20.2 makes the duty "
+			printf("reg: the clock is not known to be right (no "
+			       "NTP sync reported) -- sending no date and "
+			       "time. TS 102 527-3 7.4.20.2 makes the duty "
 			       "conditional on ours being valid, and a "
 			       "confidently wrong clock is worse than none\n");
 		}
 		locate_notify(s, &s->reg.link);
+		mwi_locate(s, &s->reg.link);
 	}
 
 	if (s->reg.link.mm.state != DECT_MM_WAIT_AUTH)

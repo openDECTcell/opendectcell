@@ -128,6 +128,9 @@ define Package/opendectcell/install
 	$(INSTALL_CONF) ./files/opendectcell.config $(1)/etc/config/opendectcell
 	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
 	$(INSTALL_DATA) ./files/opendectcell.keep $(1)/lib/upgrade/keep.d/opendectcell
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/ntp
+	$(INSTALL_DATA) ./files/opendectcell.ntp-hotplug \
+		$(1)/etc/hotplug.d/ntp/25-opendectcell
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/opendectcell.uci-defaults \
 		$(1)/etc/uci-defaults/90-opendectcell

@@ -1,0 +1,20 @@
+# ntpd's word on the clock, for dect-stubd's date and time to the handsets.
+# busybox ntpd runs this (through ntpd-hotplug) on a step, on a stratum
+# change and every 11 minutes. While it reports a stratum below 16 the
+# file stays fresh; dect-stubd takes the clock as right while the file is
+# younger than 25 minutes. The kernel's STA_UNSYNC is no help on OpenWrt:
+# busybox ntpd never lowers the kernel's error estimate, so the kernel sets
+# the flag again some hours after every boot. dnsmasq's DNSSEC check asks
+# ntpd the same way (25-dnsmasqsec).
+F=/var/run/opendectcell/time-valid
+
+case "$ACTION" in
+step|stratum|periodic)
+	if [ "${stratum:-16}" -lt 16 ]; then
+		mkdir -p /var/run/opendectcell && touch "$F"
+	fi
+	;;
+unsync)
+	rm -f "$F"
+	;;
+esac

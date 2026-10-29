@@ -114,6 +114,7 @@ size_t dect_time_build_facility(uint8_t *out, size_t cap,
 #define DECT_EVENT_MESSAGE_WAITING	0x00u
 #define DECT_EVENT_MISSED_CALL		0x01u
 #define DECT_EVENT_LIST_CHANGE		0x03u
+#define DECT_EVENT_VOICE		0x01u	/* message waiting subtype */
 #define DECT_EVENT_LINE_EXTERNAL	0x00u	/* line id subtypes, table 13 */
 #define DECT_EVENT_LINE_RELATING_TO	0x03u
 #define DECT_EVENT_NO_LINE		0xFFu

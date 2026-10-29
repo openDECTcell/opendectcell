@@ -20,6 +20,10 @@
  *     no G.722 rings the handsets narrowband, an account whose handsets
  *     are all narrowband answers G.711, and the far end's codec goes
  *     back with remote-answered;
+ *   - voicemail: the message summary a VoIP profile with MWI subscribes to
+ *     (baresip's mwi module, RFC 3842) goes to dect-stubd as "mwi" for
+ *     every handset line the account is, which tells the handsets
+ *     (TS 102 527-3 §7.4.1.2);
  *   - the line map /var/run/opendectcell/lines ("<hs> <line> <aor>" per line,
  *     written by the init script from /etc/config/opendectcell): which accounts
  *     belong to which handsets. An account may be the line of several
@@ -915,6 +919,48 @@ static bool account_narrow(const struct ua *ua)
 	return any;
 }
 
+/*
+ * The new voice messages in an RFC 3842 message summary: "Voice-Message:
+ * new/old", else 1 or 0 from "Messages-Waiting: yes|no"; -1: neither.
+ */
+static int mwi_count(const char *body)
+{
+	struct pl yes, nw;
+
+	if (!body)
+		return -1;
+	if (!re_regex(body, strlen(body), "Voice-Message:[ \t]*[0-9]+",
+		      NULL, &nw))
+		return (int)pl_u32(&nw);
+	if (!re_regex(body, strlen(body), "Messages-Waiting:[ \t]*[a-z]+",
+		      NULL, &yes))
+		return !pl_strcasecmp(&yes, "yes");
+	return -1;
+}
+
+/* A message summary for an account: to every handset line it is. */
+static void mwi_notify(const struct ua *ua, const char *body)
+{
+	int n = mwi_count(body);
+	unsigned i;
+
+	if (n < 0)
+		return;
+	for (i = 0; i < n_lines; i++) {
+		struct dect_ctl_out o;
+
+		if (!aor_is(ua, lines[i].aor))
+			continue;
+		dect_ctl_begin(&o, "mwi");
+		dect_ctl_add_uint(&o, "hs", lines[i].hs);
+		dect_ctl_add_uint(&o, "line", lines[i].line);
+		dect_ctl_add_uint(&o, "count", n > 16383 ? 16383u : (unsigned)n);
+		(void)ctl_send(&o);
+	}
+	info("openDECTcell: %s: %d voice message(s) waiting\n",
+	     account_aor(ua_account(ua)), n);
+}
+
 /* ---- the VoIP status ----------------------------------------------------- */
 
 static void json_str(FILE *f, const char *v)
@@ -1154,6 +1200,9 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 		}
 		break;
 	}
+	case UA_EVENT_MWI_NOTIFY:
+		mwi_notify(bevent_get_ua(event), bevent_get_text(event));
+		break;
 	case UA_EVENT_CALL_INCOMING:
 		if (call && !bc)
 			call_in(bevent_get_ua(event), call);
