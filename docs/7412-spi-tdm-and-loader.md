@@ -59,6 +59,19 @@ depend on the session's alignment and must be probed, as on the 7520. The
 path for openDECTcell: use `/dev/ssc-pcm0` (36 slots) for the 7412 instead of its
 own SSC engine, start it before `dect-fwload`, align by the measured offset.
 
+## 1b. dect-stubd on the SSC transport (2026-10-29, observed on hardware)
+
+Same box and software as §1a, 06.88 STUB, mode 0x119.
+
+| Finding | Detail |
+|---|---|
+| Start order | **Not needed.** Started *after* `dect-fwload`, with the chip already clocking, the transport carried the contact answer (`0xFFF2`, `0xF601`, `0xF602`) as before; only the lane offset was new (6 bits that run). The earlier "start before `dect-fwload`" was the order that happened to be used, not a requirement. What is required: `lantiq_ssc_pcm` loaded before the chip leaves reset, since it holds GPIO7. |
+| Closing `/dev/dect0` | Switched the SSC off under the transport (STATE bit 0 cleared) until `4602f60`; `dect-fwload` exits right before the daemon starts. |
+| Idle lanes | Three adjacent 16-bit lanes read `0xFEFE` in every frame, followed by `0xD5D5` and `0x0C08`. Their count peaks at the true lane offset (1536 per 512 frames) and again 8 bits later (1024), where two idle lanes are adjacent. |
+| Byte order | `read()` delivers bus order. Each slot's two bytes are swapped against the 7520's DMA buffer layout, in which an element's first byte is a slot's first byte. |
+| `dect-stubd` | `-d /dev/ssc-pcm0 -c 36`: measures the offset, aligns both directions, swaps each slot, and probes the control slot as on the 7520. First run: offset 3, control slot TX 32 / RX 13, contact answered, periodic `0xFFF1`/`0xF618`/`0xF623` every 5 s for 20 s, 0 sequence gaps and 0 checksum errors (`5667930`). |
+| STUB name | The profile now names the 7412's stages `*-06.88-7412.hex`. Under the old names, `dect-stubd` would have taken 06.88 for 08.25 and read the 08.25 UAK table address (`05c903d`). |
+
 ## 2. STUB firmware patching (the first-stage loader, `the loader routine`)
 
 - **First-level loader:** loaded from Intel HEX at chip address 0x10080. If the file name contains `_slow`, a slow boot variant is used.
