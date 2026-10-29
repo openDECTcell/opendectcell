@@ -1,0 +1,18 @@
+# The base calls a handset (an incoming call): it rings, answers, and the
+# base hangs up. Identities are made up.
+hold 80 a8 03 11 22 33 44
+
+# Our {CC-SETUP}, addressed to that identity.
+setup 80 a8 03 11 22 33 44
+fp 03 05 05 07 80 a8 03 11 22 33 44 06 05 00 01 23 45 60 e0 40 e4 41
+
+# {CC-ALERTING} and {CC-CONNECT} from the handset: TI flag set (it is the
+# destination side), value 0.
+pp 83 01
+pp 83 07
+fp 03 0f
+
+# We release: {CC-RELEASE}; the handset completes it.
+release
+fp 03 4d
+pp 83 5a

@@ -1,0 +1,18 @@
+# The host build and every test, golden traces included (make check), on
+# each push and pull request. The packages are the Packages workflow's.
+name: Check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: make check
+        run: make check

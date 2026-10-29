@@ -1,0 +1,15 @@
+# A GAP handset dials out and hangs up (EN 300 175-5 §9.3.1, EN 300 444).
+# Identities are made up: IPUI N 11 22 33 44 (in <<PORTABLE-IDENTITY>>
+# 80 a8 03 11 22 33 44), PARK 00 01 23 45 60.
+hold 80 a8 03 11 22 33 44
+
+# {CC-SETUP}: PD 3, TI 0 from the originator; <<PORTABLE-IDENTITY>>,
+# <<FIXED-IDENTITY>> (PARK, 37 bits), <<BASIC-SERVICE>> normal call, basic
+# speech; <<MULTI-KEYPAD>> "0301234"; <<SENDING-COMPLETE>>.
+pp 03 05 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 e0 80 2c 07 30 33 30 31 32 33 34 a1
+fp 83 02
+fp 83 07
+
+# {CC-RELEASE} from the handset, <<RELEASE-REASON>> normal.
+pp 03 4d e2 00
+fp 83 5a

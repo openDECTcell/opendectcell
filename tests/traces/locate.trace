@@ -1,0 +1,8 @@
+# A held handset locates (EN 300 175-5 §13.4.1, EN 300 444 §13.2), without
+# authentication. Identities are made up.
+hold 80 a8 03 11 22 33 44
+
+# {LOCATE-REQUEST}: PD 5 (MM), TI 0; <<PORTABLE-IDENTITY>>, <<FIXED-IDENTITY>>
+# (PARK).
+pp 05 54 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60
+fp 85 55 05 05 a0 94 00 11 01 07 01 64 7c 07 90 03 00 01 02 00 84

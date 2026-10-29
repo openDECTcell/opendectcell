@@ -1,0 +1,14 @@
+# A CAT-iq (NG-DECT Part 3) handset dials out, wideband, with call status
+# on (TS 102 527-3 §7.4.6.4): the base's answers carry <<CALL-INFORMATION>>.
+# Identities are made up.
+hold 80 a8 03 11 22 33 44
+callstatus 1
+
+# {CC-SETUP} as in pp-call.trace, but <<BASIC-SERVICE>> wideband speech.
+pp 03 05 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 e0 88 2c 07 30 33 30 31 32 33 34 a1
+fp 83 02 7e 06 01 00 81 02 01 83
+fp 83 07 7c 04 90 02 00 84 7e 06 01 00 81 02 01 85
+
+# {CC-RELEASE}, normal.
+pp 03 4d e2 00
+fp 83 5a
