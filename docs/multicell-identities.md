@@ -491,7 +491,9 @@ were read on the 7520 host driver and matched against the 06.88 build):
 1. ~~The room (Q10, Q11).~~ Answered, A-0131. Left over: the RPN width.
    Bench B0 (no transmission, no EIC needed): patch tag 1 with a class B
    RFPI whose RPN is 8, upload, keep the radio parked, and read the RFPI
-   back from `0xF601` [CR A-0132]. Pass: the 5 bytes come back unchanged
+   back from `0xF601` [CR A-0132]. *Built 2026-10-30:* uci `rfpi_test`
+   (`dect-fwload --rfpi`, `dect-stubd -a rfpicheck=`); card N4 in
+   `docs/bench-later.md`. Pass: the 5 bytes come back unchanged
    and the chip runs as usual. Falsified if the RPN comes back altered or
    the STUB does not come up. A pass shows that the STUB stores tag 1
    verbatim. That the beacon carries the same bytes is the room's

@@ -495,6 +495,9 @@ int fwi_patch(struct fwi_image *img, const struct fwi_family *fam,
 	if (in->mode)
 		count(rep, fwi_tlv_replace(area, size, FWI_TAG_MODE,
 					   &in->mode, 1));
+	if (in->rfpi)
+		count(rep, fwi_tlv_replace(area, size, FWI_TAG_RFPI,
+					   in->rfpi, FWI_RFPI_LEN));
 	fwi_update_checksum(img);
 	return 0;
 }

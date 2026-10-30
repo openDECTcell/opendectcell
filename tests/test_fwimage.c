@@ -224,7 +224,7 @@ static void test_patch(void)
 	static const uint8_t factory[] = { 1, 5, '0', '2', '7', '0', 0x99,
 					   3, 1, 0x44, 4, 1, 0x55 };
 	struct fwi_patch_input in = { factory, sizeof(factory),
-				      "00:11:22:33:44:55", 0x05 };
+				      "00:11:22:33:44:55", 0x05, NULL };
 	CHECK_EQ(fwi_patch(&img, fam, &in, &rep), 0);
 	CHECK_EQ(rep.rfpi_from_maca, 1);
 	CHECK_EQ(rep.replaced, 3); /* RFPI, tag 4, mode */
@@ -242,7 +242,8 @@ static void test_patch(void)
 
 	/* placeholder kept when no MAC is available */
 	build_patchable(&img);
-	struct fwi_patch_input no_mac = { factory, sizeof(factory), NULL, 0 };
+	struct fwi_patch_input no_mac = { factory, sizeof(factory), NULL, 0,
+					  NULL };
 	CHECK_EQ(fwi_patch(&img, fam, &no_mac, &rep), 0);
 	CHECK_EQ(rep.rfpi_from_maca, 0);
 	fwi_patch_area(&img, fam, &area, &size);
@@ -252,10 +253,23 @@ static void test_patch(void)
 	CHECK(v && *v == 0x00); /* mode 0: untouched */
 	fwi_image_free(&img);
 
+	/* B0: tag 1 forced to a given RFPI, over the factory block's */
+	build_patchable(&img);
+	static const uint8_t class_b[5] = { 0x12, 0x34, 0x56, 0x78, 0x9A };
+	struct fwi_patch_input forced = { factory, sizeof(factory),
+					  "00:11:22:33:44:55", 0, class_b };
+	CHECK_EQ(fwi_patch(&img, fam, &forced, &rep), 0);
+	fwi_patch_area(&img, fam, &area, &size);
+	v = fwi_tlv_find(area, size, FWI_TAG_RFPI, &len);
+	CHECK(v && len == 5 && !memcmp(v, class_b, 5));
+	CHECK_EQ(img.data[img.len - 1], fwi_checksum(&img));
+	fwi_image_free(&img);
+
 	/* factory block longer than 64 bytes is ignored entirely */
 	build_patchable(&img);
 	uint8_t longblk[65] = { 4, 1, 0x77 };
-	struct fwi_patch_input too_long = { longblk, sizeof(longblk), NULL, 0 };
+	struct fwi_patch_input too_long = { longblk, sizeof(longblk), NULL, 0,
+					    NULL };
 	CHECK_EQ(fwi_patch(&img, fam, &too_long, &rep), 0);
 	CHECK_EQ(rep.factory_ignored, 1);
 	fwi_patch_area(&img, fam, &area, &size);

@@ -176,6 +176,7 @@ static void t_chip_mail(uint16_t prim, const uint8_t *param, size_t n)
 	m.param_len = (uint8_t)n;
 	memcpy(m.param, param, n);
 	dect_session_rx(&ts->sess, &m, stubd_test_ms);
+	rfpi_check(ts, &m);		/* as run_loop() does */
 	handle_reg_mail(ts, &m, stubd_test_ms);
 }
 

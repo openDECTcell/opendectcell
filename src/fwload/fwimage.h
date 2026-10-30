@@ -102,6 +102,11 @@ struct fwi_patch_input {
 	size_t factory_len;
 	const char *maca;        /* for the RFPI placeholder, or NULL */
 	uint8_t mode;            /* low byte of the mode word; 0 = leave */
+	/*
+	 * Tag 1 set to these 5 bytes whatever the factory block says, or NULL
+	 * (bench B0, docs/multicell-identities.md: a class B RFPI).
+	 */
+	const uint8_t *rfpi;
 };
 
 /* Counts from fwi_patch(), for logging. */

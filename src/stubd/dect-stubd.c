@@ -889,6 +889,13 @@ struct stubd {
 		uint32_t ipuio;
 		int      ipuio_set;
 		/*
+		 * rfpicheck=HEX10: compare the RFPI the chip reports in 0xF601
+		 * with these 5 bytes and log only the verdict (bench B0: a
+		 * class B RFPI patched into tag 1, docs/multicell-identities.md).
+		 */
+		uint8_t  rfpi_check[5];
+		int      rfpi_check_set;
+		/*
 		 * 0x017c 00 <mask>: the handsets locked in, bit n = chip slot
 		 * n+1 holding a live 0x020A record. [CR A-0129], from AVM's
 		 * symboled driver: stock builds it from its active-handset
@@ -11413,6 +11420,33 @@ static void cell_tick(struct stubd *s, uint64_t now)
 }
 
 /*
+ * rfpicheck= (bench B0): the RFPI in the chip's contact answer against the
+ * one the loader patched into tag 1 [CR A-0132]. The bytes are an identity
+ * and are not printed; the verdict names the octets that differ (the 5th
+ * holds the RPN's low bits).
+ */
+static void rfpi_check(const struct stubd *s, const struct dect_mail *m)
+{
+	char diff[32] = "";
+	size_t at = 0;
+	unsigned k;
+
+	if (!s->audio.rfpi_check_set || m->prim != DECT_PRIM_CONTACT_ACK1 ||
+	    m->param_len < 5u)
+		return;
+	for (k = 0; k < 5u; k++)
+		if (m->param[k] != s->audio.rfpi_check[k])
+			at += (size_t)snprintf(diff + at, sizeof(diff) - at,
+					       " %u", k + 1u);
+	if (!at)
+		printf("rfpi: the chip reports the RFPI rfpicheck= names, all "
+		       "5 octets (0xF601)\n");
+	else
+		printf("rfpi: the chip's RFPI DIFFERS from rfpicheck= in "
+		       "octet(s)%s (0xF601)\n", diff);
+}
+
+/*
  * One pass of everything above the chip transport, after the received
  * blocks: the timers, the queues, the links, the sockets. run_loop() calls
  * it once per pass; the daemon-level traces (tests/test_stubd.c) call it
@@ -11681,6 +11715,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 					if (s->verbose)
 						log_mail(&m, "rx  ", s->show_params);
 					dect_session_rx(&s->sess, &m, now);
+					rfpi_check(s, &m);
 					if (s->do_register)
 						handle_reg_mail(s, &m, now);
 					else if (s->cell_mode) {
@@ -11781,7 +11816,7 @@ static const char *const audio_word_keys[] = {
 	"seqstep", "play", "playpcm", "playraw", "led",
 	"statefile", "profiles", "ctl", "linename", "remote",
 	"clip", "memdump", "timesync", "codeclist", "infoie",
-	"lane2", "lane3", "cnip",
+	"lane2", "lane3", "cnip", "rfpicheck",
 };
 
 static int audio_word_key(const char *key, size_t klen)
@@ -12091,6 +12126,17 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			if (!name)
 				return -1;
 			a->line_name = name;
+		} else if (eq && klen == 9 && !memcmp(key, "rfpicheck", 9)) {
+			unsigned k, b;
+
+			if (spec - (eq + 1) != 10)
+				return -1;
+			for (k = 0; k < 5u; k++) {
+				if (sscanf(eq + 1 + 2u * k, "%2x", &b) != 1)
+					return -1;
+				a->rfpi_check[k] = (uint8_t)b;
+			}
+			a->rfpi_check_set = 1;
 		} else if (eq && klen == 3 && !memcmp(key, "ctl", 3)) {
 			char *path = audio_value(eq, spec);
 

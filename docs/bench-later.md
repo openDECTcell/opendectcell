@@ -54,6 +54,27 @@ back, deregister it and register again without the option.
 | N3c. Call it (call-in from SIP), then call out from it | it rings on the page (TPUI from LOCATE-ACCEPT, `00 11 0n`), the call connects ciphered both ways | it does not ring: the page; the call fails at CC-SETUP: the CC identities derived from the record |
 | N3d. The same on the other Gigasets (`ipuio=2`, `ipuio=3`) | as above | a model that refuses: note which, B4b must avoid it |
 
+N4 is bench B0 (`docs/multicell-identities.md` §10.1 step 1): does the
+06.88 STUB keep a class B RFPI with an RPN above 7? Nothing is transmitted:
+in cell role the radio stays parked. No handset needed, so it can run
+unattended (T13). The RFPI is made up: ARC 001, EIC 0F42, FPN 01, FPS 1,
+RPN 09 = `10f4201109`.
+
+```
+uci set opendectcell.main.role=cell; uci set opendectcell.main.rfpi_test=10f4201109; uci commit opendectcell
+/etc/init.d/opendectcell stop; rm -f /var/run/opendectcell/stub.second
+/etc/init.d/opendectcell start      # uploads with tag 1 = 10f4201109, dect-stubd -K stays parked
+logread -e rfpi -e 'control slot'; cat /tmp/dect-fwload.log
+# afterwards: uci delete opendectcell.main.rfpi_test; uci set opendectcell.main.role=base; uci commit opendectcell
+#             /etc/init.d/opendectcell stop; rm -f /var/run/opendectcell/stub.second; /etc/init.d/opendectcell start
+```
+
+| test | pass | fail and what it means |
+|---|---|---|
+| N4a. The upload with the class B RFPI | `/tmp/dect-fwload.log` counts one more TLV patched; `control slot found`; the chip's periodic mails as usual | no control slot after 3 minutes: a class B tag 1 stops the STUB booting |
+| N4b. The read-back | `rfpi: the chip reports the RFPI rfpicheck= names, all 5 octets` | `DIFFERS ... octet(s) 5`: the STUB rewrote the RPN (it keeps 3 bits: class A only); other octets: it rewrote the ARI; no `rfpi:` line: no 0xF601 came (the contact answer) |
+| N4c. Back to the factory RFPI (the afterwards lines), then a handset | the base back as before, the A540 finds it | the chip kept the class B RFPI: the reload did not run (`stub.second` still there) |
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |

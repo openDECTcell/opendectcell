@@ -311,7 +311,8 @@ static void usage(void)
 	fprintf(stderr,
 		"usage: dect-fwload --uart DEV {--dect-dev /dev/dect0 | --dect-fd N} "
 		"--first FILE.hex --second FILE.hex [--factory-mtd DEV --factory-offset N]\n"
-		"                   [--mode 0x105] [--listen SECONDS] [--no-strap] [-v]\n"
+		"                   [--mode 0x105] [--listen SECONDS] [--no-strap]\n"
+		"                   [--rfpi HEX10] [-v]\n"
 		"       dect-fwload --probe DEV [BAUD]\n");
 }
 
@@ -358,7 +359,8 @@ int main(int argc, char **argv)
 	const char *factory_mtd = NULL, *dect_dev = NULL;
 	int dect_fd_arg = -1;	/* inherited, e.g. from dect-pcmcap -e */
 	off_t factory_off = 0;
-	int no_strap = 0;
+	int no_strap = 0, have_rfpi = 0;
+	uint8_t rfpi[5];
 	uint8_t factory[FWI_FACTORY_MAX];
 	size_t factory_len = 0;
 	struct dev d = { .uart = -1, .dect_fd = -1 };
@@ -384,6 +386,22 @@ int main(int argc, char **argv)
 			listen_s = (unsigned)strtoul(argv[++i], NULL, 0);
 		else if (!strcmp(argv[i], "--no-strap"))
 			no_strap = 1;
+		else if (!strcmp(argv[i], "--rfpi") && i + 1 < argc) {
+			/* bench B0: tag 1 set to these 5 bytes */
+			const char *h = argv[++i];
+			unsigned k, v;
+
+			for (k = 0; k < 5u; k++) {
+				if (sscanf(h + 2u * k, "%2x", &v) != 1)
+					break;
+				rfpi[k] = (uint8_t)v;
+			}
+			if (k < 5u || strlen(h) != 10u) {
+				fprintf(stderr, "--rfpi wants 10 hex digits\n");
+				return 2;
+			}
+			have_rfpi = 1;
+		}
 		else if (!strcmp(argv[i], "-v"))
 			d.verbose = 1;
 		else {
@@ -415,7 +433,8 @@ int main(int argc, char **argv)
 	}
 	struct fwi_patch_input in = { .factory = factory_len ? factory : NULL,
 				      .factory_len = factory_len,
-				      .mode = (uint8_t)mode };
+				      .mode = (uint8_t)mode,
+				      .rfpi = have_rfpi ? rfpi : NULL };
 	struct fwi_patch_report rep;
 	if (fwi_patch(&second, fam, &in, &rep)) {
 		fprintf(stderr, "no patch area in the STUB image\n");
