@@ -811,3 +811,8 @@ _ring_tick() (S3n).
 **115.** dect_base.h, 2026-10-30: struct dect_base's `bridge`,
 `next_call` and `line2[]`; dect_base_party_link(), _drain(),
 _call_new_id(), _party_line2(), _call_out() (S3o).
+
+**116.** dect_base.h, 2026-10-30: dect_base_link's `bound`, `path_on`,
+`connect_staged`, `connect_at`, `cs_connect_sent`; dect_base_cfg's
+`no_cipher`; dect_base_call_auth_ok(), _number_complete(), _dial_tick(),
+_dial_connect(), _connect_tick(), _cs_connect_tick() (S3p).

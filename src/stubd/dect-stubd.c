@@ -1172,10 +1172,8 @@ struct stubd {
 	 * registration state is base.main_link (dect_base.h).
 	 */
 	struct reg_ctx {
-		int call_bound;		/* audio channel bound for the active call */
 		int nonspeech_noted;	/* logged "not a speech call" once */
 		uint32_t time_sent_for;	/* mm.stats.located we last answered */
-		int audio_connected;	/* 0x022D sent (after 0x0242, or fallback) */
 		uint64_t remode_at;	/* when to send the mode-2 re-assign, 0 = off */
 		int      remode_done;	/* the mode-2 re-assign has been sent */
 		uint64_t seq_t0;	/* when the call bound, 0 = no call */
@@ -1193,13 +1191,10 @@ struct stubd {
 		int cipher_timeout_seen;	/* <MM_cipher.1> already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
 		int info_sent;		/* infoie= went out on this call */
-		int cs_connect_sent;	/* "CS call connect" after CONNECT (Part 3) */
 		int cc_was_busy;	/* nlr: the last tick had a call */
 		int nlr_armed;		/* nlr: a call ended, release pending */
 		int nlr_lia;		/* ... and it was list access: DISC first */
 		uint64_t nlr_disc_at;	/* ... DISC queued at, 0 = not yet */
-		int      connect_staged;	/* alertms/bindfirst: CONNECT due */
-		uint64_t connect_at;		/* ... not before this */
 	} reg;
 };
 
@@ -2105,7 +2100,7 @@ static enum lane0_src lane0_source(const struct stubd *s, const uint8_t *rx,
 	int mode2 = s->reg.call_wideband || !s->audio.remode_ms ||
 		    s->reg.remode_done;
 
-	if (!s->reg.call_bound || w >= s->slots ||
+	if (!s->base.main_link.bound || w >= s->slots ||
 	    w == (unsigned int)s->tx_slot)
 		return L0_IDLE;
 	if (s->ab.l[0].cfd >= 0 && s->ab.l[0].call)
@@ -2195,7 +2190,7 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 
 	if (s->tx_slot < 0)
 		return;
-	tmpl = s->tx_tmpl + (s->reg.call_bound ? fb : 0u);
+	tmpl = s->tx_tmpl + (s->base.main_link.bound ? fb : 0u);
 	src0 = lane0_source(s, rx, &peer);
 	for (f = 0; f < fpb; f++) {
 		uint8_t *fr = frames + f * fb;
@@ -3452,54 +3447,13 @@ static void dial_route(struct stubd *s, uint64_t now)
 	}
 	if (bridge_call_out(s, -1, now))
 		return;
-	if (s->base.cfg.alert_ms || s->base.cfg.bind_first) {
-		/* the steps a routed call takes; connect_tick() finishes */
-		if (dect_cc_proceed(&s->base.main_link.link.cc) == 0) {
-			if (s->base.cfg.alert_ms) {
-				(void)dect_cc_alert(&s->base.main_link.link.cc);
-				printf("call: ALERTING sent, CONNECT in %u ms\n",
-				       s->base.cfg.alert_ms);
-			}
-			s->reg.connect_staged = 1;
-			s->reg.connect_at = now + s->base.cfg.alert_ms;
-			dect_link_drain(&s->base.main_link.link, now);
-			pump_lapc(s);
-		}
-		return;
-	}
-	if (dect_cc_accept(&s->base.main_link.link.cc) == 0) {
-		dect_link_drain(&s->base.main_link.link, now);
-		pump_lapc(s);
-	}
+	dect_base_dial_connect(&s->base, now);
 }
 
-/*
- * Authenticate first (security audit 2026-10-29, A1). A handset is taken
- * for the one it names, and an IPUI travels in clear: until the handset on
- * this connection has answered our challenge with the key we hold for that
- * IPUI, its call goes nowhere -- not to SIP, not to another handset -- and
- * its answer to our call is not passed on. The challenge itself starts as
- * soon as the call exists (the authfirst block in the call tick). -C (no
- * cipher, a lab option) keeps the old order, as does -a noauthfirst.
- */
+/* Authenticate first (dect_base_call_auth_ok(), S3p). */
 static int call_auth_ok(const struct stubd *s, const struct dect_link *l)
 {
-	return !s->base.cfg.auth_first || s->no_cipher || l->mm.authenticated;
-}
-
-/*
- * A handset's call whose number came complete and waits in PROCEEDING to be
- * routed: an internal call, a number picked from a list (1C15H, TS 102
- * 527-3 7.4.10.6.2), or one sent with <<SENDING-COMPLETE>> (redial, the
- * phonebook: dect_cc_set_route_complete()).
- */
-static int number_complete(const struct dect_cc *cc)
-{
-	unsigned cls = cc->peer_basic_service >> 4;
-
-	return cc->state == DECT_CC_ST_PROCEEDING && !cc->incoming &&
-	       !cc->busy_notified &&	/* §7.4.8.3: the busy tone */
-	       (cls == 0x8u || cls == 0x9u || cc->list_number);
+	return dect_base_call_auth_ok(&s->base, l);
 }
 
 /*
@@ -3509,37 +3463,20 @@ static int number_complete(const struct dect_cc *cc)
  */
 static void dial_tick(struct stubd *s, uint64_t now)
 {
+	int due = dect_base_dial_tick(&s->base, -1, now);
 	const uint8_t *k;
 	size_t len;
 
-	if (s->base.main_link.active && !s->base.main_link.ic_tried &&
-	    number_complete(&s->base.main_link.link.cc) && call_auth_ok(s, &s->base.main_link.link)) {
-		k = dect_cc_keypad(&s->base.main_link.link.cc, &len);
+	if (!due)
+		return;
+	k = dect_cc_keypad(&s->base.main_link.link.cc, &len);
+	if (due == 1)
 		printf("call: dialled \"%.*s\", complete -- connecting\n",
 		       (int)len, (const char *)k);
-		fflush(stdout);
-		dial_route(s, now);
-	}
-	if (!s->base.main_link.active || !dect_cc_busy(&s->base.main_link.link.cc))
-		s->base.main_link.ic_tried = 0;
-	if (!s->base.main_link.active || s->base.main_link.link.cc.state != DECT_CC_ST_OVERLAP) {
-		s->base.main_link.dial_len = 0;
-		s->base.main_link.dial_change_ms = 0;
-		return;
-	}
-	k = dect_cc_keypad(&s->base.main_link.link.cc, &len);
-	if (!s->base.main_link.dial_change_ms || len != s->base.main_link.dial_len) {
-		s->base.main_link.dial_len = len;
-		s->base.main_link.dial_change_ms = now;
-		return;
-	}
-	if (!len || now - s->base.main_link.dial_change_ms < s->base.cfg.dial_wait_ms)
-		return;		/* no digit yet: F<CC.01> covers it */
-	if (!call_auth_ok(s, &s->base.main_link.link))
-		return;		/* the number waits for the proof */
-	printf("call: dialled \"%.*s\" -- complete after %u ms without a "
-	       "digit, connecting\n", (int)len, (const char *)k,
-	       s->base.cfg.dial_wait_ms);
+	else
+		printf("call: dialled \"%.*s\" -- complete after %u ms "
+		       "without a digit, connecting\n", (int)len,
+		       (const char *)k, s->base.cfg.dial_wait_ms);
 	fflush(stdout);
 	dial_route(s, now);
 }
@@ -3547,25 +3484,7 @@ static void dial_tick(struct stubd *s, uint64_t now)
 /* alertms / bindfirst: send the CONNECT once its conditions hold. */
 static void connect_tick(struct stubd *s, uint64_t now)
 {
-	if (!s->reg.connect_staged)
-		return;
-	if (!s->base.main_link.active ||
-	    s->base.main_link.link.cc.state != DECT_CC_ST_PROCEEDING) {
-		s->reg.connect_staged = 0;	/* released meanwhile */
-		return;
-	}
-	if (now < s->reg.connect_at ||
-	    (s->base.cfg.bind_first && !s->reg.audio_connected))
-		return;
-	s->reg.connect_staged = 0;
-	printf("call: CONNECT now%s%s\n",
-	       s->base.cfg.alert_ms ? ", after ALERTING" : "",
-	       s->base.cfg.bind_first ? ", the U-plane is up (0x022D sent)" : "");
-	fflush(stdout);
-	if (dect_cc_connect(&s->base.main_link.link.cc) == 0) {
-		dect_link_drain(&s->base.main_link.link, now);
-		pump_lapc(s);
-	}
+	dect_base_connect_tick(&s->base, now);
 }
 
 static void holdback_tick(struct stubd *s, uint64_t now)
@@ -4096,9 +4015,9 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 {
 	const struct audio_cfg *a = &s->audio;
 
-	if (s->reg.audio_connected)
+	if (s->base.main_link.path_on)
 		return;
-	s->reg.audio_connected = 1;
+	s->base.main_link.path_on = 1;
 	s->reg.remode_handle = handle;
 	if (a->remode_ms)
 		s->reg.remode_at = mono_ms() + a->remode_ms;
@@ -4112,7 +4031,7 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
  */
 static void audio_connect_fallback(struct stubd *s, uint64_t now)
 {
-	if (!s->reg.call_bound || s->reg.audio_connected || !s->base.main_link.active)
+	if (!s->base.main_link.bound || s->base.main_link.path_on || !s->base.main_link.active)
 		return;
 	if (now - s->reg.bind_ms < 500u)
 		return;
@@ -4204,7 +4123,7 @@ static void mem_dump_tick(struct stubd *s, uint64_t now)
 			printf("mem: sweep %u complete at t=%llu ms%s\n",
 			       ++s->md_pass,
 			       (unsigned long long)(now - g_start),
-			       s->reg.call_bound ? " (call bound)" : " (idle)");
+			       s->base.main_link.bound ? " (call bound)" : " (idle)");
 			fflush(stdout);
 		}
 	}
@@ -4240,7 +4159,7 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 		sl->status_ms = now;
 		send_conn_status_one(s, sl->bl->handle);
 	}
-	if (!s->audio.status_ms || !s->reg.call_bound || !s->base.main_link.active)
+	if (!s->audio.status_ms || !s->base.main_link.bound || !s->base.main_link.active)
 		return;
 	if (s->reg.status_ms && now - s->reg.status_ms < s->audio.status_ms)
 		return;
@@ -4341,48 +4260,10 @@ static uint8_t ring_svc(const struct stubd *s, unsigned t, int narrow)
 	return dect_base_ring_svc(&s->base, t, narrow);
 }
 
-/*
- * The ring target is a Part 3 handset whose call information we choose:
- * no lab option set any <<CALL-INFORMATION>> field.
- */
-static int ring_target_part3(const struct stubd *s)
-{
-	return dect_base_ring_part3(&s->base);
-}
-
-/*
- * Stock's next step for a Part 3 handset [CR A-0125]: once our call is
- * answered, a {CC-INFO} with the call id and "CS call connect".
- */
+/* Stock's next step for a Part 3 handset (dect_base.h, S3p). */
 static void cs_connect_tick(struct stubd *s, uint64_t now)
 {
-	struct dect_cc *cc = &s->base.main_link.link.cc;
-	struct dect_callinfo ci;
-	uint8_t ie[16];
-	size_t n;
-
-	if (!s->base.main_link.active || !dect_cc_busy(cc)) {
-		s->reg.cs_connect_sent = 0;
-		return;
-	}
-	if (s->reg.cs_connect_sent || !cc->incoming ||
-	    cc->state != DECT_CC_ST_ACTIVE || !ring_target_part3(s) ||
-	    s->base.cfg.no_call_status)
-		return;
-	s->reg.cs_connect_sent = 1;
-	dect_callinfo_init(&ci);
-	ci.has_call_id = 1;
-	ci.call_id = cc->status_call_id;
-	ci.has_call_status = 1;
-	ci.call_status = DECT_CS_CALL_CONNECT;
-	n = dect_callinfo_put(ie, sizeof(ie), 0, &ci);
-	if (!n || dect_cc_info(cc, ie, n)) {
-		printf("call: could not queue the CS call connect\n");
-		return;
-	}
-	printf("call: CS call connect sent in CC-INFO (Part 3)\n");
-	dect_link_drain(&s->base.main_link.link, now);
-	pump_lapc(s);
+	dect_base_cs_connect_tick(&s->base, now);
 }
 
 /*
@@ -4633,7 +4514,7 @@ static void led_tick(struct stubd *s, uint64_t now, int radio_on)
 		led_write(s, 0);
 		return;
 	}
-	if (s->led_traffic != s->led_traffic_seen || s->reg.call_bound) {
+	if (s->led_traffic != s->led_traffic_seen || s->base.main_link.bound) {
 		s->led_traffic_seen = s->led_traffic;
 		s->led_blink_ticks++;
 		led_write(s, s->led_state != 1);	/* toggle */
@@ -5077,9 +4958,9 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		mcfg.assign_id_len = 7;
 	}
 
-	s->reg.call_bound = 0;
+	s->base.main_link.bound = 0;
 	s->reg.call_wideband = 0;
-	s->reg.connect_staged = 0;
+	s->base.main_link.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
 	s->reg.cipher_started = 0;
 	s->base.main_link.cipher_done = 0;
@@ -6281,26 +6162,14 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 	if (!dect_cc_busy(cc))	/* decided for the next SETUP only */
 		dect_cc_set_busy(cc, sl->lane < 0 &&
 				 lanes_available(s, sl) <= 0);
-	if (!sl->bl->ic_tried && number_complete(cc) && call_auth_ok(s, &sl->bl->link))
+	switch (dect_base_dial_tick(&s->base, (int)(sl - s->side), now)) {
+	case 2:
+		printf("side: dialled on handle %u -- connecting\n",
+		       sl->bl->handle);
+		/* fall through */
+	case 1:
 		side_route(s, sl, now);
-	if (!dect_cc_busy(cc))
-		sl->bl->ic_tried = 0;
-	if (cc->state == DECT_CC_ST_OVERLAP) {
-		size_t len;
-
-		(void)dect_cc_keypad(cc, &len);
-		if (!sl->bl->dial_change_ms || len != sl->bl->dial_len) {
-			sl->bl->dial_len = len;
-			sl->bl->dial_change_ms = now;
-		} else if (len && now - sl->bl->dial_change_ms >=
-			   s->base.cfg.dial_wait_ms && call_auth_ok(s, &sl->bl->link)) {
-			printf("side: dialled on handle %u -- connecting\n",
-			       sl->bl->handle);
-			side_route(s, sl, now);
-		}
-	} else {
-		sl->bl->dial_len = 0;
-		sl->bl->dial_change_ms = 0;
+		break;
 	}
 	if (sl->lane < 0 && cc->state == DECT_CC_ST_ACTIVE &&
 	    (cc->incoming || dect_cc_peer_is_speech(cc)) &&
@@ -6358,7 +6227,7 @@ static void ic_drain(struct stubd *s, int p, uint64_t now)
 /* the party has its audio channel bound */
 static int ic_has_lane(const struct stubd *s, int p)
 {
-	return p == -1 ? s->reg.call_bound : p >= 0 && s->side[p].lane >= 0;
+	return p == -1 ? s->base.main_link.bound : p >= 0 && s->side[p].lane >= 0;
 }
 
 static void ic_page(struct stubd *s)
@@ -8401,7 +8270,7 @@ static const struct dect_base_call *ab_call_of(struct stubd *s, unsigned i, int 
 
 	if (i == 0) {
 		*wb = s->reg.call_wideband;
-		return s->base.main_link.active && s->reg.call_bound ? bc_active(s, -1)
+		return s->base.main_link.active && s->base.main_link.bound ? bc_active(s, -1)
 							  : NULL;
 	}
 	x = &s->xl[i - 1u];
@@ -8961,7 +8830,7 @@ static int ic_word(const struct stubd *s, int side)
 	    ic_wideband(s, s->ic.caller) != ic_wideband(s, s->ic.tside)))
 		return -1;
 	if (side < 0)
-		w = s->reg.call_bound ? (int)s->audio.lane0_word : -1;
+		w = s->base.main_link.bound ? (int)s->audio.lane0_word : -1;
 	else if (s->side[side].lane < 0 ||
 		 !s->xl[s->side[side].lane].connected)
 		w = -1;
@@ -9005,7 +8874,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	if (s->base.ring.state != RING_WAIT_PAGE_RESP || !s->base.main_link.active ||
 	    !tgt_len || ind->page_id_len != tgt_len ||
 	    memcmp(ind->page_id, tgt, tgt_len) != 0 ||
-	    s->reg.call_bound || dect_cc_busy(&s->base.main_link.link.cc) ||
+	    s->base.main_link.bound || dect_cc_busy(&s->base.main_link.link.cc) ||
 	    s->base.main_link.link.mm.state == DECT_MM_WAIT_AUTH ||
 	    dect_cc_busy(&sl->bl->link.cc))
 		return 0;
@@ -9040,7 +8909,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 		(uint8_t)s->audio.locate_validity;
 	main_cc_setup(s);
 	s->reg.call_wideband = 0;
-	s->reg.connect_staged = 0;
+	s->base.main_link.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
 	s->base.main_link.enrol_routed = 0;
 	s->base.main_link.enrol_switched = 0;
@@ -9056,7 +8925,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->reg.cipher_reject_seen = 0;
 	s->base.main_link.auth_refused = 0;
 	s->reg.cipher_timeout_seen = 0;
-	s->reg.audio_connected = 0;
+	s->base.main_link.path_on = 0;
 	s->reg.time_sent_for = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
 	       "link; handle %u (%s) is a side link now\n", s->base.main_link.handle,
@@ -9683,7 +9552,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * PP; there is no peer <<BASIC-SERVICE>> to read on those and we only
 	 * ever originate speech calls, so they bind as before.
 	 */
-	if (!s->reg.call_bound && !s->reg.nonspeech_noted &&
+	if (!s->base.main_link.bound && !s->reg.nonspeech_noted &&
 	    !s->base.main_link.link.cc.incoming &&
 	    !dect_cc_peer_is_speech(&s->base.main_link.link.cc) &&
 	    s->base.main_link.link.cc.state == DECT_CC_ST_ACTIVE) {
@@ -9693,13 +9562,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		       s->base.main_link.link.cc.peer_basic_service);
 	}
 
-	if (!s->reg.call_bound && call_auth_ok(s, &s->base.main_link.link) &&
+	if (!s->base.main_link.bound && call_auth_ok(s, &s->base.main_link.link) &&
 	    (s->base.main_link.link.cc.state == DECT_CC_ST_ACTIVE ||
-	     (s->base.cfg.bind_first && s->reg.connect_staged &&
+	     (s->base.cfg.bind_first && s->base.main_link.connect_staged &&
 	      s->base.main_link.link.cc.state == DECT_CC_ST_PROCEEDING)) &&
 	    (s->base.main_link.link.cc.incoming ||
 	     dect_cc_peer_is_speech(&s->base.main_link.link.cc))) {
-		s->reg.audio_connected = 0;
+		s->base.main_link.path_on = 0;
 		s->reg.remode_at = 0;
 		s->reg.remode_done = 0;
 		s->reg.seq_t0 = now;	/* seq window 0 starts now */
@@ -9727,7 +9596,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		       (s->audio.flags & 0x40u) ? "the configured" :
 		       "narrowband (mode 2, linear PCM)");
 		send_audio_bind(s, s->base.main_link.handle);
-		s->reg.call_bound = 1;
+		s->base.main_link.bound = 1;
 		s->reg.nonspeech_noted = 0;
 		/* take the phase from this call's first received transition */
 		s->play_locked = 0;
@@ -9939,7 +9808,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		{
 			int ring_busy = s->base.ring.state == RING_WAIT_PAGE_RESP;
 			int busy = s->base.main_link.active &&
-				   (s->reg.call_bound ||
+				   (s->base.main_link.bound ||
 				    dect_cc_busy(&s->base.main_link.link.cc) ||
 				    s->base.main_link.link.mm.state == DECT_MM_WAIT_AUTH ||
 				    ring_busy);
@@ -10053,7 +9922,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * which we do not yet read. Until we do, binding audio here is
 		 * an assumption, and the run summary says so.
 		 */
-		if (s->reg.call_bound && !s->reg.audio_connected &&
+		if (s->base.main_link.bound && !s->base.main_link.path_on &&
 		    m->param_len >= 4 && m->param[0] == s->base.main_link.handle) {
 			uint8_t chan = m->param[1] & 0x0Fu;
 
@@ -10090,7 +9959,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			}
 			break;
 		}
-		if (s->reg.call_bound)
+		if (s->base.main_link.bound)
 			report_conn_status(s, m);
 		break;
 	default:
@@ -10188,7 +10057,7 @@ static void voice_slot_probe(struct stubd *s, const uint8_t *fr, unsigned int fp
 	unsigned int f, n, nslots = s->ssc ? (s->slots < 64u ? s->slots : 64u)
 					   : (s->slots < 8u ? s->slots : 8u);
 
-	if (!s->reg.call_bound || (!s->verbose && !s->voice_fp))
+	if (!s->base.main_link.bound || (!s->verbose && !s->voice_fp))
 		return;
 	for (f = 0; f < fpb; f++) {
 		for (n = 0; n < nslots; n++) {
@@ -10257,7 +10126,7 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 	 * watched with the radio off -- which is how the chip's DSP routing is
 	 * probed without transmitting anything.
 	 */
-	if (!s->voice_fp || (!s->reg.call_bound && !s->audio.cap_all))
+	if (!s->voice_fp || (!s->base.main_link.bound && !s->audio.cap_all))
 		return;
 
 	/*
@@ -10937,8 +10806,8 @@ static void loop_tick(struct stubd *s, uint64_t now)
 		 * and the next call starts on top of the last one's
 		 * state.
 		 */
-		if (s->reg.call_bound && !dect_cc_busy(&s->base.main_link.link.cc)) {
-			s->reg.call_bound = 0;
+		if (s->base.main_link.bound && !dect_cc_busy(&s->base.main_link.link.cc)) {
+			s->base.main_link.bound = 0;
 			send_audio_disconnect(s, s->base.main_link.handle);
 			s->reg.call_wideband = 0;
 		}
@@ -12352,6 +12221,7 @@ int main(int argc, char **argv)
 	s.base.cfg.narrowband = s.audio.narrowband;
 	s.base.cfg.two_calls = s.audio.two_calls;
 	s.base.cfg.auth_first = s.audio.auth_first;
+	s.base.cfg.no_cipher = s.no_cipher;
 	s.base.cfg.locauth = s.audio.locauth;
 	s.base.cfg.no_overlap = s.audio.no_overlap;
 	s.base.cfg.dial_wait_ms = s.audio.dial_wait_ms;

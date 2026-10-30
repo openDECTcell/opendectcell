@@ -130,6 +130,12 @@ struct dect_base_link {
 	int      ic_tried;		/* checked for an internal call */
 	int      cipher_done;		/* the cipher's outcome handled */
 	int      auth_refused;		/* authfirst: ended, the key unproven */
+	/* Stage S3p, the main link's call: */
+	int      bound;			/* its audio channel bound */
+	int      path_on;		/* ... and connected (0x022D sent) */
+	int      connect_staged;	/* alertms/bindfirst: CONNECT due */
+	uint64_t connect_at;		/* ... not before this */
+	int      cs_connect_sent;	/* "CS call connect" after CONNECT (Part 3) */
 };
 
 /*
@@ -224,6 +230,7 @@ struct dect_base_cfg {
 	int      narrowband;	/* the speech is narrowband: G.726, no G.722 */
 	int      two_calls;	/* up to three calls (twocalls) */
 	int      auth_first;	/* a handset proves its key before its call goes anywhere */
+	int      no_cipher;	/* -C, a lab option: no ciphering, no proof */
 	int      locauth;	/* authenticate on location registration */
 	int      no_overlap;	/* no overlap sending: the number en bloc */
 	unsigned dial_wait_ms;	/* the dial pause that ends a number */
@@ -569,6 +576,39 @@ int dect_base_party_line2(const struct dect_base *b, int p);
  * client, or CC refused; 1: done (busy if the call table is full).
  */
 int dect_base_call_out(struct dect_base *b, int p, uint64_t now);
+
+/*
+ * A handset's call and its number (S3p). Authenticate first (security
+ * audit 2026-10-29, A1): with cfg.auth_first, a call goes nowhere until
+ * the handset on its link proved the key we hold for the IPUI it named.
+ */
+int dect_base_call_auth_ok(const struct dect_base *b,
+			   const struct dect_link *l);
+/*
+ * A handset's call whose number came complete and waits in PROCEEDING to
+ * be routed: an internal call, a number picked from a list (1C15H, TS 102
+ * 527-3 7.4.10.6.2), or one sent with <<SENDING-COMPLETE>>.
+ */
+int dect_base_number_complete(const struct dect_cc *cc);
+/*
+ * Link p's dialling, once a tick: 1 the number is complete, 2 overlap
+ * digits were quiet for cfg.dial_wait_ms (a dial plan's stand-in), 0 not
+ * yet. Either way the host routes the call (and sets ic_tried).
+ */
+int dect_base_dial_tick(struct dect_base *b, int p, uint64_t now);
+/*
+ * The main link's call, routed nowhere else: the base connects it,
+ * through the routed steps when cfg.alert_ms or cfg.bind_first ask for
+ * them (dect_base_connect_tick() finishes).
+ */
+void dect_base_dial_connect(struct dect_base *b, uint64_t now);
+/* alertms / bindfirst: the CONNECT once its conditions hold. */
+void dect_base_connect_tick(struct dect_base *b, uint64_t now);
+/*
+ * Stock's next step for a Part 3 handset [CR A-0125]: once our call is
+ * answered, a {CC-INFO} with the call id and "CS call connect".
+ */
+void dect_base_cs_connect_tick(struct dect_base *b, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

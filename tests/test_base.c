@@ -506,5 +506,33 @@ int main(void)
 		CHECK(dect_base_party_link(&b, 2) == &b.side[2]);
 		CHECK_EQ(dect_base_call_out(&b, -1, 0), 0);	/* no bridge */
 	}
+
+	/* a handset's number (S3p) */
+	{
+		struct dect_cc cc;
+
+		memset(&cc, 0, sizeof(cc));
+		cc.state = DECT_CC_ST_PROCEEDING;
+		cc.peer_basic_service = 0x80;		/* normal call */
+		CHECK_EQ(dect_base_number_complete(&cc), 1);
+		cc.incoming = 1;
+		CHECK_EQ(dect_base_number_complete(&cc), 0);
+		cc.incoming = 0;
+		cc.peer_basic_service = 0x20;		/* list access */
+		CHECK_EQ(dect_base_number_complete(&cc), 0);
+		dect_base_init(&b);
+		b.cfg.auth_first = 1;
+		CHECK_EQ(dect_base_call_auth_ok(&b, &b.main_link.link), 0);
+		b.main_link.link.mm.authenticated = 1;
+		CHECK_EQ(dect_base_call_auth_ok(&b, &b.main_link.link), 1);
+		b.main_link.link.mm.authenticated = 0;
+		b.cfg.no_cipher = 1;
+		CHECK_EQ(dect_base_call_auth_ok(&b, &b.main_link.link), 1);
+		/* nothing staged, no link: nothing to do */
+		b.main_link.connect_staged = 1;
+		dect_base_connect_tick(&b, 0);
+		CHECK_EQ(b.main_link.connect_staged, 0);
+		CHECK_EQ(dect_base_dial_tick(&b, -1, 0), 0);
+	}
 	return CHECK_DONE();
 }

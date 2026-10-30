@@ -312,3 +312,16 @@ Line 2 (`line2[]`, set by the host from its accounts). The host says
 whether a bridge client is connected (`bridge`). `dect_base_drain()`
 sends what a link's stack queued, main or side. Unit tests; traces
 unchanged.
+
+**S3p.** A handset's dialling is the library's: when a number is complete
+(`dect_base_dial_tick()`, for the main link and side links alike, with
+the authenticate-first rule `dect_base_call_auth_ok()`), the base's own
+connect when no one else takes the call (`dect_base_dial_connect()`, the
+alertms/bindfirst steps and `dect_base_connect_tick()`), and the Part 3
+"CS call connect" after an answer. The main link's call state (audio
+bound and connected, the staged CONNECT) is `dect_base_link`'s. Routing
+stays with the host for now: the internal call, then the bridge
+(`dect_base_call_out()`), then the base's connect. New trace
+`dial-local.trace` (overlap digits, no bridge, alertms and bindfirst),
+recorded on S3p and replayed unchanged on the commit before it; the
+other eight unchanged.

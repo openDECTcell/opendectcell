@@ -1034,3 +1034,122 @@ int dect_base_call_out(struct dect_base *b, int p, uint64_t now)
 	dect_base_drain(b, p, now);
 	return 1;
 }
+
+int dect_base_call_auth_ok(const struct dect_base *b,
+			   const struct dect_link *l)
+{
+	return !b->cfg.auth_first || b->cfg.no_cipher || l->mm.authenticated;
+}
+
+int dect_base_number_complete(const struct dect_cc *cc)
+{
+	unsigned cls = cc->peer_basic_service >> 4;
+
+	return cc->state == DECT_CC_ST_PROCEEDING && !cc->incoming &&
+	       !cc->busy_notified &&	/* §7.4.8.3: the busy tone */
+	       (cls == 0x8u || cls == 0x9u || cc->list_number);
+}
+
+int dect_base_dial_tick(struct dect_base *b, int p, uint64_t now)
+{
+	struct dect_base_link *bl = dect_base_party_link(b, p);
+	struct dect_cc *cc = &bl->link.cc;
+	int due = 0;
+	size_t len;
+
+	if (bl->active && !bl->ic_tried && dect_base_number_complete(cc) &&
+	    dect_base_call_auth_ok(b, &bl->link))
+		due = 1;
+	if (!bl->active || !dect_cc_busy(cc))
+		bl->ic_tried = 0;
+	if (!bl->active || cc->state != DECT_CC_ST_OVERLAP) {
+		bl->dial_len = 0;
+		bl->dial_change_ms = 0;
+		return due;
+	}
+	(void)dect_cc_keypad(cc, &len);
+	if (!bl->dial_change_ms || len != bl->dial_len) {
+		bl->dial_len = len;
+		bl->dial_change_ms = now;
+		return due;
+	}
+	if (!len || now - bl->dial_change_ms < b->cfg.dial_wait_ms)
+		return due;	/* no digit yet: F<CC.01> covers it */
+	if (!dect_base_call_auth_ok(b, &bl->link))
+		return due;	/* the number waits for the proof */
+	return 2;
+}
+
+void dect_base_dial_connect(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+
+	if (b->cfg.alert_ms || b->cfg.bind_first) {
+		/* the steps a routed call takes; connect_tick() finishes */
+		if (dect_cc_proceed(&bl->link.cc) == 0) {
+			if (b->cfg.alert_ms) {
+				(void)dect_cc_alert(&bl->link.cc);
+				dect_base_log(b, "call: ALERTING sent, CONNECT in "
+					      "%u ms", b->cfg.alert_ms);
+			}
+			bl->connect_staged = 1;
+			bl->connect_at = now + b->cfg.alert_ms;
+			dect_base_drain(b, -1, now);
+		}
+		return;
+	}
+	if (dect_cc_accept(&bl->link.cc) == 0)
+		dect_base_drain(b, -1, now);
+}
+
+void dect_base_connect_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+
+	if (!bl->connect_staged)
+		return;
+	if (!bl->active || bl->link.cc.state != DECT_CC_ST_PROCEEDING) {
+		bl->connect_staged = 0;		/* released meanwhile */
+		return;
+	}
+	if (now < bl->connect_at || (b->cfg.bind_first && !bl->path_on))
+		return;
+	bl->connect_staged = 0;
+	dect_base_log(b, "call: CONNECT now%s%s",
+		      b->cfg.alert_ms ? ", after ALERTING" : "",
+		      b->cfg.bind_first ? ", the U-plane is up (0x022D sent)"
+					: "");
+	if (dect_cc_connect(&bl->link.cc) == 0)
+		dect_base_drain(b, -1, now);
+}
+
+void dect_base_cs_connect_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+	struct dect_cc *cc = &bl->link.cc;
+	struct dect_callinfo ci;
+	uint8_t ie[16];
+	size_t n;
+
+	if (!bl->active || !dect_cc_busy(cc)) {
+		bl->cs_connect_sent = 0;
+		return;
+	}
+	if (bl->cs_connect_sent || !cc->incoming ||
+	    cc->state != DECT_CC_ST_ACTIVE || !dect_base_ring_part3(b) ||
+	    b->cfg.no_call_status)
+		return;
+	bl->cs_connect_sent = 1;
+	dect_callinfo_init(&ci);
+	ci.has_call_id = 1;
+	ci.call_id = cc->status_call_id;
+	ci.has_call_status = 1;
+	ci.call_status = DECT_CS_CALL_CONNECT;
+	n = dect_callinfo_put(ie, sizeof(ie), 0, &ci);
+	if (!n || dect_cc_info(cc, ie, n)) {
+		dect_base_log(b, "call: could not queue the CS call connect");
+		return;
+	}
+	dect_base_log(b, "call: CS call connect sent in CC-INFO (Part 3)");
+	dect_base_drain(b, -1, now);
+}
