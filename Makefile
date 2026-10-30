@@ -218,6 +218,7 @@ $(BUILD)/dect-cell: src/cell/dect-cell.c src/libopendectcell/dect_cell.c src/lib
 check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done
 	@python3 -I tests/test_fw_extract.py
+	@python3 -I tests/test_luci_js.py
 
 clean:
 	rm -rf $(BUILD)

@@ -598,7 +598,7 @@ function addKeyOptions(ss, keys) {
 					return n >= k.min && n <= k.max ? true :
 						_('%d to %d (or 0x..)').format(k.min, k.max);
 				}
-				return /^hex:[0-9a-fA-F {}a-z]+$/.test(v) ? true : _('hex:... with {text} or {len}');
+				return (/^hex:[0-9a-fA-F {}a-z]+$/).test(v) ? true : _('hex:... with {text} or {len}');
 			};
 		}
 		o.modalonly = true;
@@ -611,7 +611,7 @@ function addKeyOptions(ss, keys) {
 
 /* What a baresip account line can carry in a parameter. */
 function sipSafe(sid, v) {
-	return /[;"<>\s]/.test(v) ? _('baresip cannot take ; " < > or spaces here') : true;
+	return (/[;"<>\s]/).test(v) ? _('baresip cannot take ; " < > or spaces here') : true;
 }
 
 /* A VoIP profile's name as the menus show it. */
@@ -1413,7 +1413,7 @@ return view.extend({
 				if (f[0] == 'url') {
 					o.rmempty = false;
 					o.validate = function(sid, v) {
-						return /^https:\/\/[^\/]+/.test(v || '') ? true
+						return (/^https:\/\/[^\/]+/).test(v || '') ? true
 							: _('An https:// address');
 					};
 				}
