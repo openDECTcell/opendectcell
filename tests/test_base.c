@@ -55,6 +55,14 @@ static void event(void *ctx, struct dect_ctl_out *o)
 		snprintf(event_line, sizeof(event_line), "%.*s", n, o->buf);
 }
 
+static unsigned named_i = 99;
+
+static void named(void *ctx, unsigned i)
+{
+	(void)ctx;
+	named_i = i;
+}
+
 static void install(void *ctx)
 {
 	(void)ctx;
@@ -73,7 +81,7 @@ static void pump(void *ctx, struct dect_base_link *bl)
 static const struct dect_base_ops ops = { .save = save, .send = send,
 					  .random = rnd, .log = log_line,
 					  .install = install, .event = event,
-					  .pump = pump };
+					  .pump = pump, .named = named };
 
 int main(void)
 {
@@ -774,6 +782,41 @@ int main(void)
 		dect_base_time_tick(&b, 62000);
 		CHECK_EQ(n_sent, 1u);
 		CHECK_EQ(sent[0].prim, 0x0300);
+	}
+
+	/* the lists' hooks (S4d) */
+	{
+		struct dect_iwu *iwu = &b.main_link.link.cc.iwu;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.hs[0].slot = 1;
+		b.hs[1].slot = 2;
+		b.loaded[0] = b.loaded[1] = 1;
+		b.main_link.active = 1;
+		b.main_link.link.mm.adopted = -1;
+		iwu->n_handsets = 2;
+		iwu->handsets[1].terminal_id = 2;
+		snprintf(iwu->handsets[1].name, sizeof(iwu->handsets[1].name),
+			 "Hall");
+		iwu->names_changed = 2;
+		dect_base_lists_tick(&b, 1000);
+		CHECK_EQ(strcmp(b.name[1], "Hall"), 0);
+		CHECK_EQ(named_i, 1u);
+		CHECK_EQ(iwu->names_changed, 0u);
+		/* ten wrong PINs in the hour: no PIN for an hour */
+		iwu->stats.pin_wrong = DECT_BASE_PIN_WRONG_MAX;
+		dect_base_lists_tick(&b, 2000);
+		CHECK_EQ(b.pin_wrong, DECT_BASE_PIN_WRONG_MAX);
+		CHECK_EQ(b.pin_locked_until, 2000u + DECT_BASE_PIN_LOCK_MS);
+		CHECK_EQ(iwu->pin_known, 0);
+		/* a deletion from the list is a deregistration */
+		iwu->delete_request = 2;
+		dect_base_lists_tick(&b, 3000);
+		CHECK_EQ(iwu->delete_request, 0u);
+		CHECK(b.dereg.st != DECT_BASE_DEREG_IDLE);
+		CHECK_EQ(b.dereg.target, 1);
 	}
 	return CHECK_DONE();
 }

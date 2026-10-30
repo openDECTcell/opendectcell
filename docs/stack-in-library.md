@@ -411,3 +411,12 @@ whether its clock is right (`clock()`) and calls the tick while the radio
 is on. New trace `time-round.trace` (timeupdate=1: DECT 1 paged, the
 date and time, the release), replayed unchanged on the commit before;
 the other thirteen unchanged.
+
+**S4d.** The lists' hooks per link are the library's
+(`dect_base_lists_tick()`): a name a handset saved in the Internal Names
+List (kept in `name[]`, spread to every link, the change notice; the host
+saves the file and tells its clients through `named()`), the UAK for the
+handset's authentication of the base, the base PIN and the hour's lock
+after ten wrong ones, the cipher state, who is in a call, and a deletion
+from a handset's list as a deregistration. Unit tests (no trace edits a
+list yet); the fourteen traces unchanged.

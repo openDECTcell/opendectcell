@@ -112,6 +112,11 @@ struct dect_base_ops {
 	 * host's clock is known to be right (S4c): 1, else 0.
 	 */
 	int  (*clock)(void *ctx, struct dect_time *dt, long *off_s);
+	/*
+	 * A handset renamed record i in the Internal Names List (S4d): the
+	 * host keeps the name (b->name[i]) and tells its clients.
+	 */
+	void (*named)(void *ctx, unsigned i);
 };
 
 /*
@@ -268,6 +273,7 @@ struct dect_base_cfg {
 	unsigned ring_ms;	/* ring= test timing */
 	unsigned ring_attach_ms;	/* ringattach= test timing */
 	unsigned time_every_min;	/* the periodic date and time */
+	const char *pin;	/* the base PIN, decimal; NULL: none (S4d) */
 	/* callinfo keys: a fixed <<CALL-INFORMATION>> for every SETUP (S3k) */
 	struct dect_callinfo callinfo;
 	/* infoie=: IEs in a {CC-INFO} on ALERTING, a lab option (S3r) */
@@ -413,6 +419,9 @@ struct dect_base {
 	struct dect_base_ic ic;
 	struct dect_base_dereg dereg;
 	struct dect_base_tu tu;
+	/* wrong PINs entered in list sessions, and the lock they earn (S4d) */
+	unsigned pin_wrong;
+	uint64_t pin_wrong_since, pin_locked_until;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	/* record i holds a subscription (the host's store had one) */
 	int      loaded[DECT_BASE_HS_MAX];
@@ -957,6 +966,25 @@ int dect_base_time_busy(const struct dect_base *b);
 void dect_base_link_flush(struct dect_base *b, struct dect_link *l,
 			  uint64_t now);
 void dect_base_time_tick(struct dect_base *b, uint64_t now);
+
+/*
+ * What the lists need from the base (TS 102 527-3 7.4.10.4.6, 7.4.11.1),
+ * once a tick per link that is up (S4d): the name a handset saved, the
+ * UAK of the handset the link serves (so MM can answer the handset's
+ * authentication of the base, EN 300 444 §8.23), the base PIN to check an
+ * entered one against (no PIN after DECT_BASE_PIN_WRONG_MAX wrong ones in
+ * the hour), whether the link is ciphered, which handsets are in a call
+ * (no deletion then), and the deletion a handset asked for, which is a
+ * deregistration.
+ */
+#define DECT_BASE_PIN_WRONG_MAX		10u
+#define DECT_BASE_PIN_WRONG_WINDOW_MS	3600000u	/* the count's window */
+#define DECT_BASE_PIN_LOCK_MS		3600000u	/* no PIN check after that */
+/* Record i's name into every link's Internal Names List. */
+void dect_base_names_spread(struct dect_base *b, unsigned i);
+/* Is the handset in this slot in a voice call on any link? */
+int dect_base_slot_in_call(const struct dect_base *b, unsigned slot);
+void dect_base_lists_tick(struct dect_base *b, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

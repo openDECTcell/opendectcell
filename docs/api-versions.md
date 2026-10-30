@@ -856,3 +856,8 @@ dect_base_dereg_erase(), _dereg_begin(), _dereg_tick() (S4b).
 dect_base_time_state, struct dect_base_tu and dect_base's `tu`,
 DECT_BASE_TIME_PAGES, _PAGE_MS, _SENT_MS; dect_base_ops' `clock`;
 dect_base_time_busy(), _link_flush(), _time_tick() (S4c).
+
+**125.** dect_base.h, 2026-10-30: dect_base_ops' `named`, dect_base_cfg's
+`pin`, dect_base's `pin_wrong`, `pin_wrong_since`, `pin_locked_until`;
+DECT_BASE_PIN_WRONG_MAX, _PIN_WRONG_WINDOW_MS, _PIN_LOCK_MS;
+dect_base_names_spread(), _slot_in_call(), _lists_tick() (S4d).

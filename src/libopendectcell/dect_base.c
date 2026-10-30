@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "dect_base.h"
+#include "dect_dsaa.h"
 
 void dect_base_init(struct dect_base *b)
 {
@@ -3115,4 +3116,159 @@ void dect_base_time_tick(struct dect_base *b, uint64_t now)
 			      ? ", the FACILITY unacknowledged" : "");
 	}
 	time_next(b);
+}
+
+void dect_base_names_spread(struct dect_base *b, unsigned i)
+{
+	char name[DECT_IWU_NAME_MAX];
+	uint8_t tid = (uint8_t)dect_base_slot(b, i);
+	unsigned k;
+
+	dect_base_hs_name(b, i, name, sizeof(name));
+	if (b->main_link.active)
+		(void)dect_iwu_add_handset(&b->main_link.link.cc.iwu, tid, name);
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active)
+			(void)dect_iwu_add_handset(&b->side[k].link.cc.iwu, tid,
+						   name);
+}
+
+/*
+ * A handset saved a name in the Internal Names List (dect_iwu sets
+ * names_changed): keep it for that record, show it on every link's list,
+ * and tell the handsets (§7.4.10.2.2). An empty name is the reset to
+ * "DECT n".
+ */
+static void names_take(struct dect_base *b, struct dect_link *l)
+{
+	struct dect_iwu *iwu = &l->cc.iwu;
+	unsigned n, j;
+
+	for (n = 0; iwu->names_changed && n < iwu->n_handsets; n++) {
+		const struct dect_iwu_handset *h = &iwu->handsets[n];
+
+		if (!(iwu->names_changed & (1u << n)))
+			continue;
+		iwu->names_changed &= ~(1u << n);
+		for (j = 0; j < b->n_hs; j++)
+			if (dect_base_slot(b, j) == h->terminal_id)
+				break;
+		if (j == b->n_hs)
+			continue;
+		snprintf(b->name[j], sizeof(b->name[j]), "%s", h->name);
+		dect_base_log(b, "names: DECT %u is now %s%s%s", h->terminal_id,
+			      h->name[0] ? "\"" : "", h->name[0] ? h->name :
+			      "back to its default name",
+			      h->name[0] ? "\"" : "");
+		dect_base_names_spread(b, j);
+		dect_base_names_notify(b);
+		if (b->ops && b->ops->named)
+			b->ops->named(b->ctx, j);
+	}
+	iwu->names_changed = 0;
+}
+
+/*
+ * The UAK of the handset a link serves: the main link serves the current
+ * record unless it adopted another; a side link only the one it adopted.
+ */
+static void uak_for_link(struct dect_base *b, struct dect_link *l, int main)
+{
+	int i = l->mm.adopted >= 0 ? l->mm.adopted
+				   : main ? (int)b->cur : -1;
+
+	if (i < 0 || (unsigned)i >= b->n_hs)
+		return;
+	if ((unsigned)i == b->cur) {
+		if (b->rec.uak_valid)
+			dect_mm_set_uak(&l->mm, b->rec.uak);
+	} else if (b->hs[i].uak_valid) {
+		dect_mm_set_uak(&l->mm, b->hs[i].uak);
+	}
+}
+
+int dect_base_slot_in_call(const struct dect_base *b, unsigned slot)
+{
+	const struct dect_link *ls[1 + DECT_BASE_SIDES];
+	unsigned k, n = 0;
+
+	if (b->main_link.active)
+		ls[n++] = &b->main_link.link;
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active)
+			ls[n++] = &b->side[k].link;
+	for (k = 0; k < n; k++) {
+		int i = dect_base_hs_of_link(b, ls[k]);
+
+		if (i >= 0 && dect_base_slot(b, (unsigned)i) == slot &&
+		    dect_cc_busy(&ls[k]->cc) &&
+		    (ls[k]->cc.peer_basic_service >> 4) != 0x2u)
+			return 1;
+	}
+	return 0;
+}
+
+static void lists_link(struct dect_base *b, struct dect_link *l, uint64_t now)
+{
+	struct dect_iwu *iwu = &l->cc.iwu;
+	unsigned j;
+
+	if (iwu->stats.pin_wrong != iwu->pin_wrong_seen) {
+		if (!b->pin_wrong_since ||
+		    now - b->pin_wrong_since > DECT_BASE_PIN_WRONG_WINDOW_MS) {
+			b->pin_wrong = 0;
+			b->pin_wrong_since = now;
+		}
+		b->pin_wrong += iwu->stats.pin_wrong - iwu->pin_wrong_seen;
+		iwu->pin_wrong_seen = iwu->stats.pin_wrong;
+		dect_base_log(b, "list: wrong PIN entered (%u within the hour)",
+			      b->pin_wrong);
+		if (b->pin_wrong >= DECT_BASE_PIN_WRONG_MAX &&
+		    now >= b->pin_locked_until) {
+			b->pin_locked_until = now + DECT_BASE_PIN_LOCK_MS;
+			dect_base_log(b, "list: %u wrong PINs -- no PIN is "
+				      "accepted for the next hour",
+				      b->pin_wrong);
+		}
+	}
+	if (now < b->pin_locked_until) {
+		/* nothing to compare against: every entry is wrong */
+		iwu->pin_known = 0;
+		iwu->pin_ok = 0;
+	} else if (!iwu->pin_known && b->cfg.pin) {
+		uint8_t ac[4];
+
+		if (!dect_dsaa_pin_to_ac(b->cfg.pin, ac, sizeof(ac)))
+			dect_iwu_set_pin(iwu, ac);
+	}
+	iwu->ciphered = l->mm.cipher_on;
+	for (j = 0; j < iwu->n_handsets; j++)
+		iwu->handsets[j].in_call = (uint8_t)
+			dect_base_slot_in_call(b, iwu->handsets[j].terminal_id);
+	if (iwu->delete_request) {
+		char who[48];
+		unsigned slot = iwu->delete_request;
+
+		iwu->delete_request = 0;
+		snprintf(who, sizeof(who), "DECT %u's handset list (PIN given)",
+			 iwu->own_terminal_id);
+		dect_base_dereg_begin(b, slot, now, who);
+	}
+}
+
+void dect_base_lists_tick(struct dect_base *b, uint64_t now)
+{
+	unsigned k;
+
+	if (b->main_link.active) {
+		names_take(b, &b->main_link.link);
+		uak_for_link(b, &b->main_link.link, 1);
+		lists_link(b, &b->main_link.link, now);
+	}
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active) {
+			names_take(b, &b->side[k].link);
+			uak_for_link(b, &b->side[k].link, 0);
+			lists_link(b, &b->side[k].link, now);
+		}
 }

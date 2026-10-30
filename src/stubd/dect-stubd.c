@@ -596,8 +596,7 @@ struct stubd {
 	 * the lockout they earn (security audit 2026-10-29, A4): the library
 	 * allows a few per connection, this bounds the connections.
 	 */
-	unsigned    pin_wrong;
-	uint64_t    pin_wrong_since, pin_locked_until;
+	/* wrong PINs and their lock: base.pin_wrong (dect_base.h, S4d) */
 	int rand_fd;		/* /dev/urandom, -1 if unavailable */
 	uint8_t rfpi[DECT_MM_RFPI_LEN];
 	int have_rfpi;
@@ -2851,12 +2850,13 @@ static int base_lanes(void *ctx, int p)
 static void base_forget(void *ctx, unsigned i, const char *why);
 static void base_mask(void *ctx);
 static int base_clock(void *ctx, struct dect_time *dt, long *off_s);
+static void base_named(void *ctx, unsigned i);
 
 static const struct dect_base_ops base_ops = {
 	.save = base_save, .send = base_send, .random = base_random,
 	.log = base_log, .install = base_install, .event = base_event,
 	.pump = base_pump, .lanes = base_lanes, .forget = base_forget,
-	.mask = base_mask, .clock = base_clock,
+	.mask = base_mask, .clock = base_clock, .named = base_named,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -5155,12 +5155,6 @@ static void name_save(const struct stubd *s, unsigned i)
 
 static void names_spread(struct stubd *s, unsigned i);
 
-/* The handset table index a link serves, or -1. */
-static int hs_of_link(const struct stubd *s, const struct dect_link *l)
-{
-	return dect_base_hs_of_link(&s->base, l);
-}
-
 static int profile_load(const char *path, struct dect_profile *p);
 
 #define PROFILE_DIR_DEFAULT	"/etc/opendectcell/profiles"
@@ -5383,179 +5377,28 @@ static void names_notify(struct stubd *s)
 	dect_base_names_notify(&s->base);
 }
 
-/*
- * A handset saved a name in the Internal Names List (dect_iwu sets
- * names_changed): keep it for that handset, in its .name file, and show
- * it on every link's list. An empty name is the reset to "DECT n".
- * TS 102 527-3 also wants a list change notification to the other
- * handsets (§7.4.10.2.2); that comes with the {FACILITY} builder.
- */
-static void names_take(struct stubd *s, struct dect_link *l)
+/* dect_base's named(): keep the name in its .name file, tell the clients. */
+static void base_named(void *ctx, unsigned i)
 {
-	struct dect_iwu *iwu = &l->cc.iwu;
-	unsigned b, j;
+	struct stubd *s = ctx;
 
-	for (b = 0; iwu->names_changed && b < iwu->n_handsets; b++) {
-		const struct dect_iwu_handset *h = &iwu->handsets[b];
-
-		if (!(iwu->names_changed & (1u << b)))
-			continue;
-		iwu->names_changed &= ~(1u << b);
-		for (j = 0; j < s->base.n_hs; j++)
-			if (hs_slot(s, j) == h->terminal_id)
-				break;
-		if (j == s->base.n_hs)
-			continue;
-		snprintf(s->base.name[j], sizeof(s->base.name[j]), "%s", h->name);
-		name_save(s, j);
-		printf("names: DECT %u is now %s%s%s\n", h->terminal_id,
-		       h->name[0] ? "\"" : "", h->name[0] ? h->name :
-		       "back to its default name", h->name[0] ? "\"" : "");
-		names_spread(s, j);
-		names_notify(s);
-		ctl_hs(s, j, "registered");
-	}
-	iwu->names_changed = 0;
+	name_save(s, i);
+	ctl_hs(s, i, "registered");
 }
 
 static void names_spread(struct stubd *s, unsigned i)
 {
-	char name[DECT_IWU_NAME_MAX];
-	uint8_t tid = (uint8_t)hs_slot(s, i);
-	unsigned k;
-
-	hs_name(s, i, name, sizeof(name));
-	if (s->base.main_link.active)
-		(void)dect_iwu_add_handset(&s->base.main_link.link.cc.iwu, tid, name);
-	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl->active)
-			(void)dect_iwu_add_handset(&s->side[k].bl->link.cc.iwu,
-						   tid, name);
-}
-
-/*
- * The UAK of the handset a link serves, so MM can answer the handset's
- * authentication of the base (EN 300 444 §8.23; mandatory inside access
- * rights termination, §8.31). The main link serves the current store
- * unless it adopted another; a side link only the one it adopted.
- */
-static void uak_for_link(struct stubd *s, struct dect_link *l, int main)
-{
-	int i = l->mm.adopted >= 0 ? l->mm.adopted
-				   : main ? (int)s->base.cur : -1;
-
-	if (i < 0 || (unsigned)i >= s->base.n_hs)
-		return;
-	if ((unsigned)i == s->base.cur) {
-		if (s->base.rec.uak_valid)
-			dect_mm_set_uak(&l->mm, s->base.rec.uak);
-	} else if (s->base.hs[i].uak_valid) {
-		dect_mm_set_uak(&l->mm, s->base.hs[i].uak);
-	}
-}
-
-/* Is the handset in this slot in a voice call on any link? */
-static int slot_in_call(const struct stubd *s, unsigned slot)
-{
-	const struct dect_link *ls[1 + SIDE_MAX];
-	unsigned k, n = 0;
-
-	if (s->base.main_link.active)
-		ls[n++] = &s->base.main_link.link;
-	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl->active)
-			ls[n++] = &s->side[k].bl->link;
-	for (k = 0; k < n; k++) {
-		int i = hs_of_link(s, ls[k]);
-
-		if (i >= 0 && hs_slot(s, (unsigned)i) == slot &&
-		    dect_cc_busy(&ls[k]->cc) &&
-		    (ls[k]->cc.peer_basic_service >> 4) != 0x2u)
-			return 1;
-	}
-	return 0;
-}
-
-static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
-			const char *who);
-
-/*
- * What the lists need from the daemon (7.4.10.4.6, 7.4.11.1): the base PIN
- * to check an entered one against, whether the link is ciphered (a PIN
- * only travels ciphered), which handsets are in a call (no deletion then),
- * and the deletion a handset asked for, which is a deregistration.
- */
-#define PIN_WRONG_MAX		10u
-#define PIN_WRONG_WINDOW_MS	3600000u	/* the count's window */
-#define PIN_LOCK_MS		3600000u	/* no PIN check after that */
-
-static void lists_tick(struct stubd *s, struct dect_link *l)
-{
-	struct dect_iwu *iwu = &l->cc.iwu;
-	uint64_t now = mono_ms();
-	unsigned j;
-
-	if (iwu->stats.pin_wrong != iwu->pin_wrong_seen) {
-		if (!s->pin_wrong_since ||
-		    now - s->pin_wrong_since > PIN_WRONG_WINDOW_MS) {
-			s->pin_wrong = 0;
-			s->pin_wrong_since = now;
-		}
-		s->pin_wrong += iwu->stats.pin_wrong - iwu->pin_wrong_seen;
-		iwu->pin_wrong_seen = iwu->stats.pin_wrong;
-		printf("list: wrong PIN entered (%u within the hour)\n",
-		       s->pin_wrong);
-		if (s->pin_wrong >= PIN_WRONG_MAX && now >= s->pin_locked_until) {
-			s->pin_locked_until = now + PIN_LOCK_MS;
-			printf("list: %u wrong PINs -- no PIN is accepted for "
-			       "the next hour\n", s->pin_wrong);
-		}
-		fflush(stdout);
-	}
-	if (now < s->pin_locked_until) {
-		/* nothing to compare against: every entry is wrong */
-		iwu->pin_known = 0;
-		iwu->pin_ok = 0;
-	} else if (!iwu->pin_known && s->pin) {
-		uint8_t ac[4];
-
-		if (!dect_dsaa_pin_to_ac(s->pin, ac, sizeof(ac)))
-			dect_iwu_set_pin(iwu, ac);
-	}
-	iwu->ciphered = l->mm.cipher_on;
-	for (j = 0; j < iwu->n_handsets; j++)
-		iwu->handsets[j].in_call =
-			(uint8_t)slot_in_call(s, iwu->handsets[j].terminal_id);
-	if (iwu->delete_request) {
-		char who[48];
-		unsigned slot = iwu->delete_request;
-
-		iwu->delete_request = 0;
-		snprintf(who, sizeof(who), "DECT %u's handset list (PIN given)",
-			 iwu->own_terminal_id);
-		dereg_begin(s, slot, mono_ms(), who);
-	}
+	dect_base_names_spread(&s->base, i);
 }
 
 static void names_tick(struct stubd *s)
 {
-	unsigned k;
-
 	if (want_profiles) {
 		want_profiles = 0;
 		profiles_resolve_all(s, "SIGHUP");
 	}
-	if (s->base.main_link.active) {
-		names_take(s, &s->base.main_link.link);
-		uak_for_link(s, &s->base.main_link.link, 1);
-		lists_tick(s, &s->base.main_link.link);
-	}
-	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl->active) {
-			names_take(s, &s->side[k].bl->link);
-			uak_for_link(s, &s->side[k].bl->link, 0);
-			lists_tick(s, &s->side[k].bl->link);
-		}
+	/* the lists' hooks per link are the library's (dect_base.h, S4d) */
+	dect_base_lists_tick(&s->base, mono_ms());
 }
 
 static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
@@ -6016,6 +5859,9 @@ static int time_page_response(struct stubd *s, struct side_link *sl,
 	printf("time: DECT %u answered the page\n", hs_slot(s, (unsigned)i));
 	return 1;
 }
+
+static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
+			const char *who);
 
 /*
  * SIGUSR2: deregister the handsets in the slots named in DEREG_REQ_PATH
@@ -10376,6 +10222,7 @@ int main(int argc, char **argv)
 	s.base.cfg.basic_svc_set = s.audio.basic_svc_set;
 	s.base.cfg.ring_ms = s.audio.ring_ms;
 	s.base.cfg.ring_attach_ms = s.audio.ring_attach_ms;
+	s.base.cfg.pin = s.pin;
 	s.base.cfg.time_every_min = s.audio.time_every_min;
 	s.base.cfg.callinfo = s.audio.callinfo;
 	s.base.contacts = s.contacts_path ? &stubd_contacts : NULL;
