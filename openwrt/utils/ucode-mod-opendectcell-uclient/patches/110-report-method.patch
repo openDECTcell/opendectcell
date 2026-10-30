@@ -1,0 +1,33 @@
+From: ctandi <ctandi@users.noreply.github.com>
+Subject: uclient-http: add the REPORT method
+
+WebDAV's REPORT (RFC 3253), which CardDAV uses to fetch many address
+book entries in one request (RFC 6352 addressbook-query and
+addressbook-multiget). It carries a request body like PROPFIND.
+
+--- a/uclient-http.c
++++ b/uclient-http.c
+@@ -55,6 +55,7 @@
+ 	REQ_PROPFIND,
+ 	REQ_PROPPATCH,
+ 	REQ_UNLOCK,
++	REQ_REPORT,
+ 	__REQ_MAX
+ };
+ 
+@@ -82,6 +83,7 @@
+ 	[REQ_PROPFIND] = "PROPFIND",
+ 	[REQ_PROPPATCH] = "PROPPATCH",
+ 	[REQ_UNLOCK] = "UNLOCK",
++	[REQ_REPORT] = "REPORT",
+ };
+ 
+ struct uclient_http {
+@@ -343,6 +345,7 @@
+ 	case REQ_DELETE:
+ 	case REQ_PROPFIND:
+ 	case REQ_PROPPATCH:
++	case REQ_REPORT:
+ 	case REQ_LOCK:
+ 	case REQ_MKCOL:
+ 		return true;

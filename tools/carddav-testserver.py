@@ -2,22 +2,32 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """
 A small CardDAV server for testing opendectcell-carddav (openwrt/net/opendectcell/
-files/carddav.uc) against: one address book in memory, HTTPS with its own
-CA, Basic auth, and the four methods the sync uses (PROPFIND Depth 0/1,
-GET, PUT, DELETE) with ETags, If-Match and If-None-Match as RFC 4918/6352
-want them. Not a server for real use.
+files/carddav.uc) against: address books in memory, HTTPS with its own CA,
+Basic auth, discovery as RFC 6764 and RFC 6352 describe it, and the methods
+the sync uses (PROPFIND Depth 0/1, REPORT addressbook-multiget, GET, PUT,
+DELETE) with ETags, If-Match and If-None-Match. Not a server for real use.
 
   tools/carddav-testserver.py --host 192.168.1.146 --port 8843 --dir /tmp/cdav
 
 --dir gets ca.pem (give the box this as opendectcell.carddav.ca_file) and the
-server's key and certificate, made with openssl on the first run. The
-address book is https://HOST:PORT/addressbooks/test/, user "test", password
-"test" (or --user / --password). Seed cards cover what the sync must cope
-with: vCard 3.0 and 4.0 (tel: URIs), a company without N, a fax number, a
-photo, folded lines. GET /_dump (with auth) returns every card as JSON, for
-a test to check what the box wrote. --default-ns answers with the DAV:
-namespace as default instead of a "d:" prefix, as some servers do;
---no-chunked reads a chunked request body as empty, as WSGI servers do.
+server's key and certificate, made with openssl on the first run. User
+"test", password "test" (or --user / --password).
+
+  /.well-known/carddav        301 to /
+  /                           current-user-principal /principals/test/
+  /principals/test/           addressbook-home-set /addressbooks/test/
+  /addressbooks/test/         the home: two books, "Contacts" and "Work"
+  /addressbooks/test/BOOK/    a book; its cards are BOOK/NAME.vcf
+
+The seed cards cover what the sync must cope with: vCard 3.0 and 4.0 (tel:
+URIs), a company without N, a fax number, a photo, folded lines, and one
+contact in both books (opendectcell does not merge duplicates). GET /_dump (with
+auth) returns every card as JSON, for a test to check what the box wrote.
+
+--default-ns answers with the DAV: namespace as default instead of a "d:"
+prefix, as some servers do; --no-chunked reads a chunked request body as
+empty, as WSGI servers do; --no-report answers REPORT with 405, as a
+server without it would.
 """
 import argparse
 import base64
@@ -25,41 +35,54 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
 import threading
+from urllib.parse import quote, unquote
 from xml.sax.saxutils import escape
 
-BOOK = "/addressbooks/test/"
+HOME = "/addressbooks/test/"
+PRINCIPAL = "/principals/test/"
 
 SEED = {
-    "anna.vcf": (
-        "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:anna\r\nN:Smith;Anna;;;\r\n"
-        "FN:Anna Smith\r\nTEL;TYPE=CELL:+49 171 1111111\r\n"
-        "TEL;TYPE=HOME,VOICE:030 2222222\r\nTEL;TYPE=WORK,FAX:030 2222299\r\n"
-        "EMAIL:anna@example.org\r\nPHOTO;ENCODING=b;TYPE=JPEG:/9j/4AAQSkZJRgABAQ\r\n"
-        " EASABIAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQE=\r\nEND:VCARD\r\n"),
-    "luca.vcf": (
-        "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:luca\r\nN:Bordonado;Luca;;;\r\n"
-        "FN:Luca Bordonado\r\nTEL;VALUE=uri;TYPE=\"work,voice\":tel:+39-02-3333333\r\n"
-        "NOTE:keeps this note\r\nEND:VCARD\r\n"),
-    "acme.vcf": (
-        "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:acme\r\nFN:ACME Hardware\r\n"
-        "ORG:ACME Hardware;Sales\r\nTEL;TYPE=WORK:0800 444 444\r\nEND:VCARD\r\n"),
-    "müller.vcf": (
-        "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:mueller\r\nN:Müller;Jörg;;;\r\n"
-        "FN:Jörg Müller\r\nTEL:0049 89 5555555\r\nEND:VCARD\r\n"),
+    "contacts": ("Contacts", {
+        "anna.vcf": (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:anna\r\nN:Smith;Anna;;;\r\n"
+            "FN:Anna Smith\r\nTEL;TYPE=CELL:+49 171 1111111\r\n"
+            "TEL;TYPE=HOME,VOICE:030 2222222\r\nTEL;TYPE=WORK,FAX:030 2222299\r\n"
+            "EMAIL:anna@example.org\r\nPHOTO;ENCODING=b;TYPE=JPEG:/9j/4AAQSkZJRgABAQ\r\n"
+            " EASABIAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQE=\r\nEND:VCARD\r\n"),
+        "luca.vcf": (
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:luca\r\nN:Bordonado;Luca;;;\r\n"
+            "FN:Luca Bordonado\r\nTEL;VALUE=uri;TYPE=\"work,voice\":tel:+39-02-3333333\r\n"
+            "NOTE:keeps this note\r\nEND:VCARD\r\n"),
+        "acme.vcf": (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:acme\r\nFN:ACME Hardware\r\n"
+            "ORG:ACME Hardware;Sales\r\nTEL;TYPE=WORK:0800 444 444\r\nEND:VCARD\r\n"),
+        "müller.vcf": (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:mueller\r\nN:Müller;Jörg;;;\r\n"
+            "FN:Jörg Müller\r\nTEL:0049 89 5555555\r\nEND:VCARD\r\n"),
+    }),
+    "work": ("Work", {
+        "reception.vcf": (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:reception\r\nN:Reception;;;;\r\n"
+            "FN:Reception\r\nTEL;TYPE=WORK:0301234560\r\nEND:VCARD\r\n"),
+        "anna-work.vcf": (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nUID:anna-work\r\nN:Smith;Anna;;;\r\n"
+            "FN:Anna Smith\r\nTEL;TYPE=WORK:0301234567\r\nEND:VCARD\r\n"),
+    }),
 }
 
 
 class Book:
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.cards = {}         # name -> (text, etag)
+    def __init__(self, name, cards):
+        self.name = name
+        self.cards = {}         # file name -> (text, etag)
         self.ctag = 0
-        for name, text in SEED.items():
-            self.put(name, text)
+        for n, text in cards.items():
+            self.put(n, text)
 
     def put(self, name, text):
         etag = '"%s"' % hashlib.sha1(text.encode()).hexdigest()[:16]
@@ -89,9 +112,27 @@ def make_certs(d, host):
     return crt, key
 
 
-def handler(book, user, password, default_ns, no_chunked=False):
+def handler(books, user, password, opts):
     want = "Basic " + base64.b64encode(("%s:%s" % (user, password)).encode()).decode()
-    p = "" if default_ns else "d:"
+    p = "" if opts.default_ns else "d:"
+    lock = threading.Lock()
+
+    def response(href, props):
+        return ("<%sresponse><%shref>%s</%shref><%spropstat><%sprop>%s</%sprop>"
+                "<%sstatus>HTTP/1.1 200 OK</%sstatus></%spropstat></%sresponse>"
+                % (p, p, href, p, p, p, props, p, p, p, p, p))
+
+    def book_props(b):
+        return ("<%sresourcetype><%scollection/><card:addressbook/></%sresourcetype>"
+                "<%sdisplayname>%s</%sdisplayname><cs:getctag>ctag-%d</cs:getctag>"
+                % (p, p, p, p, escape(b.name), p, b.ctag))
+
+    def multistatus(parts):
+        ns = 'xmlns="DAV:"' if opts.default_ns else 'xmlns:d="DAV:"'
+        return ('<?xml version="1.0" encoding="utf-8"?>\n<%smultistatus %s '
+                'xmlns:cs="http://calendarserver.org/ns/" '
+                'xmlns:card="urn:ietf:params:xml:ns:carddav">\n%s\n</%smultistatus>'
+                % (p, ns, "\n".join(parts), p)).encode()
 
     class H(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -120,7 +161,7 @@ def handler(book, user, password, default_ns, no_chunked=False):
                     size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
                     if not size:
                         self.rfile.readline()
-                        return b"" if no_chunked else out
+                        return b"" if opts.no_chunked else out
                     out += self.rfile.read(size)
                     self.rfile.readline()
             n = int(self.headers.get("Content-Length") or 0)
@@ -133,58 +174,90 @@ def handler(book, user, password, default_ns, no_chunked=False):
             self.send(401, b"auth", extra={"WWW-Authenticate": 'Basic realm="test"'})
             return False
 
-        def card(self):
-            path = self.path.split("?")[0]
-            if not path.startswith(BOOK) or path == BOOK:
-                return None
-            from urllib.parse import unquote
-            return unquote(path[len(BOOK):])
+        def path_only(self):
+            return unquote(self.path.split("?")[0])
+
+        def where(self):
+            """(book id, book, card file name or None) under the home."""
+            path = self.path_only()
+            if not path.startswith(HOME) or path == HOME:
+                return None, None, None
+            bn, _, card = path[len(HOME):].partition("/")
+            return bn, books.get(bn), (card or None)
 
         def do_PROPFIND(self):
             if not self.authed():
                 return
             self.body()
+            if self.path == "/.well-known/carddav":
+                self.send(301, extra={"Location": "/"})
+                return
             depth = self.headers.get("Depth", "1")
-            path = self.path.split("?")[0]
-            ns = ('xmlns="DAV:"' if default_ns else 'xmlns:d="DAV:"')
-            out = ['<?xml version="1.0" encoding="utf-8"?>',
-                   '<%smultistatus %s xmlns:cs="http://calendarserver.org/ns/" '
-                   'xmlns:card="urn:ietf:params:xml:ns:carddav">' % (p, ns)]
-            with book.lock:
-                if path == BOOK:
-                    out.append(
-                        '<%sresponse><%shref>%s</%shref><%spropstat><%sprop>'
-                        '<%sresourcetype><%scollection/><card:addressbook/></%sresourcetype>'
-                        '<cs:getctag>ctag-%d</cs:getctag></%sprop>'
-                        '<%sstatus>HTTP/1.1 200 OK</%sstatus></%spropstat></%sresponse>'
-                        % (p, p, BOOK, p, p, p, p, p, p, book.ctag, p, p, p, p, p))
+            path = self.path_only()
+            cup = ("<%scurrent-user-principal><%shref>%s</%shref></%scurrent-user-principal>"
+                   % (p, p, PRINCIPAL, p, p))
+            with lock:
+                if path == "/":
+                    parts = [response("/", cup)]
+                elif path == PRINCIPAL:
+                    parts = [response(PRINCIPAL, cup +
+                        "<card:addressbook-home-set><%shref>%s</%shref></card:addressbook-home-set>"
+                        % (p, HOME, p))]
+                elif path == HOME:
+                    parts = [response(HOME, "<%sresourcetype><%scollection/></%sresourcetype>"
+                                      % (p, p, p))]
                     if depth != "0":
-                        from urllib.parse import quote
-                        for name, (text, etag) in sorted(book.cards.items()):
-                            out.append(
-                                '<%sresponse><%shref>%s</%shref><%spropstat><%sprop>'
-                                '<%sgetetag>%s</%sgetetag><%sresourcetype/></%sprop>'
-                                '<%sstatus>HTTP/1.1 200 OK</%sstatus></%spropstat></%sresponse>'
-                                % (p, p, BOOK + quote(name), p, p, p, p, escape(etag),
-                                   p, p, p, p, p, p, p))
+                        for bn, b in sorted(books.items()):
+                            parts.append(response(HOME + bn + "/", book_props(b)))
                 else:
-                    self.send(404)
-                    return
-            out.append('</%smultistatus>' % p)
-            self.send(207, "\n".join(out).encode(), "application/xml; charset=utf-8")
+                    bn, b, card = self.where()
+                    if not b or card:
+                        self.send(404)
+                        return
+                    parts = [response(HOME + bn + "/", book_props(b))]
+                    if depth != "0":
+                        for name, (text, etag) in sorted(b.cards.items()):
+                            parts.append(response(HOME + bn + "/" + quote(name),
+                                "<%sgetetag>%s</%sgetetag><%sresourcetype/>"
+                                % (p, escape(etag), p, p)))
+            self.send(207, multistatus(parts), "application/xml; charset=utf-8")
+
+        def do_REPORT(self):
+            if not self.authed():
+                return
+            req = self.body().decode()
+            if opts.no_report:
+                self.send(405)
+                return
+            bn, b, card = self.where()
+            if not b or card or "addressbook-multiget" not in req:
+                self.send(400)
+                return
+            parts = []
+            with lock:
+                for href in re.findall(r"<(?:\w+:)?href>([^<]*)</", req):
+                    c = b.cards.get(unquote(href)[len(HOME + bn + "/"):])
+                    if c:
+                        parts.append(response(href, "<%sgetetag>%s</%sgetetag>"
+                            "<card:address-data>%s</card:address-data>"
+                            % (p, escape(c[1]), p, escape(c[0]).replace("\r", "&#13;"))))
+            self.send(207, multistatus(parts), "application/xml; charset=utf-8")
 
         def do_GET(self):
+            if self.path == "/.well-known/carddav":
+                self.send(301, extra={"Location": "/"})
+                return
             if not self.authed():
                 return
             if self.path == "/_dump":
-                with book.lock:
-                    d = {k: v[0] for k, v in book.cards.items()}
+                with lock:
+                    d = {bn: {k: v[0] for k, v in b.cards.items()} for bn, b in books.items()}
                 self.send(200, json.dumps(d, indent=1, ensure_ascii=False).encode(),
                           "application/json")
                 return
-            name = self.card()
-            with book.lock:
-                c = book.cards.get(name)
+            bn, b, card = self.where()
+            with lock:
+                c = b.cards.get(card) if b and card else None
             if not c:
                 self.send(404)
                 return
@@ -194,12 +267,12 @@ def handler(book, user, password, default_ns, no_chunked=False):
             if not self.authed():
                 return
             data = self.body().decode()
-            name = self.card()
-            if not name or "BEGIN:VCARD" not in data:
+            bn, b, card = self.where()
+            if not b or not card or "BEGIN:VCARD" not in data:
                 self.send(400)
                 return
-            with book.lock:
-                c = book.cards.get(name)
+            with lock:
+                c = b.cards.get(card)
                 if self.headers.get("If-None-Match") == "*" and c:
                     self.send(412)
                     return
@@ -207,16 +280,16 @@ def handler(book, user, password, default_ns, no_chunked=False):
                 if im and (not c or im != c[1]):
                     self.send(412)
                     return
-                etag = book.put(name, data)
+                etag = b.put(card, data)
             self.send(201 if not c else 204, extra={"ETag": etag})
 
         def do_DELETE(self):
             if not self.authed():
                 return
             self.body()
-            name = self.card()
-            with book.lock:
-                c = book.cards.get(name)
+            bn, b, card = self.where()
+            with lock:
+                c = b.cards.get(card) if b and card else None
                 if not c:
                     self.send(404)
                     return
@@ -224,8 +297,8 @@ def handler(book, user, password, default_ns, no_chunked=False):
                 if im and im != c[1]:
                     self.send(412)
                     return
-                del book.cards[name]
-                book.ctag += 1
+                del b.cards[card]
+                b.ctag += 1
             self.send(204)
 
     return H
@@ -241,15 +314,18 @@ def main():
     ap.add_argument("--default-ns", action="store_true")
     ap.add_argument("--no-chunked", action="store_true",
                     help="read a chunked request body as empty, as WSGI servers do")
+    ap.add_argument("--no-report", action="store_true",
+                    help="answer REPORT with 405")
     a = ap.parse_args()
     crt, key = make_certs(a.dir, a.host)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(crt, key)
-    srv = http.server.ThreadingHTTPServer(
-        ("0.0.0.0", a.port), handler(Book(), a.user, a.password, a.default_ns, a.no_chunked))
+    books = {bn: Book(name, cards) for bn, (name, cards) in SEED.items()}
+    srv = http.server.ThreadingHTTPServer(("0.0.0.0", a.port),
+                                          handler(books, a.user, a.password, a))
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
-    print("carddav test server: https://%s:%d%s (CA %s)"
-          % (a.host, a.port, BOOK, os.path.join(a.dir, "ca.pem")), flush=True)
+    print("carddav test server: https://%s:%d/ (home %s, CA %s)"
+          % (a.host, a.port, HOME, os.path.join(a.dir, "ca.pem")), flush=True)
     srv.serve_forever()
 
 

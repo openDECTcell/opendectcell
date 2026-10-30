@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# uclient's ucode module with one change (patches/): a request body whose
+# uclient's ucode module with two changes (patches/): a request body whose
 # length the caller gives in a Content-Length header goes out as it is,
-# not chunked, which some CardDAV servers need (docs/phonebook.md). Built
+# not chunked, which some CardDAV servers need, and the REPORT method, for
+# fetching many address book entries at once (docs/phonebook.md). Built
 # as a module of its own, opendectcell_uclient, from the uclient commit the
 # base feed packages, so the system's libuclient stays as it is.
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ucode-mod-opendectcell-uclient
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL=$(PROJECT_GIT)/project/uclient.git
@@ -38,8 +39,8 @@ endef
 
 define Package/ucode-mod-opendectcell-uclient/description
   uclient's ucode module as "opendectcell_uclient", changed to send a request
-  body of known length without chunked transfer coding. Used by
-  opendectcell-carddav.
+  body of known length without chunked transfer coding, and with the
+  WebDAV REPORT method. Used by opendectcell-carddav.
 endef
 
 define Build/Configure

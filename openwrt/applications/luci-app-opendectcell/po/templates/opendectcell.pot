@@ -6,24 +6,24 @@ msgid "Read the DECT base's state, change its settings and manage its handsets"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:128
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:192
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:321
 msgid "not seen since the base started"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:131
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:195
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:324
 #, javascript-format
 msgid "%d s ago"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:133
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:197
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:326
 #, javascript-format
 msgid "%d min ago"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:134
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:198
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:327
 #, javascript-format
 msgid "%d h ago"
 msgstr ""
@@ -35,7 +35,7 @@ msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:169
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:634
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:296
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:425
 msgid "connecting"
 msgstr ""
 
@@ -111,7 +111,7 @@ msgstr ""
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:214
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:336
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:512
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:578
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:707
 msgid "off"
 msgstr ""
 
@@ -161,7 +161,7 @@ msgid "Call"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:334
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:434
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:563
 msgid "from the handset"
 msgstr ""
 
@@ -182,7 +182,7 @@ msgstr ""
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:336
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:403
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:510
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1133
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1264
 msgid "Encryption"
 msgstr ""
 
@@ -252,22 +252,22 @@ msgid "No figures from the base."
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:385
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:911
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1042
 msgid "CAT-iq"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:385
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:911
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1042
 msgid "GAP"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:386
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:917
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1048
 msgid "standard"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:387
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:929
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1060
 msgid "base off"
 msgstr ""
 
@@ -291,7 +291,7 @@ msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:400
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:525
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1166
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1297
 msgid "Registration"
 msgstr ""
 
@@ -317,7 +317,7 @@ msgid "Wideband audio"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:406
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:825
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:956
 msgid "Several calls"
 msgstr ""
 
@@ -340,36 +340,36 @@ msgid "openDECTcell interface"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:413
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:799
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:930
 msgid "Handsets"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:414
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:902
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1033
 msgid "IPEI"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:414
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:925
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1056
 msgid "Last contact"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:414
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:913
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:955
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1025
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1044
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1086
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1156
 msgid "Model"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:414
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:896
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:934
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1151
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1027
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1065
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1282
 msgid "Name"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:414
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:894
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1025
 msgid "No."
 msgstr ""
 
@@ -379,7 +379,7 @@ msgid "State"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:414
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:905
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1036
 msgid "Type"
 msgstr ""
 
@@ -441,8 +441,8 @@ msgid "Service"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:469
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:921
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:985
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1052
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1116
 #, javascript-format
 msgid "Line %d"
 msgstr ""
@@ -560,8 +560,8 @@ msgid "Lines"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:524
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1130
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1153
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1261
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1284
 msgid "Account"
 msgstr ""
 
@@ -592,7 +592,7 @@ msgid "No handset has a VoIP profile as a line."
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:540
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:868
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:999
 msgid "Calls"
 msgstr ""
 
@@ -626,7 +626,7 @@ msgid "The newest %d lines from the system log, refreshed every 2 seconds while 
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:633
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:295
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:424
 msgid "up"
 msgstr ""
 
@@ -652,12 +652,12 @@ msgid "starting"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:643
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:302
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:431
 msgid "active"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:643
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:302
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:431
 msgid "waiting for an admin to approve it"
 msgstr ""
 
@@ -666,7 +666,7 @@ msgid "disabled by the controller"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:644
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:303
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:432
 msgid "revoked"
 msgstr ""
 
@@ -687,18 +687,18 @@ msgid "Controller link (dect-cell)"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:662
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:291
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:847
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:420
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:978
 msgid "Controller"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:663
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:293
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:422
 msgid "Link"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:665
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:300
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:429
 msgid "This cell at the controller"
 msgstr ""
 
@@ -763,8 +763,8 @@ msgid "Log"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/opendectcell/monitor.js:728
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:282
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:793
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:411
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:924
 msgid "DECT"
 msgstr ""
 
@@ -784,1016 +784,1066 @@ msgstr ""
 msgid "Live figures of the DECT base and its phone lines, and their log, refreshed every 2 seconds. Settings, handsets and registration: Network > DECT."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:175
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:78
+msgid "Use"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:79
+msgid "New contacts"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:80
+msgid "Address book"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:92
+msgid "No address books yet: fill in the server, user name and password, then fetch them."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:111
+msgid "Asking the server…"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:120
+msgid "The server could not be asked."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:131
+#, javascript-format
+msgid "%d address book(s) found. Tick the ones to use."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:135
+msgid "Fetch address books"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:160
+msgid "Choose at least one address book."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:304
 msgid "the DECT service is not running"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:176
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:305
 msgid "the base does not hold that handset"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:177
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:306
 msgid "the name is too long (at most 15 octets) or not valid text"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:178
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:307
 msgid "no such handset number"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:179
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:308
 msgid "the base is still starting up"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:180
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:309
 msgid "the base does not know that handset model"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:181
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:310
 msgid "the base is busy with other requests; try again in a moment"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:186
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:315
 #, javascript-format
 msgid "Not done: %s."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:222
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:351
 msgid "Make this box a cell of a controller"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:223
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:352
 msgid "The controller then runs the DECT base: its handsets, calls and phone lines. This box's own handsets, VoIP profiles and settings stay saved but unused, and its SIP client does not run. Leaving cell mode brings them back."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:224
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:353
 msgid "Paste the enrollment string from the controller's web interface:"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:227
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:259
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:327
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:356
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:388
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:456
 msgid "Cancel"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:237
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:366
 msgid "Enrolling"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:238
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:367
 msgid "Asking the controller; this can take up to a minute."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:242
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:371
 #, javascript-format
 msgid "Not enrolled: %s"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:246
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:375
 msgid "Enrolled: this box is now a cell. The page reloads."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:250
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:379
 msgid "Enrol"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:256
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:385
 msgid "Leave cell mode?"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:257
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:386
 msgid "This box forgets the controller: its key and certificate are erased, and it runs as a DECT base again with its own handsets and settings. To be a cell again it needs a new enrollment string."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:266
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:395
 #, javascript-format
 msgid "Could not leave cell mode: %s"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:272
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:401
 msgid "Leave cell mode"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:283
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:412
 msgid "This box is a cell of an openDECTcell controller: the controller runs the DECT base, its handsets and its phone lines. Live figures are on Status > DECT."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:287
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:416
 msgid "Enable the cell"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:288
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:417
 msgid "Boots the DECT chip and connects to the controller. The controller turns the radio on."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:292
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:297
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:421
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:426
 msgid "not enrolled"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:295
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:424
 msgid "not running"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:303
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:432
 msgid "disabled"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:307
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:436
 msgid "Enrolment"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:308
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:437
 msgid "Enrol…"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:312
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:441
 msgid "Cell mode"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:313
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:442
 msgid "Run this box as its own DECT base again."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:314
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:443
 msgid "Leave cell mode…"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:323
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:452
 #, javascript-format
 msgid "Deregister DECT %d (%s)?"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:324
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:453
 msgid "The base erases this handset's registration. The handset is told if it is in range; to use it again it has to be registered anew. A handset that is lost or switched off is erased after about 30 seconds without its confirmation."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:325
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:454
 msgid "Its settings here go with it; its VoIP profiles stay, free for another handset."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:338
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:882
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:467
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1013
 msgid "Deregister"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:351
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:480
 #, javascript-format
 msgid "Deregistering DECT %d"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:352
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:481
 msgid "Waiting for the base to let the handset go…"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:363
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:492
 #, javascript-format
 msgid "DECT %d is still registered after 40 s; its settings are kept. See Status > DECT, Log."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:373
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:502
 #, javascript-format
 msgid "DECT %d is deregistered, but its settings could not be removed: %s"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:410
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:539
 msgid "What the handset reports"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:411
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:540
 msgid "Features"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:433
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:562
 #, javascript-format
 msgid "as the model says (%s)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:441
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:570
 msgid "as the model says"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:449
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:578
 #, javascript-format
 msgid "%d to %d (or 0x..)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:451
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:580
 msgid "hex:... with {text} or {len}"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:464
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:593
 msgid "baresip cannot take ; \" < > or spaces here"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:499
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:628
 msgid "Profile name"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:500
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:629
 msgid "How the Line menus of the handsets name this profile."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:504
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:633
 msgid "A name is needed"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:507
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:636
 msgid "Another profile has this name"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:509
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:638
 msgid "Name on the handset"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:510
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:639
 msgid "What CAT-iq handsets show for this line, at most 15 characters (fewer with umlauts). Empty: the profile name, if it is that short."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:512
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:641
 msgid "At most 15 characters"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:514
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:643
 msgid "Display name"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:514
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:643
 msgid "The name the called party sees."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:515
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:644
 msgid "The SIP user, often the phone number."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:515
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1241
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:644
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1375
 msgid "User name"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:518
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:647
 msgid "A user name is needed"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:520
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:649
 msgid "Login name"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:521
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:650
 msgid "When the provider wants a login other than the user name."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:524
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1242
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:653
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1376
 msgid "Password"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:527
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:656
 msgid "Registrar"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:528
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:657
 msgid "The provider's SIP server, host or host:port (e.g. sip.example.net, or 192.168.178.1 for a FRITZ!Box)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:537
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:666
 #, javascript-format
 msgid "Another profile has this account (%s@%s)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:539
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:668
 msgid "Register"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:540
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:669
 msgid "Register with the server. Off for a peer that calls this handset directly by address."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:543
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:672
 msgid "Registration interval"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:543
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:672
 msgid "Seconds between registrations."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:548
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:677
 msgid "Transport"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:549
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:678
 msgid "Use TLS if your provider supports it: it encrypts the signalling, so your password and the numbers you call do not cross the internet in the clear (the provider names the port, often 5061). Encrypted speech (Encryption tab) is only private with TLS here."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:552
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:681
 msgid "TLS (encrypted signalling)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:554
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:683
 msgid "Only when the provider names one."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:554
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:683
 msgid "Outbound proxy"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:557
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:686
 msgid "Second outbound proxy"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:560
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:689
 msgid "SIP outbound (RFC 5626)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:561
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:690
 msgid "Keep the connection to the server open through NAT, when the provider supports it."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:562
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:691
 msgid "NAT traversal for media"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:563
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:622
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:684
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:692
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:751
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:813
 msgid "none"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:567
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:696
 msgid "STUN/TURN server"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:567
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:696
 msgid "host or host:port."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:570
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:699
 msgid "TURN user"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:572
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:701
 msgid "TURN password"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:576
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:705
 msgid "Keep media open"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:577
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:706
 msgid "Packets that keep a NAT binding open while one side is silent."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:579
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:708
 msgid "empty RTP packets"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:581
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:710
 msgid "dynamic"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:584
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:616
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:713
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:745
 msgid "Try to autodetect"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:585
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:714
 msgid "Offers every codec, HD first, and sends key tones the way the other side asks. Right for nearly every provider; untick to set them by hand."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:588
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:717
 msgid "Codecs"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:589
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:718
 msgid "Offered in the order shown. G.722 keeps the handset's wideband (HD) audio end to end."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:595
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:724
 msgid "Milliseconds of audio per RTP packet."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:595
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:724
 msgid "Packet time"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:599
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:728
 msgid "Key tones (DTMF)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:600
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:729
 msgid "RTP events (RFC 4733)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:601
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:730
 msgid "SIP INFO"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:602
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1195
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:731
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1326
 msgid "automatic"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:605
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:734
 msgid "Reliable provisional responses (100rel)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:606
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:735
 msgid "when the other side supports it"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:607
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:736
 msgid "never"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:608
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:737
 msgid "required"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:611
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:740
 msgid "Voicemail notification (MWI)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:612
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:741
 msgid "Allow call transfer"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:617
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:746
 msgid "Offers encrypted speech (SRTP) and falls back to plain speech when the other side does not take it. Untick to choose a method, or none."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:620
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:749
 msgid "Media encryption"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:621
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:750
 msgid "Encrypts the speech on the internet side. Use TLS as transport too, or the keys travel in the clear."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:623
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:752
 msgid "SRTP when offered"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:624
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:753
 msgid "SRTP required"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:625
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:754
 msgid "SRTP required (in the offer)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:629
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:758
 msgid "Further account parameters"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:630
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:759
 msgid "Appended to the account as is, baresip syntax: ;key=value;key=value."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:634
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:763
 msgid ";key=value pairs, no spaces"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:691
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:820
 #, javascript-format
 msgid "%s (deleted profile)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:701
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:830
 msgid "Search the profiles…"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:726
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:855
 msgid "This profile was deleted; choose another or none"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:728
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:857
 msgid "Choose Line 1 first: it is the line the handset's calls go out on unless it picks Line 2"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:729
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:858
 msgid "This profile is already the other line"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:794
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:925
 msgid "The base station for DECT handsets. Saving restarts it with the new settings; a call in progress ends. Live figures are on Status > DECT."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:798
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:867
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:929
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:998
 msgid "General"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:800
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:931
 msgid "VoIP Profiles"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:802
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:933
 msgid "Phonebook"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:803
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1134
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:934
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1265
 msgid "Advanced"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:806
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:937
 msgid "Enable the DECT base"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:807
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:938
 msgid "Boots the DECT chip and puts the base on the air. Needs the chip firmware (Advanced)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:810
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:941
 msgid "Encrypt calls"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:811
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:942
 msgid "DECT standard encryption on every call and list session. Switch off only to debug audio."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:815
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:946
 msgid "Check handsets when they report in"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:816
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:947
 msgid "Each handset proves its key whenever it reports in to the base; a handset that cannot is turned away."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:820
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:951
 msgid "Wideband audio (HD)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:821
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:952
 msgid "G.722 when the handset offers it; off keeps every call narrowband."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:826
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:957
 msgid "Up to three calls at once: other handsets may call and be called while one is in a call."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:830
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:961
 msgid "Collect dialled digits"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:831
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:962
 msgid "Wait for the number to be complete before connecting."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:835
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:966
 msgid "Dialling pause"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:836
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:967
 msgid "Milliseconds after the last digit before the number counts as complete."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:841
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:972
 msgid "Time update interval"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:842
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:973
 msgid "Hours between sending the date and time to all handsets. Each handset also gets it whenever it reports in to the base; 0 sends it only then."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:848
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:979
 msgid "Make this box a cell of an openDECTcell controller, which then runs the base for several boxes."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:849
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:980
 msgid "Make this box a cell…"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:857
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:988
 msgid "The DECT service is not running: renaming and deregistering need it, and handsets registered later appear here once it runs."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:864
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:995
 #, javascript-format
 msgid "Handset DECT %s"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:869
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1000
 msgid "Radio link and lists"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:870
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1001
 msgid "Capabilities and features"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:873
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1004
 msgid "Edit"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:880
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1011
 msgid "Needs the DECT service running"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:887
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1018
 msgid "This handset is not registered; remove its settings and free its VoIP profiles"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:889
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1020
 msgid "Remove"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:900
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1031
 msgid "not registered"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:900
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1031
 msgid "unknown: the service is off"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:930
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1061
 msgid "connected now"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:935
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1066
 msgid "What every handset shows for this one, at most 15 characters (fewer with umlauts). Empty restores \"DECT n\". Takes effect when this pop-up is saved."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:936
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1067
 msgid "Can only be changed while the DECT service is running."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:950
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1081
 #, javascript-format
 msgid "DECT %d renamed."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:956
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1087
 msgid "Known quirks of this handset model; its own settings in the other tabs override it. Takes effect when this pop-up is saved."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:958
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1089
 msgid "automatic (standard)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:960
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1091
 #, javascript-format
 msgid "%s (other models)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:986
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1117
 msgid "A VoIP profile (VoIP Profiles tab): calls to it ring this handset, and the handset's calls go out on it unless the handset picks Line 2."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:987
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1118
 msgid "An optional second VoIP profile, ringing this handset too."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1012
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1143
 msgid "Manufacturer"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1013
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1144
 msgid "Of the handset you are about to register. A known model gets the settings it needs from the start."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1014
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1145
 msgid "Generic DECT GAP/CAT-iq handset"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1030
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1161
 #, javascript-format
 msgid "another %s model"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1033
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1164
 msgid "Registration PIN"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1034
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1165
 msgid "The PIN a handset asks for when it registers. Random; \"New PIN\" makes another."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1050
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1181
 #, javascript-format
 msgid "%d digits, as PIN length says"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1054
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1185
 msgid "New PIN"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1061
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1192
 msgid "PIN length"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1062
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1193
 msgid "8 digits are the most DECT allows and the hardest to guess. Choose fewer only for a handset that cannot take 8."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1063
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1194
 msgid "8 digits"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1064
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1195
 msgid "6 digits"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1065
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1196
 msgid "4 digits"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1073
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1204
 msgid "New handset"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1074
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1205
 msgid "Opens registration for the registration window; start the registration on the handset then and enter the PIN below."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1075
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1206
 msgid "Needs the DECT service running."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1077
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1208
 msgid "Register a handset"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1087
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1218
 msgid "The PIN shown is not in use yet: press Save & Apply first, then register."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1093
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1224
 msgid "A new PIN is saved but not in use yet: press Save & Apply first, then register."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1101
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1232
 #, javascript-format
 msgid "Registration is open for %s s. Start the registration on the handset now and enter the PIN %s."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1108
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1239
 msgid "Registration window"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1109
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1240
 msgid "Seconds that \"Register a handset\" keeps registration open."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1113
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1244
 msgid "Keep registration open"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1114
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1245
 msgid "Registration stays open while the base runs. Not recommended: anyone nearby who knows the PIN can register a handset."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1121
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1252
 msgid "One profile per SIP account; assign them under Handsets (Edit, Line 1 / Line 2). A profile may be a line of several handsets: a call to it rings them all."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1126
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1257
 msgid "Add a profile"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1128
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1259
 msgid "(new)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1128
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1259
 #, javascript-format
 msgid "VoIP profile %s"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1131
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1262
 msgid "Server and NAT"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1132
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1263
 msgid "Media"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1158
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1289
 msgid "Line of"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1163
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1294
 #, javascript-format
 msgid "DECT %s, Line %d"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1164
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1295
 msgid "free"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1171
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1302
 msgid "not in use (yet)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1178
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1309
 msgid "Settings for all profiles"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1181
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1312
 msgid "SIP port"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1182
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1313
 msgid "The local port for SIP signalling (UDP and TCP; TLS on the next port)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1185
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1316
 msgid "RTP port range"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1186
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1317
 msgid "Local ports for the speech, first-last."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1191
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1322
 msgid "first-last, 1024 to 65535"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1193
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1324
 msgid "Network interface"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1194
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1325
 msgid "The network device SIP and speech go out on, e.g. br-lan or pppoe-wan (not an interface name like wan). Empty: the default route."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1196
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1327
 msgid "DNS server"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1197
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1328
 msgid "An IP address, optionally with :port, for the SIP servers' names. Empty: the system's."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1200
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1331
 msgid "Speech priority (DSCP)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1201
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1332
 msgid "Marks the speech packets so routers can prefer them."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1202
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1333
 msgid "EF (46), the usual for voice"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1204
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1209
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1335
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1340
 msgid "none (0)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1206
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1337
 msgid "Signalling priority (DSCP)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1211
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1342
 msgid "Jitter buffer"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1212
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1343
 msgid "Milliseconds of speech held back to smooth out the network, min-max."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1216
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1347
 msgid "min-max, up to 1000"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1218
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1349
 msgid "Check the server's certificate"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1219
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1350
 msgid "For lines with TLS transport. Off accepts any certificate, which defeats the encryption."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1222
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1353
 msgid "Certificate authorities"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1223
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1354
 msgid "A PEM file of the CAs to trust; empty: the system's (ca-bundle)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1233
-msgid "The handsets' phonebook comes from a CardDAV address book (Nextcloud, Baïkal, a mail provider's). What a handset adds, changes or deletes is written back to it."
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1365
+msgid "The handsets' phonebook comes from CardDAV address books (Nextcloud, Baïkal, a mail provider's). What a handset changes or deletes is written back to the book the contact came from; a contact made on a handset goes to the book chosen for new contacts."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1234
-msgid "Use an address book"
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1366
+msgid "Contacts are not merged: one that is in two books appears twice on the handsets."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1239
-msgid "Address book URL"
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1368
+msgid "Use address books"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1240
-msgid "The address book itself, https:// only, e.g. https://cloud.example.org/remote.php/dav/addressbooks/users/NAME/contacts/"
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1373
+msgid "Server"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1243
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1374
+msgid "Any address of the account, https:// only: the server (https://cloud.example.org), or an address book's own URL."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1377
 msgid "An app password where the server offers one."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1244
-msgid "Check every"
-msgstr ""
-
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1244
-msgid "Minutes. Changes on a handset are written back at once."
-msgstr ""
-
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1245
-msgid "CA certificate"
-msgstr ""
-
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1246
-msgid "Only for a server with its own certificate authority: a PEM file on this box. Empty: the usual public CAs."
-msgstr ""
-
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1247
-msgid "Allow \"delete list\""
-msgstr ""
-
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1248
-msgid "A handset's \"delete list\" empties the whole address book on the server. Off: the base refuses it."
-msgstr ""
-
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1265
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1391
 msgid "An https:// address"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1269
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1395
+msgid "Address books"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1405
+msgid "Check every"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1405
+msgid "Minutes. Changes on a handset are written back at once."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1406
+msgid "CA certificate"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1407
+msgid "Only for a server with its own certificate authority: a PEM file on this box. Empty: the usual public CAs."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1408
+msgid "Allow \"delete list\""
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1409
+msgid "A handset's \"delete list\" empties every address book used here, on the server. Off: the base refuses it."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1422
 msgid "Last sync"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1273
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1427
 msgid "none yet"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1275
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1429
 #, javascript-format
 msgid "failed: %s"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1276
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1430
 #, javascript-format
 msgid "%d contacts, %s"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1282
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1436
+#, javascript-format
+msgid "%d contacts"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1442
 msgid "Chip firmware directory"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1283
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1443
 msgid "Where the two DECT chip firmware files from a FRITZ!OS image are kept (never shipped with opendectcell)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1285
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1445
 msgid "First-stage firmware"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1287
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1447
 msgid "Second-stage firmware"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1289
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1449
 msgid "Allow unknown firmware"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1290
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1450
 msgid "Run a chip firmware build opendectcell does not know. For developers."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1291
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1451
 msgid "DECT UART"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1293
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1453
 msgid "Factory partition"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1294
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1454
 msgid "Holds the base's DECT identity and calibration."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1296
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1456
 msgid "Factory offset"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1298
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1458
 msgid "Chip mode word"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1300
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1460
 msgid "Handset stores"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1301
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1461
 msgid "One file per registered handset."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1303
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1463
 msgid "Extra options"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/opendectcell/settings.js:1304
+#: htdocs/luci-static/resources/view/opendectcell/settings.js:1464
 msgid "Further dect-stubd -a options, comma-separated, for developers. They follow the service's own, so a key set here wins."
 msgstr ""

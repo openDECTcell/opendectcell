@@ -2,8 +2,15 @@
 
 Since 2026-10-30. The handsets read the base's Contact List (CAT-iq list
 access, TS 102 527-3 V1.7.1 clause 7.4.10.5.7), and the base fills it from
-one CardDAV address book (RFC 6352) over HTTPS. It works both ways: a
-contact a handset adds, edits or deletes is written back to the server.
+CardDAV address books (RFC 6352) over HTTPS. It works both ways: an edit or
+a delete on a handset goes back to the book the contact came from, and a
+contact made on a handset goes to the book chosen for new contacts.
+
+**Several books, no merging.** One account usually has several address
+books. LuCI's "Fetch address books" lists them, and the user ticks the ones
+to use and picks the one for new contacts. Contacts are not merged: one that
+is in two books appears twice on the handsets (the maintainer's decision,
+2026-10-30). LuCI says so on the Phonebook tab.
 The maintainer asked for this on 2026-10-28 (ROADMAP M9b) and approved it on
 2026-10-30.
 
@@ -14,9 +21,9 @@ The maintainer asked for this on 2026-10-28 (ROADMAP M9b) and approved it on
 | the store | `src/libopendectcell/dect_contacts.[ch]` | up to 500 contacts, sorted by name then first name without case (ä as a, ß as ss), stable entry identifiers, a journal of the handsets' changes, caller-name lookup by number |
 | the list | `src/libopendectcell/dect_iwu.c` | Contact List 05H: read, search (by name), query fields, edit, save (existing and new), delete entry, delete list; one store shared by every link, so an entry one handset edits is locked for the others |
 | dect-stubd | `-b FILE` | offers the list, re-reads FILE when it changes, appends the handsets' changes to FILE.changes; an incoming call without a SIP name gets the contact's name |
-| the sync | `openwrt/net/opendectcell/files/carddav.uc`, package `opendectcell-carddav` | ucode, about 20 KB; reads the address book into FILE and writes FILE.changes back |
-| its HTTP client | `openwrt/utils/ucode-mod-opendectcell-uclient` | uclient's ucode module with a patch for sized request bodies, 25 KB installed (see Limits) |
-| LuCI | Network > DECT, Phonebook tab | the settings and the last sync's result |
+| the sync | `openwrt/net/opendectcell/files/carddav.uc`, package `opendectcell-carddav` | ucode, about 25 KB; finds the account's books (`discover`), reads the chosen ones into FILE and writes FILE.changes back |
+| its HTTP client | `openwrt/utils/ucode-mod-opendectcell-uclient` | uclient's ucode module with two patches: sized request bodies and the REPORT method, 25 KB installed (see Limits) |
+| LuCI | Network > DECT, Phonebook tab | server, user and password; "Fetch address books" and a row per book (use it, new contacts go here); the last sync per book |
 
 File formats: the comment at the top of `dect_contacts.h`.
 
@@ -49,8 +56,14 @@ File formats: the comment at the top of `dect_contacts.h`.
 
 ## Limits
 
-- **One address book, its URL configured.** No discovery from a server
-  name.
+- **Discovery** follows RFC 6764 section 6 and RFC 6352 section 7:
+  - the URL's own books;
+  - else the current-user-principal of the URL or of `/.well-known/carddav`;
+  - that principal's addressbook-home-set and the books in it.
+
+  PROPFIND only. The form's password goes to the box in a root-only file,
+  which the script deletes; it is never on a command line. DNS SRV lookup
+  (RFC 6764 section 3) is not done: give the server's own address.
 - **Chunked uploads: fixed in our build.** OpenWrt's HTTP client (uclient)
   sends every request body with `Transfer-Encoding: chunked`.
   - Servers behind nginx, or Apache with mod_php, accept that.
@@ -66,12 +79,20 @@ File formats: the comment at the top of `dect_contacts.h`.
     reads a chunked body as empty, as WSGI servers do: the stock module's
     edit was refused, and with ours the edit, the delete and the new card
     all arrived.
-- **No REPORT** (uclient has no such method): each sync first asks for the
-  collection's CTag. When the CTag changed, it lists the ETags and fetches
-  only the cards that changed.
-  - The first sync of a large address book takes about 0.3 s per card on
-    the 7412 (500 cards: about 2.5 minutes).
-- **500 contacts at most**; more are cut, and the log says so.
+- **REPORT.** Each sync first asks each book for its CTag. When the CTag
+  changed, the sync lists the ETags (PROPFIND Depth 1) and fetches the cards
+  that changed with addressbook-multiget, 50 per request. uclient had no
+  REPORT; `opendectcell_uclient` adds it.
+  - Where REPORT fails (the stock module, a server answering 405), the sync
+    fetches card by card for the rest of that round, about 0.3 s per card
+    on the 7412.
+  - Tested against `carddav-testserver.py`: two books took 6 PROPFINDs and
+    2 REPORTs; with `--no-report`, the same result by GET.
+- **500 contacts at most**, over all books. More are cut, and the log says
+  so. The maintainer expects that to be enough for nearly everyone. The
+  handsets never hold the list: they read it from the base in pieces and
+  search it there (7.4.10.4.3, 7.4.10.4.8). So the only limit is the
+  base's, and a search reaches every contact the base holds.
 - **Nothing on flash.** The cache lives in the sync's memory and the files
   under /var/run. After a reboot the first sync reads the address book
   again.
@@ -100,6 +121,14 @@ File formats: the comment at the top of `dect_contacts.h`.
   killed it 5 s later. Under ucode's uloop a SIGTERM was caught and
   dropped. The sync now exits from its own handler. Timed stop, with the
   server unreachable and after real requests: under 1 s in both cases.
+- **Several books, 2026-10-30, 7412 against the test server:**
+  - discovery from the server root, from a book URL, from an unknown path
+    (via `/.well-known/carddav`) and with a wrong password;
+  - a sync of two books, Anna in both shown twice;
+  - an edit of the work book's Anna went back to the work book, a new
+    contact went to the default book, a delete went to the work book;
+  - the Phonebook tab in headless Chrome: the form, "Fetch address books"
+    and the book rows render.
 - **Not tested yet:**
   - a handset reading or editing the list on the air;
   - a real server (Nextcloud, Baïkal);

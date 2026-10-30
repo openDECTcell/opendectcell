@@ -1,23 +1,37 @@
 #!/usr/bin/ucode
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// opendectcell-carddav: the handsets' Contact List from a CardDAV address book,
-// both ways. Reads the address book (RFC 6352) over HTTPS into the contacts
-// file dect-stubd offers the handsets (-b), and writes what handsets change
-// (FILE.changes) back. File formats: src/libopendectcell/dect_contacts.h.
+// opendectcell-carddav: the handsets' Contact List from CardDAV address books,
+// both ways. Reads the chosen address books (RFC 6352) over HTTPS into the
+// contacts file dect-stubd offers the handsets (-b), and writes what
+// handsets change (FILE.changes) back: an edit or a delete to the book the
+// contact came from, a new contact to the default book. File formats:
+// src/libopendectcell/dect_contacts.h. Contacts in several books are shown once
+// per book; nothing is merged.
 //
-// One address book, its collection URL configured; no discovery. Only
-// PROPFIND, GET, PUT and DELETE: uclient has no REPORT, so a sync lists
-// the ETags (Depth 1) and fetches what changed, after a Depth 0 look at
-// the collection's CTag says anything did. Nothing is kept on flash: the
-// cache is this process's memory, the files are under /var/run.
+// Discovery (`discover`): from any URL of the account -- a server name, a
+// principal, a home set, a book -- as RFC 6764 section 6 and RFC 6352
+// section 7 describe it: the URL's own books, else /.well-known/carddav
+// and the current-user-principal, its addressbook-home-set, the books in
+// that. PROPFIND only.
 //
-// Configuration (uci opendectcell.carddav): enabled, url (https:// only),
-// username, password, interval (minutes, default 15), ca_file (a PEM CA
-// for a self-hosted server; default the system bundle), allow_clear (a
-// handset's 'delete list' empties the address book; default off).
+// A sync looks at each book's CTag (Depth 0); when it changed, it lists
+// the ETags (Depth 1) and fetches the cards that changed, in batches with
+// REPORT addressbook-multiget, or one GET each where REPORT is missing
+// (the stock uclient, or a server without it). Nothing is kept on flash:
+// the cache is this process's memory, the files are under /var/run.
 //
-// Usage: carddav.uc [once]       (once: one sync, then exit; for tests)
+// Configuration (uci opendectcell.carddav): enabled, url (https:// only; where
+// discovery starts, and the one book when no book is listed), list book
+// (the books' URLs), default (the book for new contacts; default the
+// first), username, password, interval (minutes, default 15), ca_file (a
+// PEM CA for a self-hosted server; default the system bundle), allow_clear
+// (a handset's 'delete list' empties every chosen book; default off).
+//
+// Usage: carddav.uc [once]          (once: one sync, then exit; for tests)
+//        carddav.uc discover [FILE] (the account's books as JSON; FILE, a
+//                                    JSON {url, username, password} that
+//                                    is read and deleted, else uci)
 
 'use strict';
 
@@ -39,32 +53,42 @@ try {
 const DIR = '/var/run/opendectcell';
 const FILE = DIR + '/contacts';
 const STATE = DIR + '/carddav.json';
+const BOOKS = DIR + '/carddav-books.json';	// the last discovery, for LuCI
+const MULTIGET = 50;		// cards per REPORT
 const SYSTEM_CA = '/etc/ssl/certs/ca-certificates.crt';
 const MAX_CONTACTS = 500;	// DECT_CONTACTS_MAX
 const NAME_MAX = 31;		// DECT_CONTACT_NAME_MAX - 1, UTF-8 bytes
 
 let cfg;
-let cache = {};		// href -> { etag, key, name, first, line, numbers }
-let keys = {};		// key -> href
-let hints = {};		// href -> the entry id a handset gave it
-let ctag = null;
+let cache = {};		// card href -> { book, etag, key, name, first, line, numbers }
+let keys = {};		// key -> card href
+let hints = {};		// card href -> the entry id a handset gave it
+let ctags = {};		// book -> its CTag at the last good read
+let report;		// REPORT works this round (only our uclient has it)
 let synced = 0;		// the last journal change applied
-let state = { ok: false, contacts: 0, last_sync: 0, error: null };
+let state = { ok: false, contacts: 0, last_sync: 0, error: null, books: [] };
 
 function log(msg) {
 	warn('carddav: ', msg, '\n');
 }
 
+function slash(url) {
+	return substr(url, -1) == '/' ? url : url + '/';
+}
+
 function config() {
 	let c = uci.cursor();
 	let s = c.get_all('opendectcell', 'carddav') || {};
-	let url = s.url || '';
+	let url = slash(s.url || '');
+	let books = map(type(s.book) == 'array' ? s.book : (s.book ? [ s.book ] : []), slash);
 
-	if (substr(url, -1) != '/')
-		url += '/';
+	if (!length(books))
+		books = [ url ];
 	return {
 		enabled: s.enabled == '1',
 		url: url,
+		books: books,
+		default: s.default && index(books, slash(s.default)) >= 0 ? slash(s.default) : books[0],
 		auth: s.username ? s.username + ':' + (s.password || '') : null,
 		interval: (+s.interval || 15) * 60,
 		ca: s.ca_file || SYSTEM_CA,
@@ -79,6 +103,20 @@ function save_state() {
 }
 
 // ---- HTTP ------------------------------------------------------------------
+
+function origin(url) {
+	let m = match(url, /^(https?:\/\/[^\/]+)/);
+
+	return m ? m[1] : '';
+}
+
+// An href as a URL: absolute already, or a path on base's server.
+function absolute(base, href) {
+	if (index(href, 'http://') == 0 || index(href, 'https://') == 0)
+		return href;
+	return origin(base) + (index(href, '/') == 0 ? '' : '/') + href;
+}
+
 
 // A stop ends this process at once (maintainer, 2026-10-29: "If the
 // service is stopped, we want things to stop immediately"). Under ucode's
@@ -98,20 +136,18 @@ function stop_check() {
 }
 
 // One request on a fresh client: { status, headers, body } (status 0 on a
-// transport or TLS error). Redirects are followed, up to three. With
-// `challenge`, uclient answers the server's 401 itself (Basic or Digest,
-// it learns which from the challenge) by sending the request once more.
+// transport or TLS error). With `challenge`, uclient answers the server's
+// 401 itself (Basic or Digest, it learns which from the challenge) by
+// sending the request once more. Redirects are http()'s: uclient's own
+// would send the request again without its body.
 function attempt(method, url, headers, body, challenge) {
 	let res = { status: 0, headers: {}, body: '' };
-	let redirects = 0;
 	let cl;
 
 	cl = uclient.new(url, challenge ? cfg.auth : null, {
 		header_done: function() {
 			let st = cl.status();
 
-			if (st.redirect && redirects++ < 3 && cl.redirect())
-				return;
 			res.status = st.status;
 			res.headers = cl.get_headers() || {};
 		},
@@ -139,7 +175,7 @@ function attempt(method, url, headers, body, challenge) {
 	let args = { headers: { ...(headers || {}) } };
 	if (body != null)
 		args.post_data = body;
-	if (sized && index([ 'PUT', 'PROPFIND', 'DELETE', 'POST' ], method) >= 0)
+	if (sized && index([ 'PUT', 'PROPFIND', 'REPORT', 'DELETE', 'POST' ], method) >= 0)
 		args.headers['Content-Length'] = '' + length(body != null ? body : '');
 	for (let tries = 0; tries < (challenge ? 2 : 1); tries++) {
 		res = { status: 0, headers: {}, body: '' };
@@ -157,15 +193,28 @@ function attempt(method, url, headers, body, challenge) {
 
 // One request: Basic credentials sent up front, the usual case over HTTPS,
 // so a request costs one round trip; on a 401 once more the slow way.
+// Up to three redirects are followed, the whole request each time, to
+// https:// only; r.url is where the answer came from.
 function http(method, url, headers, body) {
-	let h = { ...(headers || {}) };
+	let r;
 
-	if (!cfg.auth)
-		return attempt(method, url, h, body, false);
-	h['Authorization'] = 'Basic ' + b64enc(cfg.auth);
-	let r = attempt(method, url, h, body, false);
-	if (r.status == 401)
-		r = attempt(method, url, headers || {}, body, true);
+	for (let hops = 0; hops < 4; hops++) {
+		let h = { ...(headers || {}) };
+
+		if (cfg.auth)
+			h['Authorization'] = 'Basic ' + b64enc(cfg.auth);
+		r = attempt(method, url, h, body, false);
+		if (r.status == 401 && cfg.auth)
+			r = attempt(method, url, headers || {}, body, true);
+		r.url = url;
+		let to = r.headers.location;
+		if (index([ 301, 302, 303, 307, 308 ], r.status) < 0 || !to)
+			break;
+		to = absolute(url, to);
+		if (index(to, 'https://') != 0)
+			break;
+		url = to;
+	}
 	return r;
 }
 
@@ -176,6 +225,8 @@ function ok(r) {
 // ---- WebDAV ----------------------------------------------------------------
 
 function xml_text(s) {
+	s = replace(s, /&#(1[03]|9);/g, (m, n) => chr(+n));
+	s = replace(s, /&#x([0-9a-fA-F]{1,2});/g, (m, n) => hex(n) < 128 ? chr(hex(n)) : m);
 	s = replace(s, /&quot;/g, '"');
 	s = replace(s, /&apos;/g, "'");
 	s = replace(s, /&lt;/g, '<');
@@ -190,16 +241,44 @@ function xml_get(s, name) {
 	return m ? trim(xml_text(m[3])) : null;
 }
 
-function origin(url) {
-	let m = match(url, /^(https?:\/\/[^\/]+)/);
+// What follows the first opening tag with this local name, or null.
+function xml_after(s, name) {
+	let p = split(s, regexp('<([A-Za-z0-9_.-]+:)?' + name + '([ \t\r\n][^>]*)?>'), 2);
 
-	return m ? m[1] : '';
+	return length(p) == 2 ? p[1] : null;
 }
 
-// PROPFIND: a list of { href (absolute URL), etag, collection, ctag }.
+// An element's text that may hold markup-like content: CDATA, or text up
+// to the closing tag.
+function xml_body(s, name) {
+	let rest = xml_after(s, name);
+
+	if (rest == null)
+		return null;
+	if (index(rest, '<![CDATA[') == 0)
+		return substr(rest, 9, index(rest, ']]>') - 9);
+	let end = index(rest, '<');
+	return xml_text(end < 0 ? rest : substr(rest, 0, end));
+}
+
+// The <response> parts of a multistatus body.
+function responses(body) {
+	return slice(split(body, /<([A-Za-z0-9_.-]+:)?response[ \t\r\n>]/), 1);
+}
+
+// The href inside an element, e.g. current-user-principal, or null.
+function href_in(part, name) {
+	let rest = xml_after(part, name);
+
+	return rest == null ? null : xml_get(rest, 'href');
+}
+
+// PROPFIND: a list of { href (absolute URL), etag, ctag, name, collection,
+// book (an address book), principal, home }.
 function propfind(url, depth, props) {
 	let body = '<?xml version="1.0" encoding="utf-8"?>\n' +
-		'<d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/">' +
+		'<d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"' +
+		' xmlns:card="urn:ietf:params:xml:ns:carddav">' +
 		'<d:prop>' + props + '</d:prop></d:propfind>';
 	let r = http('PROPFIND', url, {
 		'Depth': '' + depth,
@@ -209,21 +288,70 @@ function propfind(url, depth, props) {
 
 	if (r.status != 207)
 		return { status: r.status, list: null };
-	for (let part in split(r.body, /<([A-Za-z0-9_.-]+:)?response[ \t\r\n>]/)) {
+	url = r.url;
+	for (let part in responses(r.body)) {
 		let href = xml_get(part, 'href');
+		let principal = href_in(part, 'current-user-principal');
+		let home = href_in(part, 'addressbook-home-set');
 
 		if (!href)
 			continue;
-		if (index(href, '/') == 0)
-			href = origin(url) + href;
 		push(out, {
-			href: href,
+			href: absolute(url, href),
 			etag: xml_get(part, 'getetag'),
 			ctag: xml_get(part, 'getctag'),
+			name: xml_get(part, 'displayname'),
 			collection: !!match(part, /<([A-Za-z0-9_.-]+:)?collection[ \t\r\n\/>]/),
+			book: !!match(part, /<([A-Za-z0-9_.-]+:)?addressbook[ \t\r\n\/>]/),
+			principal: principal ? absolute(url, principal) : null,
+			home: home ? absolute(url, home) : null,
 		});
 	}
 	return { status: r.status, list: out };
+}
+
+// ---- discovery ---------------------------------------------------------------
+
+// The address books at a URL: itself if it is one, else those inside it.
+function books_at(url) {
+	let r = propfind(slash(url), 1, '<d:resourcetype/><d:displayname/>');
+
+	if (!r.list)
+		return { status: r.status, list: null };
+	let self = filter(r.list, (e) => slash(e.href) == slash(url) && e.book);
+	let list = length(self) ? self : filter(r.list, (e) => e.book && slash(e.href) != slash(url));
+
+	return { status: r.status, list: map(list, (e) => ({ href: slash(e.href), name: e.name || e.href })) };
+}
+
+// RFC 6764 section 6 and RFC 6352 section 7: the URL's own books, else
+// its principal (or the well-known URL's), that principal's home set and
+// the books there.
+function discover(url) {
+	let b = books_at(url);
+
+	if (b.list && length(b.list))
+		return { ok: true, books: b.list };
+	if (b.status == 401)
+		return { ok: false, error: 'the server refused the user name or password' };
+	let principal = null;
+	for (let u in [ url, origin(url) + '/.well-known/carddav' ]) {
+		let r = propfind(u, 0, '<d:current-user-principal/>');
+
+		principal = r.list && length(r.list) ? r.list[0].principal : null;
+		if (principal)
+			break;
+	}
+	if (!principal)
+		return { ok: false, error: sprintf('no CardDAV account found at %s', url) };
+	let r = propfind(principal, 0, '<card:addressbook-home-set/>');
+	let home = r.list && length(r.list) ? r.list[0].home : null;
+	if (!home)
+		return { ok: false, error: sprintf('%s names no address book home', principal) };
+	b = books_at(home);
+	if (!b.list)
+		return { ok: false, error: sprintf('PROPFIND %s: status %d', home, b.status) };
+	return { ok: true, books: b.list };
 }
 
 // ---- vCard -----------------------------------------------------------------
@@ -539,54 +667,125 @@ function fetch(href) {
 	return { text: r.body, etag: r.headers.etag };
 }
 
-function remember(href, etag, text) {
+function remember(book, href, etag, text) {
 	let c = vcard_parse(text);
 
+	c.book = book;
 	c.href = href;
 	c.etag = etag;
 	c.key = key_for(href);
 	cache[href] = c;
 }
 
-// Read the address book; true when the cache is current.
-function sync() {
-	let top = propfind(cfg.url, 0, '<cs:getctag/><d:resourcetype/>');
+function path_of(href) {
+	return substr(href, length(origin(href)));
+}
 
-	if (!top.list) {
-		state.error = sprintf('PROPFIND %s: status %d', cfg.url, top.status);
-		return false;
+// Cards by REPORT addressbook-multiget (RFC 6352 8.7), MULTIGET at a time;
+// the ones it did not bring, by GET. false when one could not be fetched.
+function fetch_all(book, list) {
+	let want = {};
+
+	for (let e in list)
+		want[e.href] = e.etag;
+	for (let i = 0; report && i < length(list); i += MULTIGET) {
+		let body = '<?xml version="1.0" encoding="utf-8"?>\n' +
+			'<card:addressbook-multiget xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">' +
+			'<d:prop><d:getetag/><card:address-data/></d:prop>';
+
+		for (let e in slice(list, i, i + MULTIGET))
+			body += '<d:href>' + replace(replace(path_of(e.href), /&/g, '&amp;'), /</g, '&lt;') + '</d:href>';
+		body += '</card:addressbook-multiget>';
+		let r = http('REPORT', book, { 'Depth': '1',
+			'Content-Type': 'application/xml; charset=utf-8' }, body);
+		if (r.status != 207) {
+			// 405, 501, no answer at all, ...: GET for the rest of
+			// this round; a book that is really gone fails there
+			report = false;
+			log(sprintf('REPORT %s: status %d; fetching cards one by one', book, r.status));
+			break;
+		}
+		for (let part in responses(r.body)) {
+			let href = xml_get(part, 'href');
+			let text = xml_body(part, 'address-data');
+
+			if (!href || text == null)
+				continue;
+			href = absolute(book, href);
+			if (!(href in want))
+				continue;
+			remember(book, href, xml_get(part, 'getetag') || want[href], text);
+			delete want[href];
+		}
 	}
+	for (let href, etag in want) {
+		let v = fetch(href);
+
+		if (!v)
+			return false;
+		remember(book, href, etag, v.text);
+	}
+	return true;
+}
+
+// Read one address book; true when its part of the cache is current.
+function sync_book(book) {
+	let top = propfind(book, 0, '<cs:getctag/><d:resourcetype/>');
+
+	if (!top.list)
+		return sprintf('PROPFIND %s: status %d', book, top.status);
 	let tag = length(top.list) ? top.list[0].ctag : null;
-	if (tag && tag == ctag)
-		return true;
+	if (tag && tag == ctags[book])
+		return null;
 
-	let all = propfind(cfg.url, 1, '<d:getetag/><d:resourcetype/>');
-	if (!all.list) {
-		state.error = sprintf('PROPFIND %s: status %d', cfg.url, all.status);
-		return false;
-	}
-	let seen = {};
+	let all = propfind(book, 1, '<d:getetag/><d:resourcetype/>');
+	if (!all.list)
+		return sprintf('PROPFIND %s: status %d', book, all.status);
+	let seen = {}, todo = [];
 	for (let e in all.list) {
 		if (e.collection || !e.etag)
 			continue;
 		seen[e.href] = true;
-		if (cache[e.href] && cache[e.href].etag == e.etag)
-			continue;
-		let v = fetch(e.href);
-		if (!v) {
-			state.error = sprintf('GET %s failed', e.href);
-			return false;
-		}
-		remember(e.href, e.etag, v.text);
+		if (!cache[e.href] || cache[e.href].etag != e.etag)
+			push(todo, e);
 	}
+	if (!fetch_all(book, todo))
+		return sprintf('could not fetch the cards of %s', book);
 	for (let href, c in cache)
-		if (!seen[href]) {
+		if (c.book == book && !seen[href]) {
 			delete keys[c.key];
 			delete cache[href];
 			delete hints[href];
 		}
-	ctag = tag;
-	return true;
+	ctags[book] = tag;
+	return null;
+}
+
+// Every chosen book; true when all are current. A book that fails keeps
+// what was read of it before.
+function sync() {
+	let errors = [];
+
+	report = sized;
+	state.books = [];
+	for (let book in cfg.books) {
+		let err = sync_book(book);
+		let n = 0;
+
+		for (let href, c in cache)
+			n += c.book == book;
+		push(state.books, { href: book, contacts: n, error: err });
+		if (err)
+			push(errors, err);
+	}
+	// the cache of books no longer chosen
+	for (let href, c in cache)
+		if (index(cfg.books, c.book) < 0) {
+			delete keys[c.key];
+			delete cache[href];
+		}
+	state.error = length(errors) ? join('; ', errors) : null;
+	return !length(errors);
 }
 
 function uuid() {
@@ -598,14 +797,14 @@ function uuid() {
 function apply_change(ch) {
 	if (ch.op == 'put' && !ch.key) {
 		let id = uuid();
-		let href = cfg.url + id + '.vcf';
+		let href = cfg.default + id + '.vcf';
 		let r = http('PUT', href, { 'Content-Type': 'text/vcard; charset=utf-8',
 					    'If-None-Match': '*' }, vcard_new(id, ch));
 
 		if (!ok(r))
 			return r.status == 0 || r.status >= 500 ? 'retry' : 'skip';
 		hints[href] = ch.id;
-		ctag = null;
+		ctags = {};
 		return 'ok';
 	}
 	let href = keys[ch.key];
@@ -618,7 +817,7 @@ function apply_change(ch) {
 			let r = http('PUT', href, { 'Content-Type': 'text/vcard; charset=utf-8',
 						    'If-Match': v.etag }, vcard_apply(v.text, ch));
 			if (ok(r)) {
-				ctag = null;
+				ctags = {};
 				return 'ok';
 			}
 			if (r.status != 412)
@@ -634,12 +833,13 @@ function apply_change(ch) {
 			h['If-Match'] = cache[href].etag;
 		let r = http('DELETE', href, h);
 		if (ok(r) || r.status == 404) {
-			ctag = null;
+			ctags = {};
 			return 'ok';
 		}
 		return r.status == 0 || r.status >= 500 ? 'retry' : 'skip';
 	}
 	if (ch.op == 'clear') {
+		// every chosen book; the cards it holds that we know
 		if (!cfg.allow_clear)
 			return 'skip';
 		for (let k, h in keys) {
@@ -648,7 +848,7 @@ function apply_change(ch) {
 			if (!ok(r) && r.status != 404)
 				return 'retry';
 		}
-		ctag = null;
+		ctags = {};
 		return 'ok';
 	}
 	return 'skip';
@@ -690,7 +890,7 @@ function changes() {
 
 function round() {
 	// the hrefs the changes refer to: a fresh process has none yet
-	if (!length(cache) && !sync()) {
+	if (!length(cache) && !sync() && !length(cache)) {
 		state.ok = false;
 		save_state();
 		log(state.error);
@@ -700,10 +900,8 @@ function round() {
 	let fresh = sync();
 
 	state.ok = fresh;
-	if (fresh) {
-		state.error = null;
+	if (fresh)
 		state.last_sync = time();
-	}
 	// after changes the file must say seq=N even if the read failed
 	if (fresh || had)
 		write_contacts();
@@ -713,13 +911,32 @@ function round() {
 }
 
 cfg = config();
+fs.mkdir(DIR);
+uloop.init();
+stop_check();
+
+if (ARGV[0] == 'discover') {
+	// LuCI hands the form's values over in a root-only file, never on a
+	// command line every local user could read
+	if (ARGV[1]) {
+		let req = json(fs.readfile(ARGV[1]) || '{}');
+
+		fs.unlink(ARGV[1]);
+		cfg.url = slash(req.url || '');
+		cfg.auth = req.username ? req.username + ':' + (req.password || '') : null;
+	}
+	let r = index(cfg.url, 'https://') == 0 ? discover(cfg.url)
+		: { ok: false, error: 'the URL must start with https://' };
+	if (r.ok)
+		fs.writefile(BOOKS, sprintf('%J\n', r.books));
+	print(sprintf('%J\n', r));
+	exit(r.ok ? 0 : 1);
+}
+
 if (!cfg.enabled || index(cfg.url, 'https://') != 0) {
 	log(cfg.enabled ? 'the url must start with https://' : 'disabled');
 	exit(cfg.enabled ? 1 : 0);
 }
-fs.mkdir(DIR);
-uloop.init();
-stop_check();
 // the journal number the last run reached, from the file it left
 {
 	let head = fs.readfile(FILE, 128);

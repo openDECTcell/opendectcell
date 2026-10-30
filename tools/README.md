@@ -25,7 +25,7 @@ them with `python3 -I`.
 | Tool | What it does |
 |---|---|
 | [cell-testpeer.py](cell-testpeer.py) | A stand-in controller for testing a cell (`dect-cell`, `dect-stubd -K`): its own CA, enrolment, mutual TLS 1.3, HELLO and heartbeats, optional harmless MAIL_DOWNs. Needs the `cryptography` package (the only tool here that is not standard library only) |
-| [carddav-testserver.py](carddav-testserver.py) | A small CardDAV server for testing `opendectcell-carddav`: one address book in memory, HTTPS with its own CA (made with `openssl`), Basic auth, PROPFIND/GET/PUT/DELETE with ETags, seed cards with the awkward cases; `GET /_dump` shows what the box wrote; `--no-chunked` reads a chunked request body as empty, as WSGI servers do |
+| [carddav-testserver.py](carddav-testserver.py) | A small CardDAV server for testing `opendectcell-carddav`: two address books in memory, discovery (well-known, principal, home set), REPORT multiget (`--no-report` refuses it), HTTPS with its own CA (made with `openssl`), Basic auth, PROPFIND/GET/PUT/DELETE with ETags, seed cards with the awkward cases; `GET /_dump` shows what the box wrote; `--no-chunked` reads a chunked request body as empty, as WSGI servers do |
 
 ## For development and analysis
 

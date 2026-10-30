@@ -21,7 +21,9 @@
 				"/usr/sbin/dect-cell": [ "list" ],
 				"/usr/share/opendectcell/carddav.uc": [ "list" ],
 				"/var/run/opendectcell/carddav.json": [ "read" ],
-				"/tmp/run/opendectcell/carddav.json": [ "read" ]
+				"/tmp/run/opendectcell/carddav.json": [ "read" ],
+				"/var/run/opendectcell/carddav-books.json": [ "read" ],
+				"/tmp/run/opendectcell/carddav-books.json": [ "read" ]
 			},
 			"ubus": {
 				"service": [ "list" ]
@@ -35,7 +37,9 @@
 				"/usr/sbin/dect-stubd --profile-keys": [ "exec" ],
 				"/etc/opendectcell-sub.*.profile": [ "write" ],
 				"/etc/init.d/opendectcell enroll *": [ "exec" ],
-				"/etc/init.d/opendectcell cell_leave": [ "exec" ]
+				"/etc/init.d/opendectcell cell_leave": [ "exec" ],
+				"/tmp/opendectcell-carddav-discover.json": [ "write" ],
+				"/usr/share/opendectcell/carddav.uc discover *": [ "exec" ]
 			},
 			"uci": [ "opendectcell" ]
 		}

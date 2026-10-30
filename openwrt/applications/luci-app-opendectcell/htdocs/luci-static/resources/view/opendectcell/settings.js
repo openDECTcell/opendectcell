@@ -5,6 +5,7 @@
 'require ui';
 'require uci';
 'require rpc';
+'require dom';
 
 /*
  * Network > DECT: the base's settings and its handsets (/etc/config/opendectcell).
@@ -43,6 +44,134 @@ var CELL_BIN = '/usr/sbin/dect-cell';
 var LINK = '/var/run/opendectcell/cell-link.json';
 var CARDDAV = '/usr/share/opendectcell/carddav.uc';
 var CARDDAV_STATE = '/var/run/opendectcell/carddav.json';
+var CARDDAV_BOOKS = '/var/run/opendectcell/carddav-books.json';
+var CARDDAV_REQ = '/tmp/opendectcell-carddav-discover.json';
+
+/*
+ * The address books of the CardDAV account: "Fetch address books" asks the
+ * server (carddav.uc discover; the form's URL and credentials go over in a
+ * root-only file, not on a command line), then one row per book: used or
+ * not, and the one new contacts go to. Stored as 'list book' and 'option
+ * default' in the carddav section. The value this option compares is
+ * "DEFAULT|BOOK BOOK ...".
+ */
+var BookList = form.Value.extend({
+	__name__: 'CBI.OpenDECTcellBooks',
+
+	books: null,		/* [ { href, name } ], the rows offered */
+
+	cfgvalue: function() {
+		var b = L.toArray(uci.get('opendectcell', 'carddav', 'book'));
+
+		return (uci.get('opendectcell', 'carddav', 'default') || '') + '|' + b.join(' ');
+	},
+
+	rows: function(box, sid) {
+		var self = this, chosen = {}, def, first;
+		var v = this.current || this.cfgvalue(sid), bar = v.indexOf('|');
+
+		v.substr(bar + 1).split(' ').filter(String).forEach(function(h) { chosen[h] = true; });
+		first = this.books.filter(function(b) { return chosen[b.href]; })[0];
+		def = v.substr(0, bar) || (first ? first.href : null);
+		dom.content(box, this.books.length ? E('table', { 'class': 'table' }, [
+			E('tr', { 'class': 'tr table-titles' }, [
+				E('th', { 'class': 'th' }, _('Use')),
+				E('th', { 'class': 'th' }, _('New contacts')),
+				E('th', { 'class': 'th' }, _('Address book'))
+			])
+		].concat(this.books.map(function(b) {
+			return E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td' }, E('input', { 'type': 'checkbox', 'data-href': b.href,
+					'class': 'cd-use', 'checked': chosen[b.href] ? '' : null })),
+				E('td', { 'class': 'td' }, E('input', { 'type': 'radio', 'name': self.cbid(sid) + '.def',
+					'data-href': b.href, 'class': 'cd-def',
+					'checked': def == b.href ? '' : null })),
+				E('td', { 'class': 'td' }, [ E('strong', {}, b.name || b.href), E('br'),
+					E('small', {}, b.href) ])
+			]);
+		}))) : E('em', {}, _('No address books yet: fill in the server, user name and password, then fetch them.')));
+	},
+
+	renderWidget: function(sid) {
+		var self = this, box = E('div', { 'class': 'cd-books' });
+		var msg = E('span', { 'class': 'cd-msg' });
+
+		this.rows(box, sid);
+		return E('div', { 'id': this.cbid(sid) }, [
+			box,
+			E('p', {}, [
+				E('button', { 'class': 'cbi-button cbi-button-action', 'click': ui.createHandlerFn(this, function() {
+					var req = {
+						url: this.section.formvalue(sid, '_cd_url'),
+						username: this.section.formvalue(sid, '_cd_username'),
+						password: this.section.formvalue(sid, '_cd_password')
+					};
+
+					this.current = this.formvalue(sid);
+					dom.content(msg, _('Asking the server…'));
+					return fs.write(CARDDAV_REQ, JSON.stringify(req), 384).then(function() {
+						return fs.exec(CARDDAV, [ 'discover', CARDDAV_REQ ]);
+					}).then(function(r) {
+						var res = {};
+
+						try { res = JSON.parse(r.stdout || '{}'); } catch (e) {}
+						if (!res.ok) {
+							dom.content(msg, E('em', { 'class': 'error' },
+								res.error || r.stderr || _('The server could not be asked.')));
+							return;
+						}
+						/* rows: what the server has, then chosen ones it no longer lists */
+						self.books.forEach(function(b) {
+							if ((self.current || '').indexOf(b.href) >= 0 &&
+							    !res.books.some(function(x) { return x.href == b.href; }))
+								res.books.push(b);
+						});
+						self.books = res.books;
+						self.rows(box, sid);
+						dom.content(msg, _('%d address book(s) found. Tick the ones to use.').format(res.books.length));
+					}).catch(function(e) {
+						dom.content(msg, E('em', { 'class': 'error' }, e.message));
+					});
+				}) }, _('Fetch address books')),
+				' ', msg
+			])
+		]);
+	},
+
+	formvalue: function(sid) {
+		var node = document.getElementById(this.cbid(sid)), use = [], def = null;
+
+		if (!node)
+			return this.cfgvalue(sid);
+		node.querySelectorAll('input.cd-use').forEach(function(c) {
+			if (c.checked)
+				use.push(c.getAttribute('data-href'));
+		});
+		node.querySelectorAll('input.cd-def').forEach(function(r) {
+			if (r.checked && use.indexOf(r.getAttribute('data-href')) >= 0)
+				def = r.getAttribute('data-href');
+		});
+		return (def || use[0] || '') + '|' + use.join(' ');
+	},
+
+	validate: function(sid) {
+		var v = this.formvalue(sid);
+
+		return v.substr(v.indexOf('|') + 1) ? true : _('Choose at least one address book.');
+	},
+
+	write: function(sid, v) {
+		var bar = v.indexOf('|'), use = v.substr(bar + 1).split(' ').filter(String);
+
+		uci.set('opendectcell', 'carddav', 'book', use);
+		uci.set('opendectcell', 'carddav', 'default', v.substr(0, bar));
+	},
+
+	remove: function() {
+		uci.unset('opendectcell', 'carddav', 'book');
+		uci.unset('opendectcell', 'carddav', 'default');
+	}
+});
 
 function readState() {
 	return fs.read(STATE).then(function(text) {
@@ -742,7 +871,8 @@ return view.extend({
 			readLink(),
 			L.resolveDefault(fs.stat(CELL_BIN), null),
 			L.resolveDefault(fs.stat(CARDDAV), null),
-			L.resolveDefault(fs.read(CARDDAV_STATE), '')
+			L.resolveDefault(fs.read(CARDDAV_STATE), ''),
+			L.resolveDefault(fs.read(CARDDAV_BOOKS), '')
 		]).then(function(r) {
 			var st = r[1], profiles = r[2], voip = r[4];
 
@@ -761,13 +891,14 @@ return view.extend({
 					return (t || '').trim();
 				});
 			})).then(function(choices) {
-				var cd = null;
+				var cd = null, found = [];
 
 				try { cd = r[9] ? JSON.parse(r[9]) : null; } catch (e) {}
+				try { found = r[10] ? JSON.parse(r[10]) : []; } catch (e) {}
 				/* the section the Phonebook options live in */
 				if (r[8] && !uci.get('opendectcell', 'carddav'))
 					uci.add('opendectcell', 'carddav', 'carddav');
-				return [ st, profiles, choices, r[3], voip, r[5], r[6], r[7], r[8], cd ];
+				return [ st, profiles, choices, r[3], voip, r[5], r[6], r[7], r[8], cd, found ];
 			});
 		});
 	},
@@ -1226,38 +1357,33 @@ return view.extend({
 
 		/* Phonebook */
 		if (data[8]) {
-			var cd = data[9];
+			var cd = data[9], found = data[10] || [];
 
 			o = s.taboption('phonebook', form.DummyValue, '_cd_intro');
 			o.rawhtml = true;
-			o.default = E('p', {}, _('The handsets\' phonebook comes from a CardDAV address book (Nextcloud, Baïkal, a mail provider\'s). What a handset adds, changes or deletes is written back to it.'));
-			o = s.taboption('phonebook', form.Flag, '_cd_enabled', _('Use an address book'));
+			o.default = E('div', {}, [
+				E('p', {}, _('The handsets\' phonebook comes from CardDAV address books (Nextcloud, Baïkal, a mail provider\'s). What a handset changes or deletes is written back to the book the contact came from; a contact made on a handset goes to the book chosen for new contacts.')),
+				E('p', {}, _('Contacts are not merged: one that is in two books appears twice on the handsets.'))
+			]);
+			o = s.taboption('phonebook', form.Flag, '_cd_enabled', _('Use address books'));
 			o.cfgvalue = function() { return uci.get('opendectcell', 'carddav', 'enabled') || '0'; };
 			o.write = function(sid, v) { uci.set('opendectcell', 'carddav', 'enabled', v); };
 			o.remove = function() { uci.set('opendectcell', 'carddav', 'enabled', '0'); };
 			[
-				[ 'url', form.Value, _('Address book URL'),
-				  _('The address book itself, https:// only, e.g. https://cloud.example.org/remote.php/dav/addressbooks/users/NAME/contacts/') ],
+				[ 'url', form.Value, _('Server'),
+				  _('Any address of the account, https:// only: the server (https://cloud.example.org), or an address book\'s own URL.') ],
 				[ 'username', form.Value, _('User name') ],
 				[ 'password', form.Value, _('Password'),
-				  _('An app password where the server offers one.') ],
-				[ 'interval', form.Value, _('Check every'), _('Minutes. Changes on a handset are written back at once.') ],
-				[ 'ca_file', form.Value, _('CA certificate'),
-				  _('Only for a server with its own certificate authority: a PEM file on this box. Empty: the usual public CAs.') ],
-				[ 'allow_clear', form.Flag, _('Allow "delete list"'),
-				  _('A handset\'s "delete list" empties the whole address book on the server. Off: the base refuses it.') ]
+				  _('An app password where the server offers one.') ]
 			].forEach(function(f) {
 				o = s.taboption('phonebook', f[1], '_cd_' + f[0], f[2], f[3]);
 				o.depends('_cd_enabled', '1');
+				o.retain = true;	/* switched off, the settings stay */
 				o.cfgvalue = function() { return uci.get('opendectcell', 'carddav', f[0]); };
 				o.write = function(sid, v) { uci.set('opendectcell', 'carddav', f[0], v); };
 				o.remove = function() { uci.unset('opendectcell', 'carddav', f[0]); };
 				if (f[0] == 'password')
 					o.password = true;
-				if (f[0] == 'interval') {
-					o.placeholder = '15';
-					o.datatype = 'range(1,1440)';
-				}
 				if (f[0] == 'url') {
 					o.rmempty = false;
 					o.validate = function(sid, v) {
@@ -1266,15 +1392,49 @@ return view.extend({
 					};
 				}
 			});
+			o = s.taboption('phonebook', BookList, '_cd_books', _('Address books'));
+			o.depends('_cd_enabled', '1');
+			o.retain = true;
+			o.books = found.slice();
+			/* chosen books the last fetch did not list, by URL */
+			L.toArray(uci.get('opendectcell', 'carddav', 'book')).forEach(function(h) {
+				if (!o.books.some(function(b) { return b.href == h; }))
+					o.books.push({ href: h, name: h });
+			});
+			[
+				[ 'interval', form.Value, _('Check every'), _('Minutes. Changes on a handset are written back at once.') ],
+				[ 'ca_file', form.Value, _('CA certificate'),
+				  _('Only for a server with its own certificate authority: a PEM file on this box. Empty: the usual public CAs.') ],
+				[ 'allow_clear', form.Flag, _('Allow "delete list"'),
+				  _('A handset\'s "delete list" empties every address book used here, on the server. Off: the base refuses it.') ]
+			].forEach(function(f) {
+				o = s.taboption('phonebook', f[1], '_cd_' + f[0], f[2], f[3]);
+				o.depends('_cd_enabled', '1');
+				o.retain = true;
+				o.cfgvalue = function() { return uci.get('opendectcell', 'carddav', f[0]); };
+				o.write = function(sid, v) { uci.set('opendectcell', 'carddav', f[0], v); };
+				o.remove = function() { uci.unset('opendectcell', 'carddav', f[0]); };
+				if (f[0] == 'interval') {
+					o.placeholder = '15';
+					o.datatype = 'range(1,1440)';
+				}
+			});
 			o = s.taboption('phonebook', form.DummyValue, '_cd_state', _('Last sync'));
 			o.depends('_cd_enabled', '1');
+			o.rawhtml = true;
 			o.cfgvalue = function() {
 				if (!cd)
 					return _('none yet');
-				if (cd.error)
-					return _('failed: %s').format(cd.error);
-				return _('%d contacts, %s').format(cd.contacts,
-					cd.last_sync ? new Date(cd.last_sync * 1000).toLocaleString() : '-');
+				return E('div', {}, [
+					E('div', {}, cd.error ? _('failed: %s').format(cd.error)
+						: _('%d contacts, %s').format(cd.contacts,
+							cd.last_sync ? new Date(cd.last_sync * 1000).toLocaleString() : '-'))
+				].concat((cd.books || []).map(function(b) {
+					var f = found.filter(function(x) { return x.href == b.href; })[0];
+
+					return E('div', {}, E('small', {}, '%s: %s'.format(f ? f.name : b.href,
+						b.error ? b.error : _('%d contacts').format(b.contacts))));
+				})));
 			};
 		}
 
