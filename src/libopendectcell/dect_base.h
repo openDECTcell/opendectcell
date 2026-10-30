@@ -149,6 +149,13 @@ struct dect_base_ops {
 	void (*side_call)(void *ctx, unsigned k, uint64_t now);
 	/* Side link k and the main link swapped (S6b): the host's per-link state. */
 	void (*swapped)(void *ctx, unsigned k);
+	/* Record i's capability changed (S6c): the host keeps it (b->cap[i]). */
+	void (*cap_learned)(void *ctx, unsigned i);
+	/*
+	 * The main link's call is over and its audio channel was bound (S6c,
+	 * dect_base_tick()): the host releases its audio path.
+	 */
+	void (*call_down)(void *ctx);
 };
 
 /*
@@ -1239,6 +1246,32 @@ void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known);
  */
 int dect_base_segment(struct dect_base *b, const struct dect_mail *m,
 		      uint64_t now);
+
+/*
+ * Once a tick (S6c). What a handset says of itself in
+ * <<TERMINAL-CAPABILITY>> on link l, kept for its record once the handset
+ * proved its key (audit A3); a profile that does not trust the report
+ * sets it instead.
+ */
+void dect_base_cap_tick(struct dect_base *b, const struct dect_link *l);
+/*
+ * Said once, loudly, when LAPC gave up after N250 retransmissions and
+ * released link l (EN 300 175-4 §9.2.3.6): a false release must show.
+ */
+void dect_base_lapc_note(struct dect_base *b, struct dect_link *l,
+			 const char *which);
+/*
+ * The main link's number, once complete: an internal call if it names a
+ * handset, else to the bridge, else the base's own connect.
+ */
+void dect_base_main_dial_tick(struct dect_base *b, uint64_t now);
+/*
+ * Every stack step of a tick, in dect-stubd's order, for a host that runs
+ * no steps of its own in between (dect-stubd interleaves its own: the
+ * control and audio sockets, diagnostics). radio_on: the chip is up and
+ * transmitting, for the ring and the date and time.
+ */
+void dect_base_tick(struct dect_base *b, uint64_t now, int radio_on);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

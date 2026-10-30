@@ -2815,6 +2815,7 @@ static void base_registered(void *ctx, uint64_t now);
 static void base_call_up(void *ctx, uint64_t now);
 static void base_side_call(void *ctx, unsigned k, uint64_t now);
 static void base_swapped(void *ctx, unsigned k);
+static void base_cap_learned(void *ctx, unsigned i);
 static void base_wall(void *ctx, struct dect_time *dt);
 
 static const struct dect_base_ops base_ops = {
@@ -2825,7 +2826,7 @@ static const struct dect_base_ops base_ops = {
 	.wall = base_wall, .switched = base_switched, .link_up = base_link_up,
 	.side_down = base_side_down, .registered = base_registered,
 	.call_up = base_call_up, .side_call = base_side_call,
-	.swapped = base_swapped,
+	.swapped = base_swapped, .cap_learned = base_cap_learned,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -3057,12 +3058,6 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 
 static int ic_start(struct stubd *s, int side, uint64_t now);
 
-/* The handset table entry with this IPUI, or -1. */
-static int hs_by_ipui(const struct stubd *s, const uint8_t *id, size_t len)
-{
-	return dect_base_hs_by_ipui(&s->base, id, len);
-}
-
 /*
  * A handset's capability as it last reported it, kept beside its store as
  * <store>.cap ("part3 0|1" and "ng 0|1"): a handset reports it only with a
@@ -3114,46 +3109,14 @@ static void cap_load(struct stubd *s, unsigned i)
  */
 static void cap_tick(struct stubd *s, struct dect_link *l)
 {
-	const struct dect_term_cap *tc = &l->mm.peer_cap;
-	struct handset *h;
-	int i;
-
-	/* what a handset says of itself counts once it is proved (A3) */
-	if (!l->mm.port_id_len || !l->mm.authenticated)
-		return;
-	i = hs_by_ipui(s, l->mm.port_id, l->mm.port_id_len);
-	if (i < 0)
-		return;
-	h = &s->hs[i];
-	/* the profile says the handset's own report is wrong (§5.3) */
-	if (!s->base.prof[i].trust_terminal_capability &&
-	    s->base.prof[i].cap_ngdect) {
-		if (!s->base.cap[i].known)
-			printf("cap: %s: the profile sets %s (the handset's "
-			       "report is not trusted)\n", h->path,
-			       s->base.prof[i].cap_ngdect == 3 ? "NG-DECT Part 3" :
-			       s->base.prof[i].cap_ngdect == 2 ? "NG-DECT Part 1" :
-			       "GAP only");
-		s->base.cap[i].known = 1;
-		s->base.cap[i].part3 = s->base.prof[i].cap_ngdect == 3;
-		s->base.cap[i].ng = s->base.prof[i].cap_ngdect >= 2;
-		return;
-	}
-	if (!tc->present)
-		return;
-	if (s->base.cap[i].known && s->base.cap[i].part3 == tc->ng_part3 &&
-	    s->base.cap[i].ng == (tc->ng_part1 || tc->ng_part3))
-		return;
-	s->base.cap[i].known = 1;
-	s->base.cap[i].part3 = tc->ng_part3;
-	s->base.cap[i].ng = tc->ng_part1 || tc->ng_part3;
-	cap_save(s, (unsigned)i);
-	printf("cap: %s reports %s%s\n", h->path,
-	       tc->ng_part3 ? "NG-DECT Part 3" :
-	       tc->ng_part1 ? "NG-DECT Part 1" : "GAP only",
-	       tc->ng_part3 || s->base.cfg.all_call_status ?
-	       "" : " -- no call status to it");
+	dect_base_cap_tick(&s->base, l);
 	fflush(stdout);
+}
+
+/* dect_base's cap_learned(): beside the store, for the next start. */
+static void base_cap_learned(void *ctx, unsigned i)
+{
+	cap_save(ctx, i);
 }
 
 /*
@@ -3162,13 +3125,10 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
  * corpus does not count retransmissions, so whether a working link ever
  * needs more than three is unmeasured, and a false release must show.
  */
-static void lapc_failed_note(struct dect_link *l, const char *which)
+static void lapc_failed_note(struct stubd *s, struct dect_link *l,
+			     const char *which)
 {
-	if (l->lapc.failed != 1)
-		return;
-	l->lapc.failed = 2;		/* noted */
-	printf("lapc: *** %s link: no acknowledgement after 3 retransmissions "
-	       "-- link released (DISC, abnormal) ***\n", which);
+	dect_base_lapc_note(&s->base, l, which);
 	fflush(stdout);
 }
 
@@ -3187,24 +3147,6 @@ static void info_tick(struct stubd *s, uint64_t now)
 
 static int bridge_call_out(struct stubd *s, int p, uint64_t now);
 
-/*
- * Route the main link's handset call once its number is complete: an
- * internal call if it names a handset, else the routed steps (alertms,
- * bindfirst) or CONNECT at once.
- */
-static void dial_route(struct stubd *s, uint64_t now)
-{
-	s->base.main_link.ic_tried = 1;
-	if (ic_start(s, -1, now)) {
-		dect_link_drain(&s->base.main_link.link, now);
-		pump_lapc(s);
-		return;
-	}
-	if (bridge_call_out(s, -1, now))
-		return;
-	dect_base_dial_connect(&s->base, now);
-}
-
 /* Authenticate first (dect_base_call_auth_ok(), S3p). */
 static int call_auth_ok(const struct stubd *s, const struct dect_link *l)
 {
@@ -3218,22 +3160,8 @@ static int call_auth_ok(const struct stubd *s, const struct dect_link *l)
  */
 static void dial_tick(struct stubd *s, uint64_t now)
 {
-	int due = dect_base_dial_tick(&s->base, -1, now);
-	const uint8_t *k;
-	size_t len;
-
-	if (!due)
-		return;
-	k = dect_cc_keypad(&s->base.main_link.link.cc, &len);
-	if (due == 1)
-		printf("call: dialled \"%.*s\", complete -- connecting\n",
-		       (int)len, (const char *)k);
-	else
-		printf("call: dialled \"%.*s\" -- complete after %u ms "
-		       "without a digit, connecting\n", (int)len,
-		       (const char *)k, s->base.cfg.dial_wait_ms);
+	dect_base_main_dial_tick(&s->base, now);
 	fflush(stdout);
-	dial_route(s, now);
 }
 
 /* alertms / bindfirst: send the CONNECT once its conditions hold. */
@@ -7124,7 +7052,7 @@ static void loop_tick(struct stubd *s, uint64_t now)
 			if (!s->side[k].bl->active)
 				continue;
 			dect_link_tick(&s->side[k].bl->link, now);
-			lapc_failed_note(&s->side[k].bl->link, "side");
+			lapc_failed_note(s, &s->side[k].bl->link, "side");
 			cap_tick(s, &s->side[k].bl->link);
 			side_cipher_tick(s, &s->side[k], now);
 			side_pump(s, &s->side[k]);
@@ -7158,7 +7086,7 @@ static void loop_tick(struct stubd *s, uint64_t now)
 		 * docs/spec-conformance.md.
 		 */
 		dect_link_tick(&s->base.main_link.link, now);
-		lapc_failed_note(&s->base.main_link.link, "main");
+		lapc_failed_note(s, &s->base.main_link.link, "main");
 		cap_tick(s, &s->base.main_link.link);
 		names_tick(s);		/* a handset renamed one */
 		/*

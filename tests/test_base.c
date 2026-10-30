@@ -71,6 +71,14 @@ static void switched(void *ctx, const char *why)
 	snprintf(switched_why, sizeof(switched_why), "%s", why);
 }
 
+static unsigned call_downs;
+
+static void call_down(void *ctx)
+{
+	(void)ctx;
+	call_downs++;
+}
+
 static void install(void *ctx)
 {
 	(void)ctx;
@@ -90,7 +98,8 @@ static const struct dect_base_ops ops = { .save = save, .send = send,
 					  .random = rnd, .log = log_line,
 					  .install = install, .event = event,
 					  .pump = pump, .named = named,
-					  .switched = switched };
+					  .switched = switched,
+					  .call_down = call_down };
 
 int main(void)
 {
@@ -972,6 +981,31 @@ int main(void)
 		m.param_len = 1;
 		m.param[0] = 4;
 		CHECK_EQ(dect_base_segment(&b, &m, 0), -1);
+	}
+
+	/* one tick for a host with no steps of its own (S6c) */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.rec = b.hs[0];
+		b.rec.cc_fixed_id_len = 5;
+		b.ring.now = 1;			/* a call-in */
+		n_sent = 0;
+		dect_base_tick(&b, 1000, 0);	/* the radio is off: no page */
+		CHECK_EQ(n_sent, 0u);
+		dect_base_tick(&b, 1000, 1);
+		CHECK_EQ(n_sent, 1u);
+		CHECK_EQ(sent[0].prim, 0x0300);
+		b.ring.now = 0;
+		b.ring.state = DECT_BASE_RING_DONE;
+		b.main_link.active = 1;
+		b.main_link.bound = 1;		/* a call that has ended */
+		call_downs = 0;
+		dect_base_tick(&b, 2000, 1);
+		CHECK_EQ(call_downs, 1u);
+		CHECK_EQ(b.main_link.bound, 0);
 	}
 	return CHECK_DONE();
 }

@@ -4834,3 +4834,141 @@ int dect_base_segment(struct dect_base *b, const struct dect_mail *m,
 	main_mail(b, m, now);
 	return 0;
 }
+
+void dect_base_cap_tick(struct dect_base *b, const struct dect_link *l)
+{
+	const struct dect_term_cap *tc = &l->mm.peer_cap;
+	const struct dect_hs_profile *hp;
+	int i;
+
+	/* what a handset says of itself counts once it is proved (A3) */
+	if (!l->mm.port_id_len || !l->mm.authenticated)
+		return;
+	i = dect_base_hs_by_ipui(b, l->mm.port_id, l->mm.port_id_len);
+	if (i < 0)
+		return;
+	hp = &b->prof[i];
+	/* the profile says the handset's own report is wrong (§5.3) */
+	if (!hp->trust_terminal_capability && hp->cap_ngdect) {
+		if (!b->cap[i].known)
+			dect_base_log(b, "cap: record %d: the profile sets %s (the "
+				      "handset's report is not trusted)", i,
+				      hp->cap_ngdect == 3 ? "NG-DECT Part 3" :
+				      hp->cap_ngdect == 2 ? "NG-DECT Part 1" :
+				      "GAP only");
+		b->cap[i].known = 1;
+		b->cap[i].part3 = hp->cap_ngdect == 3;
+		b->cap[i].ng = hp->cap_ngdect >= 2;
+		return;
+	}
+	if (!tc->present)
+		return;
+	if (b->cap[i].known && b->cap[i].part3 == tc->ng_part3 &&
+	    b->cap[i].ng == (tc->ng_part1 || tc->ng_part3))
+		return;
+	b->cap[i].known = 1;
+	b->cap[i].part3 = tc->ng_part3;
+	b->cap[i].ng = tc->ng_part1 || tc->ng_part3;
+	if (b->ops && b->ops->cap_learned)
+		b->ops->cap_learned(b->ctx, (unsigned)i);
+	dect_base_log(b, "cap: record %d reports %s%s", i,
+		      tc->ng_part3 ? "NG-DECT Part 3" :
+		      tc->ng_part1 ? "NG-DECT Part 1" : "GAP only",
+		      tc->ng_part3 || b->cfg.all_call_status ?
+		      "" : " -- no call status to it");
+}
+
+void dect_base_lapc_note(struct dect_base *b, struct dect_link *l,
+			 const char *which)
+{
+	if (l->lapc.failed != 1)
+		return;
+	l->lapc.failed = 2;		/* noted */
+	dect_base_log(b, "lapc: *** %s link: no acknowledgement after 3 "
+		      "retransmissions -- link released (DISC, abnormal) ***",
+		      which);
+}
+
+void dect_base_main_dial_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *ml = &b->main_link;
+	int due = dect_base_dial_tick(b, -1, now);
+	const uint8_t *k;
+	size_t len;
+
+	if (!due)
+		return;
+	k = dect_cc_keypad(&ml->link.cc, &len);
+	if (due == 1)
+		dect_base_log(b, "call: dialled \"%.*s\", complete -- connecting",
+			      (int)len, (const char *)k);
+	else
+		dect_base_log(b, "call: dialled \"%.*s\" -- complete after %u ms "
+			      "without a digit, connecting", (int)len,
+			      (const char *)k, b->cfg.dial_wait_ms);
+	ml->ic_tried = 1;
+	if (dect_base_ic_start(b, -1, now)) {
+		dect_base_drain(b, -1, now);
+		return;
+	}
+	if (dect_base_call_out(b, -1, now))
+		return;
+	dect_base_dial_connect(b, now);
+}
+
+void dect_base_tick(struct dect_base *b, uint64_t now, int radio_on)
+{
+	unsigned k;
+
+	dect_base_main_dial_tick(b, now);
+	dect_base_info_tick(b, now);
+	dect_base_cs_connect_tick(b, now);
+	dect_base_nlr_tick(b, now);
+	dect_base_connect_tick(b, now);
+	dect_base_missed_changed_tick(b);
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active)
+			side_call(b, k, now);
+	dect_base_ic_tick(b, now);
+	dect_base_dereg_tick(b, now);
+	if (radio_on)
+		dect_base_time_tick(b, now);
+	dect_base_bridge_tick(b, now);
+	if (radio_on)
+		dect_base_ring_tick(b, now);
+	/*
+	 * Side links keep their own timers and queues whether or not the
+	 * main link is up: an internal call's caller can be on a side link
+	 * after the main connection went (review, finding 4).
+	 */
+	for (k = 0; k < DECT_BASE_SIDES; k++) {
+		struct dect_base_link *sl = &b->side[k];
+
+		if (!sl->active)
+			continue;
+		dect_link_tick(&sl->link, now);
+		dect_base_lapc_note(b, &sl->link, "side");
+		dect_base_cap_tick(b, &sl->link);
+		dect_base_side_cipher_tick(b, k, now);
+		pump(b, sl);
+	}
+	if (!b->main_link.active)
+		return;
+	/*
+	 * dect_link_tick() and not the timers it contains: it also drains
+	 * the NWK queue, without which an FP-originated {CC-SETUP} sat in CC's
+	 * output until the handset next sent something (vBR01: 3 860 ms
+	 * late, and lost to the handset's own call).
+	 */
+	dect_link_tick(&b->main_link.link, now);
+	dect_base_lapc_note(b, &b->main_link.link, "main");
+	dect_base_cap_tick(b, &b->main_link.link);
+	dect_base_lists_tick(b, now);
+	/* the call has gone: release its audio channel */
+	if (b->main_link.bound && !dect_cc_busy(&b->main_link.link.cc)) {
+		b->main_link.bound = 0;
+		if (b->ops && b->ops->call_down)
+			b->ops->call_down(b->ctx);
+	}
+	pump(b, &b->main_link);
+}

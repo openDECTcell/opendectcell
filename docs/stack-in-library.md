@@ -508,3 +508,19 @@ follows a completed enrolment (`registered()`), the main call's audio
 path (`call_up()`), a side link's lane and dialling (`side_call()`),
 and its per-link state after a swap (`swapped()`). Unit test; the
 fifteen traces unchanged.
+
+**S6c.** The last per-link steps are the library's: a handset's
+capability kept once proven (`dect_base_cap_tick()`, the host saving it
+through `cap_learned()`), the LAPC failure note, and the main link's
+dialled number routed (`dect_base_main_dial_tick()`). `dect_base_tick()`
+runs every stack step of a tick in dect-stubd's order, for a host with
+no steps of its own in between (the controller); dect-stubd keeps
+calling the steps one by one, because its own (the control and audio
+sockets, diagnostics) sit between them, and moving those would shift
+when things happen for no gain. Unit tests; the fifteen traces
+unchanged.
+
+What dect-stubd still holds of the stack: the main call's audio path
+(`call_up()`, `call_down()`), the side links' lanes, the key read-back
+and slot audit (S2.2b), the controller-fetch experiment (M4), and the
+control verbs that are not the bridge's (S5c).

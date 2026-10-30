@@ -902,3 +902,7 @@ dect_base_cipher_on(), _contact(), _conn_up(), _conn_down() (S6a).
 `call_up`, `side_call`, `swapped`; dect_base_cfg's `verbose`;
 dect_base's `foreign_seg`, `foreign_seg_handle`, `last_seen_ms[]`;
 dect_base_segment() (S6b).
+
+**135.** dect_base.h, 2026-10-30: dect_base_ops' `cap_learned` and
+`call_down`; dect_base_cap_tick(), _lapc_note(), _main_dial_tick(),
+_tick() (S6c).
