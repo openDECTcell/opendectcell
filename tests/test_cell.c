@@ -6,6 +6,8 @@
 #include "check.h"
 #include "../src/libopendectcell/dect_cell.h"
 
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void test_frame_round_trip(void)
@@ -146,6 +148,137 @@ static void test_mail(void)
 	CHECK_EQ(dect_cell_mail_down(out, sizeof(out), &m), 0);
 }
 
+/*
+ * Hostile input (the sanitizers do the judging, so this runs under them):
+ * valid frames, TLV bodies and mail bodies of every shape, then cut, grown
+ * and byte-flipped at random from a fixed seed. Each input sits in a heap
+ * block of exactly its length, so any read past it is an error. What must
+ * hold is only what the header promises: a parse takes no more octets than
+ * it was given, a body that passes the TLV check can be walked, a getter
+ * that returns a pointer returns one inside the body.
+ */
+static uint64_t rng_state = 0x9E3779B97F4A7C15ull;
+
+static uint32_t rnd(void)
+{
+	rng_state ^= rng_state << 13;
+	rng_state ^= rng_state >> 7;
+	rng_state ^= rng_state << 17;
+	return (uint32_t)(rng_state >> 16);
+}
+
+static void walk(const uint8_t *body, size_t len)
+{
+	size_t n, pos, i;
+	const uint8_t *v;
+	uint8_t u8;
+	uint16_t u16;
+	uint32_t u32;
+	struct dect_cell_mail m;
+
+	if (!dect_cell_tlv_check(body, len)) {
+		for (i = 0; i < 24; i++) {
+			uint8_t tag = (uint8_t)i;
+
+			v = dect_cell_tlv_get(body, len, tag, &n);
+			if (v)
+				CHECK(v >= body && v + n <= body + len);
+			pos = 0;
+			while ((v = dect_cell_tlv_next(body, len, tag, &pos, &n))
+			       != NULL) {
+				CHECK(v >= body && v + n <= body + len);
+				CHECK(pos <= len);
+			}
+			(void)dect_cell_tlv_get_u8(body, len, tag, &u8);
+			(void)dect_cell_tlv_get_u16(body, len, tag, &u16);
+			(void)dect_cell_tlv_get_u32(body, len, tag, &u32);
+		}
+	}
+	if (!dect_cell_mail_parse(body, len, 0, &m) && m.plen)
+		CHECK(m.param >= body && m.param + m.plen <= body + len);
+	if (!dect_cell_mail_parse(body, len, 1, &m) && m.plen)
+		CHECK(m.param >= body && m.param + m.plen <= body + len);
+}
+
+static void feed(const uint8_t *src, size_t n)
+{
+	uint8_t *buf = malloc(n ? n : 1u);
+	struct dect_cell_frame f;
+	size_t off = 0;
+	long r;
+
+	CHECK(buf != NULL);
+	if (!buf)
+		return;
+	memcpy(buf, src, n);
+	walk(buf, n);			/* as a body */
+	while (off < n) {		/* as a stream of frames */
+		r = dect_cell_parse(buf + off, n - off, &f);
+		if (r <= 0)
+			break;
+		CHECK((size_t)r <= n - off);
+		CHECK(f.body >= buf + off && f.body + f.len <= buf + n);
+		(void)dect_cell_body_max(f.type);
+		walk(f.body, f.len);
+		off += (size_t)r;
+	}
+	free(buf);
+}
+
+static void test_hostile_input(void)
+{
+	uint8_t seed[1100], tmp[1100];
+	struct dect_cell_tlv t;
+	size_t len, i, k;
+	unsigned round;
+
+	for (round = 0; round < 60000u; round++) {
+		/* a seed: a TLV body of up to six random tags, or a frame, or
+		 * a mail body */
+		dect_cell_tlv_init(&t, seed, sizeof(seed));
+		for (k = rnd() % 7u; k; k--) {
+			uint8_t v[64];
+			size_t vn = rnd() % sizeof(v);
+
+			for (i = 0; i < vn; i++)
+				v[i] = (uint8_t)rnd();
+			dect_cell_tlv_put(&t, (uint8_t)(rnd() % 20u), v, vn);
+		}
+		len = t.err ? 0 : t.len;
+		switch (rnd() % 3u) {
+		case 0:
+			break;
+		case 1:
+			len = dect_cell_put(tmp, sizeof(tmp),
+					    (uint16_t)(rnd() % 0x400u),
+					    (uint16_t)rnd(), seed, len);
+			memcpy(seed, tmp, len);
+			break;
+		default: {
+			struct dect_cell_mail m = { rnd(), (uint8_t)rnd(),
+				(uint8_t)rnd(), (uint16_t)rnd(), seed,
+				rnd() % 200u };
+
+			len = (rnd() & 1u) ? dect_cell_mail_up(tmp, sizeof(tmp),
+							       &m)
+					   : dect_cell_mail_down(tmp,
+							  sizeof(tmp), &m);
+			memcpy(seed, tmp, len);
+		}
+		}
+		/* the mutations: flips, a cut, a growth of random octets */
+		for (k = rnd() % 5u; k && len; k--)
+			seed[rnd() % len] ^= (uint8_t)(1u << (rnd() % 8u));
+		if (rnd() % 4u == 0 && len)
+			len = rnd() % (len + 1u);
+		if (rnd() % 8u == 0)
+			for (k = rnd() % 8u; k && len < sizeof(seed); k--)
+				seed[len++] = (uint8_t)rnd();
+		feed(seed, len);
+	}
+	CHECK(1);
+}
+
 int main(void)
 {
 	test_frame_round_trip();
@@ -153,5 +286,6 @@ int main(void)
 	test_body_bounds();
 	test_tlv();
 	test_mail();
+	test_hostile_input();
 	return CHECK_DONE();
 }
