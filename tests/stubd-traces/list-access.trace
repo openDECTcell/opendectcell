@@ -1,0 +1,55 @@
+# A stored handset reads the List of Supported Lists (TS 102 527-3 §7.4.10)
+# in a list access call, as the A540 does after a power cycle (its commands
+# from the 2026-10-30 bench log), and releases the call.
+# Identities, keys and numbers are made up.
+sub 1 80 a8 03 11 22 33 44
+start
+ev hello api=N lines=1 hs=1
+ev hs hs=1 state=registered name="DECT 1" wideband=1
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+mail 0247 02 00 00
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 01
+
+up 1
+# {CC-SETUP}, <<BASIC-SERVICE>> call class 2 (list access)
+pp 03 05 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 e0 28
+fp 83 02
+fp 05 40 0a 03 01 18 18 0c 08 db 00 25 4a 6f 94 b9 de 0e 08 03 28 4d 72 97 bc e1 06
+tick 200
+# {CC-IWU-INFO} <<IWU-TO-IWU>>: start session on list 00
+pp 03 60 77 04 c3 00 00 00
+fp 83 60 77 0a c3 01 00 81 81 00 00 00 ff 00
+tick 200
+# read entries: session 1, from entry 1, one entry, no mark, field 01
+pp 03 60 77 07 c3 06 81 81 01 00 01
+fp 83 60 77 05 c3 07 81 81 01
+fp 83 60 77 10 c3 14 81 81 8b 01 89 80 00 01 02 03 04 06 07 08
+tick 200
+# end session 1
+pp 03 60 77 03 c3 02 81
+fp 83 60 77 03 c3 03 81
+tick 200
+# {CC-RELEASE}, normal
+pp 03 4d e2 00
+fp 83 5a
+tick 500
+mail 0202 01
+down
+tick 1000
