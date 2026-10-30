@@ -43,8 +43,17 @@ static void log_line(void *ctx, const char *line)
 	snprintf(logged, sizeof(logged), "%s", line);
 }
 
+static unsigned installs;
+
+static void install(void *ctx)
+{
+	(void)ctx;
+	installs++;
+}
+
 static const struct dect_base_ops ops = { .save = save, .send = send,
-					  .random = rnd, .log = log_line };
+					  .random = rnd, .log = log_line,
+					  .install = install };
 
 int main(void)
 {
@@ -178,6 +187,34 @@ int main(void)
 		CHECK_EQ(bl.link.mm.port_id_len, 7u);
 		CHECK_EQ(bl.link.mm.port_id[6], 0x44);
 		CHECK_EQ(bl.link.mm.n_held, 2u);	/* hs[1], then hs[0] */
+	}
+
+	/* the registration completes: key, gate, install, save, once */
+	{
+		struct dect_mm *mm = &b.main_link.link.mm;
+
+		b.ops = &ops;
+		b.ctx = &saved_i;
+		b.rec.uak_valid = 0;
+		b.rec.port_id_len = 0;
+		b.main_link.persisted = 0;
+		CHECK_EQ(dect_base_main_registered(&b), 0);	/* not yet */
+		mm->subscribed = 1;
+		mm->stats.located = 1;
+		memset(mm->uak, 0x77, DECT_MM_UAK_LEN);
+		memcpy(mm->port_id, "\x80\xa8\x03\x01\x02\x03\x04", 7);
+		mm->port_id_len = 7;
+		saved_i = 99;
+		installs = 0;
+		CHECK_EQ(dect_base_main_registered(&b), 1);
+		CHECK_EQ(b.rec.uak_valid, 1);
+		CHECK_EQ(b.rec.uak[15], 0x77);
+		CHECK_EQ(b.rec.port_id_len, 7u);
+		CHECK_EQ(installs, 1u);
+		CHECK_EQ(saved_i, b.cur);
+		CHECK_EQ(b.main_link.persisted, 1);
+		CHECK_EQ(dect_base_main_registered(&b), 0);	/* once */
+		CHECK_EQ(installs, 1u);
 	}
 	return CHECK_DONE();
 }

@@ -725,3 +725,8 @@ links.
 **96.** dect_base.h, 2026-10-30: dect_base_main_segment(), a C-plane
 segment on the main link with the challenges drawn and the adopted
 record made current (S2.3c).
+
+**97.** dect_base.h, 2026-10-30: dect_base_ops gains install(), and
+dect_base_main_registered(): a registration completed on the main link
+(new key and identity into the current record, the host's install and
+save) (S2.3d).

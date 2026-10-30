@@ -2937,9 +2937,17 @@ static void base_log(void *ctx, const char *line)
 	printf("%s\n", line);
 }
 
+static void send_subscription(struct stubd *s);
+
+/* dect_base's install(): every handset this box serves (send_subscription()). */
+static void base_install(void *ctx)
+{
+	send_subscription(ctx);
+}
+
 static const struct dect_base_ops base_ops = {
 	.save = base_save, .send = base_send, .random = base_random,
-	.log = base_log,
+	.log = base_log, .install = base_install,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -10244,28 +10252,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * Once the handset is authenticated (UAK valid) and we have answered its
 	 * LOCATE-REQUEST, install the subscription in the chip, once per connection.
 	 */
-	if (!s->base.main_link.persisted && s->base.main_link.link.mm.subscribed && s->base.main_link.link.mm.stats.located) {
-		/* Keep the UAK for the later call's ciphering, and across restarts. */
-		memcpy(s->base.rec.uak, s->base.main_link.link.mm.uak, DECT_MM_UAK_LEN);
-		s->base.rec.uak_valid = 1;
-		/*
-		 * Arm the identity gate for every later link of this run, the
-		 * way sub_load() arms it for a stored handset. Since 7e7e5f4 a
-		 * {LOCATE-REQUEST} is rejected when nothing is armed, and a
-		 * freshly registered handset coming back on a new link would
-		 * have been told "IPUI unknown" -- which a handset may take as
-		 * losing its registration.
-		 */
-		if (s->base.main_link.link.mm.port_id_len &&
-		    s->base.main_link.link.mm.port_id_len <= sizeof(s->base.rec.port_id)) {
-			memcpy(s->base.rec.port_id, s->base.main_link.link.mm.port_id,
-			       s->base.main_link.link.mm.port_id_len);
-			s->base.rec.port_id_len = s->base.main_link.link.mm.port_id_len;
-			printf("sub: identity gate armed for the newly "
-			       "registered handset (%zu bytes)\n",
-			       s->base.rec.port_id_len);
-		}
-		send_subscription(s);
+	if (dect_base_main_registered(&s->base)) {
 		/*
 		 * The chip now holds what the start-up restore would write:
 		 * without this the restore in loop_tick() saw the new UAK and
@@ -10273,7 +10260,6 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * 2026-10-30).
 		 */
 		s->sub_restored = 1;
-		dect_base_changed(&s->base);
 		if (s->reg_profile[0])
 			reg_profile_apply(s);
 		/*
@@ -10284,7 +10270,6 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * advertising open enrolment and the handset re-attaching.
 		 */
 		reg_window(s, 0, 0, now, "handset enrolled");
-		s->base.main_link.persisted = 1;
 		printf("reg: subscription persisted + registration closed (slot %u)\n",
 		       (unsigned)stubd_sub_slot(s));
 	}

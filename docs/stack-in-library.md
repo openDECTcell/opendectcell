@@ -178,8 +178,14 @@ second of two stored handsets locates on the main link and becomes
 current), passed against the code before this step as well, with the
 daemon's log identical.
 
-Next, (d): the registration's completion on the main link (the first
-locate after a subscription: the gate armed, the install, the save, the
-registration window closed) as a library step with the install policy a
-host callback.
+**S2.3d, 2026-10-30.** `dect_base_main_registered()`: the registration's
+completion on the main link (the new key and identity into the current
+record, the host's `install()` and save, the link marked persisted). The
+registration window's close and the handset profile stay with the host.
+Traces unchanged, unit test added.
+
+S2.3 is done as far as it goes without calls and side links: the
+remaining main-link code is the arbitration on connection-up and the
+reactions to calls, lists and the clock, which move with S2.4, S3 and S4.
+**Bench after S2.3** (`docs/bench-later.md`, N2): register and relocate.
 

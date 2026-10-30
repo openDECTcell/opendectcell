@@ -30,6 +30,16 @@ Added as the tasks land; each with the commit it needs.
 |---|---|---|---|
 | N1. Register a handset afresh (deregister the C430A or the AS690H first), then call out from it, then restart the service and call again | T2 | registration, the first locate, then **one** `sub: cleared chip subscription slots` and, until the restart, no `sub: stored subscription reloaded into the chip` (after the restart it appears, as at every start); both calls go through | the second call is refused or the handset shows "no base" after the restart: the chip lacked the record, so the second install was needed after all; revert T2 |
 
+N2 needs packages built with S2.3d or later (S2.3, the stack's first
+move into the library); run it before anything else on that build.
+
+| test | pass | fail and what it means |
+|---|---|---|
+| N2a. The service starts with the handsets known | `sub: restored subscription ... (with call identities)` per store, `sub: cleared chip subscription slots other than ...`, `sub: locked-in handset mask 0x017c 00 NN`, the A540 and the C430A show the base within a minute | a handset searches: the install (`dect_base_slot_*`) or the held identities (`dect_base_link_open`) broke; `sub: refusing 0x020A` names a bad slot |
+| N2b. The A540 relocates (power cycle it) | `reg: connection up`, `sub: now serving <its store>` if it is not store 0, LOCATE-ACCEPT, `reg: sent the date and time` | LOCATE-REJECT or "IPUI unknown": the identity gate or adoption (`dect_base_main_segment`) |
+| N2c. Register a handset afresh (the AS690H or the C430A after a deregistration), PIN from LuCI | access rights, key allocation, the first locate, `sub: identity gate armed for the newly registered handset`, one install, `reg: subscription persisted + registration closed`, the store file written | the handset says "PIN wrong" or registers and then searches: the completion (`dect_base_main_registered`, the install callback) |
+| N2d. A call each way on the newly registered handset, then restart the service and call again | both calls ciphered and with audio; after the restart the same | the second call fails: the saved record (`dect_base_changed`) |
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |

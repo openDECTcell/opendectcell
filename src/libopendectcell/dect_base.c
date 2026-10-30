@@ -201,3 +201,32 @@ int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
 		*switched = dect_base_switch(b, (unsigned)bl->link.mm.adopted);
 	return r;
 }
+
+int dect_base_main_registered(struct dect_base *b)
+{
+	struct dect_base_link *bl = &b->main_link;
+	const struct dect_mm *mm = &bl->link.mm;
+
+	if (bl->persisted || !mm->subscribed || !mm->stats.located)
+		return 0;
+	/* the key for later calls' ciphering, and across restarts */
+	memcpy(b->rec.uak, mm->uak, DECT_MM_UAK_LEN);
+	b->rec.uak_valid = 1;
+	/*
+	 * The identity gate for every later link, as a stored record arms it:
+	 * a {LOCATE-REQUEST} is rejected when nothing is armed, and a handset
+	 * told "IPUI unknown" may take it as losing its registration.
+	 */
+	if (mm->port_id_len && mm->port_id_len <= sizeof(b->rec.port_id)) {
+		memcpy(b->rec.port_id, mm->port_id, mm->port_id_len);
+		b->rec.port_id_len = mm->port_id_len;
+		dect_base_log(b, "sub: identity gate armed for the newly "
+			      "registered handset (%zu bytes)",
+			      b->rec.port_id_len);
+	}
+	if (b->ops && b->ops->install)
+		b->ops->install(b->ctx);
+	dect_base_changed(b);
+	bl->persisted = 1;
+	return 1;
+}

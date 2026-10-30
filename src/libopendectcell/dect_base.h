@@ -65,6 +65,11 @@ struct dect_base_ops {
 	void (*random)(void *ctx, uint8_t *out, size_t n);
 	/* One line for the log, without its newline. */
 	void (*log)(void *ctx, const char *line);
+	/*
+	 * Put the handsets the host serves into the chip's slots (with the
+	 * dect_base_slot_*() writers): a record's key changed (S2.3d).
+	 */
+	void (*install)(void *ctx);
 };
 
 /*
@@ -174,6 +179,15 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
 			   uint64_t now, struct dect_link_ind *ind,
 			   int *switched);
+
+/*
+ * After a segment on the main link: if the handset registered on it and
+ * has now located (its subscription is complete), the current record
+ * takes its new key and its identity (the gate for every later link), the
+ * host installs and saves it, and the link counts as persisted. 1 when
+ * that happened now, else 0.
+ */
+int dect_base_main_registered(struct dect_base *b);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
