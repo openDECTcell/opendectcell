@@ -523,25 +523,7 @@ struct stubd {
 	/* An internal call: base.ic (dect_base.h, S3q); its codec mismatch reported */
 	int ic_warned;
 	/* Deregistering a handset: base.dereg (dect_base.h, S4b) */
-	/*
-	 * The periodic date and time (-a timeupdate=MIN): one round over all
-	 * handsets every MIN minutes, one handset at a time -- on its link
-	 * if it has one, else paged first (TS 102 527-3 §7.4.2.1).
-	 */
-	struct {
-		enum { TIME_IDLE, TIME_PAGING, TIME_SENT } st;
-		uint64_t next_round;	/* 0 = not scheduled yet */
-		int      in_round;
-		unsigned next;		/* handset table index to visit next */
-		int      target;
-		uint8_t  tpui[3];
-		unsigned pages;
-		uint64_t page_at;
-		int      answered;	/* it came up for our page: release it */
-		uint64_t sent_at;
-		int      with_time;	/* this round sends the date and time */
-		/* handsets to visit for a notice: base.page_want */
-	} tu;
+	/* The periodic date and time: base.tu (dect_base.h, S4c) */
 	/*
 	 * The control socket (docs/bridge-interface.md §2): one message per
 	 * line, from up to CTL_CLIENTS clients at once.
@@ -2868,12 +2850,13 @@ static int base_lanes(void *ctx, int p)
 
 static void base_forget(void *ctx, unsigned i, const char *why);
 static void base_mask(void *ctx);
+static int base_clock(void *ctx, struct dect_time *dt, long *off_s);
 
 static const struct dect_base_ops base_ops = {
 	.save = base_save, .send = base_send, .random = base_random,
 	.log = base_log, .install = base_install, .event = base_event,
 	.pump = base_pump, .lanes = base_lanes, .forget = base_forget,
-	.mask = base_mask,
+	.mask = base_mask, .clock = base_clock,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -5380,11 +5363,6 @@ static void mwi_locate(struct stubd *s, struct dect_link *l)
 	dect_base_mwi_locate(&s->base, l);
 }
 
-static unsigned missed_send(struct stubd *s, struct dect_link *l, unsigned i)
-{
-	return dect_base_missed_send(&s->base, l, i);
-}
-
 static void missed_locate(struct stubd *s, struct dect_link *l)
 {
 	dect_base_missed_locate(&s->base, l);
@@ -6029,12 +6007,12 @@ static int dereg_page_response(struct stubd *s, struct side_link *sl,
 static int time_page_response(struct stubd *s, struct side_link *sl,
 			      const struct dect_link_ind *ind)
 {
-	int i = s->tu.target;
+	int i = s->base.tu.target;
 
-	if (s->tu.st != TIME_PAGING || !ind->page_response ||
+	if (s->base.tu.st != DECT_BASE_TIME_PAGING || !ind->page_response ||
 	    !page_adopt(s, sl, ind, i, " (date and time)"))
 		return 0;
-	s->tu.answered = 1;
+	s->base.tu.answered = 1;
 	printf("time: DECT %u answered the page\n", hs_slot(s, (unsigned)i));
 	return 1;
 }
@@ -6085,226 +6063,29 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 	dect_base_dereg_tick(&s->base, now);
 }
 
-#define TIME_PAGES	5u		/* 3 s apart, as a ring's */
-#define TIME_PAGE_MS	3000u
-#define TIME_SENT_MS	5000u		/* the FACILITY's ack, at most */
-
-static void drain_nwk(struct stubd *s, uint64_t now);
-
-/*
- * Anything a page of ours could get in the way of: a ring, an internal
- * call, a deregistration, a call or list session on any link. The date and
- * time can wait for all of them.
- */
-static int time_base_busy(struct stubd *s)
-{
-	unsigned k;
-
-	if (s->base.dereg.st != DEREG_IDLE || s->base.ic.st != IC_IDLE ||
-	    (s->base.ring.state != RING_IDLE && s->base.ring.state != RING_DONE))
-		return 1;
-	if (s->base.main_link.active && dect_cc_busy(&s->base.main_link.link.cc))
-		return 1;
-	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl->active && dect_cc_busy(&s->side[k].bl->link.cc))
-			return 1;
-	return 0;
-}
-
 /* Push what a link has queued towards the chip. */
 static void time_pump(struct stubd *s, struct dect_link *l, uint64_t now)
 {
-	unsigned k;
-
-	if (l == &s->base.main_link.link) {
-		drain_nwk(s, now);
-		return;
-	}
-	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl->active && &s->side[k].bl->link == l)
-			side_pump(s, &s->side[k]);
+	dect_base_link_flush(&s->base, l, now);
 }
 
-/* Done with the current handset: on to the next one. */
-static void time_next(struct stubd *s)
+/* dect_base's clock(): the wall clock, when it is known to be right. */
+static int base_clock(void *ctx, struct dect_time *dt, long *off_s)
 {
-	s->tu.st = TIME_IDLE;
-	s->tu.next = (unsigned)s->tu.target + 1u;
+	struct stubd *s = ctx;
+
+	return clock_now(s->audio.timesync, dt, off_s);
 }
 
 /*
  * -a timeupdate=MIN: the date and time to every handset we hold, every MIN
- * minutes (maintainer, 2026-10-29). One interval for the base, not one per
- * handset: a handset that attached a minute before a round gets it twice,
- * which is harmless.
- *
- * TS 102 527-3 §7.4.2.0 makes it "the responsibility of the entity to
- * ensure that time and date information within the peer entity is up to
- * date", and §7.4.2.1 says how to reach a handset with no link: "the FP
- * shall initiate indirect link establishment" -- a page, as for a call, with
- * the LCE header "000" (no U-plane). That is the C-plane page the
- * deregistration sends. Then the {FACILITY} (dect_link_send_time), and once
- * it is acknowledged we release the link we brought up, as after a call
- * (EN 300 175-5 §14.2.7). A handset that already has a link gets it there
- * and keeps its link.
- *
- * One handset at a time, and only while the base is otherwise idle
- * (time_base_busy); a handset that does not answer TIME_PAGES pages is off
- * or out of range and is skipped until the next round. The same clock gate
- * as after a location registration: no trustworthy clock, no time.
- *
- * The same round visits a handset with no link that has a voice message
- * waiting notification to hear (tu.want, mwi_send(): §7.4.1.2 wants it
- * sent to every attached handset); outside a time round, only those.
+ * minutes (maintainer, 2026-10-29), and the notices for handsets with no
+ * link: the library's (dect_base.h, S4c), while the radio is on.
  */
 static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 {
-	uint64_t every = (uint64_t)s->base.cfg.time_every_min * 60000u;
-	struct dect_link *l;
-	struct dect_time dt;
-	long off_s;
-	int i;
-
-	if (!radio_on)
-		return;
-	if (every && !s->tu.next_round)
-		s->tu.next_round = now + every;
-	if (!s->tu.in_round) {
-		int time_due = every && now >= s->tu.next_round;
-
-		if (!time_due && !s->base.page_want)
-			return;
-		s->tu.with_time = 0;
-		if (time_due) {
-			s->tu.next_round = now + every;
-			if (clock_now(s->audio.timesync, &dt, &off_s))
-				s->tu.with_time = 1;
-			else
-				printf("time: update round skipped -- the "
-				       "clock is not known to be right (no "
-				       "NTP sync reported)\n");
-			if (!s->tu.with_time && !s->base.page_want)
-				return;
-		}
-		s->tu.in_round = 1;
-		s->tu.next = 0;
-		s->tu.st = TIME_IDLE;
-		if (s->tu.with_time)
-			printf("time: update round, every %u min\n",
-			       s->base.cfg.time_every_min);
-	}
-
-	if (s->tu.st == TIME_IDLE) {
-		while (s->tu.next < s->base.n_hs &&
-		       (!s->base.loaded[s->tu.next] ||
-			(!s->tu.with_time &&
-			 !(s->base.page_want & (1u << s->tu.next)))))
-			s->tu.next++;
-		if (s->tu.next >= s->base.n_hs) {
-			s->tu.in_round = 0;
-			if (s->tu.with_time)
-				printf("time: update round done\n");
-			return;
-		}
-		if (time_base_busy(s))
-			return;
-		s->tu.target = (int)s->tu.next;
-		s->tu.pages = 0;
-		s->tu.page_at = now;
-		s->tu.answered = 0;
-		s->tu.st = TIME_PAGING;
-		{
-			struct dect_mm_cfg cfg;
-			struct dect_mm mm;
-
-			memset(&cfg, 0, sizeof(cfg));
-			cfg.sub_slot = (uint8_t)hs_slot(s,
-						(unsigned)s->tu.target);
-			dect_mm_init(&mm, &cfg);
-			dect_mm_tpui(&mm, s->tu.tpui);
-		}
-	}
-	i = s->tu.target;
-	if (!s->base.loaded[i]) {		/* deregistered meanwhile */
-		time_next(s);
-		return;
-	}
-	l = link_known_hs(s, i);
-
-	if (s->tu.st == TIME_PAGING) {
-		if (l) {
-			s->base.page_want &= ~(1u << i);
-			(void)mwi_send(s, l, (unsigned)i);
-			(void)missed_send(s, l, (unsigned)i);
-			if (s->tu.with_time &&
-			    clock_now(s->audio.timesync, &dt, &off_s) &&
-			    dect_link_send_time(l, &dt) == 0) {
-				printf("time: DECT %u: sent the date and time "
-				       "(20%02u-%02u-%02u %02u:%02u:%02u, "
-				       "GMT%+ld:%02ld)%s\n",
-				       hs_slot(s, (unsigned)i), dt.year,
-				       dt.month, dt.day, dt.hour, dt.minute,
-				       dt.second, off_s / 3600,
-				       labs(off_s % 3600) / 60,
-				       s->tu.answered ? "" : " on its link");
-			} else if (s->tu.with_time) {
-				printf("time: DECT %u: could not queue the "
-				       "date and time\n",
-				       hs_slot(s, (unsigned)i));
-			}
-			time_pump(s, l, now);
-			/* a link we paged up is ours to release, sent or not */
-			if (!s->tu.answered) {
-				time_next(s);
-				return;
-			}
-			s->tu.st = TIME_SENT;
-			s->tu.sent_at = now;
-			return;
-		}
-		/* a call or a ring came first: page again later */
-		if (time_base_busy(s)) {
-			s->tu.st = TIME_IDLE;
-			return;
-		}
-		if (now < s->tu.page_at)
-			return;
-		if (s->tu.pages >= TIME_PAGES) {
-			printf("time: DECT %u did not answer %u pages -- "
-			       "skipped until it reports in\n",
-			       hs_slot(s, (unsigned)i), TIME_PAGES);
-			s->base.page_want &= ~(1u << i);	/* mwi_locate() then */
-			time_next(s);
-			return;
-		}
-		{
-			/* C-plane only, the TPUI: the deregistration's page */
-			dect_base_page(&s->base, 0x08, s->tu.tpui);
-		}
-		if (!s->tu.pages)
-			printf("time: DECT %u has no link -- paging it\n",
-			       hs_slot(s, (unsigned)i));
-		s->tu.pages++;
-		s->tu.page_at = now + TIME_PAGE_MS;
-		return;
-	}
-
-	/* TIME_SENT: release the link we brought up, once the ack is in */
-	if (!l) {
-		time_next(s);		/* the handset released it itself */
-		return;
-	}
-	if ((l->ciss_n || l->lapc.outstanding || l->lapc.txmsg_len) &&
-	    now - s->tu.sent_at < TIME_SENT_MS)
-		return;
-	if (!dect_cc_busy(&l->cc)) {
-		chip_mail(s, 0x0202u, &l->handle, 1);	/* [CR A-0127] */
-		printf("time: link released (0x0202 on handle %u)%s\n",
-		       (unsigned)l->handle,
-		       l->ciss_n || l->lapc.outstanding
-		       ? ", the FACILITY unacknowledged" : "");
-	}
-	time_next(s);
+	if (radio_on)
+		dect_base_time_tick(&s->base, now);
 }
 
 /* -------------------------------------------------------------------------

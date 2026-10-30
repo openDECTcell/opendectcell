@@ -107,6 +107,11 @@ struct dect_base_ops {
 	void (*forget)(void *ctx, unsigned i, const char *why);
 	/* The records in the chip changed: write the locked-in mask (0x017C). */
 	void (*mask)(void *ctx);
+	/*
+	 * The date and time now, with the zone's offset in seconds, when the
+	 * host's clock is known to be right (S4c): 1, else 0.
+	 */
+	int  (*clock)(void *ctx, struct dect_time *dt, long *off_s);
 };
 
 /*
@@ -348,6 +353,36 @@ struct dect_base_dereg {
 	unsigned nq;
 };
 
+/*
+ * Stage S4c: the periodic date and time (cfg.time_every_min): one round
+ * over all records every so many minutes, one handset at a time -- on its
+ * link if it has one, else paged first (TS 102 527-3 §7.4.2.1). The same
+ * round visits a handset with no link that has a notice due (page_want).
+ */
+enum dect_base_time_state {
+	DECT_BASE_TIME_IDLE,
+	DECT_BASE_TIME_PAGING,
+	DECT_BASE_TIME_SENT,
+};
+
+#define DECT_BASE_TIME_PAGES	5u	/* 3 s apart, as a ring's */
+#define DECT_BASE_TIME_PAGE_MS	3000u
+#define DECT_BASE_TIME_SENT_MS	5000u	/* the FACILITY's ack, at most */
+
+struct dect_base_tu {
+	enum dect_base_time_state st;
+	uint64_t next_round;	/* 0 = not scheduled yet */
+	int      in_round;
+	unsigned next;		/* the record to visit next */
+	int      target;
+	uint8_t  tpui[3];
+	unsigned pages;
+	uint64_t page_at;
+	int      answered;	/* it came up for our page: release it */
+	uint64_t sent_at;
+	int      with_time;	/* this round sends the date and time */
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
@@ -377,6 +412,7 @@ struct dect_base {
 	struct dect_clip clip;
 	struct dect_base_ic ic;
 	struct dect_base_dereg dereg;
+	struct dect_base_tu tu;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	/* record i holds a subscription (the host's store had one) */
 	int      loaded[DECT_BASE_HS_MAX];
@@ -902,6 +938,25 @@ void dect_base_dereg_begin(struct dect_base *b, unsigned slot, uint64_t now,
 			   const char *who);
 /* The deregistration's progress, and handsets that deregistered themselves. */
 void dect_base_dereg_tick(struct dect_base *b, uint64_t now);
+
+/*
+ * The date and time, and the notices for handsets with no link (S4c).
+ * TS 102 527-3 §7.4.2.0 makes it "the responsibility of the entity to
+ * ensure that time and date information within the peer entity is up to
+ * date", and §7.4.2.1 says how to reach a handset with no link: a page
+ * with the LCE header "000" (no U-plane), as the deregistration's. Then
+ * the {FACILITY}, and once it is acknowledged the link we brought up is
+ * released, as after a call (EN 300 175-5 §14.2.7). One handset at a
+ * time, only while the base is otherwise idle; a handset that does not
+ * answer DECT_BASE_TIME_PAGES pages is skipped until the next round. No
+ * trustworthy clock (clock()), no time. The host calls the tick while the
+ * radio is on.
+ */
+int dect_base_time_busy(const struct dect_base *b);
+/* Push what link l has queued towards the chip. */
+void dect_base_link_flush(struct dect_base *b, struct dect_link *l,
+			  uint64_t now);
+void dect_base_time_tick(struct dect_base *b, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

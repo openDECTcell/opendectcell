@@ -5,6 +5,7 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "dect_base.h"
@@ -2920,4 +2921,198 @@ void dect_base_dereg_tick(struct dect_base *b, uint64_t now)
 	default:
 		break;
 	}
+}
+
+/*
+ * Anything a page of ours could get in the way of: a ring, an internal
+ * call, a deregistration, a call or list session on any link. The date and
+ * time can wait for all of them.
+ */
+int dect_base_time_busy(const struct dect_base *b)
+{
+	unsigned k;
+
+	if (b->dereg.st != DECT_BASE_DEREG_IDLE ||
+	    b->ic.st != DECT_BASE_IC_IDLE ||
+	    (b->ring.state != DECT_BASE_RING_IDLE &&
+	     b->ring.state != DECT_BASE_RING_DONE))
+		return 1;
+	if (b->main_link.active && dect_cc_busy(&b->main_link.link.cc))
+		return 1;
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active && dect_cc_busy(&b->side[k].link.cc))
+			return 1;
+	return 0;
+}
+
+void dect_base_link_flush(struct dect_base *b, struct dect_link *l,
+			  uint64_t now)
+{
+	unsigned k;
+
+	if (l == &b->main_link.link) {
+		dect_base_drain(b, -1, now);
+		return;
+	}
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active && &b->side[k].link == l)
+			pump(b, &b->side[k]);
+}
+
+static int base_clock(struct dect_base *b, struct dect_time *dt, long *off_s)
+{
+	return b->ops && b->ops->clock && b->ops->clock(b->ctx, dt, off_s);
+}
+
+/* Done with the current handset: on to the next one. */
+static void time_next(struct dect_base *b)
+{
+	b->tu.st = DECT_BASE_TIME_IDLE;
+	b->tu.next = (unsigned)b->tu.target + 1u;
+}
+
+void dect_base_time_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_tu *tu = &b->tu;
+	uint64_t every = (uint64_t)b->cfg.time_every_min * 60000u;
+	struct dect_link *l;
+	struct dect_time dt;
+	long off_s;
+	int i;
+
+	if (every && !tu->next_round)
+		tu->next_round = now + every;
+	if (!tu->in_round) {
+		int time_due = every && now >= tu->next_round;
+
+		if (!time_due && !b->page_want)
+			return;
+		tu->with_time = 0;
+		if (time_due) {
+			tu->next_round = now + every;
+			if (base_clock(b, &dt, &off_s))
+				tu->with_time = 1;
+			else
+				dect_base_log(b, "time: update round skipped -- "
+					      "the clock is not known to be "
+					      "right (no NTP sync reported)");
+			if (!tu->with_time && !b->page_want)
+				return;
+		}
+		tu->in_round = 1;
+		tu->next = 0;
+		tu->st = DECT_BASE_TIME_IDLE;
+		if (tu->with_time)
+			dect_base_log(b, "time: update round, every %u min",
+				      b->cfg.time_every_min);
+	}
+
+	if (tu->st == DECT_BASE_TIME_IDLE) {
+		struct dect_mm_cfg cfg;
+		struct dect_mm mm;
+
+		while (tu->next < b->n_hs &&
+		       (!b->loaded[tu->next] ||
+			(!tu->with_time &&
+			 !(b->page_want & (1u << tu->next)))))
+			tu->next++;
+		if (tu->next >= b->n_hs) {
+			tu->in_round = 0;
+			if (tu->with_time)
+				dect_base_log(b, "time: update round done");
+			return;
+		}
+		if (dect_base_time_busy(b))
+			return;
+		tu->target = (int)tu->next;
+		tu->pages = 0;
+		tu->page_at = now;
+		tu->answered = 0;
+		tu->st = DECT_BASE_TIME_PAGING;
+		memset(&cfg, 0, sizeof(cfg));
+		cfg.sub_slot = (uint8_t)dect_base_slot(b, (unsigned)tu->target);
+		dect_mm_init(&mm, &cfg);
+		dect_mm_tpui(&mm, tu->tpui);
+	}
+	i = tu->target;
+	if (!b->loaded[i]) {		/* deregistered meanwhile */
+		time_next(b);
+		return;
+	}
+	l = dect_base_link_known(b, i);
+
+	if (tu->st == DECT_BASE_TIME_PAGING) {
+		if (l) {
+			b->page_want &= ~(1u << i);
+			(void)dect_base_mwi_send(b, l, (unsigned)i);
+			(void)dect_base_missed_send(b, l, (unsigned)i);
+			if (tu->with_time && base_clock(b, &dt, &off_s) &&
+			    dect_link_send_time(l, &dt) == 0) {
+				dect_base_log(b, "time: DECT %u: sent the date "
+					      "and time (20%02u-%02u-%02u "
+					      "%02u:%02u:%02u, GMT%+ld:%02ld)%s",
+					      dect_base_slot(b, (unsigned)i),
+					      dt.year, dt.month, dt.day,
+					      dt.hour, dt.minute, dt.second,
+					      off_s / 3600,
+					      labs(off_s % 3600) / 60,
+					      tu->answered ? "" : " on its link");
+			} else if (tu->with_time) {
+				dect_base_log(b, "time: DECT %u: could not queue "
+					      "the date and time",
+					      dect_base_slot(b, (unsigned)i));
+			}
+			dect_base_link_flush(b, l, now);
+			/* a link we paged up is ours to release, sent or not */
+			if (!tu->answered) {
+				time_next(b);
+				return;
+			}
+			tu->st = DECT_BASE_TIME_SENT;
+			tu->sent_at = now;
+			return;
+		}
+		/* a call or a ring came first: page again later */
+		if (dect_base_time_busy(b)) {
+			tu->st = DECT_BASE_TIME_IDLE;
+			return;
+		}
+		if (now < tu->page_at)
+			return;
+		if (tu->pages >= DECT_BASE_TIME_PAGES) {
+			dect_base_log(b, "time: DECT %u did not answer %u pages "
+				      "-- skipped until it reports in",
+				      dect_base_slot(b, (unsigned)i),
+				      DECT_BASE_TIME_PAGES);
+			/* the notices go at its next location registration */
+			b->page_want &= ~(1u << i);
+			time_next(b);
+			return;
+		}
+		/* C-plane only, the TPUI: the deregistration's page */
+		dect_base_page(b, 0x08, tu->tpui);
+		if (!tu->pages)
+			dect_base_log(b, "time: DECT %u has no link -- paging it",
+				      dect_base_slot(b, (unsigned)i));
+		tu->pages++;
+		tu->page_at = now + DECT_BASE_TIME_PAGE_MS;
+		return;
+	}
+
+	/* SENT: release the link we brought up, once the ack is in */
+	if (!l) {
+		time_next(b);		/* the handset released it itself */
+		return;
+	}
+	if ((l->ciss_n || l->lapc.outstanding || l->lapc.txmsg_len) &&
+	    now - tu->sent_at < DECT_BASE_TIME_SENT_MS)
+		return;
+	if (!dect_cc_busy(&l->cc)) {
+		chip_mail(b, 0x0202u, &l->handle, 1);	/* [CR A-0127] */
+		dect_base_log(b, "time: link released (0x0202 on handle %u)%s",
+			      (unsigned)l->handle,
+			      l->ciss_n || l->lapc.outstanding
+			      ? ", the FACILITY unacknowledged" : "");
+	}
+	time_next(b);
 }

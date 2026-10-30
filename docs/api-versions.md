@@ -851,3 +851,8 @@ _missed_due(), _missed_changed_tick(), _names_notify() (S4a).
 dect_base_dereg_state, struct dect_base_dereg and dect_base's `dereg`,
 DECT_BASE_DEREG_PAGES and _PAGE_MS; dect_base_ops' `forget` and `mask`;
 dect_base_dereg_erase(), _dereg_begin(), _dereg_tick() (S4b).
+
+**124.** dect_base.h, 2026-10-30: the date and time round: enum
+dect_base_time_state, struct dect_base_tu and dect_base's `tu`,
+DECT_BASE_TIME_PAGES, _PAGE_MS, _SENT_MS; dect_base_ops' `clock`;
+dect_base_time_busy(), _link_flush(), _time_tick() (S4c).

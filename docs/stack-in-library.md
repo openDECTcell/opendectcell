@@ -402,3 +402,12 @@ request is now taken before a self-deregistration seen in the same tick
 (was after); both are erased either way. New trace `deregister.trace`
 (DECT 2 paged, the request, its accept, the erasure), replayed unchanged
 on the commit before; the other twelve unchanged.
+
+**S4c.** The periodic date and time is the library's
+(`dect_base_time_tick()`): the round, the C-plane page of a handset with
+no link, the {FACILITY}, the release of the link it brought up, and the
+notices for handsets with no link riding the same round. The host says
+whether its clock is right (`clock()`) and calls the tick while the radio
+is on. New trace `time-round.trace` (timeupdate=1: DECT 1 paged, the
+date and time, the release), replayed unchanged on the commit before;
+the other thirteen unchanged.

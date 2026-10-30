@@ -749,5 +749,31 @@ int main(void)
 		CHECK_EQ(b.dereg.nq, 0u);		/* the queue's turn */
 		CHECK_EQ(b.dereg.target, 0);
 	}
+
+	/* the date and time round (S4c): no trustworthy clock, no round */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;			/* no clock() */
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.loaded[0] = 1;
+		b.cfg.time_every_min = 1;
+		CHECK_EQ(dect_base_time_busy(&b), 0);
+		b.ic.st = DECT_BASE_IC_PAGING;
+		CHECK_EQ(dect_base_time_busy(&b), 1);
+		b.ic.st = DECT_BASE_IC_IDLE;
+		n_sent = 0;
+		dect_base_time_tick(&b, 1000);
+		CHECK_EQ(b.tu.next_round, 61000u);
+		dect_base_time_tick(&b, 61000);
+		CHECK_EQ(b.tu.in_round, 0);
+		CHECK_EQ(n_sent, 0u);
+		b.page_want = 1;		/* but a notice due: paged */
+		dect_base_time_tick(&b, 62000);
+		CHECK_EQ(b.tu.st, DECT_BASE_TIME_PAGING);
+		dect_base_time_tick(&b, 62000);
+		CHECK_EQ(n_sent, 1u);
+		CHECK_EQ(sent[0].prim, 0x0300);
+	}
 	return CHECK_DONE();
 }
