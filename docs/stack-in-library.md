@@ -403,6 +403,20 @@ record 0 when the PIN fails) are the library's. A roamer's record
 (`remote[]`) is never free. The register, call-in and locate-second
 traces take these paths; the fourteen traces unchanged.
 
+**S3z.** Setting links up is the library's: the main link on a
+connection (`dect_base_main_open()`: MM for the current record, the
+records it may turn out to be, the call state reset, CC with the lists
+a CAT-iq handset reads first), a side link while the main one is busy
+(`dect_base_side_start()`), and a side link promoted to the main one when
+the ring target answers there (`dect_base_side_promote()`). The link
+callbacks for call status, call ids and the UAK lookup are the
+library's, as are the registration window (`dect_base_reg_window()`,
+`dect_base_reg_policy()`) and the options they read. The host keeps its
+NWK log hooks, the audio lanes and its diagnostics per link. New trace
+`promote.trace` (DECT 1 takes the main link while DECT 2 is paged; DECT
+2's page response on a side link; the swap; it rings), replayed unchanged
+on the commit before; the other fourteen unchanged.
+
 ## S5, the control verbs (started 2026-10-30)
 
 **S5a.** The bridge's call verbs are the library's:

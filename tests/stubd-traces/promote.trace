@@ -1,0 +1,66 @@
+# A side link promoted to the main link (12d, 2026-10-25): the bridge
+# offers DECT 2 a call and the base pages it; DECT 1 brings up a link
+# first (it locates) and holds the main link, so DECT 2's page response
+# lands on a side link. The two links swap and DECT 2 rings on the new
+# main link. -C: no ciphering; -a nolocauth: no authentication in the
+# way. Identities, keys and numbers are made up.
+sub 1 80 a8 03 11 22 33 44
+sub 2 80 a8 03 55 66 77 88
+args -C -a nolocauth
+start
+ev hello api=N lines=1 hs=2
+ev hs hs=1 state=registered name="DECT 1" wideband=1
+ev hs hs=2 state=registered name="DECT 2" wideband=1
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 02 01 00
+mail 020a 02 c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 ca cb cc cd ce cf 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 03
+ctl bridge
+ev ok verb=bridge
+ctl call-in line=1 hs=2 number=0301234567 sip=p1
+ev call-in-ok call=1 sip=p1
+mail 0300 2c 11 02
+tick 200
+# DECT 1 comes up on handle 1 and locates.
+up 1
+pp 05 54 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60
+fp 85 55 05 05 a0 94 00 11 01 07 01 64 7c 07 90 03 00 01 02 00 84
+fp 64 62 23 08 c0 26 10 30 09 00 00 00
+tick 300
+# DECT 2 answers the page on handle 2: a side link, {LCE-PAGE-RESPONSE}.
+up 2
+pp 00 71 05 07 80 a8 03 55 66 77 88
+fp 03 05 05 07 80 a8 03 55 66 77 88 06 05 00 01 23 45 60 e0 88 e4 41 6c 0c 00 80 30 33 30 31 32 33 34 35 36 37
+tick 300
+# DECT 2 rings; the far end gives up.
+pp 83 01
+ev ringing call=1 hs=2
+tick 300
+ctl remote-released call=1 reason=normal
+ev ok verb=remote-released call=1
+fp 03 4d
+mail 0202 02
+tick 300
+pp 83 5a
+tick 500
+down
+on 1
+down
+tick 1000

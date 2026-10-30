@@ -886,3 +886,10 @@ _time_page_response(), _ic_target_link(), _side_ring_answer() (S3x).
 **131.** dect_base.h, 2026-10-30: dect_base's `remote[]`;
 dect_base_ring_port_id(), _free_record(), _main_page_response(),
 _main_enrolment() (S3y).
+
+**132.** dect_base.h, 2026-10-30: dect_base_link's `located_seen` and
+`rejected_seen`; dect_base_cfg's `codeclist`, `codeclist_len`,
+`locate_validity`, `defer_unknown`, `ipuio_set`, `ipuio`; dect_base's
+`fetched[]`, `reg_open`, `reg_open_until`; dect_base_hs_by_ipui(),
+_reg_policy(), _reg_window(), _main_cc_setup(), _main_open(),
+_side_start(), _side_promote() (S3z).

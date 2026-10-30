@@ -893,5 +893,37 @@ int main(void)
 		/* a page response with an identity MM does not hold */
 		CHECK_EQ(dect_base_page_adopt(&b, 0, &ind, 0, ""), 0);
 	}
+
+	/* links set up, the registration window (S3z) */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.hs[0].slot = 1;
+		b.hs[1].slot = 2;
+		b.loaded[0] = 1;
+		b.absent[1] = 1;
+		CHECK_EQ(dect_base_reg_policy(&b), DECT_MM_REG_CLOSED);
+		n_sent = 0;
+		dect_base_reg_window(&b, 1, 60, 1000, "test");
+		CHECK_EQ(sent[0].prim, 0x022B);
+		CHECK_EQ(sent[0].param[0], 0x41);
+		CHECK_EQ(b.reg_open_until, 61000u);
+		CHECK_EQ(dect_base_reg_policy(&b), DECT_MM_REG_OPEN);	/* free */
+		b.absent[1] = 0;
+		b.rec.port_id_len = 7;
+		CHECK_EQ(dect_base_reg_policy(&b), DECT_MM_REG_SAME);
+		dect_base_reg_window(&b, 0, 0, 2000, "test");
+		CHECK_EQ(sent[1].prim, 0x022C);
+		b.main_link.active = 1;
+		b.main_link.handle = 1;
+		CHECK_EQ(dect_base_side_start(&b, 2), 0);
+		CHECK_EQ(b.side[0].active, 1);
+		CHECK_EQ(b.side[0].adopted, -1);
+		CHECK_EQ(dect_base_side_start(&b, 2), 0);	/* repeated */
+		CHECK_EQ(dect_base_side_start(&b, 3), 1);
+		CHECK_EQ(dect_base_side_start(&b, 4), 2);
+		CHECK_EQ(dect_base_side_start(&b, 5), -1);	/* none free */
+	}
 	return CHECK_DONE();
 }

@@ -165,6 +165,8 @@ struct dect_base_link {
 	int      cipher_reject_seen;	/* ... CIPHER-REJECT reported */
 	int      cipher_timeout_seen;	/* ... <MM_cipher.1> reported */
 	uint32_t time_sent_for;		/* main link: mm.stats.located answered (S3w) */
+	uint32_t located_seen;		/* side link: mm.stats.located answered (S3z) */
+	uint32_t rejected_seen;		/* cc.stats.rejected_identity reported (S3z) */
 	/* Stage S3p, the main link's call: */
 	int      bound;			/* its audio channel bound */
 	int      path_on;		/* ... and connected (0x022D sent) */
@@ -292,6 +294,13 @@ struct dect_base_cfg {
 	unsigned time_every_min;	/* the periodic date and time */
 	const char *pin;	/* the base PIN, decimal; NULL: none (S4d) */
 	const char *line_name;	/* Line 1's default name, NULL: "Line 1" (S3x) */
+	/* codeclist=: a <<CODEC-LIST>> for FP-originated SETUPs (S3z) */
+	uint8_t  codeclist[31];
+	size_t   codeclist_len;
+	unsigned locate_validity;	/* locvalid=N x 40.96 s */
+	int      defer_unknown;	/* hold an unknown LOCATE-REQUEST (the host fetches) */
+	int      ipuio_set;	/* ipuio=N: assign IPUI O N at registration */
+	uint32_t ipuio;
 	/* callinfo keys: a fixed <<CALL-INFORMATION>> for every SETUP (S3k) */
 	struct dect_callinfo callinfo;
 	/* infoie=: IEs in a {CC-INFO} on ALERTING, a lab option (S3r) */
@@ -454,6 +463,10 @@ struct dect_base {
 	int      absent[DECT_BASE_HS_MAX];
 	/* record i is a roamer's the host must fetch: never free (S3y) */
 	int      remote[DECT_BASE_HS_MAX];
+	int      fetched[DECT_BASE_HS_MAX];	/* ... and it has, this run (S3z) */
+	/* the registration window (S3z) */
+	int      reg_open;
+	uint64_t reg_open_until;	/* 0: until closed */
 	/* the Contact List the host keeps, NULL: none (S5a) */
 	struct dect_contacts *contacts;
 	/* the call lists the host keeps, NULL: none (S4a) */
@@ -1118,6 +1131,48 @@ void dect_base_main_page_response(struct dect_base *b,
  * PIN fails), and the outcome, said once.
  */
 void dect_base_main_enrolment(struct dect_base *b);
+
+/*
+ * Links set up (S3z). The record whose stored IPUI this is, or -1.
+ */
+int dect_base_hs_by_ipui(const struct dect_base *b, const uint8_t *id,
+			 size_t len);
+/*
+ * Who may enrol on the main link: nobody unless the window is open; then
+ * anyone with the PIN when a free record can take a new handset, else
+ * only the current record's own handset re-enrolling.
+ */
+uint8_t dect_base_reg_policy(const struct dect_base *b);
+/*
+ * Open or close the registration window: the chip's mode (0x022B 'A' /
+ * 0x022C 01 [CR COMMAND_SET §6.2]) and MM's policy together. secs = 0
+ * keeps it open until closed.
+ */
+void dect_base_reg_window(struct dect_base *b, int open, unsigned secs,
+			  uint64_t now, const char *why);
+/* The main link's CC entity, fresh: per connection, and on a promotion. */
+void dect_base_main_cc_setup(struct dect_base *b);
+/*
+ * A connection on `handle` becomes the main link: MM configured for the
+ * current record (the PIN, the window's policy, the RFPI), the records it
+ * may turn out to be held, the call state reset, CC set up.
+ */
+void dect_base_main_open(struct dect_base *b, uint8_t handle);
+/*
+ * A connection on `handle` while the main link is busy gets a side link:
+ * location registration and list access, a call only with
+ * cfg.two_calls. Its index, the one it already has when the chip repeats
+ * connection-up, or -1 when none is free.
+ */
+int dect_base_side_start(struct dect_base *b, uint8_t handle);
+/*
+ * Swap side link k with the main link: the ring target answered our page
+ * there while the main link carries another handset that is not in a call
+ * nor enrolling. Both are C-plane state only, so the swap is a copy. 1
+ * when promoted (the SETUP is then queued on the new main link).
+ */
+int dect_base_side_promote(struct dect_base *b, unsigned k,
+			   const struct dect_link_ind *ind, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
