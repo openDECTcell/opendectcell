@@ -25,7 +25,12 @@ and is then put through cases from the security review of 2026-10-30
      cryptography, not mbedTLS), G.722 with AEAD_AES_128_GCM at 20 ms and
      L16 with AES_CM_128_HMAC_SHA1_80 at 10 ms; packets down arrive as
      frames, a replayed or forged one does not; plain RTP is refused
-     without -P; MEDIA_CLOSE ends the flow.
+     without -P; MEDIA_CLOSE ends the flow;
+  8. renewal (§5.4, D4): enrolled with a certificate two thirds through its
+     life, the cell asks for a new one at once, stores it with its new key
+     and presents it on the next connection; a renewal cut short between
+     the two renames is completed at the next start; an expired
+     certificate stops the cell before it dials.
 
     python3 -I tests/test_cell_link.py build/dect-cell-test
 """
@@ -39,9 +44,11 @@ import subprocess
 import sys
 import tempfile
 import threading
+import datetime
 import time
 
-from cryptography.hazmat.primitives import hashes, hmac
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, hmac, serialization
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -52,6 +59,7 @@ tp = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tp)
 
 HELLO, HELLO_ACK, HEARTBEAT, ECHO, GOODBYE, ERROR = 1, 2, 3, 4, 5, 6
+RENEW_REQUEST, RENEW_RESPONSE = 0x210, 0x211
 MAIL_DOWN, CELL_STATE, STATUS = 0x101, 0x200, 0x203
 MEDIA_OPEN, MEDIA_OPEN_ACK, MEDIA_CLOSE, MEDIA_CLOSED = 0x300, 0x301, 0x302, \
     0x303
@@ -164,6 +172,7 @@ class Controller:
         self.peer = tp.Peer(a)
         self.scripts = []
         self.hellos = 0
+        self.certs = []            # each connection's cell certificate
         threading.Thread(target=self.serve, daemon=True).start()
 
     def serve(self):
@@ -186,6 +195,7 @@ class Controller:
             if t != HELLO:
                 return
             self.hellos += 1
+            self.certs.append(s.getpeercert(binary_form=True))
             script = self.scripts.pop(0) if self.scripts else None
             if script:
                 script(s, corr)
@@ -269,8 +279,9 @@ class Srtp:
                                                   len(pkt) - 22))
 
 
-def reader(s, got):
-    """Every frame the cell sends, answering its heartbeats."""
+def reader(s, got, renew=None):
+    """Every frame the cell sends, answering its heartbeats (and, given
+    renew, its RENEW_REQUEST)."""
     def run():
         try:
             while True:
@@ -279,6 +290,9 @@ def reader(s, got):
                     with SEND_LOCK:     # media() writes from its thread
                         s.sendall(tp.frame(ECHO, corr, body))
                 got.append((t, corr, body))
+                if t == RENEW_REQUEST and renew:
+                    with SEND_LOCK:
+                        s.sendall(renew(body, corr))
         except (EOFError, OSError, ValueError):
             pass
     threading.Thread(target=run, daemon=True).start()
@@ -431,6 +445,63 @@ def media(stubd, ctl_send, got):
     u.close()
 
 
+def issue(ca, pub, uri, eku, start, end):
+    """A certificate from the test CA valid from start to end days from
+    now (tools/cell-testpeer.py's CA.issue, with the dates free)."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return (x509.CertificateBuilder().subject_name(x509.Name([]))
+            .issuer_name(ca.cert.subject).public_key(pub)
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now + datetime.timedelta(days=start))
+            .not_valid_after(now + datetime.timedelta(days=end))
+            .add_extension(x509.SubjectAlternativeName(
+                [x509.UniformResourceIdentifier(uri)]), True)
+            .add_extension(x509.ExtendedKeyUsage([eku]), False)
+            .sign(ca.key, hashes.SHA256()))
+
+
+def enrol_dated(exe, ctl, cell, env, start, end):
+    """Enrol cell with a certificate valid from start to end days."""
+    ca = ctl.peer.ca
+    plain = ca.issue
+    ca.issue = lambda pub, uri, eku, days: issue(ca, pub, uri, eku, start,
+                                                 end)
+    try:
+        return subprocess.run([exe, "-d", cell, "enroll",
+                               ctl.peer.enrollment_string()],
+                              capture_output=True, text=True, timeout=30,
+                              env=env)
+    finally:
+        ca.issue = plain
+
+
+def cell_uri(der):
+    c = x509.load_der_x509_certificate(der)
+    return c.extensions.get_extension_for_class(
+        x509.SubjectAlternativeName).value.get_values_for_type(
+        x509.UniformResourceIdentifier)[0]
+
+
+def expired(exe, ctl, d, env):
+    """Case 8, the end: an expired certificate stops the cell."""
+    cell = os.path.join(d, "cell-expired")
+    os.mkdir(cell, 0o700)
+    r = enrol_dated(exe, ctl, cell, env, -91, -1)
+    sock = os.path.join(d, "stubd3.sock")
+    Stubd(sock)
+    hellos = ctl.hellos
+    p = subprocess.Popen([exe, "-d", cell, "-s", sock, "run"],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, env=env)
+    time.sleep(3)
+    p.send_signal(signal.SIGTERM)
+    out = p.communicate(timeout=5)[0]
+    check(r.returncode == 0 and "has expired: enrol this cell again" in out
+          and ctl.hellos == hellos,
+          "an expired certificate: the cell says so and does not dial")
+    return out
+
+
 def silent(exe, cell, env):
     """Case 6: the enrolment pointed at a listener that never speaks."""
     ls = socket.create_server(("127.0.0.1", 0))
@@ -479,10 +550,23 @@ def main():
     cell = os.path.join(d, "cell")
     os.mkdir(cell, 0o700)
     env = dict(os.environ, ASAN_OPTIONS="abort_on_error=0:exitcode=99")
-    r = subprocess.run([exe, "-d", cell, "enroll",
-                        ctl.peer.enrollment_string()],
-                       capture_output=True, text=True, timeout=30, env=env)
+    # 61 of 90 days gone: renewal is due at once (§5.4)
+    r = enrol_dated(exe, ctl, cell, env, -61, 29)
     check(r.returncode == 0, "enrolment (%s)" % r.stdout.strip())
+    old_cert = open(os.path.join(cell, "cert.der"), "rb").read()
+    old_key = open(os.path.join(cell, "key.pem"), "rb").read()
+    renewed = []
+
+    def renew(body, corr):
+        csr = x509.load_der_x509_csr(tp.parse_tlv(body)[1])
+        if not csr.is_signature_valid:
+            return tp.frame(RENEW_RESPONSE, corr, tp.tlv([(1, b"\0\2")]))
+        c = ctl.peer.ca.issue(csr.public_key(), cell_uri(ctl.certs[-1]),
+                              x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH, 90)
+        der = c.public_bytes(serialization.Encoding.DER)
+        renewed.append(der)
+        return tp.frame(RENEW_RESPONSE, corr, tp.tlv([(1, b"\0\0"),
+                                                      (2, der)]))
     if r.returncode:
         print(r.stderr)
         return 1
@@ -495,7 +579,7 @@ def main():
             link2[0].sendall(b)
 
     def first(s, corr):
-        reader(s, got1)
+        reader(s, got1, renew)
         s.sendall(hello_ack(corr, 0))           # pending
         time.sleep(0.5)
         s.sendall(mail_down(0x10, 1))
@@ -539,6 +623,15 @@ def main():
               "controller's reason (finding 4)")
         check(wait_for(lambda: ctl.hellos >= 2, 10) and p.poll() is None,
               "after GOODBYE alive and reconnected (finding 1)")
+        check([1 for t, c, b in got1 if t == RENEW_REQUEST] and renewed and
+              open(os.path.join(cell, "cert.der"), "rb").read() ==
+              renewed[0] and
+              open(os.path.join(cell, "key.pem"), "rb").read() != old_key
+              and not os.path.exists(os.path.join(cell, "cert.der.new")),
+              "renewal due at once: asked, stored with a new key (§5.4)")
+        check(ctl.certs[0] == old_cert and len(ctl.certs) > 1 and
+              renewed and ctl.certs[1] == renewed[0],
+              "... and the next connection presents the new certificate")
         check(wait_for(lambda: len(stubd.of(MAIL_DOWN)) == 600, 5),
               "600 MAIL_DOWNs in one burst all forwarded (finding 3): %d"
               % len(stubd.of(MAIL_DOWN)))
@@ -560,7 +653,18 @@ def main():
         if p.poll() is None:
             p.kill()
         out = p.communicate()[0]
-    out += silent(exe, cell, env)
+    # a renewal cut short between its renames: new certificate, old key
+    if renewed and old_key:
+        new_key = open(os.path.join(cell, "key.pem"), "rb").read()
+        open(os.path.join(cell, "key.pem.new"), "wb").write(new_key)
+        open(os.path.join(cell, "key.pem"), "wb").write(old_key)
+    s_out = silent(exe, cell, env)
+    out += s_out
+    check("renewal cut short is completed" in s_out and renewed and
+          open(os.path.join(cell, "key.pem"), "rb").read() == new_key and
+          not os.path.exists(os.path.join(cell, "key.pem.new")),
+          "a renewal cut short is completed at the next start")
+    out += expired(exe, ctl, d, env)
     if "Sanitizer" in out or failed:
         print(out)
     check("Sanitizer" not in out, "no sanitizer report")

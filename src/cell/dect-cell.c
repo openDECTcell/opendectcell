@@ -92,6 +92,11 @@ static uint64_t mono_ms(void)
 	return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
+static int64_t wall_s(void)
+{
+	return (int64_t)time(NULL);
+}
+
 static void on_signal(int sig)
 {
 	(void)sig;
@@ -577,13 +582,43 @@ static void hw_model(char *out, size_t cap)
 	}
 }
 
+/*
+ * §5.2: a new P-256 key made here, which never leaves the cell, as PEM in
+ * key_pem; its certificate request at the end of csr_buf, *csr_n octets.
+ * 0 or -1.
+ */
+static int make_key_csr(unsigned char key_pem[512], uint8_t *csr_buf,
+			size_t cap, int *csr_n)
+{
+	mbedtls_pk_context key;
+	mbedtls_x509write_csr csr;
+	int rc = -1;
+
+	mbedtls_pk_init(&key);
+	mbedtls_x509write_csr_init(&csr);
+	if (mbedtls_pk_setup(&key, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY)) ||
+	    mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(key),
+				mbedtls_ctr_drbg_random, &drbg) ||
+	    mbedtls_pk_write_key_pem(&key, key_pem, 512))
+		goto out;
+	mbedtls_x509write_csr_set_md_alg(&csr, MBEDTLS_MD_SHA256);
+	mbedtls_x509write_csr_set_key(&csr, &key);
+	if (mbedtls_x509write_csr_set_subject_name(&csr, "CN=opendectcell-cell"))
+		goto out;
+	*csr_n = mbedtls_x509write_csr_der(&csr, csr_buf, cap,
+					   mbedtls_ctr_drbg_random, &drbg);
+	rc = *csr_n > 0 ? 0 : -1;
+out:
+	mbedtls_x509write_csr_free(&csr);
+	mbedtls_pk_free(&key);
+	return rc;
+}
+
 static int enroll(const char *s)
 {
 	char addr[200], tok[64], pin[64][48], hint[64], sw[64], hw[64];
 	uint8_t token[20], csr_buf[1024], body[2048], rx[RX_BUF];
 	unsigned char key_pem[512];
-	mbedtls_pk_context key;
-	mbedtls_x509write_csr csr;
 	struct dect_cell_tlv t;
 	struct dect_cell_frame f;
 	struct tls tl;
@@ -614,26 +649,8 @@ static int enroll(const char *s)
 		perror(dir);
 		return 1;
 	}
-	/* §5.2: a P-256 key made here, which never leaves the cell */
-	mbedtls_pk_init(&key);
-	mbedtls_x509write_csr_init(&csr);
-	if (mbedtls_pk_setup(&key, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY)) ||
-	    mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(key),
-				mbedtls_ctr_drbg_random, &drbg) ||
-	    mbedtls_pk_write_key_pem(&key, key_pem, sizeof(key_pem))) {
-		fprintf(stderr, "cannot make a key\n");
-		goto out;
-	}
-	mbedtls_x509write_csr_set_md_alg(&csr, MBEDTLS_MD_SHA256);
-	mbedtls_x509write_csr_set_key(&csr, &key);
-	if (mbedtls_x509write_csr_set_subject_name(&csr, "CN=opendectcell-cell")) {
-		fprintf(stderr, "cannot make a request\n");
-		goto out;
-	}
-	csr_n = mbedtls_x509write_csr_der(&csr, csr_buf, sizeof(csr_buf),
-					  mbedtls_ctr_drbg_random, &drbg);
-	if (csr_n <= 0) {
-		fprintf(stderr, "cannot make a request\n");
+	if (make_key_csr(key_pem, csr_buf, sizeof(csr_buf), &csr_n)) {
+		fprintf(stderr, "cannot make a key and its request\n");
 		goto out;
 	}
 	if (tls_open(&tl, addr, NULL, NULL, 0, pin, 1)) {
@@ -715,8 +732,6 @@ static int enroll(const char *s)
 close:
 	tls_close(&tl);
 out:
-	mbedtls_x509write_csr_free(&csr);
-	mbedtls_pk_free(&key);
 	mbedtls_platform_zeroize(key_pem, sizeof(key_pem));
 	return rc;
 }
@@ -724,7 +739,8 @@ out:
 static int forget(void)
 {
 	static const char *const names[] = { "key.pem", "cert.der", "ca.der",
-					     "enrollment" };
+					     "enrollment", "key.pem.new",
+					     "cert.der.new" };
 	unsigned i;
 	char p[256];
 
@@ -745,7 +761,47 @@ struct creds {
 	uint8_t cert[DECT_CELL_FRAME_MAX];	/* as the enrolment brought it */
 	size_t cert_n;
 	char cell_id[33];
+	int64_t not_before, not_after;	/* the certificate's, Unix seconds */
 };
+
+static int64_t x509_time_s(const mbedtls_x509_time *t)
+{
+	struct tm tm;
+
+	memset(&tm, 0, sizeof(tm));
+	tm.tm_year = t->year - 1900;
+	tm.tm_mon = t->mon - 1;
+	tm.tm_mday = t->day;
+	tm.tm_hour = t->hour;
+	tm.tm_min = t->min;
+	tm.tm_sec = t->sec;
+	return (int64_t)timegm(&tm);
+}
+
+/* The key in key_pem is the one cert certifies: 0, else -1. */
+static int pair_ok(const uint8_t *cert, size_t cert_n, const char *key_pem,
+		   int64_t *from, int64_t *to)
+{
+	mbedtls_x509_crt crt;
+	mbedtls_pk_context key;
+	int r;
+
+	mbedtls_x509_crt_init(&crt);
+	mbedtls_pk_init(&key);
+	r = mbedtls_x509_crt_parse_der(&crt, cert, cert_n) ||
+	    mbedtls_pk_parse_key(&key, (const unsigned char *)key_pem,
+				 strlen(key_pem) + 1u, NULL, 0,
+				 mbedtls_ctr_drbg_random, &drbg) ||
+	    mbedtls_pk_check_pair(&crt.pk, &key, mbedtls_ctr_drbg_random,
+				  &drbg);
+	if (!r && from) {
+		*from = x509_time_s(&crt.valid_from);
+		*to = x509_time_s(&crt.valid_to);
+	}
+	mbedtls_pk_free(&key);
+	mbedtls_x509_crt_free(&crt);
+	return r ? -1 : 0;
+}
 
 static int creds_load(struct creds *c)
 {
@@ -759,6 +815,37 @@ static int creds_load(struct creds *c)
 	    (n = file_get("cert.der", c->cert, sizeof(c->cert))) <= 0)
 		return -1;
 	c->cert_n = (size_t)n;
+	/*
+	 * A renewal writes key.pem.new and cert.der.new, then renames the
+	 * certificate and the key. Cut short between the two, the new
+	 * certificate sits beside the old key: the new key finishes it.
+	 * Cut short before, the old pair is whole and the new files go.
+	 */
+	if (pair_ok(c->cert, c->cert_n, c->key_pem, &c->not_before,
+		    &c->not_after) == 0) {
+		char np[256];
+
+		path_of(np, sizeof(np), "key.pem.new");
+		(void)unlink(np);
+		path_of(np, sizeof(np), "cert.der.new");
+		(void)unlink(np);
+	} else {
+		char np[256], kp[256];
+
+		if (file_get("key.pem.new", (unsigned char *)c->key_pem,
+			     sizeof(c->key_pem)) <= 0 ||
+		    pair_ok(c->cert, c->cert_n, c->key_pem, &c->not_before,
+			    &c->not_after)) {
+			logf_("the key in %s is not the certificate's", dir);
+			mbedtls_platform_zeroize(c->key_pem, sizeof(c->key_pem));
+			return -1;
+		}
+		path_of(np, sizeof(np), "key.pem.new");
+		path_of(kp, sizeof(kp), "key.pem");
+		if (rename(np, kp))
+			return -1;
+		logf_("a renewal cut short is completed: the new key is in use");
+	}
 	for (p = strtok(text, "\n"); p; p = strtok(NULL, "\n")) {
 		if (!strncmp(p, "controller=", 11))
 			snprintf(c->addr, sizeof(c->addr), "%s", p + 11);
@@ -830,6 +917,10 @@ struct link {
 	uint16_t grace_ms;
 	uint32_t caps;			/* HELLO_ACK tag 10: what both have */
 	struct media media[MEDIA_MAX];
+	/* §5.4 renewal: the new key until its certificate comes */
+	unsigned char renew_key[512];
+	int      renewing;
+	uint64_t renew_sent, renew_next;	/* monotonic ms */
 };
 
 /* §10 stats_interval_s, its default: CONFIG_SET is not applied yet */
@@ -844,14 +935,15 @@ static void link_state_write(struct link *l)
 	/* rtt_ms 0: not measured (only our own heartbeats measure it) */
 	fprintf(f, "{\"state\":\"%s\",\"controller\":\"%s\",\"cell_id\":\"%s\","
 		"\"cell_state\":\"%s\",\"rtt_ms\":%u,\"reconnects\":%u,"
-		"\"dect_stubd\":%s,\"dropped\":%u}\n", l->state,
+		"\"dect_stubd\":%s,\"dropped\":%u,\"cert_expires\":%lld}\n",
+		l->state,
 		l->enrolled ? l->creds.addr : "", l->enrolled ?
 		l->creds.cell_id : "",
 		!l->tls.up ? "" : l->cell_state == DECT_CELL_ST_ACTIVE ?
 		"active" : l->cell_state == DECT_CELL_ST_PENDING ? "pending" :
 		l->cell_state == DECT_CELL_ST_DISABLED ? "disabled" : "revoked",
 		l->rtt_ms, l->reconnects, l->stubd >= 0 ? "true" : "false",
-		l->dropped);
+		l->dropped, l->enrolled ? (long long)l->creds.not_after : 0LL);
 	if (fclose(f) == 0)
 		(void)rename(LINK_STATE ".tmp", LINK_STATE);
 }
@@ -1013,6 +1105,18 @@ static int link_up(struct link *l)
 	long n = 0;
 	uint64_t until;
 
+	/*
+	 * §5.4: an expired certificate is not renewed; the cell is enrolled
+	 * again with a new token. (A clock before the certificate's start is
+	 * not set yet, and proves nothing.)
+	 */
+	if (l->creds.not_after && wall_s() > l->creds.not_after &&
+	    wall_s() >= l->creds.not_before) {
+		logf_("our certificate has expired: enrol this cell again");
+		l->next_try = UINT64_MAX;
+		set_state(l, "stopped: certificate expired, enrol again");
+		return -1;
+	}
 	set_state(l, "connecting");
 	if (tls_open(&l->tls, l->creds.addr, l->creds.key_pem, l->creds.cert,
 		     l->creds.cert_n, l->creds.pins, 1))
@@ -1489,6 +1593,157 @@ static void media_drop_all(struct link *l, uint64_t now)
 		}
 }
 
+/* ---- renewal (§5.4) --------------------------------------------------- */
+
+#define RENEW_RETRY_MS	3600000u	/* §5.4: every hour until it works */
+#define RENEW_WAIT_MS	60000u		/* an answer within */
+
+/*
+ * Due at two thirds of the certificate's life. A clock before its start
+ * is not set yet (no RTC, no NTP): nothing is due then.
+ */
+static int renew_due(const struct link *l)
+{
+	int64_t now = wall_s(), from = l->creds.not_before,
+		to = l->creds.not_after;
+
+	return to > from && now >= from && now < to &&
+	       now >= from + (to - from) * 2 / 3;
+}
+
+static void renew_tick(struct link *l, uint64_t now)
+{
+	uint8_t csr[1024], b[1100];
+	struct dect_cell_tlv t;
+	int csr_n;
+
+	if (l->renewing && now - l->renew_sent >= RENEW_WAIT_MS) {
+		logf_("no answer to the certificate renewal; again in an hour");
+		l->renewing = 0;
+		mbedtls_platform_zeroize(l->renew_key, sizeof(l->renew_key));
+		l->renew_next = now + RENEW_RETRY_MS;
+	}
+	if (l->renewing || now < l->renew_next || !renew_due(l))
+		return;
+	l->renew_next = now + RENEW_RETRY_MS;
+	if (make_key_csr(l->renew_key, csr, sizeof(csr), &csr_n)) {
+		logf_("cannot make a key for the renewal");
+		return;
+	}
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_put(&t, 1, csr + sizeof(csr) - csr_n, (size_t)csr_n);
+	ctl_send(l, DECT_CELL_RENEW_REQUEST, 0x5244, b, t.len, now);
+	l->renewing = 1;
+	l->renew_sent = now;
+	logf_("certificate renewal asked (it expires in %lld days)",
+	      (long long)((l->creds.not_after - wall_s()) / 86400));
+}
+
+/*
+ * The cell URI in a certificate's SAN, "urn:opendectcell:cell:<uuid>", into
+ * out; 0, or -1 if it has none.
+ */
+static int cell_uri(const mbedtls_x509_crt *c, char *out, size_t cap)
+{
+	const mbedtls_x509_sequence *san;
+
+	for (san = &c->subject_alt_names; san && san->buf.p; san = san->next) {
+		mbedtls_x509_subject_alternative_name sn;
+		int hit;
+
+		if (mbedtls_x509_parse_subject_alt_name(&san->buf, &sn))
+			continue;
+		hit = sn.type == MBEDTLS_X509_SAN_UNIFORM_RESOURCE_IDENTIFIER &&
+		      sn.san.unstructured_name.len > 17u &&
+		      sn.san.unstructured_name.len < cap &&
+		      !memcmp(sn.san.unstructured_name.p, "urn:opendectcell:cell:",
+			      17);
+		if (hit) {
+			memcpy(out, sn.san.unstructured_name.p,
+			       sn.san.unstructured_name.len);
+			out[sn.san.unstructured_name.len] = 0;
+		}
+		mbedtls_x509_free_subject_alt_name(&sn);
+		if (hit)
+			return 0;
+	}
+	return -1;
+}
+
+/*
+ * RENEW_RESPONSE: a certificate for the new key, from our CA, for this
+ * cell, for clients. Then the new pair replaces the old on disk (see
+ * creds_load() for a cut short) and serves from the next connection on.
+ */
+static void renew_response(struct link *l, const struct dect_cell_frame *f)
+{
+	const uint8_t *cert;
+	size_t cn = 0;
+	uint16_t st = 0xFFFF;
+	mbedtls_x509_crt crt, cur, ca;
+	uint8_t cab[2048];
+	long can;
+	uint32_t flags = 0;
+	char uri_new[80], uri_cur[80], np[256], p[256];
+	int ok;
+
+	if (!l->renewing)
+		return;
+	l->renewing = 0;
+	if (dect_cell_tlv_check(f->body, f->len) ||
+	    dect_cell_tlv_get_u16(f->body, f->len, 1, &st) || st ||
+	    !(cert = dect_cell_tlv_get(f->body, f->len, 2, &cn))) {
+		logf_("certificate renewal refused (status %u); again in an "
+		      "hour", st);
+		mbedtls_platform_zeroize(l->renew_key, sizeof(l->renew_key));
+		return;
+	}
+	mbedtls_x509_crt_init(&crt);
+	mbedtls_x509_crt_init(&cur);
+	mbedtls_x509_crt_init(&ca);
+	can = file_get("ca.der", cab, sizeof(cab));
+	ok = can > 0 && cn < sizeof(l->creds.cert) &&
+	     !mbedtls_x509_crt_parse_der(&crt, cert, cn) &&
+	     !mbedtls_x509_crt_parse_der(&cur, l->creds.cert,
+					 l->creds.cert_n) &&
+	     !mbedtls_x509_crt_parse_der(&ca, cab, (size_t)can) &&
+	     !mbedtls_x509_crt_verify(&crt, &ca, NULL, NULL, &flags, NULL,
+				      NULL) &&
+	     !mbedtls_x509_crt_check_extended_key_usage(&crt,
+		MBEDTLS_OID_CLIENT_AUTH,
+		MBEDTLS_OID_SIZE(MBEDTLS_OID_CLIENT_AUTH)) &&
+	     !cell_uri(&crt, uri_new, sizeof(uri_new)) &&
+	     !cell_uri(&cur, uri_cur, sizeof(uri_cur)) &&
+	     !strcmp(uri_new, uri_cur);
+	mbedtls_x509_crt_free(&crt);
+	mbedtls_x509_crt_free(&cur);
+	mbedtls_x509_crt_free(&ca);
+	if (!ok || pair_ok(cert, cn, (const char *)l->renew_key, NULL, NULL)) {
+		logf_("the renewed certificate does not fit (flags %08x): "
+		      "kept the old one", flags);
+		mbedtls_platform_zeroize(l->renew_key, sizeof(l->renew_key));
+		return;
+	}
+	ok = !file_put("cert.der.new", cert, cn, 0600) &&
+	     !file_put("key.pem.new", l->renew_key,
+		       strlen((const char *)l->renew_key), 0600);
+	mbedtls_platform_zeroize(l->renew_key, sizeof(l->renew_key));
+	path_of(np, sizeof(np), "cert.der.new");
+	path_of(p, sizeof(p), "cert.der");
+	ok = ok && !rename(np, p);
+	path_of(np, sizeof(np), "key.pem.new");
+	path_of(p, sizeof(p), "key.pem");
+	ok = ok && !rename(np, p);
+	if (!ok || creds_load(&l->creds)) {
+		logf_("cannot store the renewed certificate in %s", dir);
+		return;
+	}
+	l->renew_next = 0;
+	logf_("certificate renewed: valid until %lld (Unix time), used from "
+	      "the next connection", (long long)l->creds.not_after);
+	link_state_write(l);
+}
+
 /* One STATS counter, tag 1 {id u16, value u64} (§10). */
 static void stats_put(struct dect_cell_tlv *t, uint16_t id, uint64_t v)
 {
@@ -1640,6 +1895,9 @@ static void from_controller(struct link *l, const struct dect_cell_frame *f,
 		}
 		break;
 	}
+	case DECT_CELL_RENEW_RESPONSE:
+		renew_response(l, f);
+		break;
 	case DECT_CELL_ERROR: {
 		uint16_t code = 0, rt = 0;
 
@@ -1777,6 +2035,8 @@ static int run(void)
 
 				ctl_send(&l, DECT_CELL_HEARTBEAT, 0, b, 4, now);
 			}
+			if (l.tls.up)
+				renew_tick(&l, now);
 			/* §10: STATS every stats_interval_s, dect-stubd's first */
 			if (l.tls.up && now >= l.next_stats) {
 				l.next_stats = now + STATS_INTERVAL_MS;

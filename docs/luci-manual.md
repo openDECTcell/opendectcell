@@ -481,9 +481,22 @@ settings. To be a cell again it needs a new enrollment string.
 
 **Status > DECT in cell mode** has two tabs. *Cell* shows the chip
 (dect-stubd) and controller link (dect-cell) services, the controller, the
-link's state, round trip and reconnects, and the chip side: radio, chip
-firmware, radio links, and the counts of messages ("mails") to and from
-the controller. *Log* is as in [3.3](#33-log).
+link's state, round trip and reconnects, the date the cell's certificate
+runs out, and the chip side: radio, chip firmware, radio links, calls with
+audio, and the counts of messages ("mails") to and from the controller.
+*Log* is as in [3.3](#33-log).
+
+**The certificate renews itself.** The controller's certificate for the
+cell is valid for 90 days; at two thirds of that the cell asks the
+controller for a new one over its link, and keeps asking every hour until
+it gets one. The box needs the right date for that (NTP). A certificate
+that has run out cannot be renewed: the cell stops and has to be enrolled
+again with a new enrollment string.
+
+**Calls' speech** goes between the cell and the controller encrypted
+(SRTP). Unencrypted RTP is possible only if you allow it on the command
+line (`uci set opendectcell.main.cell_plain_rtp=1`), for a network you trust
+end to end.
 
 ## 5. When something doesn't work
 
@@ -505,6 +518,7 @@ More causes and fixes are in [install.md](install.md#when-something-doesnt-work)
 | VoIP: *failed: 401 Unauthorized* / *403 Forbidden* | User name, login name or password in the profile are wrong |
 | VoIP: *failed* with a timeout | The registrar's address or port is wrong, or a firewall blocks SIP |
 | VoIP: *not running: no handset has a VoIP profile as a line* | Give a handset the profile as *Line 1*, then *Save & Apply* |
+| Cell: *stopped: this cell's certificate expired* | The cell was offline past its certificate's end (or the box's date is wrong: check NTP). Get a new enrollment string from the controller and enrol again |
 | Calls connect but one side hears nothing | NAT: try *NAT traversal for media: STUN* in the profile, or check *Network interface* |
 | A call is not HD | Both ends need G.722: the handset (Status: *G.722, wideband*), the profile's codecs, and the other party's phone |
 | Phonebook: *Last sync: failed* | The reason follows. Check the server address (https only), user name and app password, and that at least one book is ticked |
@@ -528,7 +542,7 @@ each handset's registration (`/etc/opendectcell-sub.*`). For the command line:
 | Settings for all profiles | `opendectcell.main.sip_port`, `.rtp_ports`, `.net_interface`, `.dns_server`, `.rtp_dscp`, `.sip_dscp`, `.jitter`, `.tls_verify`, `.tls_cafile` |
 | Phonebook | `config carddav 'carddav'`: `enabled`, `url`, `username`, `password`, `list book`, `default`, `interval`, `ca_file`, `allow_clear` |
 | Advanced | `opendectcell.main.firmware_dir`, `.first`, `.second`, `.fw_allow_unverified`, `.uart`, `.factory_mtd`, `.factory_offset`, `.mode`, `.stores`, `.options` |
-| Cell mode | `opendectcell.main.role` (`cell`) |
+| Cell mode | `opendectcell.main.role` (`cell`), `.cell_plain_rtp` |
 
 After a change on the command line: `uci commit opendectcell` and
 `/etc/init.d/opendectcell restart`. Some settings exist only on the command

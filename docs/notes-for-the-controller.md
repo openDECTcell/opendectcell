@@ -922,3 +922,27 @@ MEDIA_OPEN no longer answers status 4. What the cell does (cell-protocol.md
   (§6.4).
 - Not on air yet: the first call with audio is C3's. Bench card M1 in
   `docs/bench-later.md`.
+
+## The cell renews its certificate `[2026-10-30, late night]`
+
+§5.4 is built in dect-cell:
+
+- At two thirds of the certificate's life (the dates in the certificate,
+  so day 60 of 90), on a live link in any state, the cell makes a new
+  P-256 key and sends `RENEW_REQUEST {1: csr}` with corr `0x5244`. No
+  answer within 60 s, a status other than 0, or a certificate that does
+  not fit: again in an hour.
+- **What it checks in `RENEW_RESPONSE`:** the certificate verifies against
+  the CA it was enrolled with (`ca.der`; TRUST_UPDATE is not built), has
+  clientAuth, the same `urn:opendectcell:cell:` URI as the old one, and
+  certifies the new key. Otherwise the old pair stays.
+- The new pair replaces the old on disk (the certificate first, then the
+  key; a start after a cut short finishes it) and serves **from the next
+  connection**. The current link carries on with the old certificate, so
+  keep both fingerprints current until the cell connects with the new
+  one, as §5.4 says.
+- A clock before the certificate's start counts as unset (no RTC):
+  nothing is renewed, and an expired-looking certificate is not judged.
+  With a set clock past `not_after`, the cell stops before it dials
+  (state `stopped: certificate expired, enrol again`).
+- `cell-link.json` has `cert_expires` (Unix seconds); LuCI shows it.

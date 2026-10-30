@@ -636,6 +636,7 @@ var LINK_STATE = {
 	'revoked': _('revoked by the controller: enrol again'),
 	'stopped: protocol version': _('stopped: the controller speaks another protocol version'),
 	'stopped: certificate refused': _('stopped: the controller refused this cell\'s certificate'),
+	'stopped: certificate expired, enrol again': _('stopped: this cell\'s certificate expired: enrol it again (Network > DECT)'),
 	'starting': _('starting')
 };
 
@@ -668,6 +669,10 @@ function renderCell(cell, link, inst) {
 			rows.push([ _('Cell ID'), link.cell_id ]);
 		rows.push([ _('Round trip'), link.rtt_ms ? '%d ms'.format(link.rtt_ms) : '-' ]);
 		rows.push([ _('Reconnects'), String(link.reconnects) ]);
+		if (link.cert_expires > 0)
+			rows.push([ _('Certificate valid until'),
+				'%s (%s)'.format(new Date(link.cert_expires * 1000).toLocaleDateString(),
+					_('renewed by itself at two thirds of its life')) ]);
 	}
 	if (cell) {
 		chip.push([ _('Radio'), cell.radio == 'up' ? E('strong', {}, _('on')) :
@@ -680,6 +685,8 @@ function renderCell(cell, link, inst) {
 		chip.push([ _('Mails the chip could not take'), String(cell.rejected) ]);
 		chip.push([ _('Mails lost without a controller'), String(cell.not_forwarded) ]);
 		chip.push([ _('Control queue'), _('%d bytes, %d dropped').format(cell.queue_bytes, cell.queue_drops) ]);
+		if (cell.media != null)
+			chip.push([ _('Calls with audio'), String(cell.media) ]);
 	}
 	return E('div', {}, [
 		E('div', { 'class': 'cbi-section' }, [ E('h3', {}, _('Cell')), table(null, rows) ]),
