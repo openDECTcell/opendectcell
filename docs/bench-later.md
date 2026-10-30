@@ -206,6 +206,26 @@ intend it`, no `***` line; `parked` says `verified` at the end. Fail: a
 `.o` file still (the package build did not take the fix), or anything
 U6's second start did not show.
 
+**U6b and U7 results, 2026-10-30 14:16-14:21 UTC.** U6b **pass**: the
+views are `monitor.js` and `settings.js` only, settings.js minified
+(43856 bytes, 92 lines, no comment lines); the slot found, `MATCHES`,
+`slot table is as we intend it`, no `***` line, park read back. (The
+script's own log cut came out empty: it marked the system log by line
+count, which a full ring buffer does not move; read by time instead.)
+**U7 answered its question the other way:** the start measured offset 6
+(1533 idle lanes), found nothing at 6 or 14 in four passes, measured
+again and got 0 (1024 idle lanes, 512 at 8: the chip's output still
+changing), then 14 (1033), and found the slot at pass 9 **at offset 6,
+the first measurement**, 66 s after the start. The offset had not
+moved; the chip answered late. Measuring again while the chip starts
+only picks wrong offsets, so `e1a4cbf` is reverted, and the SSC search
+gets twenty passes (~140 s) instead of ten. Start-to-slot times on the
+7412 that day: 58 s (first start), 57 s (U1, after an install), 17, 19,
+2 s (U2-U3 restarts), 6 s (U5), more than 68 s (U6, after an install),
+17 s (its restart), 66 s (U6b, after an install). The slow ones are the
+first start after an install or a long pause; why the chip then takes a
+minute is open.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
