@@ -226,6 +226,21 @@ gets twenty passes (~140 s) instead of ten. Start-to-slot times on the
 first start after an install or a long pause; why the chip then takes a
 minute is open.
 
+### U8, the 7412 on `639fa67` (written 2026-10-30 night, before the run; D5)
+
+Unattended, as T13. The packages from `639fa67` (lantiq, OpenWrt
+25.12.6): dect-stubd with the twenty-pass slot search (`ed07be3`), the
+cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
+(`639fa67`). The box starts parked, service stopped, role base.
+
+| step | pass | fail and what it means |
+|---|---|---|
+| U8a. Install openDECTcell, opendectcell-baresip, opendectcell-cell, opendectcell-carddav, luci-app-opendectcell; `ls /etc/init.d/*.apk-new` | installed; no `opendectcell.apk-new` for the init script (the box's init is the packaged one) | an init `.apk-new`: the kept script is not the packaged one; move it over before U8b |
+| U8b. The first start after the install (the slow case `ed07be3` is for) | `control slot found` within the search; the seconds from start to slot written down (57-68 s expected after an install) | `gave up after 20 passes`: the chip took longer than ~140 s, or the offset moved after all |
+| U8c. Five minutes in base mode, then stop | no resync storm, no `***` line; `parked` says `verified` | a resync storm: the SSC collectors (kmod `e3c898d`) are not loaded; park not verified: the hold message instead |
+| U8d. Cell mode against `tools/cell-testpeer.py` on the PC (192.168.1.146:7300), `--mail-test`, two minutes | enrolled; the peer logs `HELLO` with caps `0x77` (MAIL, MEDIA, SRTP, STATS, FLOW, RESUME) and formats `[6, 1]`; heartbeats with no reconnect; the memory read answered (`MAIL_UP 0xFFF1`); `cell-link.json` has `cert_expires` about 90 days ahead; `cell.json` has `"radio":"parked"` and `"media":0` | no link: the connect path of `8aa6685` (own TCP connect, handshake reads) fails on the box: then the old binary's behaviour is the comparison; caps without MEDIA: the old dect-cell is still installed; a reconnect within the two minutes: the heartbeat path |
+| U8e. Leave cell mode (`/etc/init.d/opendectcell cell_leave`, role base), stop | the credentials gone, role `base`, service stopped, `parked` `verified` | anything else: put the box back by hand and say so |
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
