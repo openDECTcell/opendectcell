@@ -829,3 +829,18 @@ the transport, its sockets and files, audio lanes and diagnostics.
   (0x0251, 0x0230, 0x022D) over the tunnel: the controller through
   `call_up()`, or the cell on MEDIA_OPEN (cell-protocol.md §8). The
   library works either way.
+
+## C3: go, and who binds the audio `[2026-10-30, late night]`
+
+- **The maintainer gave C3 the go** on 2026-10-30.
+- **The controller sends the chip's audio mails**, the open point of the
+  entry above: 0x0251, 0x0230, then 0x022D on the long-form 0x0242, and
+  0x0233 with the 0x022D disconnect at the end, as MAIL_DOWN from
+  `call_up()`/`call_down()`. MEDIA_OPEN follows the bind and names the
+  channel. The maintainer's condition: over the tunnel unless it proves
+  too time-critical, then the cell. Nothing measured says it is (no air
+  timer on the bind; one exchange since the 10-25 defaults). Recorded in
+  the controller maintainers' notes and cell-protocol.md §8.1 (`09a0d07`).
+- **For the cell side:** `dect-stubd -K` already relays every MAIL_DOWN,
+  so nothing changes there. What the first call with audio still needs is
+  the cell's media (MEDIA_OPEN answers status 4 today).

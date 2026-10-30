@@ -119,9 +119,14 @@ reading:
    (`dect_base_audio_path()`) to connect it.
 3. `call_down()` releases it (`dect_base_audio_release()`).
 
-Over the tunnel, which side sends these mails is cell-protocol.md §8's
-question (MEDIA_OPEN / MEDIA_CLOSE, format 6 for G.722, 1 for L16). Settle
-it there before C3's first call; the library does not care who sends them.
+Over the tunnel **the controller sends these mails** (the maintainer,
+2026-10-30): `call_up()` sends 0x0251 and 0x0230 as MAIL_DOWN, takes the
+long-form 0x0242 on the call's handle from MAIL_UP, sends 0x022D, then
+MEDIA_OPEN with the channel (format 6 for G.722, 1 for L16);
+`call_down()` sends the release, then MEDIA_CLOSE. The bind has no air
+timer, so the tunnel costs one round trip at the start of a call. If a
+bench shows it is too time-critical after all, the bind moves to the cell
+(cell-protocol.md §8.1 and the controller maintainers' notes have the trigger).
 
 ## 6. Per-cell chip settings (`struct dect_base_chip`)
 
