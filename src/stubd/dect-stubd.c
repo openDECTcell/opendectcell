@@ -59,6 +59,7 @@
 #include "dect_clip.h"
 #include "dect_ctl.h"
 #include "dect_cell.h"
+#include "dect_calls.h"
 #include "dect_contacts.h"
 #include "opendectcell_version.h"
 
@@ -207,6 +208,29 @@ static long tz_offset_seconds(time_t t)
  * trusted (clock_is_trustworthy). Returns 1 with dt and off_s (seconds east
  * of GMT) filled, 0 when there is nothing we may send.
  */
+/*
+ * The box's local time for a call list entry: a call happened whether the
+ * clock is trusted or not, and a handset shows the time it is given.
+ */
+static void clock_any(struct dect_time *dt)
+{
+	time_t now_s = time(NULL);
+	struct tm tm;
+	long off_s = tz_offset_seconds(now_s);
+
+	memset(dt, 0, sizeof(*dt));
+	if (!localtime_r(&now_s, &tm))
+		return;
+	dt->year   = (uint8_t)(tm.tm_year % 100);
+	dt->month  = (uint8_t)(tm.tm_mon + 1);
+	dt->day    = (uint8_t)tm.tm_mday;
+	dt->hour   = (uint8_t)tm.tm_hour;
+	dt->minute = (uint8_t)tm.tm_min;
+	dt->second = (uint8_t)tm.tm_sec;
+	dt->tz_quarters = (int16_t)(off_s / 900);
+	dt->tz_valid = 1;
+}
+
 static int clock_now(uint8_t mode, struct dect_time *dt, long *off_s)
 {
 	time_t now_s = time(NULL);
@@ -327,6 +351,12 @@ struct handset {
 	 */
 	unsigned mwi[2];
 	uint8_t  mwi_known, mwi_due;	/* bit n-1: line n */
+	/*
+	 * Missed call notifications (TS 102 527-3 §7.4.1.3) the handset has
+	 * not heard yet, per line, and those for a call just missed (subtype
+	 * 01H, "a new external missed call just arrived").
+	 */
+	uint8_t  mc_due, mc_new;	/* bit n-1: line n */
 };
 
 /*
@@ -5725,6 +5755,7 @@ static void lines_load(struct stubd *s, unsigned i)
 
 /* The lines a link's Line Settings List offers: those of its handset. */
 static struct dect_contacts stubd_contacts;	/* every link's Contact List */
+static struct dect_calls stubd_calls;		/* ... and call lists */
 
 static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
 {
@@ -5733,6 +5764,7 @@ static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
 	unsigned i;
 
 	iwu->contacts = s->contacts_path ? &stubd_contacts : NULL;
+	iwu->calls = &stubd_calls;
 
 	for (i = 0; i < s->n_hs; i++)
 		if (hs_slot(s, i) == slot)
@@ -5826,6 +5858,7 @@ static void contacts_init(struct stubd *s)
 	unsigned i;
 	FILE *f;
 
+	dect_calls_init(&stubd_calls);
 	/* untouched without -b: the store's pages are never mapped in */
 	if (!s->contacts_path)
 		return;
@@ -6131,12 +6164,12 @@ static void locate_notify(const struct stubd *s, struct dect_link *l)
 			       "(Line Settings List)\n", iwu->lines[i].id);
 	}
 	/*
-	 * With a Contact List, one for the List of Supported Lists too (no
-	 * line field, so no line; one entry). A handset keeps the copy it
-	 * read once: the A540 re-reads only 06 and 08 when it reconnects,
-	 * so it never learned of the Contact List until told (2026-10-30).
+	 * One for the List of Supported Lists too (no line field, so no line;
+	 * one entry). A handset keeps the copy it read once: the A540
+	 * re-reads only 06 and 08 when it reconnects, so it never learned of
+	 * the Contact List or the call lists until told (2026-10-30).
 	 */
-	if (iwu->contacts) {
+	if (iwu->contacts || iwu->calls) {
 		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
 					 DECT_LIA_LIST_SUPPORTED, 1 };
 		uint8_t msg[DECT_LAPC_MSG_MAX];
@@ -6145,7 +6178,7 @@ static void locate_notify(const struct stubd *s, struct dect_link *l)
 
 		if (n && dect_link_send_ciss(l, msg, n) == 0)
 			printf("reg: list change notice sent (List of Supported "
-			       "Lists: the Contact List)\n");
+			       "Lists)\n");
 	}
 }
 
@@ -6196,6 +6229,116 @@ static void mwi_locate(struct stubd *s, struct dect_link *l)
 		return;
 	s->hs[i].mwi_due = s->hs[i].mwi_known;
 	(void)mwi_send(s, l, (unsigned)i);
+}
+
+/*
+ * Missed call notifications (TS 102 527-3 §7.4.1.3, table 15) to handset i
+ * on link l, for the lines in its mc_due: the unread missed calls on that
+ * line, and with it the list change indication for the Missed Calls List
+ * (its entries on the line), "line identifier for external call". Subtype
+ * 01H only for a call just missed. Part 3 handsets only (notify_ok()).
+ */
+static unsigned missed_send(struct stubd *s, struct dect_link *l, unsigned i)
+{
+	unsigned n, sent = 0, tid = hs_slot(s, i);
+
+	if (!notify_ok(s, l)) {
+		s->hs[i].mc_due = s->hs[i].mc_new = 0;
+		return 0;
+	}
+	for (n = 1; n <= 2u; n++) {
+		uint8_t bit = (uint8_t)(1u << (n - 1u));
+		struct dect_event ev[2] = {
+			{ DECT_EVENT_MISSED_CALL, s->hs[i].mc_new & bit ? 1u : 2u,
+			  dect_calls_missed_unread(&stubd_calls, tid, n) },
+			{ DECT_EVENT_LIST_CHANGE, DECT_LIA_LIST_MISSED,
+			  dect_calls_missed_total(&stubd_calls, tid, n) },
+		};
+		uint8_t msg[DECT_LAPC_MSG_MAX];
+		size_t len;
+
+		if (!(s->hs[i].mc_due & bit))
+			continue;
+		len = dect_events_build_facility(msg, sizeof(msg), ev, 2,
+						 (uint8_t)n,
+						 DECT_EVENT_LINE_EXTERNAL);
+		if (!len || dect_link_send_ciss(l, msg, len))
+			continue;	/* the queue is full: next time */
+		s->hs[i].mc_due &= (uint8_t)~bit;
+		s->hs[i].mc_new &= (uint8_t)~bit;
+		sent++;
+		printf("missed: DECT %u, line %u: %u unread of %u (%s)\n",
+		       tid, n, ev[0].multiplicity, ev[1].multiplicity,
+		       ev[0].subtype == 1u ? "a new one" : "update");
+	}
+	return sent;
+}
+
+/* The lines handset i has: 1, and 2 if it has a second. */
+static uint8_t hs_lines(const struct stubd *s, unsigned i)
+{
+	return (uint8_t)(s->hs[i].line2 ? 3u : 1u);
+}
+
+/*
+ * After a location registration: the missed calls once per line the
+ * handset has (§7.4.1.3, subtype 02H).
+ */
+static void missed_locate(struct stubd *s, struct dect_link *l)
+{
+	int i = hs_of_link(s, l);
+
+	if (i < 0)
+		return;
+	s->hs[i].mc_due = hs_lines(s, (unsigned)i);
+	(void)missed_send(s, l, (unsigned)i);
+}
+
+static struct dect_link *link_known_hs(struct stubd *s, int i);
+
+/* Could handset i hear notifications, from what it told us before? */
+static int notify_known(const struct stubd *s, unsigned i)
+{
+	if (s->hs[i].prof.notify != DECT_PROF_AUTO)
+		return s->hs[i].prof.notify == DECT_PROF_ON;
+	return s->hs[i].cap_known && s->hs[i].cap_part3;
+}
+
+/*
+ * Due notifications to handset i: now if it has a link, else at the next
+ * paging round (tu.want, time_tick()).
+ */
+static void missed_due(struct stubd *s, unsigned i, uint8_t lines, int fresh)
+{
+	struct dect_link *l;
+
+	lines &= hs_lines(s, i);
+	if (!lines || !s->hs[i].loaded || !notify_known(s, i))
+		return;
+	s->hs[i].mc_due |= lines;
+	if (fresh)
+		s->hs[i].mc_new |= lines;
+	l = link_known_hs(s, (int)i);
+	if (l)
+		(void)missed_send(s, l, i);
+	else
+		s->tu.want |= 1u << i;
+}
+
+/*
+ * The Missed Calls List changed on a handset (read, deleted): every handset
+ * hears the new counts (§7.4.1.3, "entry modified or deleted", subtype
+ * 02H) -- one in a link at once, the others at the next paging round.
+ */
+static void missed_changed_tick(struct stubd *s)
+{
+	unsigned i;
+
+	if (!stubd_calls.missed_changed)
+		return;
+	stubd_calls.missed_changed = 0;
+	for (i = 0; i < s->n_hs; i++)
+		missed_due(s, i, hs_lines(s, i), 0);
 }
 
 /*
@@ -7448,6 +7591,7 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 		if (l) {
 			s->tu.want &= ~(1u << i);
 			(void)mwi_send(s, l, (unsigned)i);
+			(void)missed_send(s, l, (unsigned)i);
 			if (s->tu.with_time &&
 			    clock_now(s->audio.timesync, &dt, &off_s) &&
 			    dect_link_send_time(l, &dt) == 0) {
@@ -8481,6 +8625,75 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			}
 		}
 		ctl_reply(s, m->verb, NULL, "hs", want);
+		return 1;
+	}
+	/*
+	 * calllog: a finished call for the call lists (the bridge knows a
+	 * call's outcome over all the handsets it rang): kind=missed |
+	 * accepted | outgoing, number, name, legs=HS:LINE,... the handsets
+	 * whose line it was and which of their lines.
+	 */
+	if (!strcmp(m->verb, "calllog")) {
+		const char *kind = dect_ctl_get(m, "kind");
+		const char *num = dect_ctl_get(m, "number");
+		const char *name = dect_ctl_get(m, "name");
+		const char *legs = dect_ctl_get(m, "legs");
+		uint8_t line[DECT_CALLS_TERMINALS];
+		char book_name[2u * DECT_CONTACT_NAME_MAX];
+		struct dect_time when;
+		unsigned list, i;
+
+		if (s->ctl.cur != s->ctl.bridge) {
+			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
+			return 1;
+		}
+		list = !kind ? 0u : !strcmp(kind, "missed") ? DECT_CALLS_MISSED :
+		       !strcmp(kind, "outgoing") ? DECT_CALLS_OUTGOING :
+		       !strcmp(kind, "accepted") ? DECT_CALLS_ACCEPTED : 0u;
+		memset(line, 0, sizeof(line));
+		while (legs && *legs) {
+			unsigned hs = 0, ln = 0;
+
+			if (sscanf(legs, "%u:%u", &hs, &ln) == 2 &&
+			    hs >= 1u && hs < DECT_CALLS_TERMINALS &&
+			    ln >= 1u && ln <= 2u)
+				line[hs] = (uint8_t)ln;
+			legs = strchr(legs, ',');
+			legs = legs ? legs + 1 : NULL;
+		}
+		if (!list) {
+			ctl_reply(s, m->verb, "malformed", NULL, 0);
+			return 1;
+		}
+		/*
+		 * The Contact List's name before the network's, as
+		 * TS 102 527-3 7.4.10.5.1.3 note 1 recommends.
+		 */
+		if (num && *num && s->contacts_path) {
+			const struct dect_contact *e =
+				dect_contacts_find_number(&stubd_contacts, num);
+
+			if (e) {
+				snprintf(book_name, sizeof(book_name), "%s%s%s",
+					 e->first, e->first[0] && e->name[0]
+					 ? " " : "", e->name);
+				name = book_name;
+			}
+		}
+		clock_any(&when);
+		(void)dect_calls_add(&stubd_calls, list, num, name, &when, line);
+		printf("calls: %s call %s%s\n", kind,
+		       list == DECT_CALLS_OUTGOING ? "to " : "from ",
+		       num && *num ? num : "(no number)");
+		if (list == DECT_CALLS_MISSED)
+			for (i = 0; i < s->n_hs; i++) {
+				unsigned tid = hs_slot(s, i);
+
+				if (tid < DECT_CALLS_TERMINALS && line[tid])
+					missed_due(s, i, (uint8_t)(1u << (line[tid] - 1u)),
+						   1);
+			}
+		ctl_reply(s, m->verb, NULL, NULL, 0);
 		return 1;
 	}
 	if (!strcmp(m->verb, "call-in")) {
@@ -9623,6 +9836,7 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 	if (sl->link.mm.stats.located != sl->located_seen) {
 		sl->located_seen = sl->link.mm.stats.located;
 		mwi_locate(s, &sl->link);
+		missed_locate(s, &sl->link);
 	}
 	if (sl->link.cc.stats.rejected_identity != sl->rejected_seen) {
 		sl->rejected_seen = sl->link.cc.stats.rejected_identity;
@@ -10097,6 +10311,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		}
 		locate_notify(s, &s->reg.link);
 		mwi_locate(s, &s->reg.link);
+		missed_locate(s, &s->reg.link);
 	}
 
 	if (s->reg.link.mm.state != DECT_MM_WAIT_AUTH)
@@ -11338,6 +11553,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		connect_tick(s, now);
 		reg_window_tick(s, now);
 		contacts_tick(s, now);
+		missed_changed_tick(s);
 		{
 			unsigned k;
 

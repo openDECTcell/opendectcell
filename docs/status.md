@@ -43,7 +43,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 | Keys during a call (DTMF, voicemail menus) | 🟡 | Sent to SIP as the profile's DTMF mode says; built 2026-10-29, not yet tested |
 | "Busy" when all voice channels are taken | ✅ | |
 | Phonebook on the handset | 🟡 | The Contact List from a CardDAV address book, both ways (`docs/phonebook.md`); tested against a test server, not yet on a handset |
-| Call lists on the handset | ❌ | Planned |
+| Call lists on the handset | 🟡 | Missed, accepted and outgoing calls in RAM, the missed call notification (message LED, message key) (`docs/phonebook.md`); on the A540 2026-10-30: a missed call notified, listed and marked read |
 | Voicemail indicator on the handset | 🟡 | *Voicemail notification (MWI)* in the VoIP profile; CAT-iq handsets show the count. Built 2026-10-29, not yet tested |
 
 ## Web interface (LuCI)

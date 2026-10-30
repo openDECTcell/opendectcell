@@ -666,3 +666,13 @@ DECT_IWU_OUT_MAX grows from 12 to 16 and DECT_IWU_SAVE_MAX from 128 to
 entries' range too large for one reply is now a partial delivery (TS 102
 527-3 §7.4.10.4.3.2, bit 8 of the counter) instead of a negative
 acknowledgement 'invalid range'.
+
+**86.** dect_calls.h, the call lists, 2026-10-30: struct dect_calls and
+dect_calls_init(), _add(), _count(), _at(), _index(), _del(), _clear(),
+_missed_unread(), _missed_total(). dect_iwu.h: struct dect_iwu gains
+`calls` (NULL = no call lists, the behaviour before); with it the Missed
+Calls List (01H), the Outgoing Calls List (02H) and the Incoming Accepted
+Calls List (03H) are served, read status marks and edits included.
+dect_iwu.c now uses dect_time_put(): link dect_time.c (and dect_nwk.c)
+with it.
+

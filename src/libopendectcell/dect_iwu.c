@@ -4,6 +4,7 @@
  * clause of each rule is cited where it is applied. See dect_iwu.h.
  */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "dect_iwu.h"
@@ -12,6 +13,9 @@
  * the Contact List only with a store attached. */
 static const uint8_t supported_lists[] = {
 	DECT_LIA_LIST_SUPPORTED,
+	DECT_LIA_LIST_MISSED,
+	DECT_LIA_LIST_OUTGOING,
+	DECT_LIA_LIST_ACCEPTED,
 	DECT_LIA_LIST_CONTACTS,
 	DECT_LIA_LIST_INTERNAL_NAMES,
 	DECT_LIA_LIST_SYSTEM_SETTINGS,
@@ -36,6 +40,21 @@ static const uint8_t fields_system[] = { 0x01, 0x02, 0x03, 0x09, 0x0A,
 static const uint8_t fields_contacts[] = { 0x01, 0x02, 0x03, 0x03, 0x03,
 					   0x05 };
 #define FIELD_CONTACT_NUMBER	0x03u
+/*
+ * 7.4.10.5.3: Number, Name, Date and time, Read status, Line name, Line
+ * id, Number of calls; only Read status editable (table 41 note 5).
+ * 7.4.10.5.4-5: Number, Name, Date and time, Line name, Line id; none.
+ */
+static const uint8_t fields_missed[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+					 0x07 };
+static const uint8_t fields_calls[] = { 0x01, 0x02, 0x03, 0x04, 0x05 };
+#define FIELD_READ_STATUS	0x04u
+
+static int is_call_list(int list)
+{
+	return list == DECT_LIA_LIST_MISSED || list == DECT_LIA_LIST_OUTGOING ||
+	       list == DECT_LIA_LIST_ACCEPTED;
+}
 
 void dect_iwu_init(struct dect_iwu *iwu)
 {
@@ -296,6 +315,8 @@ static int list_supported(const struct dect_iwu *iwu, uint8_t list)
 
 	if (list == DECT_LIA_LIST_CONTACTS && !iwu->contacts)
 		return 0;
+	if (is_call_list(list) && !iwu->calls)
+		return 0;
 	for (i = 0; i < sizeof(supported_lists); i++)
 		if (supported_lists[i] == list)
 			return 1;
@@ -319,6 +340,11 @@ static unsigned entry_count(const struct dect_iwu *iwu, uint8_t list)
 	case DECT_LIA_LIST_SUPPORTED:		return 1;
 	case DECT_LIA_LIST_CONTACTS:
 		return iwu->contacts ? iwu->contacts->n : 0;
+	case DECT_LIA_LIST_MISSED:
+	case DECT_LIA_LIST_OUTGOING:
+	case DECT_LIA_LIST_ACCEPTED:
+		return iwu->calls ? dect_calls_count(iwu->calls, list,
+						     iwu->own_terminal_id) : 0;
 	case DECT_LIA_LIST_INTERNAL_NAMES:	return iwu->n_handsets;
 	case DECT_LIA_LIST_LINE_SETTINGS:	return iwu->n_lines;
 	case DECT_LIA_LIST_SYSTEM_SETTINGS:	return 1;	/* singular */
@@ -339,6 +365,11 @@ static const uint8_t *list_fields(uint8_t list, size_t *n)
 		*n = sizeof(fields_system); return fields_system;
 	case DECT_LIA_LIST_CONTACTS:
 		*n = sizeof(fields_contacts); return fields_contacts;
+	case DECT_LIA_LIST_MISSED:
+		*n = sizeof(fields_missed); return fields_missed;
+	case DECT_LIA_LIST_OUTGOING:
+	case DECT_LIA_LIST_ACCEPTED:
+		*n = sizeof(fields_calls); return fields_calls;
 	default:
 		*n = 0; return NULL;
 	}
@@ -351,6 +382,9 @@ static uint8_t default_sort_field(uint8_t list)
 	case DECT_LIA_LIST_INTERNAL_NAMES:	return 0x01;	/* Number */
 	case DECT_LIA_LIST_LINE_SETTINGS:	return 0x02;	/* Line id */
 	case DECT_LIA_LIST_CONTACTS:		return 0x01;	/* Name, then First name */
+	case DECT_LIA_LIST_MISSED:
+	case DECT_LIA_LIST_OUTGOING:
+	case DECT_LIA_LIST_ACCEPTED:		return 0x03;	/* Date and time */
 	default:				return 0;
 	}
 }
@@ -371,10 +405,23 @@ static struct dect_contact *contact_at(const struct dect_iwu *iwu,
  * its own and outlive changes of position; the other lists are static, so
  * there the identity of an entry is its position.
  */
+/* A call list's entry at a list index, as this handset sees it, or NULL. */
+static struct dect_call *call_at(const struct dect_iwu *iwu, uint8_t list,
+				 unsigned idx)
+{
+	return iwu->calls ? dect_calls_at(iwu->calls, list,
+					  iwu->own_terminal_id, idx) : NULL;
+}
+
 static unsigned entry_id(const struct dect_iwu *iwu, uint8_t list, unsigned idx)
 {
 	const struct dect_contact *e;
 
+	if (is_call_list(list)) {
+		const struct dect_call *c = call_at(iwu, list, idx);
+
+		return c ? c->id : 0;
+	}
 	if (list != DECT_LIA_LIST_CONTACTS)
 		return idx;
 	e = contact_at(iwu, idx);
@@ -387,6 +434,9 @@ static unsigned entry_index(const struct dect_iwu *iwu, uint8_t list,
 {
 	if (list == DECT_LIA_LIST_CONTACTS)
 		return iwu->contacts ? dect_contacts_index(iwu->contacts, id) : 0;
+	if (is_call_list(list))
+		return iwu->calls ? dect_calls_index(iwu->calls, list,
+						     iwu->own_terminal_id, id) : 0;
 	return id >= 1u && id <= entry_count(iwu, list) ? id : 0;
 }
 
@@ -658,6 +708,82 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 		break;
 	}
 
+	case DECT_LIA_LIST_MISSED:
+	case DECT_LIA_LIST_OUTGOING:
+	case DECT_LIA_LIST_ACCEPTED: {
+		/*
+		 * 7.4.10.5.3-5. Field ids after 'Date and time' differ: the
+		 * Missed Calls List has 'Read status' at 04H and the rest one
+		 * further. Nothing but 'Read status' is editable.
+		 */
+		const struct dect_call *c = call_at(iwu, list, idx);
+		unsigned f = field;
+		uint8_t tbuf[16], v[2];
+		size_t tn;
+
+		if (!c)
+			break;
+		if (list == DECT_LIA_LIST_MISSED) {
+			if (field == FIELD_READ_STATUS) {
+				/* 7.4.10.5.1.5: the 'unread' bit, no value */
+				put_field(b, field, (uint8_t)(0x40u |
+					  (c->unread ? 0x20u : 0u)), NULL, 0);
+				break;
+			}
+			if (field > FIELD_READ_STATUS)
+				f = field - 1u;
+		} else if (field >= 0x06) {
+			break;
+		}
+		switch (f) {
+		case 0x01:
+			/* 7.4.10.5.1.2; length 1 when the network gave none */
+			put_field(b, field, 0x00, c->number, strlen(c->number));
+			break;
+		case 0x02:
+			put_field(b, field, 0x00, c->name, strlen(c->name));
+			break;
+		case 0x03:
+			/* 7.4.10.5.1.4: <<TIME-DATE>> from its octet 3 on */
+			tn = dect_time_put(tbuf, sizeof(tbuf), 0, &c->when);
+			if (tn > 2u)
+				put_field(b, field, 0x00, tbuf + 2, tn - 2u);
+			break;
+		case 0x04: {
+			/* 7.4.10.5.1.6, never empty */
+			const struct dect_iwu_line *ln = find_line(iwu,
+				c->line[iwu->own_terminal_id < DECT_CALLS_TERMINALS
+					? iwu->own_terminal_id : 0]);
+			char nm[DECT_IWU_NAME_MAX + 8];
+
+			if (ln && ln->name[0])
+				snprintf(nm, sizeof(nm), "%s", ln->name);
+			else
+				snprintf(nm, sizeof(nm), "Line %u",
+					 iwu->own_terminal_id < DECT_CALLS_TERMINALS
+					 ? c->line[iwu->own_terminal_id] : 1u);
+			put_field(b, field, 0x00, nm, strlen(nm));
+			break;
+		}
+		case 0x05:
+			/* 7.4.10.5.1.7: 'Line identifier for external call' */
+			v[0] = 0x00;
+			v[1] = (uint8_t)(0x80u |
+				(iwu->own_terminal_id < DECT_CALLS_TERMINALS
+				 ? c->line[iwu->own_terminal_id] : 1u));
+			put_field(b, field, 0x00, v, 2);
+			break;
+		case 0x06:
+			/* 7.4.10.5.1.8 'Number of calls' */
+			v[0] = c->count;
+			put_field(b, field, 0x00, v, 1);
+			break;
+		default:
+			break;
+		}
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -876,6 +1002,16 @@ static void query_fields(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		put(&b, (uint8_t)nf);
 		put_bytes(&b, f, nf);
 		put(&b, 0x00);
+	} else if (list == DECT_LIA_LIST_MISSED) {
+		/* only 'Read status' editable (table 41 note 5) */
+		size_t i;
+
+		put(&b, 0x01);
+		put(&b, FIELD_READ_STATUS);
+		put(&b, (uint8_t)(nf - 1u));
+		for (i = 0; i < nf; i++)
+			if (f[i] != FIELD_READ_STATUS)
+				put(&b, f[i]);
 	} else {
 		put(&b, 0x00);
 		put(&b, (uint8_t)nf);
@@ -899,6 +1035,7 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	uint8_t data[DECT_IWU_CONTENT_MAX];
 	uint8_t wanted[16];
 	unsigned session, start, count, first, last, total, got = 0;
+	unsigned mfirst, mlast;
 	size_t k, nwanted;
 	uint8_t mark;
 	int list, backward;
@@ -915,7 +1052,6 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	count = p[0] & 0x7Fu;
 	mark = p[1];
 	p += 2; n -= 2;
-	(void)mark;			/* no 'Read status' field in our lists */
 
 	list = session_list(iwu, session);
 	if (list < 0) {
@@ -950,6 +1086,8 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		if (last > total)
 			last = total;
 	}
+	mfirst = first;
+	mlast = last;
 	/* "Type 1 is used if no field was requested (mark entries request
 	 * only)": a confirm with counter 0 and no data packet. */
 	if (!nwanted)
@@ -972,6 +1110,24 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		first = last + 1u - got;
 		(void)assemble(iwu, (uint8_t)list, first, last, wanted, nwanted,
 			       &content, data, sizeof(data), &got);
+	}
+	/*
+	 * 'Mark entries request' (7.4.10.4.3.1): 7FH marks the entries of the
+	 * range read, FFH unread; only the Missed Calls List has the field.
+	 * After the entries are assembled: they carry the status the handset
+	 * shows them with (new or not), the mark is for the next reading.
+	 */
+	if (list == DECT_LIA_LIST_MISSED && (mark == 0x7Fu || mark == 0xFFu)) {
+		unsigned i, upto = nwanted ? (got ? first + got - 1u : 0u) : mlast;
+
+		for (i = nwanted ? first : mfirst; i && i <= upto; i++) {
+			struct dect_call *c = call_at(iwu, (uint8_t)list, i);
+
+			if (c && c->unread != (mark == 0xFFu)) {
+				c->unread = mark == 0xFFu;
+				iwu->calls->missed_changed = 1;
+			}
+		}
 	}
 	if (reply_begin(out, &b, DECT_LIA_READ_ENTRIES_CFM))
 		return;
@@ -1099,7 +1255,10 @@ static void edit_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
 		return;
 	}
-	if (list == DECT_LIA_LIST_SUPPORTED) {
+	/* table 41: not the List of Supported Lists, not notes 1's lists;
+	 * the Missed Calls List for its 'Read status' (note 5) */
+	if (list == DECT_LIA_LIST_SUPPORTED || list == DECT_LIA_LIST_OUTGOING ||
+	    list == DECT_LIA_LIST_ACCEPTED) {
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
 	}
@@ -1359,6 +1518,72 @@ format:
 	nack(iwu, out, session, DECT_LIA_NACK_FORMAT);
 }
 
+/*
+ * 'Save entry' on a call list: only the Missed Calls List's 'Read status',
+ * of an entry this session's 'edit entry' locked; table 52a: "FP shall
+ * update the property octet with received bits", the field's length 1.
+ */
+static void finish_save_call(struct dect_iwu *iwu, unsigned session,
+			     uint8_t list, struct dect_iwu_out *out)
+{
+	const uint8_t *p = iwu->save_data;
+	size_t n = iwu->save_len, k;
+	uint16_t locked = iwu->sessions[session - 1u].locked;
+	unsigned entry, len, flen, idx;
+	struct dect_call *c;
+	uint8_t reason = 0;
+
+	iwu->sessions[session - 1u].locked = 0;
+	idx = iwu->save_entry ? entry_index(iwu, list, iwu->save_entry) : 0;
+	c = call_at(iwu, list, idx);
+	if (list != DECT_LIA_LIST_MISSED || !c || locked != iwu->save_entry) {
+		nack(iwu, out, session, c || list != DECT_LIA_LIST_MISSED
+		     ? DECT_LIA_NACK_NOT_ALLOWED : DECT_LIA_NACK_NO_ENTRY);
+		return;
+	}
+	if (iwu->save_overflow)
+		goto format;
+	if (n) {
+		k = get_ext(p, n, &entry);
+		if (!k || entry != iwu->save_entry)
+			goto format;
+		p += k; n -= k;
+		k = get_ext(p, n, &len);
+		if (!k || len > n - k)
+			goto format;
+		p += k; n = len;
+		while (n) {
+			uint8_t fid = *p++;
+
+			n--;
+			k = get_ext(p, n, &flen);
+			if (!k || flen < 1u || flen > n - k)
+				goto format;
+			p += k; n -= k;
+			if (fid == FIELD_READ_STATUS && flen == 1u) {
+				uint8_t unread = (p[0] & 0x20u) != 0;
+
+				if (c->unread != unread) {
+					c->unread = unread;
+					iwu->calls->missed_changed = 1;
+				}
+			} else {
+				reason = DECT_LIA_NACK_NOT_ALLOWED;
+			}
+			p += flen; n -= flen;
+		}
+	}
+	if (reason) {
+		nack(iwu, out, session, reason);
+		return;
+	}
+	save_confirm(iwu, out, session, c->id, idx, entry_count(iwu, list));
+	return;
+
+format:
+	nack(iwu, out, session, DECT_LIA_NACK_FORMAT);
+}
+
 static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
 {
 	unsigned session = iwu->save_session, entry, len, fid, flen;
@@ -1373,6 +1598,10 @@ static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
 	}
 	if (list == DECT_LIA_LIST_CONTACTS) {
 		finish_save_contact(iwu, session, out);
+		return;
+	}
+	if (is_call_list(list)) {
+		finish_save_call(iwu, session, (uint8_t)list, out);
 		return;
 	}
 	locked = (uint8_t)iwu->sessions[session - 1u].locked;
@@ -1582,6 +1811,25 @@ malformed:
 }
 
 /*
+ * "Search entries" on a call list (table 41: M). Their first sorting field
+ * is 'Date and time', which no searched string names, so nothing matches:
+ * "Type 1 is used if no entry is found", a confirm with counter 0.
+ */
+static void search_nothing(struct dect_iwu *iwu, unsigned session,
+			   struct dect_iwu_out *out)
+{
+	struct buf b;
+
+	if (reply_begin(out, &b, DECT_LIA_SEARCH_ENTRIES_CFM))
+		return;
+	put_ext(&b, session);
+	put_ext(&b, 1u);
+	put(&b, 0x00);
+	emit(out, &b);
+	iwu->stats.replied++;
+}
+
+/*
  * "Delete entry" (7.4.10.4.6). Only the Internal Names List takes it, where
  * it means "deregister that handset": refused while that handset is in a
  * call ('temporarily not possible') and without the base PIN entered in
@@ -1605,6 +1853,21 @@ static void delete_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	list = session_list(iwu, session);
 	if (list < 0) {
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
+		return;
+	}
+	if (is_call_list(list)) {
+		/* 7.4.10.4.6: gone for every handset on its line */
+		if (!entry_index(iwu, (uint8_t)list, entry)) {
+			nack(iwu, out, session, DECT_LIA_NACK_NO_ENTRY);
+			return;
+		}
+		(void)dect_calls_del(iwu->calls, (unsigned)list, entry);
+		if (reply_begin(out, &b, DECT_LIA_DELETE_ENTRY_CFM))
+			return;
+		put_ext(&b, session);
+		put_ext(&b, entry_count(iwu, (uint8_t)list));
+		emit(out, &b);
+		iwu->stats.replied++;
 		return;
 	}
 	if (list == DECT_LIA_LIST_CONTACTS) {
@@ -1681,6 +1944,11 @@ static void delete_list(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
 		return;
 	}
+	if (is_call_list(list)) {
+		/* table 41: M for the call lists; what this handset sees */
+		dect_calls_clear(iwu->calls, (unsigned)list, iwu->own_terminal_id);
+		goto confirm;
+	}
 	if (list != DECT_LIA_LIST_CONTACTS || !c->allow_clear) {
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
@@ -1692,6 +1960,7 @@ static void delete_list(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_TEMP_NOT_POSSIBLE);
 		return;
 	}
+confirm:
 	iwu->sessions[session - 1u].locked = 0;
 	if (reply_begin(out, &b, DECT_LIA_DELETE_LIST_CFM))
 		return;
@@ -1765,6 +2034,8 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		if (list == DECT_LIA_LIST_INTERNAL_NAMES ||
 		    list == DECT_LIA_LIST_CONTACTS)
 			search_entries(iwu, session, list, p + k, n - k, out);
+		else if (is_call_list(list))
+			search_nothing(iwu, session, out);
 		else
 			refuse(iwu, p, n, out, DECT_LIA_NACK_NOT_ALLOWED);
 		break;

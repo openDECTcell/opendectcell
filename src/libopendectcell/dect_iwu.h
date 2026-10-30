@@ -12,6 +12,9 @@
  * considers itself synchronised with a base once it has read them. With a
  * contacts store attached (dect_contacts.h), a fifth: the Contact List
  * (05H, 7.4.10.5.7), which handsets also edit, extend and delete from.
+ * With a call store attached (dect_calls.h), the Missed Calls List (01H),
+ * the Outgoing Calls List (02H) and the Incoming Accepted Calls List (03H),
+ * 7.4.10.5.3-5, each handset seeing the calls of its own lines.
  *
  * A "read entries confirm" is followed by the entries' data packets
  * (TS 102 527-3 7.4.10.4.3.2: "Content of list entry is transmitted in data
@@ -37,6 +40,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "dect_calls.h"
 #include "dect_contacts.h"
 
 /* Octet 3 of <<IWU-TO-IWU>>: bit 8 fixed 1, S/R = 1 "transmission", PD 03H. */
@@ -168,6 +172,8 @@ struct dect_iwu {
 	char     fw_version[21];
 	/* The Contact List, shared by every link; NULL = not offered. */
 	struct dect_contacts *contacts;
+	/* The call lists (01H-03H), shared likewise; NULL = not offered. */
+	struct dect_calls *calls;
 
 	/* Open sessions; session identifier = index + 1. */
 	struct {

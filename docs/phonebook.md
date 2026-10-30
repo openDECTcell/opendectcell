@@ -14,6 +14,46 @@ is in two books appears twice on the handsets (the maintainer's decision,
 The maintainer asked for this on 2026-10-28 (ROADMAP M9b) and approved it on
 2026-10-30.
 
+## Call lists
+
+Also since 2026-10-30, and served beside the Contact List: the Missed Calls
+List (01H), the Outgoing Calls List (02H) and the Incoming Accepted Calls
+List (03H), TS 102 527-3 7.4.10.5.3-5 (`src/libopendectcell/dect_calls.[ch]`).
+
+- **Where the calls come from:** the baresip module knows a SIP call's
+  outcome over every handset it rang. When an incoming call ends, it sends
+  dect-stubd one `calllog` (missed or accepted); an outgoing call is sent
+  when it is placed (`docs/bridge-interface.md`).
+- **Storage:** 40 entries per list, in RAM, newest first. A restart of the
+  service or the box empties them.
+- **Merging:** a call from or to the party of the newest entry merges into
+  it (strategy 3). A missed one counts up 'Number of calls' and becomes
+  unread again.
+- **Per handset:** each handset sees the calls of its own lines, under its
+  own line id ("FP virtual list strategy 2").
+- **Names:** the Contact List's name comes before the caller's own name, as
+  7.4.10.5.1.3 note 1 recommends.
+- **The missed call notification** (7.4.1.3) carries the unread count and
+  the list change indication. It goes to the handsets the call rang: at
+  once on a link, else by a page. It is sent again, as an update, after a
+  handset reads or deletes entries and after every location registration.
+  Part 3 handsets only: the C430A (Part 1) neither reads the lists nor gets
+  the notification.
+- **The List of Supported Lists notice:** a handset keeps the List of
+  Supported Lists it read once. dect-stubd therefore sends a list change
+  indication for it after each location registration, and the handset then
+  re-reads it.
+- **On the A540, 2026-10-30:**
+  - after a power cycle it re-read list 00 ({00,01,02,03,05,06,07,08});
+  - an unanswered call from a mobile rang both handsets and gave "1 unread
+    of 1 (a new one)";
+  - the A540 read the Missed Calls List (number, time, unread, line
+    "Fritzbox") and marked the entry read, and the update (0 unread)
+    followed.
+- **Not yet:** the All Calls and All Incoming Calls lists (optional), a
+  search on the call lists (it answers "no match"), and keeping the lists
+  across a restart.
+
 ## Parts
 
 | part | where | does |

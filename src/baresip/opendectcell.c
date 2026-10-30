@@ -131,6 +131,21 @@ static unsigned n_lines;
 /* handsets that speak narrowband only, by slot (dect-stubd's hs lines) */
 static bool hs_narrow[7];
 static struct bcall calls[MAX_CALLS];
+
+/*
+ * An incoming SIP call for the base's call lists: who called, and whether
+ * any handset took it. dect-stubd sees one call per handset it rang; only
+ * here is the outcome over all of them known, so it goes to dect-stubd as
+ * one "calllog" when the SIP call ends (docs/phonebook.md, Call lists).
+ */
+struct incall {
+	struct call *call;		/* NULL = free */
+	struct ua   *ua;
+	char         num[DECT_CLIP_NUMBER_MAX + 1];
+	char         name[DECT_CLIP_NAME_MAX + 1];
+	int          answered;
+};
+static struct incall incalls[MAX_CALLS];
 static unsigned next_tok;
 static bool any_source;		/* config opendectcell_any_source: see sip_origin_ok() */
 
@@ -338,6 +353,61 @@ static void call_end(struct bcall *bc, uint16_t scode, const char *reason)
 		if (calls[i].call == call && &calls[i] != bc)
 			bc_free(&calls[i]);
 	bc_end(bc, scode, reason);
+}
+
+/* ---- the call lists ------------------------------------------------------ */
+
+static int ctl_send(struct dect_ctl_out *o);
+
+/*
+ * One finished or placed call for dect-stubd's call lists: kind, number,
+ * name, and legs=HS:LINE,... -- every handset that has the account as a
+ * line, and which of its lines.
+ */
+static void calllog(const char *kind, const struct ua *ua, const char *num,
+		    const char *name)
+{
+	struct dect_ctl_out o;
+	char legs[64] = "";
+	size_t n = 0;
+	unsigned i;
+
+	for (i = 0; i < n_lines && n + 8u < sizeof(legs); i++)
+		if (aor_is(ua, lines[i].aor))
+			n += (size_t)re_snprintf(legs + n, sizeof(legs) - n,
+						 "%s%u:%u", n ? "," : "",
+						 lines[i].hs, lines[i].line);
+	if (!n)
+		return;
+	dect_ctl_begin(&o, "calllog");
+	dect_ctl_add(&o, "kind", kind);
+	if (num && *num)
+		dect_ctl_add(&o, "number", num);
+	if (name && *name)
+		dect_ctl_add(&o, "name", name);
+	dect_ctl_add(&o, "legs", legs);
+	(void)ctl_send(&o);
+}
+
+static struct incall *incall_of(const struct call *call)
+{
+	unsigned i;
+
+	for (i = 0; call && i < MAX_CALLS; i++)
+		if (incalls[i].call == call)
+			return &incalls[i];
+	return NULL;
+}
+
+/* The SIP call ended: answered by a handset or missed. */
+static void incall_end(const struct call *call)
+{
+	struct incall *ic = incall_of(call);
+
+	if (!ic)
+		return;
+	calllog(ic->answered ? "accepted" : "missed", ic->ua, ic->num, ic->name);
+	ic->call = NULL;
 }
 
 /* ---- the control socket -------------------------------------------------- */
@@ -722,6 +792,7 @@ static void call_out(unsigned id, unsigned hs, unsigned line,
 	bc->ua = ua;
 	bc->out = 1;
 	bc_device(bc);
+	calllog("outgoing", ua, number, NULL);
 	info("openDECTcell: call %u: DECT %u calls %s on Line %u\n", id, hs,
 	     number, line);
 }
@@ -791,8 +862,11 @@ static void ctl_line(const char *line, size_t len)
 	} else if (!strcmp(m.verb, "answered")) {
 		bc = bc_by_id(id);
 		if (bc && !bc->out && !bc->answered) {
+			struct incall *ic = incall_of(bc->call);
 			unsigned i;
 
+			if (ic)
+				ic->answered = 1;
 			/* the first to answer takes it; the other legs stop */
 			for (i = 0; i < MAX_CALLS; i++) {
 				struct bcall *o = &calls[i];
@@ -1063,6 +1137,15 @@ static void call_in(struct ua *ua, struct call *call)
 		ua_hangup(ua, call, 503, "Service Unavailable");
 		return;
 	}
+	for (i = 0; i < MAX_CALLS; i++)
+		if (!incalls[i].call) {
+			incalls[i].call = call;
+			incalls[i].ua = ua;
+			incalls[i].answered = 0;
+			str_ncpy(incalls[i].num, num, sizeof(incalls[i].num));
+			str_ncpy(incalls[i].name, name, sizeof(incalls[i].name));
+			break;
+		}
 	info("openDECTcell: call from %s rings %u handset(s)\n", peer ? peer : "?",
 	     legs);
 }
@@ -1389,6 +1472,7 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 	case UA_EVENT_CALL_CLOSED: {
 		unsigned i;
 
+		incall_end(call);
 		/* every leg of it: the handsets ringing, or the one talking */
 		for (i = 0; call && i < MAX_CALLS; i++) {
 			bc = &calls[i];

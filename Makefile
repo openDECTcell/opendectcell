@@ -15,7 +15,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 
 # Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
@@ -27,7 +27,7 @@ XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 # transmit test tone (dect_audio.c pulls in libm).
 STUBD_SRC := src/stubd/dect-stubd.c src/stubd/ssc_align.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
 	src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c \
-	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c \
+	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c \
 	src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_audio.c \
 	src/libopendectcell/dect_g722.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c \
 	src/libopendectcell/dect_diag.c src/libopendectcell/dect_profile.c src/libopendectcell/dect_ctl.c \
@@ -112,21 +112,25 @@ $(BUILD)/test_mm: tests/test_mm.c src/libopendectcell/dect_mm.c src/libopendectc
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_mm.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c
 
-$(BUILD)/test_iwu: tests/test_iwu.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_iwu.h tests/check.h
+$(BUILD)/test_iwu: tests/test_iwu.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_iwu.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_iwu.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_iwu.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c
+
+$(BUILD)/test_calls: tests/test_calls.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_calls.h src/libopendectcell/dect_iwu.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_calls.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c
 
 $(BUILD)/test_contacts: tests/test_contacts.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.h src/libopendectcell/dect_iwu.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_contacts.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_iwu.c
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_contacts.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c
 
-$(BUILD)/test_cc: tests/test_cc.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_cc.h tests/check.h
+$(BUILD)/test_cc: tests/test_cc.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_cc.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_cc.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_cc.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c
 
-$(BUILD)/test_clip: tests/test_clip.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_clip.h tests/check.h
+$(BUILD)/test_clip: tests/test_clip.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_clip.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_clip.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_callinfo.c
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_clip.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_callinfo.c
 
 $(BUILD)/test_time: tests/test_time.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_time.h tests/check.h
 	@mkdir -p $(BUILD)
@@ -145,13 +149,13 @@ $(BUILD)/test_g722: tests/test_g722.c src/libopendectcell/dect_g722.c src/libope
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_g722.c src/libopendectcell/dect_g722.c -lm
 
-$(BUILD)/test_diag: tests/test_diag.c src/libopendectcell/dect_diag.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_diag.h tests/check.h
+$(BUILD)/test_diag: tests/test_diag.c src/libopendectcell/dect_diag.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_diag.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -Isrc/libopendectcell -o $@ tests/test_diag.c src/libopendectcell/dect_diag.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c
+	$(CC) $(CFLAGS) $(SAN) -Isrc/libopendectcell -o $@ tests/test_diag.c src/libopendectcell/dect_diag.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c
 
-$(BUILD)/test_link: tests/test_link.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_link.h tests/check.h
+$(BUILD)/test_link: tests/test_link.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_link.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -Isrc/libopendectcell -o $@ tests/test_link.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c
+	$(CC) $(CFLAGS) $(SAN) -Isrc/libopendectcell -o $@ tests/test_link.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_mail.c
 
 $(BUILD)/test_profile: tests/test_profile.c src/libopendectcell/dect_profile.c src/libopendectcell/dect_profile.h tests/check.h
 	@mkdir -p $(BUILD)
@@ -165,7 +169,7 @@ $(BUILD)/test_ctl: tests/test_ctl.c src/libopendectcell/dect_ctl.c src/libopende
 TRACE_SRC := src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c src/libopendectcell/dect_cs.c \
 	src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c src/libopendectcell/dect_nwk.c \
 	src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_dsaa.c \
-	src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c \
+	src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c \
 	src/libopendectcell/dect_mail.c
 $(BUILD)/test_trace: tests/test_trace.c $(TRACE_SRC) tests/check.h $(wildcard tests/traces/*.trace)
 	@mkdir -p $(BUILD)
