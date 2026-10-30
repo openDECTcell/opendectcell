@@ -19,6 +19,7 @@
 #include "dect_cc.h"
 #include "dect_mail.h"
 #include "dect_mm.h"
+#include "dect_proto.h"
 
 struct dect_hs_rec {
 	unsigned slot;				/* chip subscription slot, 1..6 */
@@ -65,9 +66,22 @@ struct dect_base_ops {
 	void (*log)(void *ctx, const char *line);
 };
 
+/*
+ * Stage S2.2: the chip's subscription slots. Which handsets go into the
+ * chip is the host's policy (a cell holds the ones it serves); how they go
+ * in is the chip's, here. Mails to the STUB's contact task 0x02
+ * [CR A-0026].
+ */
+struct dect_base_chip {
+	uint8_t att_flag;	/* 0x0247 op 1's flag; stock sets bit 0 [CR A-0113] */
+	uint8_t att_cfg;	/* 0x020A's byte after the UAK [CR A-0113] */
+	int     no_mask;	/* send no 0x017C at all */
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
+	struct dect_base_chip chip;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	unsigned n_hs;			/* records in use, hs[0] first */
 	unsigned cur;			/* the current one */
@@ -100,6 +114,24 @@ int dect_base_send(struct dect_base *b, const struct dect_mail *m);
  * handsets must set it.
  */
 void dect_base_random(struct dect_base *b, uint8_t *out, size_t n);
+
+/*
+ * Clear every chip slot 1..6 whose bit (1 << slot) is not in keep_mask:
+ * 0x0247 {slot, op 0, 0}. The chip keeps its slots across runs and would
+ * otherwise still admit a handset the host holds no record of.
+ */
+void dect_base_slot_clear(struct dect_base *b, unsigned keep_mask);
+
+/*
+ * Put a handset's key into chip slot `slot`: 0x0247 {slot, op 1, flag},
+ * then 0x020A {slot, UAK, config} [CR A-0026]. 0, or -1 for a slot outside
+ * 1..6 (the 0x020A writer does not range-check; only 0x0247 goes out).
+ */
+int dect_base_slot_install(struct dect_base *b, unsigned slot,
+			   const uint8_t uak[DECT_MM_UAK_LEN]);
+
+/* 0x017C {00, mask}: the handsets locked in, bit n-1 for slot n [CR A-0129]. */
+void dect_base_slot_mask(struct dect_base *b, uint8_t mask);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

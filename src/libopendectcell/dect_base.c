@@ -67,3 +67,87 @@ void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	va_end(ap);
 	b->ops->log(b->ctx, line);
 }
+
+/* One mail to the STUB's contact task. */
+static void chip_mail(struct dect_base *b, uint16_t prim, const uint8_t *p,
+		      size_t n)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = prim;
+	if (n > sizeof(m.param))
+		n = sizeof(m.param);
+	memcpy(m.param, p, n);
+	m.param_len = (uint16_t)n;
+	(void)dect_base_send(b, &m);
+}
+
+void dect_base_slot_clear(struct dect_base *b, unsigned keep_mask)
+{
+	char kept[32] = "";
+	size_t at = 0;
+	unsigned slot;
+
+	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
+		const uint8_t p[3] = { (uint8_t)slot, 0x00u /* op: clear */, 0x00u };
+
+		if (keep_mask & (1u << slot)) {
+			at += (size_t)snprintf(kept + at, sizeof(kept) - at,
+					       " %u", slot);
+			continue;
+		}
+		chip_mail(b, 0x0247u, p, sizeof(p));
+	}
+	dect_base_log(b, "sub: cleared chip subscription slots other than%s "
+		      "-- the chip keeps them across runs and would otherwise "
+		      "still admit a handset we have no record of", kept);
+}
+
+int dect_base_slot_install(struct dect_base *b, unsigned slot,
+			   const uint8_t uak[DECT_MM_UAK_LEN])
+{
+	uint8_t p[2 + DECT_MM_UAK_LEN];
+
+	/*
+	 * {slot, op 1: install or refresh, flag}. The op 1 handler tests the
+	 * flag's bit 0 and clears a per-slot mask bit on 1, sets it on 0
+	 * [CR A-0113].
+	 */
+	p[0] = (uint8_t)slot;
+	p[1] = 0x01u;
+	p[2] = b->chip.att_flag;
+	chip_mail(b, 0x0247u, p, 3);
+	/*
+	 * Slot 7 would address the start of the 0xF605 table and the chip's
+	 * writer does not range-check it [CR A-SubscriberCapacity-7].
+	 */
+	if (slot < 1u || slot > DECT_MM_MAX_SLOT) {
+		dect_base_log(b, "sub: refusing 0x020A for slot %u (valid "
+			      "1..%u)", slot, DECT_MM_MAX_SLOT);
+		return -1;
+	}
+	p[0] = (uint8_t)slot;		/* one-based, 17-byte record stride */
+	memcpy(&p[1], uak, DECT_MM_UAK_LEN);
+	/*
+	 * The byte after the UAK: stock sends 0x01 per Gigaset (0x02 for the
+	 * C4); the handler keeps it per slot for the connection's capability
+	 * word [CR A-0113].
+	 */
+	p[1 + DECT_MM_UAK_LEN] = b->chip.att_cfg;
+	chip_mail(b, 0x020Au, p, sizeof(p));
+	return 0;
+}
+
+void dect_base_slot_mask(struct dect_base *b, uint8_t mask)
+{
+	const uint8_t p[2] = { 0x00u /* unused by the handler */, mask };
+
+	if (b->chip.no_mask)
+		return;
+	chip_mail(b, 0x017Cu, p, sizeof(p));
+	dect_base_log(b, "sub: locked-in handset mask 0x017c 00 %02x "
+		      "[CR A-0129]", mask);
+}

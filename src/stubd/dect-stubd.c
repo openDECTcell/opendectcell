@@ -1815,9 +1815,7 @@ static void chip_mail_to(struct stubd *s, uint8_t dst, uint16_t prim,
 		n = sizeof(m.param);
 	memcpy(m.param, p, n);
 	m.param_len = n;
-	(void)dect_base_send(&s->base, &m);
-	if (s->verbose)
-		log_mail(&m, "tx M", s->show_params);
+	(void)dect_base_send(&s->base, &m);	/* base_send() logs it */
 }
 
 static void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p,
@@ -2923,8 +2921,11 @@ static void base_save(void *ctx, unsigned i, const struct dect_hs_rec *r)
 static int base_send(void *ctx, const struct dect_mail *m)
 {
 	struct stubd *s = ctx;
+	int r = send_mail(s, (unsigned int)s->tx_slot, m);
 
-	return send_mail(s, (unsigned int)s->tx_slot, m);
+	if (s->verbose)
+		log_mail(m, "tx M", s->show_params);
+	return r;
 }
 
 /* dect_base's random(): /dev/urandom (gen_rand()). */
@@ -3692,21 +3693,7 @@ static void sub_audit_send(struct stubd *s, uint8_t mine);
 static void clear_foreign_slots(struct stubd *s, uint8_t keep,
 				unsigned keep_mask)
 {
-	uint8_t slot;
-
-	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
-		const uint8_t p[3] = { slot, 0x00u /* op: clear */, 0x00u };
-
-		if (keep_mask & (1u << slot))
-			continue;
-		chip_mail(s, 0x0247u, p, sizeof(p));
-	}
-	printf("sub: cleared chip subscription slots other than");
-	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++)
-		if (keep_mask & (1u << slot))
-			printf(" %u", slot);
-	printf(" -- the chip keeps them across runs and would otherwise still "
-	       "admit a handset we have no record of\n");
+	dect_base_slot_clear(&s->base, keep_mask);
 	/*
 	 * ...and now check it actually happened. The clear is 0x0247, which
 	 * has no reply and no error path, so until today "cleared" meant
@@ -3761,41 +3748,7 @@ static void send_subscription(struct stubd *s)
 static void install_subscription(struct stubd *s, uint8_t slot,
 				 const uint8_t uak[DECT_MM_UAK_LEN])
 {
-	uint8_t p[2 + DECT_MM_UAK_LEN];
-
-	/*
-	 * {slot, op 1: install/refresh, flag}. The flag: [CR A-0113] stock
-	 * sends bit 0 = 1 (A540 = 0x03); the op=1 handler tests bit 0 and
-	 * clears a per-slot mask bit on 1, sets it on 0. Ours is 0x00 unless
-	 * -a attflag= sets it.
-	 */
-	p[0] = slot;
-	p[1] = 0x01u;
-	p[2] = s->audio.att_flag;
-	chip_mail(s, 0x0247u, p, 3);
-
-	/*
-	 * Slot 7 would address the start of the 0xF605 table and the chip-side
-	 * writer does not range-check it [CR A-SubscriberCapacity-7]. Refuse
-	 * rather than trust the caller; see DECT_MM_MAX_SLOT.
-	 */
-	if (slot < 1u || slot > DECT_MM_MAX_SLOT) {
-		fprintf(stderr, "sub: refusing 0x020A for slot %u "
-			"(valid 1..%u)\n", (unsigned)slot, DECT_MM_MAX_SLOT);
-		return;
-	}
-
-	p[0] = slot;			/* one-based, 17-byte record stride */
-	memcpy(&p[1], uak, DECT_MM_UAK_LEN);		/* 16-byte credential */
-	/*
-	 * Config byte after the UAK: [CR A-0113] stock sends 0x01 per Gigaset
-	 * (0x02 for the C4). The 0x020A handler stores it at UAK-slot +0x10
-	 * and the CC state machine copies it into conn+0x21, the per-connection
-	 * auth/capability word the ring progression uses. Ours is 0x00 unless
-	 * -a attcfg= sets it; the Gigasets ring with it all the same.
-	 */
-	p[1 + DECT_MM_UAK_LEN] = s->audio.att_cfg;	/* [CR A-0113] */
-	chip_mail(s, 0x020Au, p, sizeof(p));	/* the log masks the UAK */
+	(void)dect_base_slot_install(&s->base, slot, uak);	/* the log masks the UAK */
 }
 
 /*
@@ -3828,14 +3781,9 @@ static void send_subscription_tail(struct stubd *s)
 	 * [CR A-0129]). Stock sends it right after the 0x020A records and
 	 * after every deregistration.
 	 */
-	if (!s->audio.no_slot_cfg) {
-		const uint8_t p[2] = { 0x00u /* unused by the handler */, mask };
-
-		chip_mail(s, 0x017Cu, p, sizeof(p));
-		printf("sub: locked-in handset mask 0x017c 00 %02x%s "
-		       "[CR A-0129]\n", mask,
-		       s->audio.slot_mask_fixed ? " (pinned by slotmask=)" : "");
-	}
+	dect_base_slot_mask(&s->base, mask);
+	if (s->audio.slot_mask_fixed && !s->audio.no_slot_cfg)
+		printf("sub: the mask is pinned by slotmask=\n");
 }
 
 /*
@@ -13029,6 +12977,9 @@ int main(int argc, char **argv)
 		s.hs[0].path = s.sub_path;	/* the default store */
 		s.base.n_hs = 1;
 	}
+	s.base.chip.att_flag = s.audio.att_flag;	/* the chip's slots (S2.2) */
+	s.base.chip.att_cfg = s.audio.att_cfg;
+	s.base.chip.no_mask = s.audio.no_slot_cfg;
 	contacts_init(&s);
 	if (!s.audio.remode_set && !(s.audio.flags & 0x40u))
 		s.audio.remode_ms = 0;	/* mode 2 from the first assign */

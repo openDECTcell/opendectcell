@@ -143,3 +143,13 @@ in `dect_base_ops`, with `dect_base_send()`, `dect_base_random()` and
 `dect_base_log()`. dect-stubd's `chip_mail_to()` and its eight random draws
 go through them already; the traces unchanged.
 
+**S2.2, 2026-10-30.** The chip's slot writers: `dect_base_slot_clear()`,
+`_slot_install()` and `_slot_mask()` build 0x0247, 0x020A and 0x017C from
+`struct dect_base_chip` (the `attflag=`, `attcfg=` and `noslotcfg` options).
+Which handsets go into the chip stays the host's (`send_subscription()`:
+roamers, held-back handsets, loaded stores), since a controller decides
+that per cell. dect-stubd's `-v` mail log moved into its `send()` callback,
+so mails the library sends are logged too. Left for S2.2b: the UAK
+read-back and the slot audit (chip memory reads at build-specific
+addresses, with their own timers). Traces unchanged.
+

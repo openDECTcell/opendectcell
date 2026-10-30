@@ -18,13 +18,16 @@ static void save(void *ctx, unsigned i, const struct dect_hs_rec *r)
 	saved_slot = r->slot;
 }
 
-static unsigned sent_prim;
+static unsigned sent_prim, n_sent;
+static struct dect_mail sent[16];
 static char logged[300];
 
 static int send(void *ctx, const struct dect_mail *m)
 {
 	(void)ctx;
 	sent_prim = m->prim;
+	if (n_sent < 16u)
+		sent[n_sent++] = *m;
 	return 0;
 }
 
@@ -106,5 +109,45 @@ int main(void)
 	dect_base_changed(&b);
 	CHECK_EQ(saved_i, 2u);
 	CHECK_EQ(saved_slot, 3u);
+
+	/* the chip's slots (S2.2) */
+	{
+		uint8_t uak[DECT_MM_UAK_LEN];
+
+		memset(uak, 0xB0, sizeof(uak));
+		b.ops = &ops;
+		b.chip.att_flag = 0x01;
+		b.chip.att_cfg = 0x02;
+		n_sent = 0;
+		dect_base_slot_clear(&b, (1u << 1) | (1u << 3));
+		CHECK_EQ(n_sent, 4u);			/* 2, 4, 5, 6 */
+		CHECK_EQ(sent[0].prim, 0x0247u);
+		CHECK_EQ(sent[0].dst, DECT_TASK_CONTACT_DST);
+		CHECK_EQ(sent[0].param[0], 2);
+		CHECK_EQ(sent[0].param[1], 0);
+		CHECK_EQ(sent[3].param[0], 6);
+		CHECK(strstr(logged, "other than 1 3 --") != NULL);
+		n_sent = 0;
+		CHECK_EQ(dect_base_slot_install(&b, 2, uak), 0);
+		CHECK_EQ(n_sent, 2u);
+		CHECK_EQ(sent[0].param_len, 3u);
+		CHECK_EQ(sent[0].param[1], 1);		/* op 1 */
+		CHECK_EQ(sent[0].param[2], 0x01);	/* att_flag */
+		CHECK_EQ(sent[1].prim, 0x020Au);
+		CHECK_EQ(sent[1].param_len, 18u);
+		CHECK_EQ(sent[1].param[0], 2);
+		CHECK_EQ(sent[1].param[17], 0x02);	/* att_cfg */
+		n_sent = 0;
+		CHECK_EQ(dect_base_slot_install(&b, 7, uak), -1);
+		CHECK_EQ(n_sent, 1u);			/* no 0x020A for slot 7 */
+		n_sent = 0;
+		dect_base_slot_mask(&b, 0x05);
+		CHECK_EQ(n_sent, 1u);
+		CHECK_EQ(sent[0].prim, 0x017Cu);
+		CHECK_EQ(sent[0].param[1], 0x05);
+		b.chip.no_mask = 1;
+		dect_base_slot_mask(&b, 0x05);
+		CHECK_EQ(n_sent, 1u);
+	}
 	return CHECK_DONE();
 }
