@@ -11483,6 +11483,150 @@ static void cell_tick(struct stubd *s, uint64_t now)
 	cell_state_write(s, now);
 }
 
+/*
+ * One pass of everything above the chip transport, after the received
+ * blocks: the timers, the queues, the links, the sockets. run_loop() calls
+ * it once per pass; the daemon-level traces (tests/test_stubd.c) call it
+ * with their own clock.
+ */
+static void loop_tick(struct stubd *s, uint64_t now)
+{
+	led_tick(s, now, s->do_register && s->sess.state == DECT_SESS_UP);
+	state_write(s, now, s->do_register &&
+		    s->sess.state == DECT_SESS_UP, 0);
+	holdback_tick(s, now);
+	sub_check_tick(s, now);
+	fetch_tick(s, now);
+	dial_tick(s, now);
+	info_tick(s, now);
+	cs_connect_tick(s, now);
+	nlr_tick(s, now);
+	connect_tick(s, now);
+	reg_window_tick(s, now);
+	contacts_tick(s, now);
+	calls_tick(now, 0);
+	missed_changed_tick(s);
+	{
+		unsigned k;
+
+		for (k = 0; k < SIDE_MAX; k++)
+			if (s->side[k].active)
+				side_call_tick(s, &s->side[k], now);
+		ic_tick(s, now);
+		dereg_tick(s, now);
+		time_tick(s, now, s->do_register &&
+			  s->sess.state == DECT_SESS_UP);
+		ctl_tick(s, now);
+		bridge_tick(s, now);
+		ab_tick(s, now);
+		if (s->cell_mode)
+			cell_tick(s, now);
+	}
+	if (s->do_register) {
+		audio_connect_fallback(s, now);
+		send_conn_status_req(s, now);
+		ring_tick(s, now);
+	}
+	if (s->sess.state == DECT_SESS_UP)
+		mem_dump_tick(s, now);
+	remode_tick(s, now);
+	seq_tick(s, now);
+	if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
+		struct dect_mail cm;
+
+		dect_session_contact_mail(&s->sess, &cm);
+		if (send_mail(s, (unsigned int)s->tx_slot, &cm))
+			fprintf(stderr, "contact send failed\n");
+		else if (s->verbose)
+			log_mail(&cm, "tx  ", s->show_params);
+	}
+	/* Once up, send the extra mails in order, one per tick (~100 ms). */
+	if (s->sess.state == DECT_SESS_UP && s->xmail_idx < s->n_xmail) {
+		if (send_mail_spec(s, s->xmail[s->xmail_idx]))
+			fprintf(stderr, "extra mail %u (%s) failed\n",
+				s->xmail_idx, s->xmail[s->xmail_idx]);
+		s->xmail_idx++;
+		if (s->xmail_idx == s->n_xmail)
+			printf("all %u extra mails sent\n", s->n_xmail);
+	}
+	/*
+	 * Reload the stored subscriptions into the chip once the radio is
+	 * up, the way AVM restores saved handsets at boot [CR A-0026], so
+	 * the handsets stay known across daemon restarts. After the extra
+	 * mails, so a -M sequence runs before the chip knows any handset.
+	 */
+	if (s->sess.state == DECT_SESS_UP && any_uak(s) &&
+	    !s->sub_restored && s->xmail_idx >= s->n_xmail) {
+		send_subscription(s);
+		s->sub_restored = 1;
+		printf("sub: stored subscription reloaded into the chip\n");
+	}
+	/*
+	 * Side links keep their own timers and queues whether or not
+	 * the main link is up: an internal call's caller can be on a
+	 * side link after the main connection went (review, finding 4).
+	 */
+	if (s->do_register) {
+		unsigned k;
+
+		for (k = 0; k < SIDE_MAX; k++) {
+			if (!s->side[k].active)
+				continue;
+			dect_link_tick(&s->side[k].link, now);
+			lapc_failed_note(&s->side[k].link, "side");
+			cap_tick(s, &s->side[k].link);
+			side_cipher_tick(s, &s->side[k], now);
+			side_pump(s, &s->side[k]);
+		}
+	}
+	/* Drive LAPC retransmission timers for the registration link. */
+	if (s->do_register && s->reg.active) {
+		/*
+		 * dect_link_tick() and not the two timers it contains.
+		 * This loop used to call dect_lapc_tick() and
+		 * dect_cc_tick() directly, which open-codes two of the
+		 * four duties dect_link_tick() has and silently drops
+		 * the other two: dect_mm_tick() (<MM_ident.1>) and,
+		 * far worse, drain_nwk().
+		 *
+		 * Without the drain, a NWK message queued outside an
+		 * inbound-segment context never reached LAPC until the
+		 * handset happened to send us something. An
+		 * FP-originated {CC-SETUP} is exactly such a message:
+		 * ring_queue_setup() runs after dect_link_rx_segment()
+		 * has already drained, so the SETUP sat in the CC
+		 * output queue until the next inbound frame.
+		 *
+		 * Measured in vBR01: queued at t=21464 ms, on the wire
+		 * at t=25324 ms. 3 860 ms late -- by which time the
+		 * A540 had given up waiting and opened a CAT-iq
+		 * service call of its own, so our stale SETUP landed
+		 * as a {CC-SETUP} collision and the handset released
+		 * it with "insufficient resources" exactly as
+		 * EN 300 175-5 §9.5.2.3 requires. See
+		 * docs/spec-conformance.md.
+		 */
+		dect_link_tick(&s->reg.link, now);
+		lapc_failed_note(&s->reg.link, "main");
+		cap_tick(s, &s->reg.link);
+		names_tick(s);		/* a handset renamed one */
+		/*
+		 * The call has gone away: release the audio channel.
+		 * Without this it stays armed for the life of the link
+		 * and the next call starts on top of the last one's
+		 * state.
+		 */
+		if (s->reg.call_bound && !dect_cc_busy(&s->reg.link.cc)) {
+			s->reg.call_bound = 0;
+			send_audio_disconnect(s, s->reg.handle);
+			s->reg.call_wideband = 0;
+		}
+		if (!dect_cc_busy(&s->reg.link.cc))
+			s->reg.nonspeech_noted = 0;
+		pump_lapc(s);
+	}
+}
+
 static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 {
 	size_t block = s->slots * 2u * fpb;
@@ -11627,141 +11771,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 			continue;
 		}
 
-		now = mono_ms();
-		led_tick(s, now, s->do_register && s->sess.state == DECT_SESS_UP);
-		state_write(s, now, s->do_register &&
-			    s->sess.state == DECT_SESS_UP, 0);
-		holdback_tick(s, now);
-		sub_check_tick(s, now);
-		fetch_tick(s, now);
-		dial_tick(s, now);
-		info_tick(s, now);
-		cs_connect_tick(s, now);
-		nlr_tick(s, now);
-		connect_tick(s, now);
-		reg_window_tick(s, now);
-		contacts_tick(s, now);
-		calls_tick(now, 0);
-		missed_changed_tick(s);
-		{
-			unsigned k;
-
-			for (k = 0; k < SIDE_MAX; k++)
-				if (s->side[k].active)
-					side_call_tick(s, &s->side[k], now);
-			ic_tick(s, now);
-			dereg_tick(s, now);
-			time_tick(s, now, s->do_register &&
-				  s->sess.state == DECT_SESS_UP);
-			ctl_tick(s, now);
-			bridge_tick(s, now);
-			ab_tick(s, now);
-			if (s->cell_mode)
-				cell_tick(s, now);
-		}
-		if (s->do_register) {
-			audio_connect_fallback(s, now);
-			send_conn_status_req(s, now);
-			ring_tick(s, now);
-		}
-		if (s->sess.state == DECT_SESS_UP)
-			mem_dump_tick(s, now);
-		remode_tick(s, now);
-		seq_tick(s, now);
-		if (dect_session_tick(&s->sess, now) == DECT_ACT_SEND_CONTACT) {
-			struct dect_mail cm;
-
-			dect_session_contact_mail(&s->sess, &cm);
-			if (send_mail(s, (unsigned int)s->tx_slot, &cm))
-				fprintf(stderr, "contact send failed\n");
-			else if (s->verbose)
-				log_mail(&cm, "tx  ", s->show_params);
-		}
-		/* Once up, send the extra mails in order, one per tick (~100 ms). */
-		if (s->sess.state == DECT_SESS_UP && s->xmail_idx < s->n_xmail) {
-			if (send_mail_spec(s, s->xmail[s->xmail_idx]))
-				fprintf(stderr, "extra mail %u (%s) failed\n",
-					s->xmail_idx, s->xmail[s->xmail_idx]);
-			s->xmail_idx++;
-			if (s->xmail_idx == s->n_xmail)
-				printf("all %u extra mails sent\n", s->n_xmail);
-		}
-		/*
-		 * Reload the stored subscriptions into the chip once the radio is
-		 * up, the way AVM restores saved handsets at boot [CR A-0026], so
-		 * the handsets stay known across daemon restarts. After the extra
-		 * mails, so a -M sequence runs before the chip knows any handset.
-		 */
-		if (s->sess.state == DECT_SESS_UP && any_uak(s) &&
-		    !s->sub_restored && s->xmail_idx >= s->n_xmail) {
-			send_subscription(s);
-			s->sub_restored = 1;
-			printf("sub: stored subscription reloaded into the chip\n");
-		}
-		/*
-		 * Side links keep their own timers and queues whether or not
-		 * the main link is up: an internal call's caller can be on a
-		 * side link after the main connection went (review, finding 4).
-		 */
-		if (s->do_register) {
-			unsigned k;
-
-			for (k = 0; k < SIDE_MAX; k++) {
-				if (!s->side[k].active)
-					continue;
-				dect_link_tick(&s->side[k].link, now);
-				lapc_failed_note(&s->side[k].link, "side");
-				cap_tick(s, &s->side[k].link);
-				side_cipher_tick(s, &s->side[k], now);
-				side_pump(s, &s->side[k]);
-			}
-		}
-		/* Drive LAPC retransmission timers for the registration link. */
-		if (s->do_register && s->reg.active) {
-			/*
-			 * dect_link_tick() and not the two timers it contains.
-			 * This loop used to call dect_lapc_tick() and
-			 * dect_cc_tick() directly, which open-codes two of the
-			 * four duties dect_link_tick() has and silently drops
-			 * the other two: dect_mm_tick() (<MM_ident.1>) and,
-			 * far worse, drain_nwk().
-			 *
-			 * Without the drain, a NWK message queued outside an
-			 * inbound-segment context never reached LAPC until the
-			 * handset happened to send us something. An
-			 * FP-originated {CC-SETUP} is exactly such a message:
-			 * ring_queue_setup() runs after dect_link_rx_segment()
-			 * has already drained, so the SETUP sat in the CC
-			 * output queue until the next inbound frame.
-			 *
-			 * Measured in vBR01: queued at t=21464 ms, on the wire
-			 * at t=25324 ms. 3 860 ms late -- by which time the
-			 * A540 had given up waiting and opened a CAT-iq
-			 * service call of its own, so our stale SETUP landed
-			 * as a {CC-SETUP} collision and the handset released
-			 * it with "insufficient resources" exactly as
-			 * EN 300 175-5 §9.5.2.3 requires. See
-			 * docs/spec-conformance.md.
-			 */
-			dect_link_tick(&s->reg.link, now);
-			lapc_failed_note(&s->reg.link, "main");
-			cap_tick(s, &s->reg.link);
-			names_tick(s);		/* a handset renamed one */
-			/*
-			 * The call has gone away: release the audio channel.
-			 * Without this it stays armed for the life of the link
-			 * and the next call starts on top of the last one's
-			 * state.
-			 */
-			if (s->reg.call_bound && !dect_cc_busy(&s->reg.link.cc)) {
-				s->reg.call_bound = 0;
-				send_audio_disconnect(s, s->reg.handle);
-				s->reg.call_wideband = 0;
-			}
-			if (!dect_cc_busy(&s->reg.link.cc))
-				s->reg.nonspeech_noted = 0;
-			pump_lapc(s);
-		}
+		loop_tick(s, mono_ms());
 	}
 	ctl_close(s);
 	if (s->cell_mode)
