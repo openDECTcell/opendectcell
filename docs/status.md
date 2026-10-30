@@ -52,7 +52,8 @@ tested · ❌ not built yet · ➖ out of scope for now
 |---|---|---|
 | Network > DECT: settings, handsets, VoIP profiles | ✅ | Field by field in [luci-manual.md](luci-manual.md) |
 | Network > DECT: Phonebook (CardDAV) | 🟡 | With `opendectcell-carddav`; set up with a Nextcloud account (2026-10-30) |
-| Network > DECT: cell mode (enrol with a controller, leave) | 🟡 | With `opendectcell-cell`; enrolment, link and leave tested on a 7412 against a controller in Docker (2026-10-30), radio parked |
+| Network > DECT: cell mode (enrol with a controller, leave) | 🟡 | With `opendectcell-cell`; enrolment, link and leave tested on a 7412 against a controller in Docker (2026-10-30), radio parked. Built since and tested only against a scripted controller: certificate renewal, RTP/SRTP media for the controller's calls, the enrolment string passed in a root-only file. Not on air: audio through the controller; CA rotation (trust update) is not built |
+| The DECT base stack in the library, for the controller | 🟡 | `libopendectcell` runs the base stack (API 138); the controller hosts it next. Library hook for the controller's handset visibility (a handset sees only its account's handsets and cannot rename any): unit-tested, not on air |
 | Status > DECT: DECT, VoIP and Log tabs | ✅ | Live view of the base, the handsets, SIP registrations and running calls with codec and encryption |
 | Uploading the chip firmware in the web page | 🟡 | Network > DECT > Firmware (2026-10-31): upload the two `.hex` files from `tools/dect-fw-extract.py`; the box checks them. Backend tested with a fake board; the browser side (upload, check, delete) not yet clicked through on a box. `scp` still works |
 
