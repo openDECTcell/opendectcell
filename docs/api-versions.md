@@ -796,3 +796,7 @@ dect_callinfo.h.
 DECT_BASE_PAGE_WIDEBAND and the ring SETUP's helpers: dect_base_call_id(),
 _ring_part3(), _ring_callinfo(), _basic_svc(), _ring_svc(),
 _ring_narrow(), _page_info() (S3l).
+
+**113.** dect_base.h, 2026-10-30: struct dect_base's `clip` (the caller
+for the next FP-originated SETUP), dect_base_ring_setup() (the ring's
+{CC-SETUP}), DECT_BASE_SETUP_RETRY_MS and DECT_BASE_SETUP_TRIES (S3m).

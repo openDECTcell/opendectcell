@@ -260,6 +260,8 @@ struct dect_base {
 	struct dect_base_call calls[DECT_BASE_CALLS];
 	struct dect_base_ring ring;
 	struct dect_base_cfg cfg;
+	/* the caller's identity for the next FP-originated SETUP (S3m) */
+	struct dect_clip clip;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	/*
 	 * Each record's handset profile (docs/handset-profiles.md), resolved
@@ -488,6 +490,18 @@ uint8_t dect_base_ring_svc(const struct dect_base *b, unsigned t, int narrow);
 int dect_base_ring_narrow(const struct dect_base *b);
 /* The page information byte for a call (narrow: no wideband SETUP). */
 uint8_t dect_base_page_info(const struct dect_base *b, int narrow);
+
+/*
+ * The ring's {CC-SETUP} on the main link, once the handset rung answered
+ * its page (S3m): its call id, the call information, the signal and the
+ * name as its profile wants them, the identities from its record. A
+ * SETUP the link refuses (a call of the handset's in progress) is tried
+ * again every DECT_BASE_SETUP_RETRY_MS, cfg.setup_tries times (default
+ * DECT_BASE_SETUP_TRIES). The ring's state says what happened.
+ */
+#define DECT_BASE_SETUP_RETRY_MS	2000u
+#define DECT_BASE_SETUP_TRIES		8u
+void dect_base_ring_setup(struct dect_base *b, uint64_t now, const char *why);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

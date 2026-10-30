@@ -581,3 +581,70 @@ uint8_t dect_base_page_info(const struct dect_base *b, int narrow)
 			 ((b->cfg.basic_svc & 0x0Fu) == 0x08u && !narrow
 			  ? DECT_BASE_PAGE_WIDEBAND : 0u));
 }
+
+void dect_base_ring_setup(struct dect_base *b, uint64_t now, const char *why)
+{
+	struct dect_base_link *bl = &b->main_link;
+	struct dect_clip clip;
+	unsigned tries = b->cfg.setup_tries ? b->cfg.setup_tries
+					    : DECT_BASE_SETUP_TRIES;
+
+	if (!bl->active) {
+		dect_base_log(b, "ring: no link up at the page-response "
+			      "deadline -- paging again");
+		b->ring.state = DECT_BASE_RING_PAGING;
+		return;
+	}
+	if (b->cur != b->ring.hs) {
+		dect_base_log(b, "ring: this link serves record %u, not the "
+			      "handset we ring -- waiting", b->cur);
+		b->ring.resp_deadline = now + DECT_BASE_SETUP_RETRY_MS;
+		return;
+	}
+	dect_cc_set_next_ti(&bl->link.cc, 0);
+	{
+		uint8_t id = dect_base_call_id(b, &bl->link);
+
+		if (id)
+			dect_cc_set_call_status(&bl->link.cc,
+						bl->link.cc.call_status, id);
+	}
+	dect_base_ring_callinfo(b, 1);
+	clip = b->clip;
+	if (b->n_hs) {
+		const struct dect_hs_profile *hp = &b->prof[b->ring.hs];
+
+		if (!b->cfg.signal_set &&
+		    hp->cc_signal_external != DECT_SIGNAL_ALERT_PATTERN1)
+			dect_cc_set_signal(&bl->link.cc, 1,
+					   hp->cc_signal_external);
+		if (hp->cc_name_method == 1 || hp->cc_name_method == 3)
+			clip.name[0] = '\0';	/* display or none */
+	}
+	if (!dect_cc_setup_id(&bl->link.cc, b->rec.cc_port_id,
+			      b->rec.cc_port_id_len, b->rec.cc_fixed_id,
+			      b->rec.cc_fixed_id_len,
+			      dect_base_ring_svc(b, b->ring.hs,
+						 dect_base_ring_narrow(b)),
+			      &clip)) {
+		dect_base_ring_callinfo(b, 0);
+		b->ring.state = DECT_BASE_RING_DONE;
+		b->ring.watch = 1;
+		b->ring.coll0 = bl->link.cc.stats.collisions;
+		b->ring.alert0 = bl->link.cc.stats.alerting;
+		dect_base_log(b, "ring: CC-SETUP queued (%s) -- the handset "
+			      "should ring", why);
+		return;
+	}
+	if (++b->ring.setup_tries >= tries) {
+		b->ring.state = DECT_BASE_RING_DONE;
+		dect_base_log(b, "ring: CC-SETUP refused %u times, the "
+			      "handset's own call never cleared; giving up",
+			      b->ring.setup_tries);
+		return;
+	}
+	b->ring.resp_deadline = now + DECT_BASE_SETUP_RETRY_MS;
+	dect_base_log(b, "ring: CC-SETUP refused (a call is in progress), "
+		      "retry %u of %u in %u ms", b->ring.setup_tries, tries,
+		      DECT_BASE_SETUP_RETRY_MS);
+}

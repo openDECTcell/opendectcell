@@ -288,3 +288,10 @@ Unit tests; traces unchanged. What is left of the ring is its sequencing
 (`ring_tick()`, `ring_queue_setup()`), which reads the host's ring timing
 and the CLIP the bridge sets per call.
 
+**S3m.** The ring's SETUP is `dect_base_ring_setup()`: the call id, the
+call information, the profile's signal and name method, the record's
+identities, the retries of a refused SETUP. The caller's identity for it
+is `dect_base.clip` (set by the bridge's `call-in` or the `clip=`
+options). One log line now names the record instead of the store's
+file. Traces unchanged. Left of the ring: `ring_tick()`'s sequencing.
+

@@ -1129,7 +1129,6 @@ struct stubd {
 	int         play_locked;	/* playsync has seen its first transition */
 	size_t      play_pos;		/* byte offset into audio.play */
 	int         play_phase;		/* 0 = load a new word, 1 = hold it */
-	struct dect_clip clip;		/* caller identity for an FP-originated SETUP */
 	/*
 	 * Voice capture (-w): the call's TDM slot raw, two bytes per frame, or
 	 * every slot, so the sample format can be worked out offline.
@@ -3401,7 +3400,7 @@ static void info_tick(struct stubd *s, uint64_t now)
 	if (s->reg.info_sent || !cc->incoming ||
 	    cc->state != DECT_CC_ST_RINGING)
 		return;
-	r = s->base.n_hs ? name_display_info(s, cc, s->base.ring.hs, &s->clip) : 0;
+	r = s->base.n_hs ? name_display_info(s, cc, s->base.ring.hs, &s->base.clip) : 0;
 	if (r) {
 		s->reg.info_sent = 1;
 		if (r > 0) {
@@ -4315,8 +4314,8 @@ static int link_in_use(const struct dect_link *l)
 #define RING_PAGE_RETRIES	20u	/* pages before giving up (60 s) */
 #define RING_PAGE_INTERVAL	3000u	/* ms between them: <LCE.03> (EN 300 175-5 A.6) */
 #define RING_PAGE_RESP_MS	1500u	/* wait this long for the page response */
-#define RING_SETUP_RETRY_MS	2000u	/* re-try a refused CC-SETUP this often */
-#define RING_SETUP_TRIES	8u	/* ... this many times before giving up */
+#define RING_SETUP_RETRY_MS	DECT_BASE_SETUP_RETRY_MS
+#define RING_SETUP_TRIES	DECT_BASE_SETUP_TRIES
 #define RING_REQUEUE_MAX	2u	/* rings again after a lost collision */
 
 /*
@@ -4386,7 +4385,6 @@ static void send_page(struct stubd *s)
 		       ? "" : " -- WARNING: TPUI never acknowledged");
 }
 
-static struct dect_clip ring_clip;	/* s->clip as the target's profile wants it */
 
 /*
  * The <<BASIC-SERVICE>> of our SETUP to handset i. A pure GAP handset
@@ -4417,21 +4415,6 @@ static uint8_t ring_svc(const struct stubd *s, unsigned t, int narrow)
 static int ring_target_part3(const struct stubd *s)
 {
 	return dect_base_ring_part3(&s->base);
-}
-
-/*
- * on = 1: the call information of an external incoming call, for the next
- * SETUP only. A Part 3 handset gets stock's block: our line, line type
- * "significant delay" (VoIP), call id, CS call setup [CR A-0125]; TS 102
- * 527-3 §7.4.6.4.3 makes CS call setup mandatory in that SETUP. Bench
- * 2026-10-28: with it the A540 rings aloud and shows "via Line 1
- * <number>"; with a bare line id it rings silently. Part 1 handsets get
- * none (stock sends them none; §7.4.6.4.1). on = 0 restores the link's
- * setting, so later answers keep their bytes.
- */
-static void ring_callinfo(struct stubd *s, int on)
-{
-	dect_base_ring_callinfo(&s->base, on);
 }
 
 /*
@@ -4480,88 +4463,7 @@ static void cs_connect_tick(struct stubd *s, uint64_t now)
  */
 static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 {
-	/*
-	 * No link to send it on: the handsets that woke for the page took
-	 * their links and dropped them again (12d, 2026-10-25: the SETUP was
-	 * queued at 45.0 s with every link gone, and nothing rang). Page
-	 * again; the page budget still bounds it.
-	 */
-	if (!s->base.main_link.active) {
-		printf("ring: no link up at the page-response deadline -- "
-		       "paging again\n");
-		s->base.ring.state = RING_PAGING;
-		return;
-	}
-	/*
-	 * Our call goes to the handset we ring (ring_hs). A link that has taken on
-	 * another handset is that handset's; a {CC-SETUP} on it would address
-	 * the wrong one. Wait for it to clear, as for a busy CC entity.
-	 */
-	if (s->base.cur != s->base.ring.hs) {
-		printf("ring: this link serves %s, not the handset we ring -- "
-		       "waiting\n", s->sub_path);
-		s->base.ring.resp_deadline = now + RING_SETUP_RETRY_MS;
-		return;
-	}
-	/*
-	 * EN 300 444 §6.9.2: the lowest free transaction value, which for our
-	 * one-call CC entity is always 0 (see dect_cc_set_next_ti()). The
-	 * Gigasets refuse an incoming call with any other.
-	 */
-	dect_cc_set_next_ti(&s->base.main_link.link.cc, 0);
-	{
-		uint8_t id = alloc_call_id(s, &s->base.main_link.link);
-
-		if (id)
-			dect_cc_set_call_status(&s->base.main_link.link.cc,
-						s->base.main_link.link.cc.call_status, id);
-	}
-	ring_callinfo(s, 1);
-	{
-		/* the ring target's profile: its alerting pattern, unless
-		 * -a signal= chose one, and whether the name goes as CNIP */
-		const struct dect_hs_profile *hp = s->base.n_hs ?
-			&s->base.prof[s->base.ring.hs] : NULL;
-
-		ring_clip = s->clip;
-		if (hp && !s->base.cfg.signal_set &&
-		    hp->cc_signal_external != DECT_SIGNAL_ALERT_PATTERN1)
-			dect_cc_set_signal(&s->base.main_link.link.cc, 1,
-					   hp->cc_signal_external);
-		if (hp && (hp->cc_name_method == 1 || hp->cc_name_method == 3))
-			ring_clip.name[0] = '\0';	/* display or none */
-	}
-	/*
-	 * dect_cc_setup_id() refuses unless the CC entity is idle, and that is
-	 * not rare: the A540 opens a CAT-iq service call of its own roughly
-	 * every 17 s and holds it for about 13 s. Retry while the paging window
-	 * is still open rather than lose the ring on the first refusal.
-	 */
-	if (!dect_cc_setup_id(&s->base.main_link.link.cc, s->base.rec.cc_port_id, s->base.rec.cc_port_id_len,
-			      s->base.rec.cc_fixed_id, s->base.rec.cc_fixed_id_len,
-			      ring_svc(s, s->base.ring.hs, main_ring_narrow(s)),
-			      &ring_clip)) {
-		ring_callinfo(s, 0);
-		s->base.ring.state = RING_DONE;
-		s->base.ring.watch = 1;
-		s->base.ring.coll0 = s->base.main_link.link.cc.stats.collisions;
-		s->base.ring.alert0 = s->base.main_link.link.cc.stats.alerting;
-		printf("ring: CC-SETUP queued (%s) -- the handset should ring\n",
-		       why);
-		return;
-	}
-	if (++s->base.ring.setup_tries >= (s->base.cfg.setup_tries ?
-				      s->base.cfg.setup_tries : RING_SETUP_TRIES)) {
-		s->base.ring.state = RING_DONE;
-		printf("ring: CC-SETUP refused %u times, the handset's own call "
-		       "never cleared; giving up\n", s->base.ring.setup_tries);
-		return;
-	}
-	s->base.ring.resp_deadline = now + RING_SETUP_RETRY_MS;
-	printf("ring: CC-SETUP refused (a call is in progress), retry %u of %u "
-	       "in %u ms\n", s->base.ring.setup_tries,
-	       s->base.cfg.setup_tries ? s->base.cfg.setup_tries : RING_SETUP_TRIES,
-	       RING_SETUP_RETRY_MS);
+	dect_base_ring_setup(&s->base, now, why);
 }
 
 
@@ -8305,7 +8207,7 @@ static void sr_tick(struct stubd *s, struct dect_base_call *b, uint64_t now)
 	if (main_free(s)) {
 		printf("bridge: call %u: the main link is free -- ringing DECT "
 		       "%u there\n", b->id, hs_slot(s, (unsigned)b->target));
-		s->clip = b->clip;
+		s->base.clip = b->clip;
 		ring_main(s, b, (unsigned)b->target);
 		return;
 	}
@@ -8593,7 +8495,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 				return 1;
 			}
 		} else if (main_free(s)) {
-			s->clip = clip;
+			s->base.clip = clip;
 			ring_main(s, b, t);
 		} else {
 			sr_start(s, b, t, now);
@@ -12977,9 +12879,9 @@ int main(int argc, char **argv)
 	dect_rx_init(&s.rx);
 	dect_session_init(&s.sess, &scfg);
 
-	dect_clip_init(&s.clip);
+	dect_clip_init(&s.base.clip);
 	if (s.audio.clip_number
-	    && dect_clip_set_number(&s.clip, s.audio.clip_number,
+	    && dect_clip_set_number(&s.base.clip, s.audio.clip_number,
 				    DECT_CLIP_TON_UNKNOWN, DECT_CLIP_NPI_E164,
 				    DECT_CLIP_PRES_ALLOWED,
 				    DECT_CLIP_SCR_USER_UNSCREENED)) {
@@ -12988,7 +12890,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	if (s.audio.clip_name
-	    && dect_clip_set_name(&s.clip, s.audio.clip_name,
+	    && dect_clip_set_name(&s.base.clip, s.audio.clip_name,
 				  DECT_CLIP_ALPHABET_UTF8,
 				  DECT_CLIP_PRES_ALLOWED,
 				  DECT_CLIP_SCR_USER_UNSCREENED)) {
