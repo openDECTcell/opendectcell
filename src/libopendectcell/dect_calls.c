@@ -116,47 +116,99 @@ static int seen_by(const struct dect_call *e, unsigned tid)
 	return tid < DECT_CALLS_TERMINALS && e->line[tid];
 }
 
+/* The stored lists a list shows: one, or all three for the All Calls List. */
+static unsigned view_of(unsigned list)
+{
+	if (list == DECT_CALLS_ALL)
+		return 7u;
+	return list_ok(list) ? 1u << (list - 1u) : 0u;
+}
+
+/* Newer first by the date and time of the last call; 0 if equal. */
+static int time_cmp(const struct dect_time *a, const struct dect_time *b)
+{
+	const uint8_t x[6] = { a->year, a->month, a->day,
+			       a->hour, a->minute, a->second };
+	const uint8_t y[6] = { b->year, b->month, b->day,
+			       b->hour, b->minute, b->second };
+	unsigned k;
+
+	for (k = 0; k < 6u; k++)
+		if (x[k] != y[k])
+			return x[k] > y[k] ? -1 : 1;
+	return 0;
+}
+
+/*
+ * Walk a list as the handset with terminal id tid sees it, newest first:
+ * the stored lists of the view merged by time (each is newest first
+ * already; on equal times the lower list identifier first). Stops at the
+ * idx-th entry (1-based) or, with idx 0, at the entry `id`; *pos counts
+ * the entries passed. NULL at the end.
+ */
+static const struct dect_call *walk(const struct dect_calls *c, unsigned list,
+				    unsigned tid, unsigned idx, unsigned id,
+				    unsigned *pos)
+{
+	unsigned at[3] = { 0, 0, 0 }, view = view_of(list), l, best;
+
+	*pos = 0;
+	for (;;) {
+		const struct dect_call *e = NULL;
+
+		best = 3u;
+		for (l = 0; l < 3u; l++) {
+			if (!(view & (1u << l)))
+				continue;
+			while (at[l] < c->n[l] && !seen_by(&c->e[l][at[l]], tid))
+				at[l]++;
+			if (at[l] < c->n[l] &&
+			    (!e || time_cmp(&c->e[l][at[l]].when, &e->when) < 0)) {
+				e = &c->e[l][at[l]];
+				best = l;
+			}
+		}
+		if (!e)
+			return NULL;
+		at[best]++;
+		++*pos;
+		if (idx ? *pos == idx : e->id == id)
+			return e;
+	}
+}
+
 unsigned dect_calls_count(const struct dect_calls *c, unsigned list,
 			  unsigned tid)
 {
-	unsigned i, n = 0;
+	unsigned n;
 
-	if (!list_ok(list))
-		return 0;
-	for (i = 0; i < c->n[list - 1u]; i++)
-		n += seen_by(&c->e[list - 1u][i], tid);
+	(void)walk(c, list, tid, ~0u, 0, &n);
 	return n;
 }
 
 struct dect_call *dect_calls_at(struct dect_calls *c, unsigned list,
 				unsigned tid, unsigned idx)
 {
-	unsigned i;
+	unsigned n;
 
-	if (!list_ok(list) || !idx)
-		return NULL;
-	for (i = 0; i < c->n[list - 1u]; i++)
-		if (seen_by(&c->e[list - 1u][i], tid) && !--idx)
-			return &c->e[list - 1u][i];
-	return NULL;
+	return idx ? (struct dect_call *)walk(c, list, tid, idx, 0, &n) : NULL;
 }
 
 unsigned dect_calls_index(const struct dect_calls *c, unsigned list,
 			  unsigned tid, unsigned id)
 {
-	unsigned i, idx = 0;
+	unsigned n;
 
-	if (!list_ok(list))
-		return 0;
-	for (i = 0; i < c->n[list - 1u]; i++) {
-		const struct dect_call *e = &c->e[list - 1u][i];
+	return id && walk(c, list, tid, 0, id, &n) ? n : 0;
+}
 
-		if (!seen_by(e, tid))
-			continue;
-		idx++;
-		if (e->id == id)
-			return idx;
-	}
+unsigned dect_calls_type(const struct dect_calls *c, const struct dect_call *e)
+{
+	unsigned l;
+
+	for (l = 0; l < 3u; l++)
+		if (e >= c->e[l] && e < c->e[l] + c->n[l])
+			return l + 1u;
 	return 0;
 }
 
@@ -169,33 +221,34 @@ static void remove_at(struct dect_calls *c, unsigned l, unsigned i)
 
 int dect_calls_del(struct dect_calls *c, unsigned list, unsigned id)
 {
-	unsigned i;
+	unsigned i, l, view = view_of(list);
 
-	if (!list_ok(list))
-		return -1;
-	for (i = 0; i < c->n[list - 1u]; i++)
-		if (c->e[list - 1u][i].id == id) {
-			remove_at(c, list - 1u, i);
-			if (list == DECT_CALLS_MISSED)
-				c->missed_changed = 1;
-			return 0;
-		}
+	for (l = 0; l < 3u; l++)
+		for (i = 0; (view & (1u << l)) && i < c->n[l]; i++)
+			if (c->e[l][i].id == id) {
+				remove_at(c, l, i);
+				if (l == DECT_CALLS_MISSED - 1u)
+					c->missed_changed = 1;
+				return 0;
+			}
 	return -1;
 }
 
 void dect_calls_clear(struct dect_calls *c, unsigned list, unsigned tid)
 {
-	unsigned i;
+	unsigned i, l, view = view_of(list);
 
-	if (!list_ok(list))
-		return;
-	for (i = 0; i < c->n[list - 1u]; )
-		if (seen_by(&c->e[list - 1u][i], tid))
-			remove_at(c, list - 1u, i);
-		else
-			i++;
-	if (list == DECT_CALLS_MISSED)
-		c->missed_changed = 1;
+	for (l = 0; l < 3u; l++) {
+		if (!(view & (1u << l)))
+			continue;
+		for (i = 0; i < c->n[l]; )
+			if (seen_by(&c->e[l][i], tid))
+				remove_at(c, l, i);
+			else
+				i++;
+		if (l == DECT_CALLS_MISSED - 1u)
+			c->missed_changed = 1;
+	}
 }
 
 unsigned dect_calls_missed_unread(const struct dect_calls *c, unsigned tid,

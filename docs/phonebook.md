@@ -18,7 +18,9 @@ The maintainer asked for this on 2026-10-28 (ROADMAP M9b) and approved it on
 
 Also since 2026-10-30, and served beside the Contact List: the Missed Calls
 List (01H), the Outgoing Calls List (02H) and the Incoming Accepted Calls
-List (03H), TS 102 527-3 7.4.10.5.3-5 (`src/libopendectcell/dect_calls.[ch]`).
+List (03H), TS 102 527-3 7.4.10.5.3-5 (`src/libopendectcell/dect_calls.[ch]`),
+and since the same afternoon the All Calls List (04H, 7.4.10.5.6), which
+table 9 makes mandatory for the FP.
 
 - **Where the calls come from:** the baresip module knows a SIP call's
   outcome over every handset it rang. When an incoming call ends, it sends
@@ -31,6 +33,12 @@ List (03H), TS 102 527-3 7.4.10.5.3-5 (`src/libopendectcell/dect_calls.[ch]`).
 - **Merging:** a call from or to the party of the newest entry merges into
   it (strategy 3). A missed one counts up 'Number of calls' and becomes
   unread again.
+- **The All Calls List** is not stored: it shows the three lists merged,
+  newest first, with 'Call type' in front. A call is the same entry, with
+  the same identifier, in both lists it appears in, and deleting it in one
+  deletes it in the other, as the "FP side consistent update of lists"
+  rule of 7.4.10.4 asks. Its merging is therefore that of the stored lists
+  (with the newest entry of the same type), not a merge across types.
 - **Per handset:** each handset sees the calls of its own lines, under its
   own line id ("FP virtual list strategy 2").
 - **Names:** the Contact List's name comes before the caller's own name, as
@@ -52,8 +60,10 @@ List (03H), TS 102 527-3 7.4.10.5.3-5 (`src/libopendectcell/dect_calls.[ch]`).
   - the A540 read the Missed Calls List (number, time, unread, line
     "Fritzbox") and marked the entry read, and the update (0 unread)
     followed.
-- **Not yet:** the All Calls and All Incoming Calls lists (optional), and a
-  search on the call lists (it answers "no match").
+- **Search:** the call lists are sorted by date and time, and the standard
+  gives the searched value as a string with no form for a date. A search on
+  them answers "not matching", which 7.4.10.4.8.2 allows.
+- **Not yet:** the All Incoming Calls List (09H, optional for both sides).
 
 ## Parts
 

@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * The base's call lists (TS 102 527-3 V1.7.1 clauses 7.4.10.5.3-5): the
+ * The base's call lists (TS 102 527-3 V1.7.1 clauses 7.4.10.5.3-6): the
  * Missed Calls List (01H), the Outgoing Calls List (02H) and the Incoming
  * Accepted Calls List (03H), in RAM, shared by every link's list access
- * responder (dect_iwu.c).
+ * responder (dect_iwu.c), and the All Calls List (04H) over them.
  *
  * Each handset sees the calls of its own lines only, under its own line id
  * ("FP virtual list strategy 2", 7.4.10.2.1 note 8): an entry records, per
@@ -12,6 +12,11 @@
  * a new call to or from the party of the newest entry with the same lines
  * merges into it (merging strategy 3, 7.4.10.5.3-4): a missed one counts up
  * 'Number of calls' and is unread again.
+ *
+ * The All Calls List (04H, 7.4.10.5.6) is not stored: it is the three
+ * merged, newest first, so a call is the same entry, with the same
+ * identifier, in both lists it appears in, and a deletion in one is one in
+ * the other (7.4.10.4 "FP side consistent update of lists").
  *
  * No I/O and no allocation; the store is one static object of the owner.
  */
@@ -32,6 +37,7 @@
 #define DECT_CALLS_MISSED	0x01u
 #define DECT_CALLS_OUTGOING	0x02u
 #define DECT_CALLS_ACCEPTED	0x03u
+#define DECT_CALLS_ALL		0x04u	/* a view: the three merged */
 
 struct dect_call {
 	uint16_t id;				/* entry identifier, 1.. */
@@ -65,7 +71,10 @@ unsigned dect_calls_add(struct dect_calls *c, unsigned list, const char *number,
 			const char *name, const struct dect_time *when,
 			const uint8_t line[DECT_CALLS_TERMINALS]);
 
-/* Entries of a list the handset with this terminal id sees. */
+/*
+ * The list queries and deletions below take DECT_CALLS_ALL too; adding
+ * does not. Entries of a list the handset with this terminal id sees.
+ */
 unsigned dect_calls_count(const struct dect_calls *c, unsigned list,
 			  unsigned tid);
 /* Its idx-th (1-based, newest first), or NULL. */
@@ -78,6 +87,8 @@ unsigned dect_calls_index(const struct dect_calls *c, unsigned list,
 int dect_calls_del(struct dect_calls *c, unsigned list, unsigned id);
 /* Delete what the handset sees of a list. */
 void dect_calls_clear(struct dect_calls *c, unsigned list, unsigned tid);
+/* The stored list an entry is in (its 'Call type'), 0 if none. */
+unsigned dect_calls_type(const struct dect_calls *c, const struct dect_call *e);
 
 /*
  * For the missed call notification (7.4.1.3): the unread entries and all

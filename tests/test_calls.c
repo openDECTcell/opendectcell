@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Tests for src/libopendectcell/dect_calls.c (the call store) and the call lists
- * in dect_iwu.c: TS 102 527-3 V1.7.1 clauses 7.4.10.4 and 7.4.10.5.3-5.
+ * in dect_iwu.c: TS 102 527-3 V1.7.1 clauses 7.4.10.4 and 7.4.10.5.3-6.
  * Request bytes are built from the standard's tables; numbers are made up.
  */
 #include "check.h"
@@ -98,9 +98,9 @@ static void test_lists_and_fields(void)
 
 	session(&iwu, 0x00);
 	handle(&iwu, read_lists, sizeof(read_lists));
-	/* data packet: entry 1, list identifiers 00 01 02 03 06 07 08 */
+	/* data packet: entry 1, list identifiers 00 01 02 03 04 06 07 08 */
 	CHECK_EQ(out.msg[1][1], DECT_LIA_DATA_LAST);
-	CHECK_EQ(memcmp(&out.msg[1][8], "\x00\x01\x02\x03\x06\x07\x08", 7), 0);
+	CHECK_EQ(memcmp(&out.msg[1][8], "\x00\x01\x02\x03\x04\x06\x07\x08", 8), 0);
 
 	dect_iwu_reset_sessions(&iwu);
 	session(&iwu, 0x01);
@@ -222,6 +222,70 @@ static void test_edit_save_delete(void)
 	CHECK_EQ(dect_calls_count(&store, 2, 2), 1u);	/* terminal 2's own */
 }
 
+/*
+ * The All Calls List (7.4.10.5.6): the three lists merged, newest first,
+ * 'Call type' in front; a deletion there is one in the stored list.
+ */
+static void test_all_calls(void)
+{
+	static const struct dect_time t3 = { 26, 10, 30, 9, 25, 0, 4, 1 };
+	static const uint8_t read[] = { 0xC3, DECT_LIA_READ_ENTRIES, 0x81, 0x81,
+					0x01, 0x00, 0x01, 0x02, 0x03, 0x04,
+					0x05, 0x06 };
+	static const uint8_t clear[] = { 0xC3, DECT_LIA_DELETE_LIST, 0x81 };
+	uint8_t edit[] = { 0xC3, DECT_LIA_EDIT_ENTRY, 0x81, 0x80, 0x01 };
+	uint8_t del[] = { 0xC3, DECT_LIA_DELETE_ENTRY, 0x81, 0x80 };
+	struct dect_iwu iwu;
+	unsigned missed, outgoing, accepted;
+
+	dect_calls_init(&store);
+	missed = dect_calls_add(&store, DECT_CALLS_MISSED, "0301234", "Anna",
+				&t1, both);
+	outgoing = dect_calls_add(&store, DECT_CALLS_OUTGOING, "0555", "",
+				  &t3, both);
+	accepted = dect_calls_add(&store, DECT_CALLS_ACCEPTED, "0666", "",
+				  &t2, only1);
+	CHECK_EQ(dect_calls_count(&store, DECT_CALLS_ALL, 1), 3u);
+	CHECK_EQ(dect_calls_count(&store, DECT_CALLS_ALL, 2), 2u);
+	CHECK_EQ(dect_calls_at(&store, DECT_CALLS_ALL, 1, 1)->id, outgoing);
+	CHECK_EQ(dect_calls_at(&store, DECT_CALLS_ALL, 1, 2)->id, accepted);
+	CHECK_EQ(dect_calls_at(&store, DECT_CALLS_ALL, 1, 3)->id, missed);
+	CHECK(dect_calls_at(&store, DECT_CALLS_ALL, 1, 4) == NULL);
+	CHECK_EQ(dect_calls_index(&store, DECT_CALLS_ALL, 2, missed), 2u);
+	CHECK_EQ(dect_calls_type(&store,
+		 dect_calls_at(&store, DECT_CALLS_ALL, 1, 2)), DECT_CALLS_ACCEPTED);
+
+	dect_iwu_init(&iwu);
+	dect_iwu_set_own(&iwu, 1);
+	iwu.calls = &store;
+	session(&iwu, DECT_LIA_LIST_ALL_CALLS);
+	CHECK_EQ(out.msg[0][4], 0x83);			/* three entries */
+	handle(&iwu, read, sizeof(read));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_READ_ENTRIES_CFM);
+	CHECK_EQ(out.msg[1][3], (uint8_t)(0x80u | outgoing));
+	CHECK_EQ(out.msg[1][5], 0x01);			/* Call type */
+	CHECK_EQ(out.msg[1][6], 0x81);
+	CHECK_EQ(out.msg[1][7], 0x88);			/* outgoing, not editable */
+	CHECK_EQ(out.msg[1][8], 0x02);			/* Number */
+	CHECK_EQ(memcmp(&out.msg[1][11], "0555", 4), 0);
+
+	/* table 41 note 1: no edit; a deletion reaches the stored list */
+	edit[3] = (uint8_t)(0x80u | missed);
+	handle(&iwu, edit, sizeof(edit));
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+	store.missed_changed = 0;
+	del[3] = (uint8_t)(0x80u | missed);
+	handle(&iwu, del, sizeof(del));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_DELETE_ENTRY_CFM);
+	CHECK_EQ(dect_calls_count(&store, DECT_CALLS_MISSED, 2), 0u);
+	CHECK_EQ(store.missed_changed, 1);
+	/* delete list: this handset's calls in every list */
+	handle(&iwu, clear, sizeof(clear));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_DELETE_LIST_CFM);
+	CHECK_EQ(dect_calls_count(&store, DECT_CALLS_ALL, 1), 0u);
+	CHECK_EQ(dect_calls_count(&store, DECT_CALLS_ALL, 2), 0u);
+}
+
 static void test_not_offered_without_store(void)
 {
 	static const uint8_t start[] = { 0xC3, DECT_LIA_START_SESSION, 0x01, 0x00 };
@@ -279,6 +343,7 @@ static void test_save_and_load(void)
 int main(void)
 {
 	test_save_and_load();
+	test_all_calls();
 	test_store();
 	test_lists_and_fields();
 	test_read_and_mark();

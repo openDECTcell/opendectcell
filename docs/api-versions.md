@@ -681,3 +681,9 @@ with it.
 the call lists as text (one tab-separated line per entry under a
 `#opendectcell-calls 1` header). dect-stubd keeps them in /var/run/opendectcell/calls,
 so a restart of the service keeps the lists; a reboot empties them.
+
+**88.** dect_calls.h, 2026-10-30: DECT_CALLS_ALL, the All Calls List (04H)
+as a view over the three stored lists, taken by dect_calls_count(),
+_at(), _index(), _del() and _clear(); dect_calls_type() names the stored
+list of an entry. dect_iwu.c serves the All Calls List (TS 102 527-3
+7.4.10.5.6) where `calls` is set: the List of Supported Lists gains 04H.
