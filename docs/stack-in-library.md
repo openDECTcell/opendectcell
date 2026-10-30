@@ -484,6 +484,15 @@ for an entry (`wall()`). Left with the host: `bridge` itself (which
 client carries the calls). `notices.trace` covers both; the fourteen
 traces unchanged.
 
+**S5c.** The administrator's `deregister` and `rename` are the library's
+(`dect_base_ctl_admin()`); a rename's reply still reaches the client
+before its `hs` line (the host saves the name and announces it after
+replying, `named` in the reply). Left with the host: `bridge` (which
+client carries the calls), `register-window` (it waits for the daemon's
+start-up mails and checks the profile files) and `reload-profiles`.
+Unit tests; `deregister.trace` takes the verb; the fifteen traces
+unchanged.
+
 ## S6, the mail dispatch (started 2026-10-30)
 
 **S6a.** The chip's mails about connections are the library's: 0x0209

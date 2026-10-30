@@ -4673,7 +4673,6 @@ static void name_save(const struct stubd *s, unsigned i)
 	fclose(f);
 }
 
-static void names_spread(struct stubd *s, unsigned i);
 
 static int profile_load(const char *path, struct dect_profile *p);
 
@@ -4867,11 +4866,6 @@ static void missed_changed_tick(struct stubd *s)
 	dect_base_missed_changed_tick(&s->base);
 }
 
-static void names_notify(struct stubd *s)
-{
-	dect_base_names_notify(&s->base);
-}
-
 /* dect_base's named(): keep the name in its .name file, tell the clients. */
 static void base_named(void *ctx, unsigned i)
 {
@@ -4879,11 +4873,6 @@ static void base_named(void *ctx, unsigned i)
 
 	name_save(s, i);
 	ctl_hs(s, i, "registered");
-}
-
-static void names_spread(struct stubd *s, unsigned i)
-{
-	dect_base_names_spread(&s->base, i);
 }
 
 static void names_tick(struct stubd *s)
@@ -5667,58 +5656,26 @@ static void ab_tick(struct stubd *s, uint64_t now)
 	}
 }
 
-/*
- * A handset name from the socket: at most DECT_IWU_NAME_MAX - 1 octets of
- * well-formed UTF-8 (it goes on the air in the Internal Names List); the
- * line format has already refused control characters. Empty resets it.
- */
-static int ctl_name_ok(const char *nm)
-{
-	const unsigned char *p = (const unsigned char *)nm;
-	size_t n = strlen(nm);
-
-	if (n >= DECT_IWU_NAME_MAX)
-		return 0;
-	while (*p) {
-		unsigned k = *p < 0x80u ? 0 : (*p & 0xE0u) == 0xC0u ? 1
-			     : (*p & 0xF0u) == 0xE0u ? 2
-			     : (*p & 0xF8u) == 0xF0u ? 3 : 4;
-
-		if (k == 4 || (k == 1 && *p < 0xC2u))
-			return 0;
-		for (p++; k; k--, p++)
-			if ((*p & 0xC0u) != 0x80u)
-				return 0;
-	}
-	return 1;
-}
-
 static void ctl_command(struct stubd *s, const char *line, size_t len,
 			uint64_t now)
 {
 	struct dect_ctl_msg m;
+	struct dect_base_reply r;
 	const char *pr;
-	unsigned v, i;
+	unsigned v;
 
 	if (dect_ctl_parse(line, len, &m)) {
 		printf("ctl: a malformed line -- ignored\n");
 		ctl_reply(s, "?", "malformed", NULL, 0);
 		return;
 	}
-	if (!strcmp(m.verb, "deregister")) {
-		if (dect_ctl_get_uint(&m, "hs", 1, DECT_MM_MAX_SLOT, &v)) {
-			ctl_reply(s, m.verb, "bad-hs", NULL, 0);
-			return;
+	/* deregister and rename are the library's (dect_base.h, S5c) */
+	if (dect_base_ctl_admin(&s->base, &m, now, &r)) {
+		ctl_reply(s, m.verb, r.err, r.key, r.val);
+		if (r.named >= 0) {
+			name_save(s, (unsigned)r.named);
+			ctl_hs(s, (unsigned)r.named, "registered");
 		}
-		for (i = 0; i < s->base.n_hs; i++)
-			if (ctl_listed(s, i) && hs_slot(s, i) == v)
-				break;
-		if (i == s->base.n_hs) {
-			ctl_reply(s, m.verb, "no-handset", "hs", v);
-			return;
-		}
-		dereg_begin(s, v, now, "the control socket");
-		ctl_reply(s, m.verb, NULL, "hs", v);
 	} else if (!strcmp(m.verb, "register-window")) {
 		v = s->audio.reg_signal_s;
 		if (dect_ctl_get(&m, "seconds") &&
@@ -5745,34 +5702,6 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 		ctl_reply(s, m.verb, NULL, "seconds", v);
 	} else if (bridge_command(s, &m, now)) {
 		/* answered there */
-	} else if (!strcmp(m.verb, "rename")) {
-		const char *nm = dect_ctl_get(&m, "name");
-
-		if (dect_ctl_get_uint(&m, "hs", 1, DECT_MM_MAX_SLOT, &v)) {
-			ctl_reply(s, m.verb, "bad-hs", NULL, 0);
-			return;
-		}
-		for (i = 0; i < s->base.n_hs; i++)
-			if (ctl_listed(s, i) && hs_slot(s, i) == v)
-				break;
-		if (i == s->base.n_hs) {
-			ctl_reply(s, m.verb, "no-handset", "hs", v);
-			return;
-		}
-		if (!nm || !ctl_name_ok(nm)) {
-			ctl_reply(s, m.verb, "bad-name", "hs", v);
-			return;
-		}
-		/* as a handset's own save does (names_take()) */
-		snprintf(s->base.name[i], sizeof(s->base.name[i]), "%s", nm);
-		name_save(s, i);
-		printf("names: DECT %u is now %s%s%s (the control socket)\n", v,
-		       nm[0] ? "\"" : "", nm[0] ? nm : "back to its default name",
-		       nm[0] ? "\"" : "");
-		names_spread(s, i);
-		names_notify(s);
-		ctl_reply(s, m.verb, NULL, "hs", v);
-		ctl_hs(s, i, "registered");
 	} else if (!strcmp(m.verb, "reload-profiles")) {
 		want_profiles = 1;		/* as SIGHUP */
 		ctl_reply(s, m.verb, NULL, NULL, 0);

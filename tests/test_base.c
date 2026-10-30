@@ -1007,5 +1007,34 @@ int main(void)
 		CHECK_EQ(call_downs, 1u);
 		CHECK_EQ(b.main_link.bound, 0);
 	}
+
+	/* the administrator's verbs (S5c) */
+	{
+		struct dect_ctl_msg m;
+		struct dect_base_reply r;
+		const char *l1 = "rename hs=1 name=Hall";
+		const char *l2 = "rename hs=1 name=\xc3";
+		const char *l3 = "status";
+
+		CHECK_EQ(dect_base_name_ok("Küche"), 1);
+		CHECK_EQ(dect_base_name_ok("\xc3"), 0);	/* cut short */
+		CHECK_EQ(dect_base_name_ok(""), 1);		/* the reset */
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.loaded[0] = 1;
+		CHECK_EQ(dect_ctl_parse(l1, strlen(l1), &m), 0);
+		CHECK_EQ(dect_base_ctl_admin(&b, &m, 0, &r), 1);
+		CHECK(r.err == NULL);
+		CHECK_EQ(r.named, 0);
+		CHECK_EQ(strcmp(b.name[0], "Hall"), 0);
+		CHECK_EQ(dect_ctl_parse(l2, strlen(l2), &m), 0);
+		CHECK_EQ(dect_base_ctl_admin(&b, &m, 0, &r), 1);
+		CHECK_EQ(strcmp(r.err, "bad-name"), 0);
+		CHECK_EQ(r.named, -1);
+		CHECK_EQ(dect_ctl_parse(l3, strlen(l3), &m), 0);
+		CHECK_EQ(dect_base_ctl_admin(&b, &m, 0, &r), 0);
+	}
 	return CHECK_DONE();
 }

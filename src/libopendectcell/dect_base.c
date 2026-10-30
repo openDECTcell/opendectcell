@@ -2506,6 +2506,7 @@ int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
 	int p;
 
 	memset(r, 0, sizeof(*r));
+	r->named = -1;
 	if (!strcmp(m->verb, "call-in")) {
 		call_in(b, m, from_bridge, now, r);
 		return 1;
@@ -4971,4 +4972,81 @@ void dect_base_tick(struct dect_base *b, uint64_t now, int radio_on)
 			b->ops->call_down(b->ctx);
 	}
 	pump(b, &b->main_link);
+}
+
+int dect_base_name_ok(const char *nm)
+{
+	const unsigned char *p = (const unsigned char *)nm;
+
+	if (strlen(nm) >= DECT_IWU_NAME_MAX)
+		return 0;
+	while (*p) {
+		unsigned k = *p < 0x80u ? 0 : (*p & 0xE0u) == 0xC0u ? 1
+			     : (*p & 0xF0u) == 0xE0u ? 2
+			     : (*p & 0xF8u) == 0xF0u ? 3 : 4;
+
+		if (k == 4 || (k == 1 && *p < 0xC2u))
+			return 0;
+		for (p++; k; k--, p++)
+			if ((*p & 0xC0u) != 0x80u)
+				return 0;
+	}
+	return 1;
+}
+
+/* hs=N among the records listed: its index, or -1 with the error set. */
+static int ctl_record(const struct dect_base *b, const struct dect_ctl_msg *m,
+		      unsigned *slot, struct dect_base_reply *r)
+{
+	unsigned i;
+
+	if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, slot)) {
+		reply(r, "bad-hs", NULL, 0);
+		return -1;
+	}
+	for (i = 0; i < b->n_hs; i++)
+		if (dect_base_listed(b, i) && dect_base_slot(b, i) == *slot)
+			return (int)i;
+	reply(r, "no-handset", "hs", *slot);
+	return -1;
+}
+
+int dect_base_ctl_admin(struct dect_base *b, const struct dect_ctl_msg *m,
+			uint64_t now, struct dect_base_reply *r)
+{
+	unsigned v;
+	int i;
+
+	memset(r, 0, sizeof(*r));
+	r->named = -1;
+	if (!strcmp(m->verb, "deregister")) {
+		if (ctl_record(b, m, &v, r) < 0)
+			return 1;
+		dect_base_dereg_begin(b, v, now, "the control socket");
+		reply(r, NULL, "hs", v);
+		return 1;
+	}
+	if (!strcmp(m->verb, "rename")) {
+		const char *nm = dect_ctl_get(m, "name");
+
+		i = ctl_record(b, m, &v, r);
+		if (i < 0)
+			return 1;
+		if (!nm || !dect_base_name_ok(nm)) {
+			reply(r, "bad-name", "hs", v);
+			return 1;
+		}
+		/* as a handset's own save does */
+		snprintf(b->name[i], sizeof(b->name[i]), "%s", nm);
+		dect_base_log(b, "names: DECT %u is now %s%s%s (the control "
+			      "socket)", v, nm[0] ? "\"" : "",
+			      nm[0] ? nm : "back to its default name",
+			      nm[0] ? "\"" : "");
+		dect_base_names_spread(b, (unsigned)i);
+		dect_base_names_notify(b);
+		reply(r, NULL, "hs", v);
+		r->named = i;
+		return 1;
+	}
+	return 0;
 }

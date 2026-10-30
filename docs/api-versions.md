@@ -906,3 +906,6 @@ dect_base_segment() (S6b).
 **135.** dect_base.h, 2026-10-30: dect_base_ops' `cap_learned` and
 `call_down`; dect_base_cap_tick(), _lapc_note(), _main_dial_tick(),
 _tick() (S6c).
+
+**136.** dect_base.h, 2026-10-30: struct dect_base_reply's `named`;
+dect_base_name_ok(), _ctl_admin() (S5c).

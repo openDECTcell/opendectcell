@@ -959,6 +959,11 @@ struct dect_base_reply {
 	const char *key;
 	unsigned    val;
 	int         sent;
+	/*
+	 * rename: the record renamed, -1 none. After the reply the host keeps
+	 * the name and tells its clients, as named() does (S5c).
+	 */
+	int         named;
 };
 
 /* The records the base lists to its clients (`hs` lines). */
@@ -977,6 +982,17 @@ int dect_base_contact_name(const struct dect_base *b, const char *num,
 int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
 		       int from_bridge, uint64_t now,
 		       struct dect_base_reply *r);
+/*
+ * A handset name for the Internal Names List: at most DECT_IWU_NAME_MAX -
+ * 1 octets of well-formed UTF-8 (it goes on the air). Empty resets it.
+ */
+int dect_base_name_ok(const char *nm);
+/*
+ * The administrator's verbs (S5c): deregister hs= (as SIGUSR2) and rename
+ * hs= name= (as a handset's own save). 0 not one of these, 1 handled.
+ */
+int dect_base_ctl_admin(struct dect_base *b, const struct dect_ctl_msg *m,
+			uint64_t now, struct dect_base_reply *r);
 
 /*
  * Notifications (S4a), TS 102 527-3 §7.4.10.2, §7.4.1.2, §7.4.1.3: a CISS
