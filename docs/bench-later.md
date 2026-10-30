@@ -241,6 +241,22 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
 | U8d. Cell mode against `tools/cell-testpeer.py` on the PC (192.168.1.146:7300), `--mail-test`, two minutes | enrolled; the peer logs `HELLO` with caps `0x77` (MAIL, MEDIA, SRTP, STATS, FLOW, RESUME) and formats `[6, 1]`; heartbeats with no reconnect; the memory read answered (`MAIL_UP 0xFFF1`); `cell-link.json` has `cert_expires` about 90 days ahead; `cell.json` has `"radio":"parked"` and `"media":0` | no link: the connect path of `8aa6685` (own TCP connect, handshake reads) fails on the box: then the old binary's behaviour is the comparison; caps without MEDIA: the old dect-cell is still installed; a reconnect within the two minutes: the heartbeat path |
 | U8e. Leave cell mode (`/etc/init.d/opendectcell cell_leave`, role base), stop | the credentials gone, role `base`, service stopped, `parked` `verified` | anything else: put the box back by hand and say so |
 
+**U8 results, 2026-10-30 19:59-20:09 CET (box time).**
+- **U8a pass:** installed; no init `.apk-new`. apk started the service itself (pid 21697, 19:59:50).
+- **U8b pass:** that first start after the install found the slot on pass 3, 18 s after the daemon started. This was not the slow case: the chip answered at once, so `ed07be3`'s longer search was not exercised.
+- **U8c pass:** 5 min 40 s in base mode; no resync, no `***` line, `MATCHES`, slot table as intended. Stopped, `parked` `verified`.
+- **U8d pass:**
+  - Enrolled against the test peer at 20:06:13 and connected 5 s later.
+  - `HELLO` showed caps `0x77` and formats `[6, 1]`.
+  - The memory read was forwarded and answered (`MAIL_UP 0xfff1`).
+  - Over two minutes: no reconnect; `cert_expires` 90.0 days ahead; `"radio":"parked"`, `"media":0`.
+- **U8e FAILED: the box hung.**
+  - `cell_leave` ran, logged "cell mode left" and "SIP: 1 line(s)", and restarted the service in base mode.
+  - About 4 s later the script's `stop` ran. From then on the box answered neither SSH nor ping nor ARP; the 7520 and the router did.
+  - It had not come back after more than 6 minutes, so this was no reboot. Its log, in RAM, is lost with the power cycle.
+  - What the radio did: the chip was parked in cell mode (at start and by the peer's `0x015B 00`), and the base start reuses the running chip. Restarts find the slot in 2-19 s and the radio goes on only after that, so the hang more likely came before radio-on. That is not verified.
+  - **Open, for the bench:** reproduce a base start followed by a stop within a few seconds on the 7412, with `logread -f` on the serial-less box streamed to the PC. Suspects: a stop while the SSC slot search runs (`park_guard` holding the chip in reset under live DMA), or the cell-to-base restart without a chip reset. The maintainer reboots the box.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
