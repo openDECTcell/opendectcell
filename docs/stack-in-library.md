@@ -89,3 +89,10 @@ The harness sends the chip's contact answer `0xF601` at start with a
 made-up RFPI, `00 01 23 45 60`, the PARK the traces' handsets name.
 Authentication answers are computed once from the made-up UAK with the
 library's DSAA and written into the trace as plain data.
+
+**S1a, 2026-10-30.** `dect_base.h`: `struct dect_hs_rec`, a handset's
+record. dect-stubd's table (`struct handset`) and its working copy of the
+current handset (the loose `uak`, `sub_port_id`, `cc_*` and `sub_slot`
+fields of `struct stubd`) are now both this type, so `hs_load()` and
+`hs_stash()` are struct copies. A rename by pattern, checked by the
+compiler; the six traces unchanged.

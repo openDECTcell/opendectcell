@@ -687,3 +687,8 @@ as a view over the three stored lists, taken by dect_calls_count(),
 _at(), _index(), _del() and _clear(); dect_calls_type() names the stored
 list of an entry. dect_iwu.c serves the All Calls List (TS 102 527-3
 7.4.10.5.6) where `calls` is set: the List of Supported Lists gains 04H.
+
+**89.** dect_base.h, 2026-10-30: struct dect_hs_rec, a handset's record
+(slot, UAK, the MM identity gate, the call identities), the first piece of
+the base stack moving into the library (docs/stack-in-library.md, S1a).
+dect-stubd keeps its records as it did, now in this type.

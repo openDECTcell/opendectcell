@@ -59,6 +59,7 @@
 #include "dect_clip.h"
 #include "dect_ctl.h"
 #include "dect_cell.h"
+#include "dect_base.h"
 #include "dect_calls.h"
 #include "dect_contacts.h"
 #include "opendectcell_version.h"
@@ -335,16 +336,7 @@ static uint64_t mono_ms(void)
 struct handset {
 	const char *path;
 	int      loaded;
-	unsigned slot;
-	uint8_t  uak[DECT_MM_UAK_LEN];
-	int      uak_valid;
-	uint8_t  port_id[DECT_MM_PORTID_MAX];
-	size_t   port_id_len;
-	uint8_t  cc_port_id[DECT_CC_ID_MAX];
-	size_t   cc_port_id_len;
-	uint8_t  cc_fixed_id[DECT_CC_ID_MAX];
-	size_t   cc_fixed_id_len;
-	int      cc_id_learned;
+	struct dect_hs_rec rec;	/* what its store holds */
 	uint64_t last_seen_ms;	/* runtime only: last segment from it */
 	int      remote;	/* remote=: a roamer the cell must fetch */
 	int      absent;	/* the file does not exist: free for enrolment */
@@ -719,8 +711,6 @@ struct stubd {
 	 * call-time ciphering needs the UAK. Persisted in the subscription store
 	 * (-s) so a call after a daemon restart needs no fresh enrolment.
 	 */
-	uint8_t uak[DECT_MM_UAK_LEN];
-	int uak_valid;
 	const char *sub_path;	/* host-side subscription store (holds the UAK) */
 	/* -b: the Contact List's file (the CardDAV sync writes it) and when we
 	 * last read it; NULL = no Contact List for the handsets */
@@ -731,25 +721,13 @@ struct stubd {
 	struct handset hs[DECT_MM_MAX_SLOT];	/* every -s store, [0] = ring target */
 	unsigned n_hs;
 	unsigned cur;		/* which of them the fields here belong to */
-	/* Identities for an FP-originated SETUP, learned and persisted. */
 	/*
-	 * The subscribed handset's MM <<PORTABLE-IDENTITY>>, restored from the
-	 * store. reg_start() pushes it into the MM state machine so a location
-	 * registration from a handset we do not hold can be rejected -- the
-	 * chip admits anything locked to our RFPI, so this is the only gate.
+	 * hs[cur]'s record, the working copy: the handset this run serves
+	 * (dect_base.h). hs_stash() puts it back into the table.
+	 * reg_start() pushes its port_id into the MM state machine, so a
+	 * location registration from a handset we do not hold is rejected.
 	 */
-	uint8_t     sub_port_id[DECT_MM_PORTID_MAX];
-	size_t      sub_port_id_len;
-	uint8_t     cc_port_id[DECT_CC_ID_MAX];
-	size_t      cc_port_id_len;
-	uint8_t     cc_fixed_id[DECT_CC_ID_MAX];
-	size_t      cc_fixed_id_len;
-	/*
-	 * 1 once the pair came from a call the handset actually placed.
-	 * A derived pair is good enough to ring with; a measured one is
-	 * still better, so it is allowed to overwrite a derived one.
-	 */
-	int         cc_id_learned;
+	struct dect_hs_rec rec;
 	int         cc_id_foreign_warned;
 	int         cc_id_unarmed_warned;
 	/* rejected_identity of this connection's CC, as last reported */
@@ -806,8 +784,8 @@ struct stubd {
 	 *
 	 * The store has always carried the slot; sub_load() printed it and
 	 * threw it away, and reg_start() never set mcfg.sub_slot at all.
+	 * It is rec.slot.
 	 */
-	unsigned sub_slot;
 	/*
 	 * The call key for the chip (0x0208, stock's call layout [CR A-0126]),
 	 * sent whenever a call is ciphered, in plain byte order (docs/stub-api.md
@@ -2801,7 +2779,7 @@ struct sub_record {
 static uint8_t stubd_sub_slot(const struct stubd *s)
 {
 	unsigned v = s->audio.sub_slot && s->cur == 0 ? s->audio.sub_slot
-						      : s->sub_slot;
+						      : s->rec.slot;
 
 	return (v >= 1u && v <= DECT_MM_MAX_SLOT) ? (uint8_t)v
 						  : (uint8_t)DECT_MM_REG_SLOT;
@@ -2809,35 +2787,13 @@ static uint8_t stubd_sub_slot(const struct stubd *s)
 
 static void hs_stash(struct stubd *s, unsigned i)
 {
-	struct handset *h = &s->hs[i];
-
-	h->slot = s->sub_slot;
-	memcpy(h->uak, s->uak, sizeof(h->uak));
-	h->uak_valid = s->uak_valid;
-	memcpy(h->port_id, s->sub_port_id, sizeof(h->port_id));
-	h->port_id_len = s->sub_port_id_len;
-	memcpy(h->cc_port_id, s->cc_port_id, sizeof(h->cc_port_id));
-	h->cc_port_id_len = s->cc_port_id_len;
-	memcpy(h->cc_fixed_id, s->cc_fixed_id, sizeof(h->cc_fixed_id));
-	h->cc_fixed_id_len = s->cc_fixed_id_len;
-	h->cc_id_learned = s->cc_id_learned;
+	s->hs[i].rec = s->rec;
 }
 
 static void hs_load(struct stubd *s, unsigned i)
 {
-	const struct handset *h = &s->hs[i];
-
-	s->sub_path = h->path;
-	s->sub_slot = h->slot;
-	memcpy(s->uak, h->uak, sizeof(s->uak));
-	s->uak_valid = h->uak_valid;
-	memcpy(s->sub_port_id, h->port_id, sizeof(s->sub_port_id));
-	s->sub_port_id_len = h->port_id_len;
-	memcpy(s->cc_port_id, h->cc_port_id, sizeof(s->cc_port_id));
-	s->cc_port_id_len = h->cc_port_id_len;
-	memcpy(s->cc_fixed_id, h->cc_fixed_id, sizeof(s->cc_fixed_id));
-	s->cc_fixed_id_len = h->cc_fixed_id_len;
-	s->cc_id_learned = h->cc_id_learned;
+	s->sub_path = s->hs[i].path;
+	s->rec = s->hs[i].rec;
 	s->cc_id_foreign_warned = 0;
 	s->cc_id_unarmed_warned = 0;
 }
@@ -2862,18 +2818,18 @@ static void hs_switch(struct stubd *s, unsigned i, const char *why)
  */
 static size_t ring_target_fixed_len(const struct stubd *s)
 {
-	return s->cur == s->ring_hs || !s->n_hs ? s->cc_fixed_id_len
-		: s->hs[s->ring_hs].cc_fixed_id_len;
+	return s->cur == s->ring_hs || !s->n_hs ? s->rec.cc_fixed_id_len
+		: s->hs[s->ring_hs].rec.cc_fixed_id_len;
 }
 
 static const uint8_t *ring_target_port_id(const struct stubd *s, size_t *len)
 {
 	if (s->cur == s->ring_hs || !s->n_hs) {
-		*len = s->cc_port_id_len;
-		return s->cc_port_id;
+		*len = s->rec.cc_port_id_len;
+		return s->rec.cc_port_id;
 	}
-	*len = s->hs[s->ring_hs].cc_port_id_len;
-	return s->hs[s->ring_hs].cc_port_id;
+	*len = s->hs[s->ring_hs].rec.cc_port_id_len;
+	return s->hs[s->ring_hs].rec.cc_port_id;
 }
 
 static void sub_save(struct stubd *s)
@@ -2881,25 +2837,25 @@ static void sub_save(struct stubd *s)
 	struct sub_record r;
 	int fd;
 
-	if (!s->sub_path || !s->uak_valid)
+	if (!s->sub_path || !s->rec.uak_valid)
 		return;
 	memset(&r, 0, sizeof(r));
 	r.magic = SUB_MAGIC;
 	r.slot = stubd_sub_slot(s);
-	memcpy(r.uak, s->uak, DECT_MM_UAK_LEN);
+	memcpy(r.uak, s->rec.uak, DECT_MM_UAK_LEN);
 	r.magic = SUB_MAGIC2;
 	/* the current handset's identity; the link MM may serve another */
-	if (s->sub_port_id_len) {
-		r.port_id_len = (uint8_t)s->sub_port_id_len;
-		memcpy(r.port_id, s->sub_port_id, sizeof(r.port_id));
+	if (s->rec.port_id_len) {
+		r.port_id_len = (uint8_t)s->rec.port_id_len;
+		memcpy(r.port_id, s->rec.port_id, sizeof(r.port_id));
 	} else {
 		r.port_id_len = (uint8_t)s->reg.link.mm.port_id_len;
 		memcpy(r.port_id, s->reg.link.mm.port_id, sizeof(r.port_id));
 	}
-	r.cc_port_id_len = (uint8_t)s->cc_port_id_len;
-	memcpy(r.cc_port_id, s->cc_port_id, sizeof(r.cc_port_id));
-	r.cc_fixed_id_len = (uint8_t)s->cc_fixed_id_len;
-	memcpy(r.cc_fixed_id, s->cc_fixed_id, sizeof(r.cc_fixed_id));
+	r.cc_port_id_len = (uint8_t)s->rec.cc_port_id_len;
+	memcpy(r.cc_port_id, s->rec.cc_port_id, sizeof(r.cc_port_id));
+	r.cc_fixed_id_len = (uint8_t)s->rec.cc_fixed_id_len;
+	memcpy(r.cc_fixed_id, s->rec.cc_fixed_id, sizeof(r.cc_fixed_id));
 
 	/*
 	 * Replace the store atomically: write a temporary file beside it,
@@ -2981,8 +2937,8 @@ static int sub_load(struct stubd *s)
 	      (n == (ssize_t)sizeof(r) && r.magic == SUB_MAGIC2)) ||
 	    r.port_id_len > DECT_MM_PORTID_MAX)
 		return 0;
-	memcpy(s->uak, r.uak, DECT_MM_UAK_LEN);
-	s->uak_valid = 1;
+	memcpy(s->rec.uak, r.uak, DECT_MM_UAK_LEN);
+	s->rec.uak_valid = 1;
 	/*
 	 * The record has always carried the MM portable identity and we have
 	 * never restored it, so the identity gate in on_locate_request() could
@@ -2990,15 +2946,15 @@ static int sub_load(struct stubd *s)
 	 * its location registration accepted anyway.
 	 */
 	if (r.port_id_len && r.port_id_len <= DECT_MM_PORTID_MAX) {
-		memcpy(s->sub_port_id, r.port_id, r.port_id_len);
-		s->sub_port_id_len = r.port_id_len;
+		memcpy(s->rec.port_id, r.port_id, r.port_id_len);
+		s->rec.port_id_len = r.port_id_len;
 	}
 	if (r.magic == SUB_MAGIC2 && r.cc_port_id_len <= DECT_CC_ID_MAX &&
 	    r.cc_fixed_id_len <= DECT_CC_ID_MAX) {
-		memcpy(s->cc_port_id, r.cc_port_id, sizeof(s->cc_port_id));
-		s->cc_port_id_len = r.cc_port_id_len;
-		memcpy(s->cc_fixed_id, r.cc_fixed_id, sizeof(s->cc_fixed_id));
-		s->cc_fixed_id_len = r.cc_fixed_id_len;
+		memcpy(s->rec.cc_port_id, r.cc_port_id, sizeof(s->rec.cc_port_id));
+		s->rec.cc_port_id_len = r.cc_port_id_len;
+		memcpy(s->rec.cc_fixed_id, r.cc_fixed_id, sizeof(s->rec.cc_fixed_id));
+		s->rec.cc_fixed_id_len = r.cc_fixed_id_len;
 		/*
 		 * Older records carry no MM identity -- sub_save() stores
 		 * reg.mm.port_id, which is empty unless the handset registered
@@ -3009,10 +2965,10 @@ static int sub_load(struct stubd *s)
 		 * <<PORTABLE-IDENTITY>>. Use it so the gate has something to
 		 * compare against.
 		 */
-		if (!s->sub_port_id_len && r.cc_port_id_len &&
+		if (!s->rec.port_id_len && r.cc_port_id_len &&
 		    r.cc_port_id_len <= DECT_MM_PORTID_MAX) {
-			memcpy(s->sub_port_id, r.cc_port_id, r.cc_port_id_len);
-			s->sub_port_id_len = r.cc_port_id_len;
+			memcpy(s->rec.port_id, r.cc_port_id, r.cc_port_id_len);
+			s->rec.port_id_len = r.cc_port_id_len;
 		}
 		/*
 		 * Call identities that are not the subscribed handset's were
@@ -3022,22 +2978,22 @@ static int sub_load(struct stubd *s)
 		 * the identity it registered with, so the two must agree.
 		 * Drop them; the handset's next call teaches the right pair.
 		 */
-		if (s->cc_port_id_len &&
-		    (s->cc_port_id_len != s->sub_port_id_len ||
-		     memcmp(s->cc_port_id, s->sub_port_id,
-			    s->sub_port_id_len))) {
-			memset(s->cc_port_id, 0, sizeof(s->cc_port_id));
-			memset(s->cc_fixed_id, 0, sizeof(s->cc_fixed_id));
-			s->cc_port_id_len = 0;
-			s->cc_fixed_id_len = 0;
+		if (s->rec.cc_port_id_len &&
+		    (s->rec.cc_port_id_len != s->rec.port_id_len ||
+		     memcmp(s->rec.cc_port_id, s->rec.port_id,
+			    s->rec.port_id_len))) {
+			memset(s->rec.cc_port_id, 0, sizeof(s->rec.cc_port_id));
+			memset(s->rec.cc_fixed_id, 0, sizeof(s->rec.cc_fixed_id));
+			s->rec.cc_port_id_len = 0;
+			s->rec.cc_fixed_id_len = 0;
 			printf("sub: *** stored call identities belong to "
 			       "ANOTHER handset *** -- dropped; they are "
 			       "relearned from this handset's next call\n");
 		}
 	}
 	printf("sub: identity gate %s (%zu bytes)\n",
-	       s->sub_port_id_len ? "armed" : "DISABLED -- no stored identity",
-	       s->sub_port_id_len);
+	       s->rec.port_id_len ? "armed" : "DISABLED -- no stored identity",
+	       s->rec.port_id_len);
 	/*
 	 * Honour the slot the record was saved with, unless -a subslot=N said
 	 * otherwise. Without this a handset enrolled in slot 3 came back as
@@ -3046,10 +3002,10 @@ static int sub_load(struct stubd *s)
 	 */
 	if ((!s->audio.sub_slot || s->cur != 0) &&
 	    r.slot >= 1u && r.slot <= DECT_MM_MAX_SLOT)
-		s->sub_slot = r.slot;	/* subslot= is the ring target's only */
+		s->rec.slot = r.slot;	/* subslot= is the ring target's only */
 	printf("sub: restored subscription for slot %u from %s%s\n",
 	       r.slot, s->sub_path,
-	       s->cc_fixed_id_len ? " (with call identities)" : "");
+	       s->rec.cc_fixed_id_len ? " (with call identities)" : "");
 	return 1;
 }
 
@@ -3088,8 +3044,8 @@ static void fetch_keep(struct stubd *s)
 	h = &s->hs[s->fetch_idx];
 	h->fetched = 1;		/* the next link holds it from hs[] */
 	if (s->reg.active)
-		(void)dect_mm_hold(&s->reg.link.mm, h->port_id,
-				   h->port_id_len, (uint8_t)h->slot, NULL,
+		(void)dect_mm_hold(&s->reg.link.mm, h->rec.port_id,
+				   h->rec.port_id_len, (uint8_t)h->rec.slot, NULL,
 				   s->fetch_idx);
 }
 
@@ -3142,8 +3098,8 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 		s->fetch_req_ms = now;
 		s->fetch_idx = -1;
 		for (i = 0; i < s->n_hs; i++)
-			if (s->hs[i].remote && s->hs[i].port_id_len == len &&
-			    !memcmp(s->hs[i].port_id, id, len))
+			if (s->hs[i].remote && s->hs[i].rec.port_id_len == len &&
+			    !memcmp(s->hs[i].rec.port_id, id, len))
 				s->fetch_idx = (int)i;
 		/*
 		 * A record fetched earlier this run is here already: a
@@ -3192,8 +3148,8 @@ static int hs_by_ipui(const struct stubd *s, const uint8_t *id, size_t len)
 	unsigned i;
 
 	for (i = 0; i < s->n_hs; i++)
-		if (s->hs[i].port_id_len == len && len &&
-		    !memcmp(s->hs[i].port_id, id, len))
+		if (s->hs[i].rec.port_id_len == len && len &&
+		    !memcmp(s->hs[i].rec.port_id, id, len))
 			return (int)i;
 	return -1;
 }
@@ -3347,12 +3303,12 @@ static int uak_lookup(void *ctx, const uint8_t *id, size_t len,
 
 	if (i < 0)
 		return -1;
-	if ((unsigned)i == s->cur && s->uak_valid) {
-		memcpy(uak, s->uak, DECT_MM_UAK_LEN);
+	if ((unsigned)i == s->cur && s->rec.uak_valid) {
+		memcpy(uak, s->rec.uak, DECT_MM_UAK_LEN);
 		return 0;
 	}
-	if ((unsigned)i != s->cur && s->hs[i].uak_valid) {
-		memcpy(uak, s->hs[i].uak, DECT_MM_UAK_LEN);
+	if ((unsigned)i != s->cur && s->hs[i].rec.uak_valid) {
+		memcpy(uak, s->hs[i].rec.uak, DECT_MM_UAK_LEN);
 		return 0;
 	}
 	return -1;
@@ -3649,8 +3605,8 @@ static void holdback_tick(struct stubd *s, uint64_t now)
 		return;
 	s->holdback_done = 1;
 	for (i = 1; i < s->n_hs; i++) {
-		const uint8_t *uak = i == s->cur ? s->uak : s->hs[i].uak;
-		int valid = i == s->cur ? s->uak_valid : s->hs[i].uak_valid;
+		const uint8_t *uak = i == s->cur ? s->rec.uak : s->hs[i].rec.uak;
+		int valid = i == s->cur ? s->rec.uak_valid : s->hs[i].rec.uak_valid;
 
 		if (!s->hs[i].loaded || !valid)
 			continue;
@@ -3668,10 +3624,10 @@ static int any_uak(const struct stubd *s)
 {
 	unsigned i;
 
-	if (s->uak_valid)
+	if (s->rec.uak_valid)
 		return 1;
 	for (i = 0; i < s->n_hs; i++)
-		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid)
+		if (i != s->cur && s->hs[i].loaded && s->hs[i].rec.uak_valid)
 			return 1;
 	return 0;
 }
@@ -3732,13 +3688,13 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep,
 static void send_subscription(struct stubd *s)
 {
 	uint8_t slot = stubd_sub_slot(s);
-	unsigned keep = s->uak_valid && !held_back(s, s->cur) ? 1u << slot : 0u;
+	unsigned keep = s->rec.uak_valid && !held_back(s, s->cur) ? 1u << slot : 0u;
 	unsigned i;
 
 	for (i = 0; i < s->n_hs; i++) {
 		unsigned hsl = hs_slot(s, i);
 
-		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid &&
+		if (i != s->cur && s->hs[i].loaded && s->hs[i].rec.uak_valid &&
 		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT && !held_back(s, i))
 			keep |= 1u << hsl;
 	}
@@ -3746,16 +3702,16 @@ static void send_subscription(struct stubd *s)
 	for (i = 0; i < s->n_hs; i++) {
 		unsigned hsl = hs_slot(s, i);
 
-		if (i != s->cur && s->hs[i].loaded && s->hs[i].uak_valid &&
+		if (i != s->cur && s->hs[i].loaded && s->hs[i].rec.uak_valid &&
 		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT && hsl != slot &&
 		    !held_back(s, i)) {
-			install_subscription(s, (uint8_t)hsl, s->hs[i].uak);
+			install_subscription(s, (uint8_t)hsl, s->hs[i].rec.uak);
 			printf("sub: %s installed in chip slot %u\n",
 			       s->hs[i].path, hsl);
 		}
 	}
-	if (s->uak_valid && !held_back(s, s->cur)) {
-		install_subscription(s, slot, s->uak);
+	if (s->rec.uak_valid && !held_back(s, s->cur)) {
+		install_subscription(s, slot, s->rec.uak);
 		uak_verify_send(s, slot);	/* [CR A-0085] the only check */
 	}
 	send_subscription_tail(s);
@@ -3817,8 +3773,8 @@ static uint8_t live_slot_mask(const struct stubd *s)
 
 	for (i = 0; i < s->n_hs; i++) {
 		unsigned sl = hs_slot(s, i);
-		int valid = i == s->cur ? s->uak_valid
-					: s->hs[i].loaded && s->hs[i].uak_valid;
+		int valid = i == s->cur ? s->rec.uak_valid
+					: s->hs[i].loaded && s->hs[i].rec.uak_valid;
 
 		if (valid && sl >= 1u && sl <= DECT_MM_MAX_SLOT &&
 		    !held_back(s, i))
@@ -4030,7 +3986,7 @@ static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
 		       s->uak_check_slot, (unsigned)m->param_len);
 		return;
 	}
-	if (!memcmp(&m->param[7], s->uak, DECT_MM_UAK_LEN)) {
+	if (!memcmp(&m->param[7], s->rec.uak, DECT_MM_UAK_LEN)) {
 		printf("sub: UAK read-back slot %u at 0x%05X: MATCHES "
 		       "(16 bytes, flag %02x)\n", s->uak_check_slot, addr,
 		       m->param_len > 7u + DECT_MM_UAK_LEN
@@ -4509,7 +4465,7 @@ static void ring_target_tpui(const struct stubd *s, uint8_t tpui[3])
 	else
 		cfg.sub_slot = (uint8_t)(s->audio.sub_slot && !s->ring_hs
 					 ? s->audio.sub_slot
-					 : s->hs[s->ring_hs].slot);
+					 : s->hs[s->ring_hs].rec.slot);
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tpui(&mm, tpui);
 }
@@ -4736,8 +4692,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 * every 17 s and holds it for about 13 s. Retry while the paging window
 	 * is still open rather than lose the ring on the first refusal.
 	 */
-	if (!dect_cc_setup_id(&s->reg.link.cc, s->cc_port_id, s->cc_port_id_len,
-			      s->cc_fixed_id, s->cc_fixed_id_len,
+	if (!dect_cc_setup_id(&s->reg.link.cc, s->rec.cc_port_id, s->rec.cc_port_id_len,
+			      s->rec.cc_fixed_id, s->rec.cc_fixed_id_len,
 			      ring_svc(s, s->ring_hs, main_ring_narrow(s)),
 			      &ring_clip)) {
 		ring_callinfo(s, 0);
@@ -5382,7 +5338,7 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		{
 			char ipei[DECT_IPEI_TEXT_LEN];
 
-			if (!dect_ipei_text(s->hs[i].port_id, s->hs[i].port_id_len,
+			if (!dect_ipei_text(s->hs[i].rec.port_id, s->hs[i].rec.port_id_len,
 					    ipei, sizeof(ipei))) {
 				fprintf(f, ",\"ipei\":");
 				json_str(f, ipei);
@@ -5480,7 +5436,7 @@ static uint8_t reg_policy(const struct stubd *s)
 		return DECT_MM_REG_CLOSED;
 	if (hs_free(s) >= 0)
 		return DECT_MM_REG_OPEN;
-	return s->sub_port_id_len ? DECT_MM_REG_SAME : DECT_MM_REG_OPEN;
+	return s->rec.port_id_len ? DECT_MM_REG_SAME : DECT_MM_REG_OPEN;
 }
 
 /*
@@ -5603,7 +5559,7 @@ static void main_cc_setup(struct stubd *s)
 				continue;
 			hs_name(s, i, hsname, sizeof(hsname));
 			dect_iwu_add_handset(&s->reg.link.cc.iwu,
-					     (uint8_t)s->hs[i].slot, hsname);
+					     (uint8_t)s->hs[i].rec.slot, hsname);
 		}
 		dect_iwu_set_own(&s->reg.link.cc.iwu, tid);
 		iwu_lines(s, &s->reg.link.cc.iwu, tid);
@@ -5722,9 +5678,9 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	 * location registration from a handset we do not hold is rejected.
 	 * Must come AFTER dect_mm_init(), which clears it.
 	 */
-	if (s->sub_port_id_len) {
-		memcpy(s->reg.link.mm.port_id, s->sub_port_id, s->sub_port_id_len);
-		s->reg.link.mm.port_id_len = s->sub_port_id_len;
+	if (s->rec.port_id_len) {
+		memcpy(s->reg.link.mm.port_id, s->rec.port_id, s->rec.port_id_len);
+		s->reg.link.mm.port_id_len = s->rec.port_id_len;
 	}
 	/*
 	 * ...and every other handset we hold, so its location registration
@@ -5734,17 +5690,17 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	for (i = 0; i < s->n_hs; i++) {
 		const struct handset *h = &s->hs[i];
 
-		if (i == s->cur || !h->loaded || !h->port_id_len ||
+		if (i == s->cur || !h->loaded || !h->rec.port_id_len ||
 		    (h->remote && !h->fetched))
 			continue;
-		if (dect_mm_hold(&s->reg.link.mm, h->port_id, h->port_id_len,
-				 (uint8_t)h->slot, NULL, (int)i) < 0)
+		if (dect_mm_hold(&s->reg.link.mm, h->rec.port_id, h->rec.port_id_len,
+				 (uint8_t)h->rec.slot, NULL, (int)i) < 0)
 			printf("sub: could not hold %s on this link\n",
 			       h->path);
 	}
-	if (s->sub_port_id_len)
-		(void)dect_mm_hold(&s->reg.link.mm, s->sub_port_id,
-				   s->sub_port_id_len, stubd_sub_slot(s), NULL,
+	if (s->rec.port_id_len)
+		(void)dect_mm_hold(&s->reg.link.mm, s->rec.port_id,
+				   s->rec.port_id_len, stubd_sub_slot(s), NULL,
 				   (int)s->cur);
 	main_cc_setup(s);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
@@ -5757,7 +5713,7 @@ static unsigned hs_slot(const struct stubd *s, unsigned i)
 		return stubd_sub_slot(s);
 	if (i == 0 && s->audio.sub_slot)	/* subslot= is the target's */
 		return s->audio.sub_slot;
-	return s->hs[i].slot;
+	return s->hs[i].rec.slot;
 }
 
 /* The handset's name for the lists and the internal caller: its own, or
@@ -6563,10 +6519,10 @@ static void uak_for_link(struct stubd *s, struct dect_link *l, int main)
 	if (i < 0 || (unsigned)i >= s->n_hs)
 		return;
 	if ((unsigned)i == s->cur) {
-		if (s->uak_valid)
-			dect_mm_set_uak(&l->mm, s->uak);
-	} else if (s->hs[i].uak_valid) {
-		dect_mm_set_uak(&l->mm, s->hs[i].uak);
+		if (s->rec.uak_valid)
+			dect_mm_set_uak(&l->mm, s->rec.uak);
+	} else if (s->hs[i].rec.uak_valid) {
+		dect_mm_set_uak(&l->mm, s->hs[i].rec.uak);
 	}
 }
 
@@ -6678,11 +6634,11 @@ static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
 				 size_t *len)
 {
 	if (i == s->cur) {
-		*len = s->sub_port_id_len;
-		return s->sub_port_id;
+		*len = s->rec.port_id_len;
+		return s->rec.port_id;
 	}
-	*len = s->hs[i].port_id_len;
-	return s->hs[i].port_id;
+	*len = s->hs[i].rec.port_id_len;
+	return s->hs[i].rec.port_id;
 }
 
 static struct side_link *side_find(struct stubd *s, uint8_t handle)
@@ -6991,11 +6947,11 @@ static void hs_cc_ids(const struct stubd *s, unsigned i, const uint8_t **port,
 		      size_t *plen, const uint8_t **fixed, size_t *flen)
 {
 	if (i == s->cur) {
-		*port = s->cc_port_id; *plen = s->cc_port_id_len;
-		*fixed = s->cc_fixed_id; *flen = s->cc_fixed_id_len;
+		*port = s->rec.cc_port_id; *plen = s->rec.cc_port_id_len;
+		*fixed = s->rec.cc_fixed_id; *flen = s->rec.cc_fixed_id_len;
 	} else {
-		*port = s->hs[i].cc_port_id; *plen = s->hs[i].cc_port_id_len;
-		*fixed = s->hs[i].cc_fixed_id; *flen = s->hs[i].cc_fixed_id_len;
+		*port = s->hs[i].rec.cc_port_id; *plen = s->hs[i].rec.cc_port_id_len;
+		*fixed = s->hs[i].rec.cc_fixed_id; *flen = s->hs[i].rec.cc_fixed_id_len;
 	}
 }
 
@@ -7291,7 +7247,7 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	snprintf(to, sizeof(to), "%s.deregistered", from);
 	(void)rename(from, to);
 	s->hs[i].loaded = 0;
-	s->hs[i].uak_valid = 0;
+	s->hs[i].rec.uak_valid = 0;
 	s->hs[i].absent = 1;		/* free for a new enrolment */
 	s->hs[i].name[0] = '\0';
 	s->hs[i].cap_known = 0;
@@ -7299,10 +7255,10 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	s->hs[i].mwi_known = s->hs[i].mwi_due = 0;
 	s->tu.want &= ~(1u << i);
 	if ((unsigned)i == s->cur) {
-		s->uak_valid = 0;
-		s->sub_port_id_len = 0;
-		s->cc_port_id_len = 0;
-		s->cc_fixed_id_len = 0;
+		s->rec.uak_valid = 0;
+		s->rec.port_id_len = 0;
+		s->rec.cc_port_id_len = 0;
+		s->rec.cc_fixed_id_len = 0;
 	}
 	if (s->reg.active)
 		(void)dect_iwu_remove_handset(&s->reg.link.cc.iwu,
@@ -9879,8 +9835,8 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 	     cc->state == DECT_CC_ST_ACTIVE)) {
 		const uint8_t *uak = a < 0 || (unsigned)a >= s->n_hs ? NULL :
 			(unsigned)a == s->cur
-			? (s->uak_valid ? s->uak : NULL)
-			: (s->hs[a].uak_valid ? s->hs[a].uak : NULL);
+			? (s->rec.uak_valid ? s->rec.uak : NULL)
+			: (s->hs[a].rec.uak_valid ? s->hs[a].rec.uak : NULL);
 		uint8_t crand[8], crs[16];
 
 		if (!uak) {
@@ -10026,12 +9982,12 @@ static void start_call_cipher(struct stubd *s, uint64_t now)
 	if (s->no_cipher) {
 		s->reg.cipher_started = 1;
 		printf("call: cipher: suppressed (-C), call stays in the clear\n");
-	} else if (s->uak_valid) {
+	} else if (s->rec.uak_valid) {
 		uint8_t crand[8], crs[16];
 
 		gen_rand(s, crand, sizeof(crand));
 		gen_rand(s, crs, sizeof(crs));
-		dect_mm_start_cipher(&s->reg.link.mm, s->uak, crand, crs);
+		dect_mm_start_cipher(&s->reg.link.mm, s->rec.uak, crand, crs);
 		s->reg.cipher_started = 1;
 		printf("call: cipher: authenticating handset\n");
 		drain_nwk(s, now);
@@ -10258,10 +10214,10 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * first pair we see and persist it, so calling the handset later needs
 	 * no guesswork about identity types, bit lengths or padding.
 	 */
-	if (ind.cc_message && !s->cc_id_learned &&
+	if (ind.cc_message && !s->rec.cc_id_learned &&
 	    s->reg.link.cc.peer_fixed_id_len &&
-	    !dect_cc_peer_is(&s->reg.link.cc, s->sub_port_id,
-			     s->sub_port_id_len)) {
+	    !dect_cc_peer_is(&s->reg.link.cc, s->rec.port_id,
+			     s->rec.port_id_len)) {
 		/*
 		 * A CC transaction from a handset we are not subscribed to.
 		 * Learning from it would persist ANOTHER handset's identities
@@ -10282,8 +10238,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "not saving\n");
 			fflush(stdout);
 		}
-	} else if (ind.cc_message && !s->cc_id_learned &&
-		   s->reg.link.cc.peer_fixed_id_len && !s->sub_port_id_len) {
+	} else if (ind.cc_message && !s->rec.cc_id_learned &&
+		   s->reg.link.cc.peer_fixed_id_len && !s->rec.port_id_len) {
 		/*
 		 * No handset registered yet, so nothing to check the caller
 		 * against, and dect_cc_peer_is() says yes to anyone. On
@@ -10300,20 +10256,20 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "against\n");
 			fflush(stdout);
 		}
-	} else if (ind.cc_message && !s->cc_id_learned &&
+	} else if (ind.cc_message && !s->rec.cc_id_learned &&
 		   s->reg.link.cc.peer_fixed_id_len &&
 		   /* not from whoever named its IPUI (audit A3) */
 		   s->reg.link.mm.authenticated) {
-		memcpy(s->cc_port_id, s->reg.link.cc.peer_port_id,
-		       sizeof(s->cc_port_id));
-		s->cc_port_id_len = s->reg.link.cc.peer_port_id_len;
-		memcpy(s->cc_fixed_id, s->reg.link.cc.peer_fixed_id,
-		       sizeof(s->cc_fixed_id));
-		s->cc_fixed_id_len = s->reg.link.cc.peer_fixed_id_len;
-		s->cc_id_learned = 1;
+		memcpy(s->rec.cc_port_id, s->reg.link.cc.peer_port_id,
+		       sizeof(s->rec.cc_port_id));
+		s->rec.cc_port_id_len = s->reg.link.cc.peer_port_id_len;
+		memcpy(s->rec.cc_fixed_id, s->reg.link.cc.peer_fixed_id,
+		       sizeof(s->rec.cc_fixed_id));
+		s->rec.cc_fixed_id_len = s->reg.link.cc.peer_fixed_id_len;
+		s->rec.cc_id_learned = 1;
 		printf("call: learned the identities for calling the handset "
 		       "(%zu + %zu bytes), saving\n",
-		       s->cc_port_id_len, s->cc_fixed_id_len);
+		       s->rec.cc_port_id_len, s->rec.cc_fixed_id_len);
 		sub_save(s);
 	}
 
@@ -10332,23 +10288,23 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * does not need it either. A handset that never places a call, or a
 	 * freshly registered one, could not be rung at all.
 	 */
-	if (!s->cc_fixed_id_len && s->have_rfpi && s->sub_port_id_len &&
-	    s->sub_port_id_len <= sizeof(s->cc_port_id)) {
+	if (!s->rec.cc_fixed_id_len && s->have_rfpi && s->rec.port_id_len &&
+	    s->rec.port_id_len <= sizeof(s->rec.cc_port_id)) {
 		uint8_t fid[DECT_CC_ID_MAX];
 		size_t n = dect_mm_fixed_identity(&s->reg.link.mm, fid,
 						  sizeof(fid));
 
 		if (n) {
 			/* this handset's identity, not the link MM's */
-			memcpy(s->cc_port_id, s->sub_port_id,
-			       s->sub_port_id_len);
-			s->cc_port_id_len = s->sub_port_id_len;
-			memcpy(s->cc_fixed_id, fid, n);
-			s->cc_fixed_id_len = n;
+			memcpy(s->rec.cc_port_id, s->rec.port_id,
+			       s->rec.port_id_len);
+			s->rec.cc_port_id_len = s->rec.port_id_len;
+			memcpy(s->rec.cc_fixed_id, fid, n);
+			s->rec.cc_fixed_id_len = n;
 			printf("call: derived the identities for calling the "
 			       "handset (%zu + %zu bytes) from the "
 			       "subscription, saving\n",
-			       s->cc_port_id_len, s->cc_fixed_id_len);
+			       s->rec.cc_port_id_len, s->rec.cc_fixed_id_len);
 			sub_save(s);
 		}
 	}
@@ -10359,8 +10315,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 */
 	if (!s->reg.persisted && s->reg.link.mm.subscribed && s->reg.link.mm.stats.located) {
 		/* Keep the UAK for the later call's ciphering, and across restarts. */
-		memcpy(s->uak, s->reg.link.mm.uak, DECT_MM_UAK_LEN);
-		s->uak_valid = 1;
+		memcpy(s->rec.uak, s->reg.link.mm.uak, DECT_MM_UAK_LEN);
+		s->rec.uak_valid = 1;
 		/*
 		 * Arm the identity gate for every later link of this run, the
 		 * way sub_load() arms it for a stored handset. Since 7e7e5f4 a
@@ -10370,13 +10326,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * losing its registration.
 		 */
 		if (s->reg.link.mm.port_id_len &&
-		    s->reg.link.mm.port_id_len <= sizeof(s->sub_port_id)) {
-			memcpy(s->sub_port_id, s->reg.link.mm.port_id,
+		    s->reg.link.mm.port_id_len <= sizeof(s->rec.port_id)) {
+			memcpy(s->rec.port_id, s->reg.link.mm.port_id,
 			       s->reg.link.mm.port_id_len);
-			s->sub_port_id_len = s->reg.link.mm.port_id_len;
+			s->rec.port_id_len = s->reg.link.mm.port_id_len;
 			printf("sub: identity gate armed for the newly "
 			       "registered handset (%zu bytes)\n",
-			       s->sub_port_id_len);
+			       s->rec.port_id_len);
 		}
 		send_subscription(s);
 		sub_save(s);
@@ -10583,7 +10539,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	if (s->audio.auth_first && !s->no_cipher && !s->reg.cipher_started &&
 	    !s->reg.auth_refused && s->reg.active &&
 	    dect_cc_busy(&s->reg.link.cc)) {
-		if (s->uak_valid) {
+		if (s->rec.uak_valid) {
 			printf("call: authenticating the handset before the "
 			       "call goes anywhere\n");
 			start_call_cipher(s, now);
@@ -10607,7 +10563,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * allowed" (bench, 2026-10-28). The call stays in PROCEEDING (no
 	 * CONNECT on a list call), so this does not wait for the connect.
 	 */
-	if (!s->reg.cipher_started && (s->uak_valid || s->no_cipher) &&
+	if (!s->reg.cipher_started && (s->rec.uak_valid || s->no_cipher) &&
 	    !s->reg.link.cc.incoming && dect_cc_busy(&s->reg.link.cc) &&
 	    (s->reg.link.cc.peer_basic_service >> 4) == 0x2u /* LiA */) {
 		printf("call: list-access call -- ciphering it "
@@ -13090,11 +13046,11 @@ int main(int argc, char **argv)
 				stat(s.hs[i].path, &sst) != 0 && errno == ENOENT;
 			for (j = 0; s.hs[i].loaded && j < i; j++) {
 				if (!s.hs[j].loaded ||
-				    s.hs[j].slot != s.hs[i].slot)
+				    s.hs[j].rec.slot != s.hs[i].rec.slot)
 					continue;
 				printf("sub: %s claims slot %u, which %s "
 				       "holds -- not loaded\n", s.hs[i].path,
-				       s.hs[i].slot, s.hs[j].path);
+				       s.hs[i].rec.slot, s.hs[j].path);
 				s.hs[i].loaded = 0;
 			}
 		}
@@ -13127,7 +13083,7 @@ int main(int argc, char **argv)
 
 			for (i = 1; i < s.n_hs; i++)
 				if (s.hs[i].loaded)
-					used |= 1u << s.hs[i].slot;
+					used |= 1u << s.hs[i].rec.slot;
 			for (slot = 1; slot <= DECT_MM_MAX_SLOT &&
 			     (used & (1u << slot)); slot++)
 				;
@@ -13136,7 +13092,7 @@ int main(int argc, char **argv)
 					"by the other stores\n");
 				return 2;
 			}
-			s.hs[0].slot = slot;
+			s.hs[0].rec.slot = slot;
 			printf("sub: %s is new; it gets chip slot %u\n",
 			       s.hs[0].path, slot);
 		}
@@ -13154,7 +13110,7 @@ int main(int argc, char **argv)
 				continue;
 			for (k = 0; k < s.n_hs; k++) {
 				unsigned ks = k == 0 && s.audio.sub_slot ?
-					      s.audio.sub_slot : s.hs[k].slot;
+					      s.audio.sub_slot : s.hs[k].rec.slot;
 
 				if (k != i && (s.hs[k].loaded ||
 				    (k < i && !s.hs[k].remote)))
@@ -13169,14 +13125,14 @@ int main(int argc, char **argv)
 				s.hs[i].remote = 1;	/* never a free store */
 				continue;
 			}
-			s.hs[i].slot = slot;
+			s.hs[i].rec.slot = slot;
 			printf("sub: %s is free for an enrolment, chip slot %u\n",
 			       s.hs[i].path, slot);
 		}
 		if (!s.hs[0].loaded && s.audio.sub_slot) {
 			for (i = 1; i < s.n_hs; i++)
 				if (s.hs[i].loaded &&
-				    s.hs[i].slot == s.audio.sub_slot)
+				    s.hs[i].rec.slot == s.audio.sub_slot)
 					printf("sub: *** subslot=%u is %s's slot "
 					       "-- enrolling here overwrites it ***\n",
 					       s.audio.sub_slot, s.hs[i].path);
