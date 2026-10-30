@@ -29,6 +29,7 @@ Where to start depends on what you want:
 | [bridge-interface.md](bridge-interface.md) | The control and audio sockets between `dect-stubd` and the SIP side (baresip) |
 | [lines-and-calls.md](lines-and-calls.md) | Lines, call ids, ringing several handsets, call waiting (partly built) |
 | [two-calls.md](two-calls.md) | Two calls at the same time on one chip |
+| [phonebook.md](phonebook.md) | The handsets' phonebook from a CardDAV address book, both ways |
 | [diagnostics.md](diagnostics.md) | What the DECT Monitor shows, and where each value comes from |
 | [capacity.md](capacity.md) | How many handsets and calls one box carries, and how to go beyond |
 | [multicell-experiments.md](multicell-experiments.md) | Experiments towards several boxes as one DECT system |

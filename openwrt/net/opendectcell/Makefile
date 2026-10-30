@@ -77,6 +77,21 @@ define Package/opendectcell-cell/description
   /etc/init.d/opendectcell enroll '<enrollment string>'.
 endef
 
+define Package/opendectcell-carddav
+  $(call Package/opendectcell/Default)
+  TITLE:=opendectcell phonebook from a CardDAV address book
+  DEPENDS:=+opendectcell +ucode +ucode-mod-fs +ucode-mod-uci +ucode-mod-uloop \
+	+ucode-mod-uclient +ca-bundle
+  PKGARCH:=all
+endef
+
+define Package/opendectcell-carddav/description
+  The handsets' phonebook (CAT-iq Contact List) from a CardDAV address
+  book over HTTPS, both ways: what a handset adds, edits or deletes is
+  written back to the server. Configured in /etc/config/opendectcell
+  (config carddav) or in LuCI, Network > DECT.
+endef
+
 define KernelPackage/opendectcell-ipq40xx
   SUBMENU:=Voice over IP
   TITLE:=FRITZ!Box 7520/7530 DECT chip control and PCM/TDM
@@ -176,7 +191,13 @@ define Package/opendectcell-cell/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/build/dect-cell $(1)/usr/sbin/
 endef
 
+define Package/opendectcell-carddav/install
+	$(INSTALL_DIR) $(1)/usr/share/opendectcell
+	$(INSTALL_BIN) ./files/carddav.uc $(1)/usr/share/opendectcell/carddav.uc
+endef
+
 $(eval $(call BuildPackage,opendectcell-baresip))
 $(eval $(call BuildPackage,opendectcell-cell))
+$(eval $(call BuildPackage,opendectcell-carddav))
 $(eval $(call KernelPackage,opendectcell-ipq40xx))
 $(eval $(call KernelPackage,opendectcell-lantiq))

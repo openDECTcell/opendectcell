@@ -653,3 +653,16 @@ parallel mode:** a {CC-INFO} with a call-control code and the digits after
 dect_cell_tlv_get(), dect_cell_tlv_next(), the fixed-width getters) and
 the mail tunnel's layouts (struct dect_cell_mail, dect_cell_mail_up(),
 dect_cell_mail_down(), dect_cell_mail_parse()). Purely additive.
+
+**85.** dect_contacts.h, the Contact List store, 2026-10-30 (struct
+dect_contacts and dect_contacts_init(), _at(), _index(), _fold_cmp(),
+_put(), _del(), _clear(), _load(), _take_change(), _unlock(),
+_find_number(); the contacts file and the change journal it reads and
+writes). dect_iwu.h: struct dect_iwu gains `contacts` (NULL = no Contact
+List, the behaviour before), `sessions[].locked` and `save_entry` widen to
+uint16_t (Contact List entry identifiers go up to 16383),
+DECT_IWU_OUT_MAX grows from 12 to 16 and DECT_IWU_SAVE_MAX from 128 to
+256. **Behaviour change on every list:** a 'read entries' or 'search
+entries' range too large for one reply is now a partial delivery (TS 102
+527-3 §7.4.10.4.3.2, bit 8 of the counter) instead of a negative
+acknowledgement 'invalid range'.

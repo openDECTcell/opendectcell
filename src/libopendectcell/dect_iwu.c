@@ -8,9 +8,11 @@
 
 #include "dect_iwu.h"
 
-/* The lists this base serves, ascending (7.4.10.5.1.1 wants them ordered). */
+/* The lists this base serves, ascending (7.4.10.5.1.1 wants them ordered);
+ * the Contact List only with a store attached. */
 static const uint8_t supported_lists[] = {
 	DECT_LIA_LIST_SUPPORTED,
+	DECT_LIA_LIST_CONTACTS,
 	DECT_LIA_LIST_INTERNAL_NAMES,
 	DECT_LIA_LIST_SYSTEM_SETTINGS,
 	DECT_LIA_LIST_LINE_SETTINGS,
@@ -25,6 +27,15 @@ static const uint8_t fields_line[] = { 0x01, 0x02, 0x03, 0x08,
 /* 7.4.11.3: the fields table 9 makes mandatory for the FP */
 static const uint8_t fields_system[] = { 0x01, 0x02, 0x03, 0x09, 0x0A,
 					 0x0D };
+/*
+ * 7.4.10.5.7: Name, First name, three 'Contact number' instances (the
+ * repeat is how a field's instance count is told, 7.4.10.4.2.2) and
+ * 'Line id', all editable. 'Associated melody' is optional and not
+ * offered: we ring with no per-contact melody.
+ */
+static const uint8_t fields_contacts[] = { 0x01, 0x02, 0x03, 0x03, 0x03,
+					   0x05 };
+#define FIELD_CONTACT_NUMBER	0x03u
 
 void dect_iwu_init(struct dect_iwu *iwu)
 {
@@ -157,6 +168,8 @@ void dect_iwu_set_own(struct dect_iwu *iwu, uint8_t terminal_id)
 
 void dect_iwu_reset_sessions(struct dect_iwu *iwu)
 {
+	if (iwu->contacts)
+		dect_contacts_unlock(iwu->contacts, iwu);
 	memset(iwu->sessions, 0, sizeof(iwu->sessions));
 	iwu->save_pending = 0;
 	iwu->pin_ok = 0;		/* "in the same call" (7.4.11.1) */
@@ -277,20 +290,35 @@ static void nack(struct dect_iwu *iwu, struct dect_iwu_out *out,
 
 /* ---- the lists ----------------------------------------------------------- */
 
-static int list_supported(uint8_t list)
+static int list_supported(const struct dect_iwu *iwu, uint8_t list)
 {
 	size_t i;
 
+	if (list == DECT_LIA_LIST_CONTACTS && !iwu->contacts)
+		return 0;
 	for (i = 0; i < sizeof(supported_lists); i++)
 		if (supported_lists[i] == list)
 			return 1;
 	return 0;
 }
 
+/* The 'List identifiers' value: our lists, ascending. */
+static size_t lists_served(const struct dect_iwu *iwu, uint8_t *out)
+{
+	size_t i, n = 0;
+
+	for (i = 0; i < sizeof(supported_lists); i++)
+		if (list_supported(iwu, supported_lists[i]))
+			out[n++] = supported_lists[i];
+	return n;
+}
+
 static unsigned entry_count(const struct dect_iwu *iwu, uint8_t list)
 {
 	switch (list) {
 	case DECT_LIA_LIST_SUPPORTED:		return 1;
+	case DECT_LIA_LIST_CONTACTS:
+		return iwu->contacts ? iwu->contacts->n : 0;
 	case DECT_LIA_LIST_INTERNAL_NAMES:	return iwu->n_handsets;
 	case DECT_LIA_LIST_LINE_SETTINGS:	return iwu->n_lines;
 	case DECT_LIA_LIST_SYSTEM_SETTINGS:	return 1;	/* singular */
@@ -309,6 +337,8 @@ static const uint8_t *list_fields(uint8_t list, size_t *n)
 		*n = sizeof(fields_line); return fields_line;
 	case DECT_LIA_LIST_SYSTEM_SETTINGS:
 		*n = sizeof(fields_system); return fields_system;
+	case DECT_LIA_LIST_CONTACTS:
+		*n = sizeof(fields_contacts); return fields_contacts;
 	default:
 		*n = 0; return NULL;
 	}
@@ -320,24 +350,66 @@ static uint8_t default_sort_field(uint8_t list)
 	switch (list) {
 	case DECT_LIA_LIST_INTERNAL_NAMES:	return 0x01;	/* Number */
 	case DECT_LIA_LIST_LINE_SETTINGS:	return 0x02;	/* Line id */
+	case DECT_LIA_LIST_CONTACTS:		return 0x01;	/* Name, then First name */
 	default:				return 0;
 	}
 }
 
+/* The Contact List entry at a list index, writable, or NULL. */
+static struct dect_contact *contact_at(const struct dect_iwu *iwu,
+				       unsigned idx)
+{
+	struct dect_contacts *c = iwu->contacts;
+
+	if (!c || idx < 1u || idx > c->n)
+		return NULL;
+	return &c->e[c->order[idx - 1u]];
+}
+
 /*
- * Append one field of one entry, if we hold it. Entries are addressed by
- * list index (1-based) and double as entry identifiers: the lists are
- * static, so the identity of an entry is its position.
+ * The entry identifier of the entry at a list index. The Contact List's are
+ * its own and outlive changes of position; the other lists are static, so
+ * there the identity of an entry is its position.
+ */
+static unsigned entry_id(const struct dect_iwu *iwu, uint8_t list, unsigned idx)
+{
+	const struct dect_contact *e;
+
+	if (list != DECT_LIA_LIST_CONTACTS)
+		return idx;
+	e = contact_at(iwu, idx);
+	return e ? e->id : 0;
+}
+
+/* Entry identifier -> list index; 0 if there is no such entry. */
+static unsigned entry_index(const struct dect_iwu *iwu, uint8_t list,
+			    unsigned id)
+{
+	if (list == DECT_LIA_LIST_CONTACTS)
+		return iwu->contacts ? dect_contacts_index(iwu->contacts, id) : 0;
+	return id >= 1u && id <= entry_count(iwu, list) ? id : 0;
+}
+
+/*
+ * Append one field of one entry, if we hold it: the entry at list index
+ * idx (1-based), instance `inst` of the field (0 = the first; only the
+ * Contact List's 'Contact number' has more, 7.4.10.1).
  */
 static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
-			    uint8_t list, unsigned idx, uint8_t field)
+			    uint8_t list, unsigned idx, uint8_t field,
+			    unsigned inst)
 {
+	if (inst && !(list == DECT_LIA_LIST_CONTACTS &&
+		      field == FIELD_CONTACT_NUMBER))
+		return;
 	switch (list) {
 	case DECT_LIA_LIST_SUPPORTED:
 		/* 7.4.10.5.1.1 'List identifiers': properties all reserved. */
-		if (field == 0x01)
-			put_field(b, field, 0x00, supported_lists,
-				  sizeof(supported_lists));
+		if (field == 0x01) {
+			uint8_t ids[sizeof(supported_lists)];
+
+			put_field(b, field, 0x00, ids, lists_served(iwu, ids));
+		}
 		break;
 
 	case DECT_LIA_LIST_INTERNAL_NAMES: {
@@ -540,9 +612,92 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 		break;
 	}
 
+	case DECT_LIA_LIST_CONTACTS: {
+		/* 7.4.10.5.7; every field editable (bit 7) */
+		const struct dect_contact *e = contact_at(iwu, idx);
+
+		if (!e)
+			break;
+		switch (field) {
+		case 0x01:
+			put_field(b, field, 0x40, e->name, strlen(e->name));
+			break;
+		case 0x02:
+			put_field(b, field, 0x40, e->first, strlen(e->first));
+			break;
+		case FIELD_CONTACT_NUMBER:
+			/* the instances as stored; one empty instance when
+			 * there is none (7.4.10.1, "at least one available") */
+			if (inst < e->n_numbers) {
+				const struct dect_contact_number *num =
+					&e->numbers[inst];
+
+				put_field(b, field,
+					  (uint8_t)(0x40u | (num->props &
+							     DECT_CONTACT_TYPES)),
+					  num->digits, strlen(num->digits));
+			} else if (!inst && !e->n_numbers) {
+				put_field(b, field, 0x40, NULL, 0);
+			}
+			break;
+		case 0x05: {
+			/* 7.4.10.5.1.7: 'All lines' (04H) or 'Relating to'
+			 * (03H) and the line id */
+			uint8_t v[2] = { 0x04, 0x00 };
+
+			if (e->line != DECT_CONTACT_ALL_LINES) {
+				v[0] = 0x03;
+				v[1] = (uint8_t)(0x80u | e->line);
+			}
+			put_field(b, field, 0x40, v, v[0] == 0x04 ? 1u : 2u);
+			break;
+		}
+		default:
+			break;
+		}
+		break;
+	}
+
 	default:
 		break;
 	}
+}
+
+/*
+ * The field identifiers a request names, ascending as 7.4.10.4.3.1 wants
+ * them. A repeated identifier asks for that many instances (7.4.10.1):
+ * kept, up to what we hold, for the Contact List's 'Contact number';
+ * dropped for every other field, which has one. With `known`, fields we do
+ * not hold are left out too (edit and search ignore them).
+ */
+static size_t wanted_fields(const struct dect_iwu *iwu, uint8_t list,
+			    const uint8_t *p, size_t n, int known,
+			    uint8_t *wanted, size_t cap)
+{
+	const uint8_t *f;
+	size_t nf, nwanted = 0, i, have, max;
+
+	(void)iwu;
+	f = list_fields(list, &nf);
+	while (n && nwanted < cap) {
+		uint8_t id = *p++;
+
+		n--;
+		for (have = 0, max = 0, i = 0; i < nf; i++)
+			max += f[i] == id;
+		if (known && !max)
+			continue;
+		for (i = 0; i < nwanted && wanted[i] < id; i++)
+			;
+		while (i + have < nwanted && wanted[i + have] == id)
+			have++;
+		if (have && have >= (max ? max : 1u))
+			continue;
+		memmove(&wanted[i + 1u], &wanted[i], nwanted - i);
+		wanted[i] = id;
+		nwanted++;
+	}
+	return nwanted;
 }
 
 /* ---- commands ------------------------------------------------------------ */
@@ -563,7 +718,7 @@ static void start_session(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	}
 	list = p[0];
 
-	if (!list_supported(list)) {
+	if (!list_supported(iwu, list)) {
 		reject = DECT_LIA_REJ_LIST_UNSUPPORTED;
 	} else {
 		/* A list already open to this PP: reuse its session rather
@@ -614,7 +769,11 @@ static void start_session(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	 * for the one-entry lists.
 	 */
 	sort = default_sort_field(list);
-	if (sort) {
+	if (list == DECT_LIA_LIST_CONTACTS) {
+		put(&b, 0x02);			/* Name, then First name */
+		put(&b, 0x01);
+		put(&b, 0x02);
+	} else if (sort) {
 		put(&b, 0x01);
 		put(&b, sort);
 	} else {
@@ -633,6 +792,21 @@ static int session_list(const struct dect_iwu *iwu, unsigned session)
 	return iwu->sessions[session - 1u].list;
 }
 
+/* The Contact List entry this session's 'edit entry' locked, if any, is
+ * free again (7.4.10.4.4.1: "until ... the session is terminated"). */
+static void unlock_session(struct dect_iwu *iwu, unsigned session)
+{
+	struct dect_contacts *c = iwu->contacts;
+	unsigned i;
+
+	iwu->sessions[session - 1u].locked = 0;
+	if (!c)
+		return;
+	for (i = 0; i < c->n; i++)
+		if (c->e[i].lock == iwu && c->e[i].lock_session == session)
+			c->e[i].lock = NULL;
+}
+
 static void end_session(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 			struct dect_iwu_out *out)
 {
@@ -649,6 +823,7 @@ static void end_session(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		return;
 	}
 	iwu->sessions[session - 1u].in_use = 0;
+	unlock_session(iwu, session);
 	if (reply_begin(out, &b, DECT_LIA_END_SESSION_CFM))
 		return;
 	put_ext(&b, session);
@@ -696,6 +871,11 @@ static void query_fields(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		for (i = 0; i < nf; i++)
 			if (f[i] != ed)
 				put(&b, f[i]);
+	} else if (list == DECT_LIA_LIST_CONTACTS) {
+		/* every field editable; 03H once per instance we hold */
+		put(&b, (uint8_t)nf);
+		put_bytes(&b, f, nf);
+		put(&b, 0x00);
 	} else {
 		put(&b, 0x00);
 		put(&b, (uint8_t)nf);
@@ -707,7 +887,8 @@ static void query_fields(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 
 static int assemble(const struct dect_iwu *iwu, uint8_t list, unsigned first,
 		    unsigned last, const uint8_t *wanted, size_t nwanted,
-		    struct buf *content, uint8_t *data, size_t cap);
+		    struct buf *content, uint8_t *data, size_t cap,
+		    unsigned *delivered);
 static void send_data(struct dect_iwu_out *out, unsigned session,
 		      const struct buf *content);
 
@@ -717,8 +898,8 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	struct buf b, content;
 	uint8_t data[DECT_IWU_CONTENT_MAX];
 	uint8_t wanted[16];
-	unsigned session, start, count, first, last, total;
-	size_t k, nwanted = 0, i;
+	unsigned session, start, count, first, last, total, got = 0;
+	size_t k, nwanted;
 	uint8_t mark;
 	int list, backward;
 
@@ -742,19 +923,9 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		return;
 	}
 	/* Requested fields, in ascending order as the data packet wants them;
-	 * duplicates and fields we do not hold are simply not delivered. */
-	while (n && nwanted < sizeof(wanted)) {
-		uint8_t f = *p++;
-
-		n--;
-		for (i = 0; i < nwanted && wanted[i] < f; i++)
-			;
-		if (i < nwanted && wanted[i] == f)
-			continue;
-		memmove(&wanted[i + 1u], &wanted[i], nwanted - i);
-		wanted[i] = f;
-		nwanted++;
-	}
+	 * fields we do not hold are simply not delivered. */
+	nwanted = wanted_fields(iwu, (uint8_t)list, p, n, 0, wanted,
+				sizeof(wanted));
 
 	total = entry_count(iwu, (uint8_t)list);
 	if (!total) {
@@ -785,24 +956,33 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		first = 1u, last = 0u;
 
 	if (assemble(iwu, (uint8_t)list, first, last, wanted, nwanted, &content,
-		     data, sizeof(data))) {
-		/* Larger than we can deliver in one go: refuse the range
-		 * rather than truncate an entry (7.4.10.4.3.2). */
+		     data, sizeof(data), &got)) {
+		/* not even one entry fits: never a part of one (7.4.10.4.3.2) */
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_RANGE);
 		return;
 	}
 
-	/* 7.4.10.4.3.2 table 49: confirm, then the data packets. */
+	/*
+	 * 7.4.10.4.3.2 table 49: confirm, then the data packets. Fewer entries
+	 * than the range holds is a partial delivery (bit 8): the PP reads the
+	 * rest with another 'read entries'. A backward read keeps its start
+	 * index as the last entry delivered, so the partial part is the front.
+	 */
+	if (last >= first && got < last - first + 1u && backward) {
+		first = last + 1u - got;
+		(void)assemble(iwu, (uint8_t)list, first, last, wanted, nwanted,
+			       &content, data, sizeof(data), &got);
+	}
 	if (reply_begin(out, &b, DECT_LIA_READ_ENTRIES_CFM))
 		return;
 	put_ext(&b, session);
 	put_ext(&b, first);
-	put(&b, (uint8_t)(last >= first ? last - first + 1u : 0u));
+	put(&b, (uint8_t)(got | (last >= first && got < last - first + 1u
+				 ? 0x80u : 0u)));
 	emit(out, &b);
 	iwu->stats.replied++;
 	send_data(out, session, &content);
-	if (last >= first)
-		iwu->stats.entries_sent += last - first + 1u;
+	iwu->stats.entries_sent += got;
 	return;
 
 malformed:
@@ -811,35 +991,45 @@ malformed:
 
 /*
  * The data content of entries first..last, ascending, each [entry id]
- * [entry length][fields...] (7.4.10.4.10 table 62). -1 if it does not fit.
+ * [entry length][fields...] (7.4.10.4.10 table 62): as many whole entries
+ * as fit, their number in *delivered. -1 if not even the first one fits.
  */
 static int assemble(const struct dect_iwu *iwu, uint8_t list, unsigned first,
 		    unsigned last, const uint8_t *wanted, size_t nwanted,
-		    struct buf *content, uint8_t *data, size_t cap)
+		    struct buf *content, uint8_t *data, size_t cap,
+		    unsigned *delivered)
 {
-	unsigned idx;
+	unsigned idx, inst;
 	size_t i;
 
 	content->p = data;
 	content->cap = cap;
 	content->len = 0;
 	content->overflow = 0;
-	for (idx = first; idx <= last && !content->overflow; idx++) {
+	*delivered = 0;
+	for (idx = first; idx <= last; idx++) {
 		struct buf e;
-		uint8_t ebuf[128];
+		uint8_t ebuf[192];
+		size_t before = content->len;
 
 		e.p = ebuf; e.cap = sizeof(ebuf); e.len = 0; e.overflow = 0;
-		for (i = 0; i < nwanted; i++)
-			put_entry_field(iwu, &e, list, idx, wanted[i]);
-		if (e.overflow) {
-			content->overflow = 1;
+		for (i = 0, inst = 0; i < nwanted; i++) {
+			inst = i && wanted[i] == wanted[i - 1u] ? inst + 1u : 0u;
+			put_entry_field(iwu, &e, list, idx, wanted[i], inst);
+		}
+		if (!e.overflow) {
+			put_ext(content, entry_id(iwu, list, idx));
+			put_ext(content, (unsigned)e.len);
+			put_bytes(content, ebuf, e.len);
+		}
+		if (e.overflow || content->overflow) {
+			content->len = before;
+			content->overflow = 0;
 			break;
 		}
-		put_ext(content, idx);		/* entry identifier */
-		put_ext(content, (unsigned)e.len);
-		put_bytes(content, ebuf, e.len);
+		(*delivered)++;
 	}
-	return content->overflow ? -1 : 0;
+	return last >= first && !*delivered ? -1 : 0;
 }
 
 /* The data content in data packets of 56 octets, the last one marked. */
@@ -890,10 +1080,10 @@ static void edit_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		       struct dect_iwu_out *out)
 {
 	uint8_t data[DECT_IWU_CONTENT_MAX], wanted[16];
-	const uint8_t *known;
+	struct dect_contact *e = NULL;
 	struct buf b, content;
-	unsigned session, entry;
-	size_t k, nknown, nwanted = 0, i;
+	unsigned session, entry, idx, got;
+	size_t k, nwanted;
 	int list;
 
 	k = get_ext(p, n, &session);
@@ -913,16 +1103,27 @@ static void edit_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
 	}
-	if (entry < 1u || entry > entry_count(iwu, (uint8_t)list)) {
+	idx = entry_index(iwu, (uint8_t)list, entry);
+	if (!idx) {
 		nack(iwu, out, session, DECT_LIA_NACK_NO_ENTRY);
 		return;
 	}
+	/*
+	 * 7.4.10.4.4.1: an entry another PP is editing is 'temporarily not
+	 * possible' until its save or the end of its session. The Contact
+	 * List is shared, so its lock is in the store, seen by every link.
+	 */
+	if (list == DECT_LIA_LIST_CONTACTS) {
+		e = contact_at(iwu, idx);
+		if (e->lock && (e->lock != iwu || e->lock_session != session)) {
+			nack(iwu, out, session, DECT_LIA_NACK_TEMP_NOT_POSSIBLE);
+			return;
+		}
+	}
 	/* the fields asked for that we hold, ascending; unknown ones ignored,
 	 * and none known at all is 'procedure not allowed' */
-	known = list_fields((uint8_t)list, &nknown);
-	for (i = 0; i < nknown && nwanted < sizeof(wanted); i++)
-		if (memchr(p, known[i], n))
-			wanted[nwanted++] = known[i];
+	nwanted = wanted_fields(iwu, (uint8_t)list, p, n, 1, wanted,
+				sizeof(wanted));
 	if (!nwanted) {
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
@@ -933,12 +1134,16 @@ static void edit_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
 	}
-	if (assemble(iwu, (uint8_t)list, entry, entry, wanted, nwanted,
-		     &content, data, sizeof(data))) {
+	if (assemble(iwu, (uint8_t)list, idx, idx, wanted, nwanted,
+		     &content, data, sizeof(data), &got)) {
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_RANGE);
 		return;
 	}
-	iwu->sessions[session - 1u].locked = (uint8_t)entry;
+	iwu->sessions[session - 1u].locked = (uint16_t)entry;
+	if (e) {
+		e->lock = iwu;
+		e->lock_session = (uint8_t)session;
+	}
 	if (reply_begin(out, &b, DECT_LIA_EDIT_ENTRY_CFM))
 		return;
 	put_ext(&b, session);
@@ -961,20 +1166,216 @@ malformed:
  * ends an edit without change (7.4.10.4.5.1). The lock is released in
  * every case.
  */
+/*
+ * A UTF-8 text value into out, truncated on a character boundary (7.4.10.1);
+ * -1 if it holds a control character: names go to every handset's display,
+ * the log and LuCI (security audit 2026-10-29, A5).
+ */
+static int text_value(const uint8_t *v, size_t n, char *out, size_t cap)
+{
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		if (v[i] < 0x20u || v[i] == 0x7Fu)
+			return -1;
+	if (n > cap - 1u) {
+		n = cap - 1u;
+		while (n && (v[n] & 0xC0u) == 0x80u)
+			n--;
+	}
+	memcpy(out, v, n);
+	out[n] = '\0';
+	return 0;
+}
+
+static void save_confirm(struct dect_iwu *iwu, struct dect_iwu_out *out,
+			 unsigned session, unsigned id, unsigned idx,
+			 unsigned total)
+{
+	struct buf b;
+
+	/* table 53: the entry's identifier, its position now, the count */
+	if (reply_begin(out, &b, DECT_LIA_SAVE_ENTRY_CFM))
+		return;
+	put_ext(&b, session);
+	put_ext(&b, id);
+	put_ext(&b, idx);
+	put_ext(&b, total);
+	emit(out, &b);
+	iwu->stats.replied++;
+	iwu->stats.saved++;
+}
+
+/*
+ * 'Save entry' on the Contact List (7.4.10.4.5): an entry locked by this
+ * session's 'edit entry', or entry 0, a new one. Best effort: what parses
+ * is saved, then a negative acknowledgement if anything did not. Saved
+ * 'Contact number' instances replace the stored ones (the PP sends all it
+ * received, 7.4.10.1); an empty instance deletes, as table 52a says.
+ */
+static void finish_save_contact(struct dect_iwu *iwu, unsigned session,
+				struct dect_iwu_out *out)
+{
+	struct dect_contacts *c = iwu->contacts;
+	struct dect_contact draft, *e = NULL;
+	const uint8_t *p = iwu->save_data;
+	size_t n = iwu->save_len, k, j;
+	unsigned entry, len, fid, flen, id;
+	uint16_t locked = iwu->sessions[session - 1u].locked;
+	uint8_t reason = 0;
+	int numbers = 0, changed = 0;
+
+	iwu->sessions[session - 1u].locked = 0;
+	if (iwu->save_entry) {
+		unsigned idx = dect_contacts_index(c, iwu->save_entry);
+
+		if (!idx) {
+			nack(iwu, out, session, DECT_LIA_NACK_NO_ENTRY);
+			return;
+		}
+		e = contact_at(iwu, idx);
+		if (locked != iwu->save_entry || e->lock != iwu ||
+		    e->lock_session != session) {
+			nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+			return;
+		}
+		e->lock = NULL;
+		draft = *e;
+	} else {
+		memset(&draft, 0, sizeof(draft));
+		draft.line = DECT_CONTACT_ALL_LINES;
+	}
+	if (iwu->save_overflow) {
+		nack(iwu, out, session, DECT_LIA_NACK_FORMAT);
+		return;
+	}
+	if (!n) {
+		/* an edit ended without change; nothing to create */
+		if (!e) {
+			nack(iwu, out, session, DECT_LIA_NACK_FORMAT);
+			return;
+		}
+		save_confirm(iwu, out, session, e->id,
+			     dect_contacts_index(c, e->id), c->n);
+		return;
+	}
+	k = get_ext(p, n, &entry);
+	if (!k || entry != iwu->save_entry)
+		goto format;
+	p += k; n -= k;
+	k = get_ext(p, n, &len);
+	if (!k || len > n - k)
+		goto format;
+	p += k; n = len;
+	while (n) {
+		fid = *p++;
+		n--;
+		k = get_ext(p, n, &flen);
+		if (!k || flen < 1u || flen > n - k)
+			goto format;
+		p += k; n -= k;
+		switch (fid) {
+		case 0x01:
+			if (text_value(p + 1, flen - 1u, draft.name,
+				       sizeof(draft.name)))
+				reason = DECT_LIA_NACK_FORMAT;
+			else
+				changed = 1;
+			break;
+		case 0x02:
+			if (text_value(p + 1, flen - 1u, draft.first,
+				       sizeof(draft.first)))
+				reason = DECT_LIA_NACK_FORMAT;
+			else
+				changed = 1;
+			break;
+		case FIELD_CONTACT_NUMBER: {
+			struct dect_contact_number num;
+			size_t nd = flen - 1u;
+
+			if (!numbers) {
+				draft.n_numbers = 0;
+				numbers = 1;
+			}
+			changed = 1;
+			if (!nd)
+				break;			/* deleted (table 52a) */
+			memset(&num, 0, sizeof(num));
+			num.props = (uint8_t)(p[0] & DECT_CONTACT_TYPES);
+			for (j = 0; j < nd; j++)
+				if (!((p[1 + j] >= '0' && p[1 + j] <= '9') ||
+				      p[1 + j] == '*' || p[1 + j] == '#'))
+					break;
+			/* 05H and 15H (pause, flash) are not kept: a SIP
+			 * dial string has no use for them */
+			if (j < nd || nd > sizeof(num.digits) - 1u) {
+				reason = DECT_LIA_NACK_FORMAT;
+				break;
+			}
+			memcpy(num.digits, p + 1, nd);
+			/* beyond what we hold: discarded (7.4.10.1) */
+			if (draft.n_numbers < DECT_CONTACT_NUMS)
+				draft.numbers[draft.n_numbers++] = num;
+			break;
+		}
+		case 0x05:
+			/* 7.4.10.5.1.7; length 1 resets to 'All lines' */
+			if (flen == 1u || p[1] == 0x04u) {
+				draft.line = DECT_CONTACT_ALL_LINES;
+				changed = 1;
+			} else if (flen >= 3u && p[1] == 0x03u &&
+				   (p[2] & 0x80u) && (p[2] & 0x7Fu) < 127u) {
+				draft.line = (uint8_t)(p[2] & 0x7Fu);
+				changed = 1;
+			} else {
+				reason = DECT_LIA_NACK_FORMAT;
+			}
+			break;
+		default:
+			reason = DECT_LIA_NACK_NOT_ALLOWED;
+			break;
+		}
+		p += flen; n -= flen;
+	}
+	if (!e && !draft.name[0] && !draft.first[0] && !draft.n_numbers)
+		goto format;			/* a new entry with nothing in it */
+	id = e ? e->id : 0u;
+	if (changed || !e) {
+		id = dect_contacts_put(c, id, &draft);
+		if (!id) {
+			/* the list or the change journal is full */
+			nack(iwu, out, session, DECT_LIA_NACK_TEMP_NOT_POSSIBLE);
+			return;
+		}
+	}
+	if (reason) {
+		nack(iwu, out, session, reason);
+		return;
+	}
+	save_confirm(iwu, out, session, id, dect_contacts_index(c, id), c->n);
+	return;
+
+format:
+	nack(iwu, out, session, DECT_LIA_NACK_FORMAT);
+}
+
 static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
 {
 	unsigned session = iwu->save_session, entry, len, fid, flen;
 	const uint8_t *p = iwu->save_data;
 	size_t n = iwu->save_len, k;
 	uint8_t reason = 0, locked;
-	struct buf b;
 	int list = session_list(iwu, session);
 
 	if (list < 0) {
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
 		return;
 	}
-	locked = iwu->sessions[session - 1u].locked;
+	if (list == DECT_LIA_LIST_CONTACTS) {
+		finish_save_contact(iwu, session, out);
+		return;
+	}
+	locked = (uint8_t)iwu->sessions[session - 1u].locked;
 	iwu->sessions[session - 1u].locked = 0;
 	if (iwu->save_entry && iwu->save_entry > entry_count(iwu, (uint8_t)list)) {
 		nack(iwu, out, session, DECT_LIA_NACK_NO_ENTRY);
@@ -1070,15 +1471,8 @@ static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
 		return;
 	}
 	/* table 53: the entry stays where it was (sorted by number) */
-	if (reply_begin(out, &b, DECT_LIA_SAVE_ENTRY_CFM))
-		return;
-	put_ext(&b, session);
-	put_ext(&b, iwu->save_entry);
-	put_ext(&b, iwu->save_entry);
-	put_ext(&b, entry_count(iwu, (uint8_t)list));
-	emit(out, &b);
-	iwu->stats.replied++;
-	iwu->stats.saved++;
+	save_confirm(iwu, out, session, iwu->save_entry, iwu->save_entry,
+		     entry_count(iwu, (uint8_t)list));
 	return;
 
 format:
@@ -1086,22 +1480,24 @@ format:
 }
 
 /*
- * "Search entries" (7.4.10.4.8) on the Internal Names List, sorted by its
- * 'Number' (the terminal identity number): the searched value is its IA5
- * decimal form. Matching option 00H wants the exact entry; 01H takes the
- * next one ("current index") and 02H the one before when there is none;
- * then entries are delivered as by 'read entries' from there. No match is
- * a confirm with counter 0 and no data packet.
+ * "Search entries" (7.4.10.4.8) on the first sorting field: the Internal
+ * Names List's 'Number' (the terminal identity number, searched as its IA5
+ * decimal form) or the Contact List's 'Name', compared without case as it
+ * is sorted. Matching option 00H wants the exact entry; 01H takes the next
+ * one ("current index") and 02H the one before when there is none; then
+ * entries are delivered as by 'read entries' from there. No match is a
+ * confirm with counter 0 and no data packet.
  */
 static void search_entries(struct dect_iwu *iwu, unsigned session, int list,
 			   const uint8_t *p, size_t n, struct dect_iwu_out *out)
 {
 	uint8_t data[DECT_IWU_CONTENT_MAX], wanted[16];
-	const uint8_t *known;
 	struct buf b, content;
 	unsigned opt, slen, v = 0, total, cur, start = 0, count, first, last;
-	size_t nknown, nwanted = 0, j;
-	int digits = 1, backward;
+	unsigned got = 0;
+	size_t nwanted, j;
+	int digits = 1, backward, exact;
+	char text[DECT_CONTACT_NAME_MAX * 2u];
 
 	if (n < 2u)
 		goto malformed;
@@ -1116,23 +1512,31 @@ static void search_entries(struct dect_iwu *iwu, unsigned session, int list,
 		else
 			v = v * 10u + (unsigned)(p[j] - '0');
 	}
+	j = slen < sizeof(text) - 1u ? slen : sizeof(text) - 1u;
+	memcpy(text, p, j);
+	text[j] = '\0';
 	p += slen; n -= slen;
 	backward = (p[0] & 0x80u) != 0;
 	count = p[0] & 0x7Fu;
 	p += 2; n -= 2;				/* counter, mark request */
-	known = list_fields((uint8_t)list, &nknown);
-	for (j = 0; j < nknown && nwanted < sizeof(wanted); j++)
-		if (memchr(p, known[j], n))
-			wanted[nwanted++] = known[j];
+	nwanted = wanted_fields(iwu, (uint8_t)list, p, n, 1, wanted,
+				sizeof(wanted));
 
-	/* the first entry whose number is >= v: the 'current entry' */
+	/* the first entry not before the searched value: the 'current entry' */
 	total = entry_count(iwu, (uint8_t)list);
 	for (cur = 1; cur <= total; cur++)
-		if (iwu->handsets[cur - 1u].terminal_id >= v)
+		if (list == DECT_LIA_LIST_CONTACTS
+		    ? dect_contacts_fold_cmp(contact_at(iwu, cur)->name, text) >= 0
+		    : iwu->handsets[cur - 1u].terminal_id >= v)
 			break;
-	if (digits && slen && cur <= total &&
-	    iwu->handsets[cur - 1u].terminal_id == v)
-		start = cur;				/* exact */
+	if (list == DECT_LIA_LIST_CONTACTS)
+		exact = slen && cur <= total &&
+			!dect_contacts_fold_cmp(contact_at(iwu, cur)->name, text);
+	else
+		exact = digits && slen && cur <= total &&
+			iwu->handsets[cur - 1u].terminal_id == v;
+	if (exact)
+		start = cur;
 	else if (opt == 0x01u && cur <= total)
 		start = cur;
 	else if (opt == 0x02u && cur > 1u)
@@ -1151,20 +1555,26 @@ static void search_entries(struct dect_iwu *iwu, unsigned session, int list,
 		}
 	}
 	if (assemble(iwu, (uint8_t)list, first, last, wanted, nwanted, &content,
-		     data, sizeof(data))) {
+		     data, sizeof(data), &got)) {
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_RANGE);
 		return;
+	}
+	/* as 'read entries': a backward partial delivery keeps the match */
+	if (last >= first && got < last - first + 1u && backward) {
+		first = last + 1u - got;
+		(void)assemble(iwu, (uint8_t)list, first, last, wanted, nwanted,
+			       &content, data, sizeof(data), &got);
 	}
 	if (reply_begin(out, &b, DECT_LIA_SEARCH_ENTRIES_CFM))
 		return;
 	put_ext(&b, session);
 	put_ext(&b, start ? first : 1u);
-	put(&b, (uint8_t)(last >= first ? last - first + 1u : 0u));
+	put(&b, (uint8_t)(got | (last >= first && got < last - first + 1u
+				 ? 0x80u : 0u)));
 	emit(out, &b);
 	iwu->stats.replied++;
 	send_data(out, session, &content);
-	if (last >= first)
-		iwu->stats.entries_sent += last - first + 1u;
+	iwu->stats.entries_sent += got;
 	return;
 
 malformed:
@@ -1197,6 +1607,31 @@ static void delete_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
 		return;
 	}
+	if (list == DECT_LIA_LIST_CONTACTS) {
+		/* 7.4.10.4.6: gone for every handset; not while another
+		 * PP edits it (7.4.10.4.4.1) */
+		unsigned idx = dect_contacts_index(iwu->contacts, entry);
+		const struct dect_contact *e = contact_at(iwu, idx);
+
+		if (!e) {
+			nack(iwu, out, session, DECT_LIA_NACK_NO_ENTRY);
+			return;
+		}
+		if ((e->lock && (e->lock != iwu || e->lock_session != session)) ||
+		    dect_contacts_del(iwu->contacts, entry)) {
+			nack(iwu, out, session, DECT_LIA_NACK_TEMP_NOT_POSSIBLE);
+			return;
+		}
+		if (iwu->sessions[session - 1u].locked == entry)
+			iwu->sessions[session - 1u].locked = 0;
+		if (reply_begin(out, &b, DECT_LIA_DELETE_ENTRY_CFM))
+			return;
+		put_ext(&b, session);
+		put_ext(&b, iwu->contacts->n);
+		emit(out, &b);
+		iwu->stats.replied++;
+		return;
+	}
 	if (list != DECT_LIA_LIST_INTERNAL_NAMES) {
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
@@ -1218,6 +1653,49 @@ static void delete_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		return;
 	put_ext(&b, session);
 	put_ext(&b, iwu->n_handsets - 1u);
+	emit(out, &b);
+	iwu->stats.replied++;
+}
+
+/*
+ * "Delete list" (7.4.10.4.7). Only the Contact List takes it, and only
+ * where the owner allows it (allow_clear): it empties the address book on
+ * the server as well. A rejection is 'procedure not allowed', as the
+ * clause asks; so is every other list (table 41 notes 1 and 4). Not while
+ * a PP edits an entry (7.4.10.4.4.1).
+ */
+static void delete_list(struct dect_iwu *iwu, const uint8_t *p, size_t n,
+			struct dect_iwu_out *out)
+{
+	struct dect_contacts *c = iwu->contacts;
+	unsigned session, i;
+	struct buf b;
+	int list;
+
+	if (!get_ext(p, n, &session)) {
+		iwu->stats.malformed++;
+		return;
+	}
+	list = session_list(iwu, session);
+	if (list < 0) {
+		nack(iwu, out, session, DECT_LIA_NACK_INVALID_SESSION);
+		return;
+	}
+	if (list != DECT_LIA_LIST_CONTACTS || !c->allow_clear) {
+		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+		return;
+	}
+	for (i = 0; i < c->n; i++)
+		if (c->e[i].lock)
+			break;
+	if (i < c->n || dect_contacts_clear(c)) {
+		nack(iwu, out, session, DECT_LIA_NACK_TEMP_NOT_POSSIBLE);
+		return;
+	}
+	iwu->sessions[session - 1u].locked = 0;
+	if (reply_begin(out, &b, DECT_LIA_DELETE_LIST_CFM))
+		return;
+	put_ext(&b, session);
 	emit(out, &b);
 	iwu->stats.replied++;
 }
@@ -1284,7 +1762,8 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		size_t k = get_ext(p, n, &session);
 		int list = k ? session_list(iwu, session) : -1;
 
-		if (list == DECT_LIA_LIST_INTERNAL_NAMES)
+		if (list == DECT_LIA_LIST_INTERNAL_NAMES ||
+		    list == DECT_LIA_LIST_CONTACTS)
 			search_entries(iwu, session, list, p + k, n - k, out);
 		else
 			refuse(iwu, p, n, out, DECT_LIA_NACK_NOT_ALLOWED);
@@ -1297,8 +1776,7 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		delete_entry(iwu, p, n, out);
 		break;
 	case DECT_LIA_DELETE_LIST:
-		/* table 41 notes 1 and 4: 'procedure not allowed'. */
-		refuse(iwu, p, n, out, DECT_LIA_NACK_NOT_ALLOWED);
+		delete_list(iwu, p, n, out);
 		break;
 	case DECT_LIA_SAVE_ENTRY: {
 		/*
@@ -1315,7 +1793,8 @@ void dect_iwu_handle(struct dect_iwu *iwu, const uint8_t *in, size_t in_len,
 		}
 		iwu->save_pending = 1;
 		iwu->save_session = (uint8_t)session;
-		iwu->save_entry = (uint8_t)(entry > 127u ? 127u : entry);
+		iwu->save_entry = (uint16_t)(entry > DECT_CONTACT_ID_MAX
+					     ? DECT_CONTACT_ID_MAX : entry);
 		iwu->save_len = 0;
 		iwu->save_overflow = 0;
 		break;

@@ -18,7 +18,10 @@
 				"/var/run/opendectcell/cell-link.json": [ "read" ],
 				"/tmp/run/opendectcell/cell.json": [ "read" ],
 				"/tmp/run/opendectcell/cell-link.json": [ "read" ],
-				"/usr/sbin/dect-cell": [ "list" ]
+				"/usr/sbin/dect-cell": [ "list" ],
+				"/usr/share/opendectcell/carddav.uc": [ "list" ],
+				"/var/run/opendectcell/carddav.json": [ "read" ],
+				"/tmp/run/opendectcell/carddav.json": [ "read" ]
 			},
 			"ubus": {
 				"service": [ "list" ]

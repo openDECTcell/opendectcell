@@ -25,6 +25,7 @@ them with `python3 -I`.
 | Tool | What it does |
 |---|---|
 | [cell-testpeer.py](cell-testpeer.py) | A stand-in controller for testing a cell (`dect-cell`, `dect-stubd -K`): its own CA, enrolment, mutual TLS 1.3, HELLO and heartbeats, optional harmless MAIL_DOWNs. Needs the `cryptography` package (the only tool here that is not standard library only) |
+| [carddav-testserver.py](carddav-testserver.py) | A small CardDAV server for testing `opendectcell-carddav`: one address book in memory, HTTPS with its own CA (made with `openssl`), Basic auth, PROPFIND/GET/PUT/DELETE with ETags, seed cards with the awkward cases; `GET /_dump` shows what the box wrote |
 
 ## For development and analysis
 

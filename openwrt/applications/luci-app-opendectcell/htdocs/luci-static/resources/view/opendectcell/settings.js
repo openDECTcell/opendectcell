@@ -28,6 +28,10 @@
  * of an openDECTcell controller, which runs the base, its handsets and lines.
  * The page then shows only the controller link and how to leave; the
  * base's own settings stay in the config, unused, for when it does.
+ *
+ * Phonebook (package opendectcell-carddav, 'config carddav'): the handsets'
+ * Contact List from a CardDAV address book, both ways; shown only when the
+ * package is installed, with the last sync's result from carddav.json.
  */
 var STATE = '/var/run/opendectcell/state.json';
 var VOIP = '/var/run/opendectcell/voip.json';
@@ -37,6 +41,8 @@ var BOARDS = '/usr/share/opendectcell/boards/';
 var INIT = '/etc/init.d/opendectcell';
 var CELL_BIN = '/usr/sbin/dect-cell';
 var LINK = '/var/run/opendectcell/cell-link.json';
+var CARDDAV = '/usr/share/opendectcell/carddav.uc';
+var CARDDAV_STATE = '/var/run/opendectcell/carddav.json';
 
 function readState() {
 	return fs.read(STATE).then(function(text) {
@@ -734,7 +740,9 @@ return view.extend({
 			readVoip(),
 			readBoard(),
 			readLink(),
-			L.resolveDefault(fs.stat(CELL_BIN), null)
+			L.resolveDefault(fs.stat(CELL_BIN), null),
+			L.resolveDefault(fs.stat(CARDDAV), null),
+			L.resolveDefault(fs.read(CARDDAV_STATE), '')
 		]).then(function(r) {
 			var st = r[1], profiles = r[2], voip = r[4];
 
@@ -753,7 +761,13 @@ return view.extend({
 					return (t || '').trim();
 				});
 			})).then(function(choices) {
-				return [ st, profiles, choices, r[3], voip, r[5], r[6], r[7] ];
+				var cd = null;
+
+				try { cd = r[9] ? JSON.parse(r[9]) : null; } catch (e) {}
+				/* the section the Phonebook options live in */
+				if (r[8] && !uci.get('opendectcell', 'carddav'))
+					uci.add('opendectcell', 'carddav', 'carddav');
+				return [ st, profiles, choices, r[3], voip, r[5], r[6], r[7], r[8], cd ];
 			});
 		});
 	},
@@ -784,6 +798,8 @@ return view.extend({
 		s.tab('general', _('General'));
 		s.tab('handsets', _('Handsets'));
 		s.tab('voip', _('VoIP Profiles'));
+		if (data[8])
+			s.tab('phonebook', _('Phonebook'));
 		s.tab('advanced', _('Advanced'));
 
 		/* General */
@@ -1207,6 +1223,60 @@ return view.extend({
 			_('A PEM file of the CAs to trust; empty: the system\'s (ca-bundle).'));
 		o.placeholder = '/etc/ssl/certs/ca-certificates.crt';
 		o.depends('tls_verify', '1');
+
+		/* Phonebook */
+		if (data[8]) {
+			var cd = data[9];
+
+			o = s.taboption('phonebook', form.DummyValue, '_cd_intro');
+			o.rawhtml = true;
+			o.default = E('p', {}, _('The handsets\' phonebook comes from a CardDAV address book (Nextcloud, Baïkal, a mail provider\'s). What a handset adds, changes or deletes is written back to it.'));
+			o = s.taboption('phonebook', form.Flag, '_cd_enabled', _('Use an address book'));
+			o.cfgvalue = function() { return uci.get('opendectcell', 'carddav', 'enabled') || '0'; };
+			o.write = function(sid, v) { uci.set('opendectcell', 'carddav', 'enabled', v); };
+			o.remove = function() { uci.set('opendectcell', 'carddav', 'enabled', '0'); };
+			[
+				[ 'url', form.Value, _('Address book URL'),
+				  _('The address book itself, https:// only, e.g. https://cloud.example.org/remote.php/dav/addressbooks/users/NAME/contacts/') ],
+				[ 'username', form.Value, _('User name') ],
+				[ 'password', form.Value, _('Password'),
+				  _('An app password where the server offers one.') ],
+				[ 'interval', form.Value, _('Check every'), _('Minutes. Changes on a handset are written back at once.') ],
+				[ 'ca_file', form.Value, _('CA certificate'),
+				  _('Only for a server with its own certificate authority: a PEM file on this box. Empty: the usual public CAs.') ],
+				[ 'allow_clear', form.Flag, _('Allow "delete list"'),
+				  _('A handset\'s "delete list" empties the whole address book on the server. Off: the base refuses it.') ]
+			].forEach(function(f) {
+				o = s.taboption('phonebook', f[1], '_cd_' + f[0], f[2], f[3]);
+				o.depends('_cd_enabled', '1');
+				o.cfgvalue = function() { return uci.get('opendectcell', 'carddav', f[0]); };
+				o.write = function(sid, v) { uci.set('opendectcell', 'carddav', f[0], v); };
+				o.remove = function() { uci.unset('opendectcell', 'carddav', f[0]); };
+				if (f[0] == 'password')
+					o.password = true;
+				if (f[0] == 'interval') {
+					o.placeholder = '15';
+					o.datatype = 'range(1,1440)';
+				}
+				if (f[0] == 'url') {
+					o.rmempty = false;
+					o.validate = function(sid, v) {
+						return /^https:\/\/[^\/]+/.test(v || '') ? true
+							: _('An https:// address');
+					};
+				}
+			});
+			o = s.taboption('phonebook', form.DummyValue, '_cd_state', _('Last sync'));
+			o.depends('_cd_enabled', '1');
+			o.cfgvalue = function() {
+				if (!cd)
+					return _('none yet');
+				if (cd.error)
+					return _('failed: %s').format(cd.error);
+				return _('%d contacts, %s').format(cd.contacts,
+					cd.last_sync ? new Date(cd.last_sync * 1000).toLocaleString() : '-');
+			};
+		}
 
 		/* Advanced; a placeholder is what the service takes when it is empty */
 		o = s.taboption('advanced', form.Value, 'firmware_dir', _('Chip firmware directory'),

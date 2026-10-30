@@ -9,7 +9,9 @@
  * of Supported Lists (00H), the Internal Names List (06H), the DECT System
  * Settings List (07H) and the Line Settings List (08H), defined to the byte
  * in clauses 7.4.10.5.2, 7.4.10.5.8, 7.4.11.3 and 7.4.11.4. A Gigaset
- * considers itself synchronised with a base once it has read them.
+ * considers itself synchronised with a base once it has read them. With a
+ * contacts store attached (dect_contacts.h), a fifth: the Contact List
+ * (05H, 7.4.10.5.7), which handsets also edit, extend and delete from.
  *
  * A "read entries confirm" is followed by the entries' data packets
  * (TS 102 527-3 7.4.10.4.3.2: "Content of list entry is transmitted in data
@@ -34,6 +36,8 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#include "dect_contacts.h"
 
 /* Octet 3 of <<IWU-TO-IWU>>: bit 8 fixed 1, S/R = 1 "transmission", PD 03H. */
 #define DECT_IWU_DISC		0xC3u
@@ -99,14 +103,18 @@
  */
 #define DECT_IWU_MSG_MAX	63u
 #define DECT_IWU_DATA_PER_PKT	56u
-/* Replies one received record can produce: a confirm plus data packets. */
-#define DECT_IWU_OUT_MAX	12u
+/*
+ * Replies one received record can produce: a confirm plus data packets,
+ * enough for five Contact List entries of typical size ("at least 5
+ * entries of any list", 7.4.10.4.3.2); more go out as a partial delivery.
+ */
+#define DECT_IWU_OUT_MAX	16u
 /* Largest data content we assemble before segmenting it into packets. */
 #define DECT_IWU_CONTENT_MAX	(DECT_IWU_DATA_PER_PKT * (DECT_IWU_OUT_MAX - 1u))
 
 #define DECT_IWU_NAME_MAX	16u	/* UTF-8 bytes, NUL-terminated */
 #define DECT_IWU_PIN_TRIES	3u	/* wrong PIN entries per call */
-#define DECT_IWU_SAVE_MAX	128u	/* the data of one 'save entry' */
+#define DECT_IWU_SAVE_MAX	256u	/* the data of one 'save entry' */
 #define DECT_IWU_HANDSETS	8u	/* Internal Names List capacity */
 #define DECT_IWU_SESSIONS	2u	/* "at least two sessions at a time" */
 
@@ -158,17 +166,19 @@ struct dect_iwu {
 	unsigned n_lines;
 	/* 'FP version / Firmware version' (7.4.11.3.9): IA5, 1..20 chars */
 	char     fw_version[21];
+	/* The Contact List, shared by every link; NULL = not offered. */
+	struct dect_contacts *contacts;
 
 	/* Open sessions; session identifier = index + 1. */
 	struct {
 		uint8_t list;
 		uint8_t in_use;
-		uint8_t locked;		/* entry an 'edit entry' locked, 0 = none */
+		uint16_t locked;	/* entry an 'edit entry' locked, 0 = none */
 	} sessions[DECT_IWU_SESSIONS];
 	/* A 'save entry' whose data packets are still arriving (7.4.10.4.9). */
 	uint8_t  save_pending;
 	uint8_t  save_session;
-	uint8_t  save_entry;
+	uint16_t save_entry;
 	uint8_t  save_overflow;
 	size_t   save_len;
 	uint8_t  save_data[DECT_IWU_SAVE_MAX];

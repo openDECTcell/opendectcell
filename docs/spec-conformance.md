@@ -443,10 +443,10 @@ displayed "Intern".
   number's `L+2`. §7.6 settles it — "the length is calculated starting from
   octet 3" — so `L+2` is right and the figure is a typo. We follow the general
   rule, which is what `dect_nwk_put_ie()` does for every element.
-- §7.7.53 note 1 is a feature we do not have yet: if the calling number matches
-  an entry in the FP contact list, the name from that list should be sent with
-  screening "user-provided, verified and passed". That belongs with the
-  controller's contact list, not here.
+- §7.7.53 note 1: if the calling number matches an entry in the FP contact
+  list, the name from that list should be sent with screening "user-provided,
+  verified and passed". Done since 2026-10-30 for a SIP call that brings no
+  name of its own (`docs/phonebook.md`).
 
 ## Audit of this page against the code `[2026-10-23]`
 

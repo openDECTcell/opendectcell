@@ -38,7 +38,7 @@ fi
 
 # source packages to compile, and the binary packages they make
 sources="opendectcell luci-app-opendectcell"
-packages="opendectcell opendectcell-baresip opendectcell-cell luci-app-opendectcell"
+packages="opendectcell opendectcell-baresip opendectcell-cell opendectcell-carddav luci-app-opendectcell"
 case $target in
 ipq40xx/*) packages="$packages kmod-opendectcell-ipq40xx" ;;
 lantiq/*) packages="$packages kmod-opendectcell-lantiq" ;;
@@ -166,7 +166,7 @@ for p in $packages; do
 	*) arch=$(basename "$(dirname "$(dirname "$f")")") ;;	# bin/packages/ARCH/FEED
 	esac
 	case $p in
-	luci-app-*) arch=all ;;
+	luci-app-*|opendectcell-carddav) arch=all ;;
 	esac
 	name=$(basename "$f" .apk)
 	cp "$f" "$out/${name}_$arch.apk"

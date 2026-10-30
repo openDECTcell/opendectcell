@@ -42,7 +42,8 @@ tested · ❌ not built yet · ➖ out of scope for now
 | Call waiting, hold, switching between calls | 🟡 | CAT-iq handsets (the A540): call waiting, accept, reject, hold, resume, toggle, a second call out, release one. Built 2026-10-29, not yet tested; other handsets get "busy" for a second call |
 | Keys during a call (DTMF, voicemail menus) | 🟡 | Sent to SIP as the profile's DTMF mode says; built 2026-10-29, not yet tested |
 | "Busy" when all voice channels are taken | ✅ | |
-| Phonebook and call lists on the handset | ❌ | Planned, from a vCard source over HTTPS |
+| Phonebook on the handset | 🟡 | The Contact List from a CardDAV address book, both ways (`docs/phonebook.md`); tested against a test server, not yet on a handset |
+| Call lists on the handset | ❌ | Planned |
 | Voicemail indicator on the handset | 🟡 | *Voicemail notification (MWI)* in the VoIP profile; CAT-iq handsets show the count. Built 2026-10-29, not yet tested |
 
 ## Web interface (LuCI)

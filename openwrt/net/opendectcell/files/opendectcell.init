@@ -17,6 +17,7 @@ extra_command "cell_leave" "Leave cell mode: erase the cell's credentials and ru
 
 PROG=/usr/sbin/dect-stubd
 CELL=/usr/sbin/dect-cell
+CARDDAV=/usr/share/opendectcell/carddav.uc
 
 log() { logger -t opendectcell "$*"; echo "opendectcell: $*" >&2; }
 
@@ -511,6 +512,7 @@ start_cell() {
 
 start_service() {
 	local enabled pin stores options reg wb ov dw ci nocipher="" rw n spare f args=""
+	local cdav contacts=""
 	local la tc tu role
 	config_load opendectcell
 	config_get_bool enabled main enabled 0
@@ -593,12 +595,18 @@ start_service() {
 		[ $spare -ge 2 ] && break
 	done
 
+	# The handsets' Contact List from a CardDAV address book (package
+	# opendectcell-carddav): dect-stubd offers what the sync writes, and the
+	# sync writes back what handsets change. Both stop with the service.
+	config_get_bool cdav carddav enabled 0
+	[ "$cdav" = 1 ] && [ -f "$CARDDAV" ] && contacts="-b /var/run/opendectcell/contacts"
+
 	procd_open_instance
 	# the PIN through a root-only file: on the command line every local
 	# user could read it in /proc (security audit 2026-10-29, F2)
 	( umask 077; printf '%s\n' "$pin" > /var/run/opendectcell/pin )
 	procd_set_param command $PROG $PCM_ARGS -g -P @/var/run/opendectcell/pin \
-		$nocipher $args \
+		$nocipher $args $contacts \
 		${options:+-a "$options"}
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -606,6 +614,15 @@ start_service() {
 	# a crash restarts it; five quick failures in a row give up
 	procd_set_param respawn 3600 5 5
 	procd_close_instance
+
+	if [ -n "$contacts" ]; then
+		procd_open_instance carddav
+		procd_set_param command /usr/bin/ucode "$CARDDAV"
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_set_param respawn 3600 30 5
+		procd_close_instance
+	fi
 
 	# the SIP side, when a handset has a line
 	if baresip_write; then

@@ -59,6 +59,7 @@
 #include "dect_clip.h"
 #include "dect_ctl.h"
 #include "dect_cell.h"
+#include "dect_contacts.h"
 #include "opendectcell_version.h"
 
 /* Headroom left for the log and anything else sharing the filesystem. */
@@ -665,6 +666,12 @@ struct stubd {
 	uint8_t uak[DECT_MM_UAK_LEN];
 	int uak_valid;
 	const char *sub_path;	/* host-side subscription store (holds the UAK) */
+	/* -b: the Contact List's file (the CardDAV sync writes it) and when we
+	 * last read it; NULL = no Contact List for the handsets */
+	const char *contacts_path;
+	uint64_t contacts_at;
+	long long contacts_mtime;
+	long long contacts_size;
 	struct handset hs[DECT_MM_MAX_SLOT];	/* every -s store, [0] = ring target */
 	unsigned n_hs;
 	unsigned cur;		/* which of them the fields here belong to */
@@ -5717,11 +5724,15 @@ static void lines_load(struct stubd *s, unsigned i)
 }
 
 /* The lines a link's Line Settings List offers: those of its handset. */
+static struct dect_contacts stubd_contacts;	/* every link's Contact List */
+
 static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
 {
 	const char *def = s->audio.line_name ? s->audio.line_name : "Line 1";
 	uint32_t att = slot >= 1u && slot <= 32u ? 1u << (slot - 1u) : 0u;
 	unsigned i;
+
+	iwu->contacts = s->contacts_path ? &stubd_contacts : NULL;
 
 	for (i = 0; i < s->n_hs; i++)
 		if (hs_slot(s, i) == slot)
@@ -5735,6 +5746,102 @@ static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
 		(void)dect_iwu_add_line(iwu, STUBD_LINE_ID + 1u,
 					s->hs[i].line_name[1][0]
 					? s->hs[i].line_name[1] : "Line 2", att);
+}
+
+/*
+ * The Contact List's file, once a second: read whole when its size or time
+ * changed (the sync replaces it by rename); and the changes handsets made,
+ * appended to FILE.changes for the sync to write back. Formats in
+ * dect_contacts.h. A journal line that cannot be written stays queued.
+ */
+static void contacts_tick(struct stubd *s, uint64_t now)
+{
+	struct dect_contacts *c = &stubd_contacts;
+	char path[300], line[512];
+	struct stat st;
+	size_t n;
+	int fd;
+
+	if (!s->contacts_path)
+		return;
+	if (c->n_journal) {
+		snprintf(path, sizeof(path), "%s.changes", s->contacts_path);
+		fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
+		while (fd >= 0 && (n = dect_contacts_take_change(c, line,
+								 sizeof(line) - 1u))) {
+			line[n++] = '\n';
+			if (write(fd, line, n) != (ssize_t)n) {
+				fprintf(stderr, "contacts: %s: %s\n", path,
+					strerror(errno));
+				break;
+			}
+		}
+		if (fd >= 0)
+			close(fd);
+	}
+	if (now - s->contacts_at < 1000u)
+		return;
+	s->contacts_at = now;
+	if (stat(s->contacts_path, &st) ||
+	    ((long long)st.st_mtime == s->contacts_mtime &&
+	     (long long)st.st_size == s->contacts_size))
+		return;
+	s->contacts_mtime = (long long)st.st_mtime;
+	s->contacts_size = (long long)st.st_size;
+	if (st.st_size > 1024 * 1024) {
+		fprintf(stderr, "contacts: %s is larger than 1 MiB, not read\n",
+			s->contacts_path);
+		return;
+	}
+	{
+		char *text = malloc((size_t)st.st_size + 1u);
+		FILE *f = fopen(s->contacts_path, "r");
+
+		n = text && f ? fread(text, 1, (size_t)st.st_size, f) : 0;
+		if (f)
+			fclose(f);
+		if (!text)
+			return;
+		if (dect_contacts_load(c, text, n))
+			fprintf(stderr, "contacts: %s is not a contacts file\n",
+				s->contacts_path);
+		else
+			printf("contacts: %u from %s%s\n", c->n,
+			       s->contacts_path,
+			       c->dropped ? " (some lines not taken)" : "");
+		free(text);
+	}
+}
+
+/*
+ * Journal numbers go on from the last one written before a restart, the
+ * contacts file's seq=N and every FILE.changes* line, so a change after
+ * the restart is never taken for one the sync has already applied.
+ */
+static void contacts_init(struct stubd *s)
+{
+	static const char *const ext[] = { ".changes", ".changes.work" };
+	char path[300], line[512];
+	unsigned long v;
+	unsigned i;
+	FILE *f;
+
+	/* untouched without -b: the store's pages are never mapped in */
+	if (!s->contacts_path)
+		return;
+	dect_contacts_init(&stubd_contacts);
+	for (i = 0; i < 2u; i++) {
+		snprintf(path, sizeof(path), "%s%s", s->contacts_path, ext[i]);
+		f = fopen(path, "r");
+		while (f && fgets(line, sizeof(line), f)) {
+			v = strtoul(line, NULL, 10);
+			if (v > stubd_contacts.seq && v < 0xFFFFFFFFul)
+				stubd_contacts.seq = (uint32_t)v;
+		}
+		if (f)
+			fclose(f);
+	}
+	s->contacts_mtime = -1;
 }
 
 static void name_load(struct stubd *s, unsigned i)
@@ -8362,6 +8469,8 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 	if (!strcmp(m->verb, "call-in")) {
 		const char *num = dect_ctl_get(m, "number");
 		const char *name = dect_ctl_get(m, "name");
+		char book_name[2u * DECT_CONTACT_NAME_MAX];
+		int book = 0;
 		const char *sip = dect_ctl_get(m, "sip");
 		const char *why = NULL, *codec;
 		struct dect_clip clip;
@@ -8423,11 +8532,30 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 					DECT_CLIP_NPI_UNKNOWN,
 					DECT_CLIP_PRES_ALLOWED,
 					DECT_CLIP_SCR_USER_UNSCREENED);
+		/*
+		 * No name from SIP: the Contact List's, as TS 102 527-3
+		 * 7.4.10.5.1.3 note 1 recommends ("First Name"), screened
+		 * "user-provided, verified and passed" as EN 300 175-5
+		 * 7.7.53 note 1 asks for a name from the FP's contact list.
+		 */
+		if ((!name || !*name) && num && *num && s->contacts_path) {
+			const struct dect_contact *e =
+				dect_contacts_find_number(&stubd_contacts, num);
+
+			if (e) {
+				snprintf(book_name, sizeof(book_name), "%s%s%s",
+					 e->first, e->first[0] && e->name[0]
+					 ? " " : "", e->name);
+				name = book_name;
+				book = 1;
+			}
+		}
 		if (name && *name)
 			(void)dect_clip_set_name(&clip, name,
 					DECT_CLIP_ALPHABET_UTF8,
 					DECT_CLIP_PRES_ALLOWED,
-					DECT_CLIP_SCR_USER_UNSCREENED);
+					book ? DECT_CLIP_SCR_USER_PASSED
+					     : DECT_CLIP_SCR_USER_UNSCREENED);
 		b->id = bridge_new_id(s);
 		b->line = line;
 		b->narrow = codec && !strcmp(codec, "nb");
@@ -11192,6 +11320,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		nlr_tick(s, now);
 		connect_tick(s, now);
 		reg_window_tick(s, now);
+		contacts_tick(s, now);
 		{
 			unsigned k;
 
@@ -11811,6 +11940,9 @@ static void usage(void)
 		"           not share such logs) -- implies -v\n"
 		"  -M SRC:DST:PRIM[:HEX]  after contact, send this mail (repeatable,\n"
 		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n"
+		"  -b FILE  offer the handsets a Contact List (CAT-iq phonebook) from\n"
+		"           FILE, re-read when it changes; what handsets change\n"
+		"           is appended to FILE.changes (see dect_contacts.h)\n"
 		"  -K       cell mode: a cell of an openDECTcell controller. No stack and\n"
 		"           no handsets here: every chip mail goes to dect-cell on\n"
 		"           " CELL_PATH ", the radio stays parked\n"
@@ -12367,7 +12499,7 @@ int main(int argc, char **argv)
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
 	s.pin = "0000";		/* the lab's; the library has no default */
-	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gKP:s:k:w:V:Ca:h")) != -1) {
+	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gKb:P:s:k:w:V:Ca:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
 		case 'c': cfg.slots = (unsigned int)strtoul(optarg, NULL, 0); break;
@@ -12391,6 +12523,7 @@ int main(int argc, char **argv)
 			break;
 		case 'g': s.do_register = 1; break;
 		case 'K': s.cell_mode = 1; break;
+		case 'b': s.contacts_path = optarg; break;
 		case 'P':
 			/*
 			 * @FILE: the PIN from a root-only file, so it is not on
@@ -12523,6 +12656,7 @@ int main(int argc, char **argv)
 		s.hs[0].path = s.sub_path;	/* the default store */
 		s.n_hs = 1;
 	}
+	contacts_init(&s);
 	if (!s.audio.remode_set && !(s.audio.flags & 0x40u))
 		s.audio.remode_ms = 0;	/* mode 2 from the first assign */
 	/* the window the start-up mail opens (0x022B), if regopen asked */
