@@ -529,7 +529,21 @@ sockets, diagnostics) sit between them, and moving those would shift
 when things happen for no gain. Unit tests; the fifteen traces
 unchanged.
 
+**S2.2b, 2026-10-30.** The key read-back and the slot audit are the
+library's: `dect_base_uak_verify()` and `dect_base_slot_audit()` send the
+0xFFF1 memory reads (`dect_base_mem_read()`), `dect_base_mem_reply()`
+judges the answers, and `dect_base_sub_check_tick()` (also in
+`dect_base_tick()`) sends the reads the 06.88 build holds back. Where the
+table sits is one STUB build's, so the host says so in `struct
+dect_base_chip`: `uak_table` (0: a build we hold no address for, both
+skipped), `uak_guess` (the 08.25 address for a build nobody named; the
+log owns up), `check_delay_ms` and the build's name. dect-stubd keeps
+reading which build is loaded, its own park read-back, and the log's key
+masking. One change: the audit takes the host's other records' slots
+when it is sent, not when the last answer comes (the same set: nothing
+loads a record in between). 35 unit tests; the fifteen traces unchanged
+(they carry the reads, not the answers).
+
 What dect-stubd still holds of the stack: the main call's audio path
-(`call_up()`, `call_down()`), the side links' lanes, the key read-back
-and slot audit (S2.2b), the controller-fetch experiment (M4), and the
-control verbs that are not the bridge's (S5c).
+(`call_up()`, `call_down()`), the side links' lanes, the controller-fetch
+experiment (M4), and the control verbs that are not the bridge's (S5c).

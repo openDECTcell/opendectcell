@@ -168,6 +168,36 @@ struct dect_base_chip {
 	uint8_t att_flag;	/* 0x0247 op 1's flag; stock sets bit 0 [CR A-0113] */
 	uint8_t att_cfg;	/* 0x020A's byte after the UAK [CR A-0113] */
 	int     no_mask;	/* send no 0x017C at all */
+	/*
+	 * S2.2b: where the loaded STUB build keeps the UAK table in its RAM,
+	 * DECT_MM_MAX_SLOT records of DECT_BASE_UAK_STRIDE bytes from slot 1
+	 * [CR A-0085]; 0: a build whose table we have no address for, so no
+	 * read-back and no audit. The host knows the build, the library not.
+	 */
+	uint32_t    uak_table;
+	int         uak_guess;	/* uak_table is the 08.25 build's, for a build nobody named */
+	uint32_t    check_delay_ms;	/* reads wait this long after the writes (06.88) */
+	const char *stub;	/* the build's name, for the log; NULL: unknown */
+};
+
+/* One UAK table record: 16 key bytes and a flag [CR A-0085]. */
+#define DECT_BASE_UAK_STRIDE	0x11u
+
+/*
+ * S2.2b: the chip's subscription table read back. The writes have no reply
+ * and no error path, so a memory read is the only way to see them land.
+ */
+struct dect_base_sub_check {
+	uint32_t uak_addr;	/* the outstanding UAK read-back, 0 = none */
+	uint8_t  uak_slot;
+	uint8_t  pending;	/* audit: reads still out, bit n-1 for slot n */
+	uint8_t  occupied;	/* audit: slots that came back holding a key */
+	uint8_t  mine;		/* audit: the slot we believe is ours */
+	uint8_t  kept;		/* audit: our other records' slots */
+	/* chip.check_delay_ms: the reads held back until this time, 0 = none */
+	uint64_t at;
+	int      want_uak, want_audit, firing;
+	uint8_t  want_slot, want_mine, want_kept;
 };
 
 /*
@@ -454,6 +484,7 @@ struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
 	struct dect_base_chip chip;
+	struct dect_base_sub_check check;	/* S2.2b */
 	struct dect_base_link main_link;	/* calls, enrolment */
 	/*
 	 * Side links: connections while the main link is busy, for location
@@ -573,6 +604,34 @@ int dect_base_slot_install(struct dect_base *b, unsigned slot,
 
 /* 0x017C {00, mask}: the handsets locked in, bit n-1 for slot n [CR A-0129]. */
 void dect_base_slot_mask(struct dect_base *b, uint8_t mask);
+
+/*
+ * Read n bytes of chip memory at addr: 0xFFF1 sub 0x07 to the debug task
+ * [CR COMMAND_SET 7.1]. Read only; 0xFFF1 sub 0x08 answers.
+ */
+void dect_base_mem_read(struct dect_base *b, uint32_t addr, uint16_t n);
+
+/*
+ * Read back the UAK just written to chip slot `slot` (S2.2b): the reply
+ * says whether it landed, the bytes never logged. Held back by
+ * chip.check_delay_ms; skipped when chip.uak_table is 0.
+ */
+void dect_base_uak_verify(struct dect_base *b, uint8_t slot, uint64_t now);
+
+/*
+ * Read every chip slot and say which hold a key (S2.2b): `mine` is the
+ * slot we believe is ours, `kept` our other records' slots (bit n-1 for
+ * slot n); any other slot holding a key is foreign. Held back and skipped
+ * as dect_base_uak_verify().
+ */
+void dect_base_slot_audit(struct dect_base *b, uint8_t mine, uint8_t kept,
+			  uint64_t now);
+
+/* The held-back reads, once chip.check_delay_ms is up. */
+void dect_base_sub_check_tick(struct dect_base *b, uint64_t now);
+
+/* A 0xFFF1 mail from the chip: a read-back's or the audit's answer. */
+void dect_base_mem_reply(struct dect_base *b, const struct dect_mail *m);
 
 /*
  * A connection came up on `handle` for link bl: its C-plane stack starts

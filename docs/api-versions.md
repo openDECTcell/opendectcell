@@ -909,3 +909,9 @@ _tick() (S6c).
 
 **136.** dect_base.h, 2026-10-30: struct dect_base_reply's `named`;
 dect_base_name_ok(), _ctl_admin() (S5c).
+
+**137.** dect_base.h, 2026-10-30: dect_base_chip's `uak_table`,
+`uak_guess`, `check_delay_ms`, `stub`; `DECT_BASE_UAK_STRIDE`; struct
+dect_base_sub_check and dect_base's `check`; dect_base_mem_read(),
+_uak_verify(), _slot_audit(), _sub_check_tick(), _mem_reply() (S2.2b).
+dect_base_tick() runs the held-back reads.

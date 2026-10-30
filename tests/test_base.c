@@ -37,10 +37,33 @@ static void rnd(void *ctx, uint8_t *out, size_t n)
 	memset(out, 0x5C, n);
 }
 
+static char log_all[2048];	/* every line since it was last emptied */
+
 static void log_line(void *ctx, const char *line)
 {
+	size_t n = strlen(log_all);
+
 	(void)ctx;
 	snprintf(logged, sizeof(logged), "%s", line);
+	snprintf(log_all + n, sizeof(log_all) - n, "%s\n", line);
+}
+
+/* The chip's 0xFFF1 sub 0x08 answer: 17 bytes at addr, each `fill`. */
+static void mem_answer(struct dect_base *bb, uint32_t addr, uint8_t fill)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.prim = 0xFFF1u;
+	m.param[0] = 0x08u;
+	m.param[1] = (uint8_t)addr;
+	m.param[2] = (uint8_t)(addr >> 8);
+	m.param[3] = (uint8_t)(addr >> 16);
+	m.param[4] = (uint8_t)(addr >> 24);
+	m.param[5] = DECT_BASE_UAK_STRIDE;
+	memset(&m.param[7], fill, DECT_BASE_UAK_STRIDE);
+	m.param_len = 7u + DECT_BASE_UAK_STRIDE;
+	dect_base_mem_reply(bb, &m);
 }
 
 static unsigned installs;
@@ -204,6 +227,106 @@ int main(void)
 		b.chip.no_mask = 1;
 		dect_base_slot_mask(&b, 0x05);
 		CHECK_EQ(n_sent, 1u);
+	}
+
+	/* the table read back (S2.2b) */
+	{
+		unsigned k;
+
+		memset(b.rec.uak, 0xB0, DECT_MM_UAK_LEN);
+		b.chip.uak_table = 0x9518u;
+		/* the read-back: one 17-byte read at slot 2's record */
+		n_sent = 0;
+		dect_base_uak_verify(&b, 2, 1000);
+		CHECK_EQ(n_sent, 1u);
+		CHECK_EQ(sent[0].prim, 0xFFF1u);
+		CHECK_EQ(sent[0].dst, DECT_TASK_PCM_REMOTE);
+		CHECK_EQ(sent[0].param_len, 7u);
+		CHECK_EQ(sent[0].param[0], 0x07);
+		CHECK_EQ(sent[0].param[1], 0x29);	/* 0x9518 + 0x11 */
+		CHECK_EQ(sent[0].param[2], 0x95);
+		CHECK_EQ(sent[0].param[5], 0x11);
+		mem_answer(&b, 0x9529u, 0xB0);
+		CHECK(strstr(logged, "slot 2 at 0x09529: MATCHES") != NULL);
+		CHECK_EQ(b.check.uak_addr, 0u);
+		dect_base_uak_verify(&b, 2, 1000);
+		mem_answer(&b, 0x9529u, 0x00);
+		CHECK(strstr(logged, "MISMATCH") != NULL);
+		CHECK(strstr(logged, "Unless") == NULL);
+		/* a guessed table says so; the key bytes are never logged */
+		b.chip.uak_guess = 1;
+		dect_base_uak_verify(&b, 2, 1000);
+		mem_answer(&b, 0x9529u, 0x00);
+		CHECK(strstr(logged, "Unless the STUB is not 08.25") != NULL);
+		CHECK(strstr(logged, "b0") == NULL && strstr(logged, "B0") == NULL);
+		b.chip.uak_guess = 0;
+		/* no slot outside 1..6 */
+		n_sent = 0;
+		dect_base_uak_verify(&b, 7, 1000);
+		CHECK_EQ(n_sent, 0u);
+
+		/* the audit: ours in 2, our other record in 4, a stranger in 5 */
+		n_sent = 0;
+		dect_base_slot_audit(&b, 2, (1u << 1) | (1u << 3), 1000);
+		CHECK_EQ(n_sent, 6u);
+		CHECK_EQ(b.check.pending, 0x3Fu);
+		log_all[0] = '\0';
+		for (k = 1; k <= 6; k++)
+			mem_answer(&b, 0x9518u + (k - 1u) * 0x11u,
+				   k == 2 || k == 4 || k == 5 ? 0x77 : 0x00);
+		CHECK_EQ(b.check.pending, 0u);
+		CHECK(strstr(log_all, "audit: 1=- 2=OURS 3=- 4=ours 5=held 6=-")
+		      != NULL);
+		CHECK(strstr(log_all, "*** 1 FOREIGN SLOT(S) STILL HELD ***")
+		      != NULL);
+		CHECK(strstr(log_all, "as we intend it") == NULL);
+		/* our own slot empty, nothing foreign */
+		dect_base_slot_audit(&b, 2, 0, 1000);
+		log_all[0] = '\0';
+		for (k = 1; k <= 6; k++)
+			mem_answer(&b, 0x9518u + (k - 1u) * 0x11u, 0x00);
+		CHECK(strstr(log_all, "OUR OWN SLOT 2 IS EMPTY") != NULL);
+		CHECK(strstr(log_all, "FOREIGN") == NULL);
+		/* everything where we put it */
+		dect_base_slot_audit(&b, 2, 0, 1000);
+		log_all[0] = '\0';
+		for (k = 1; k <= 6; k++)
+			mem_answer(&b, 0x9518u + (k - 1u) * 0x11u, k == 2 ? 1 : 0);
+		CHECK(strstr(log_all, "slot table is as we intend it") != NULL);
+		/* an answer to a read nobody asked for changes nothing */
+		log_all[0] = '\0';
+		mem_answer(&b, 0x9529u, 0x00);
+		CHECK_EQ(log_all[0], '\0');
+
+		/* a build we hold no table for: neither, said once each */
+		b.chip.uak_table = 0;
+		b.chip.stub = "dectfw_secondlevel_441-07.56.hex";
+		n_sent = 0;
+		dect_base_uak_verify(&b, 2, 1000);
+		CHECK(strstr(logged, "read-back skipped -- STUB "
+			      "dectfw_secondlevel_441-07.56.hex") != NULL);
+		dect_base_slot_audit(&b, 2, 0, 1000);
+		CHECK(strstr(logged, "slot audit skipped") != NULL);
+		CHECK_EQ(n_sent, 0u);
+
+		/* 06.88: both wait the delay, then the audit goes first */
+		b.chip.uak_table = 0x067Fu;
+		b.chip.check_delay_ms = 1000u;
+		n_sent = 0;
+		dect_base_slot_audit(&b, 1, 0, 5000);
+		dect_base_uak_verify(&b, 1, 5040);
+		CHECK_EQ(n_sent, 0u);
+		dect_base_sub_check_tick(&b, 6039);
+		CHECK_EQ(n_sent, 0u);
+		dect_base_tick(&b, 6040, 0);
+		CHECK_EQ(n_sent, 7u);
+		CHECK_EQ(sent[0].param[1], 0x7F);	/* the audit's slot 1 */
+		CHECK_EQ(sent[6].param[1], 0x7F);	/* then the read-back */
+		CHECK_EQ(b.check.uak_addr, 0x067Fu);
+		CHECK_EQ(b.check.at, 0u);
+		b.chip.check_delay_ms = 0;
+		b.chip.stub = NULL;
+		memset(&b.check, 0, sizeof(b.check));
 	}
 
 	/* a connection comes up: the current identity and the held ones */

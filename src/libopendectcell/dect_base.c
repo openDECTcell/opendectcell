@@ -154,6 +154,265 @@ void dect_base_slot_mask(struct dect_base *b, uint8_t mask)
 		      "[CR A-0129]", mask);
 }
 
+void dect_base_mem_read(struct dect_base *b, uint32_t addr, uint16_t n)
+{
+	struct dect_mail m;
+
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_PCM_REMOTE;
+	m.prim = 0xFFF1u;
+	m.param[0] = 0x07u;			/* MEM_READ */
+	m.param[1] = (uint8_t)addr;
+	m.param[2] = (uint8_t)(addr >> 8);
+	m.param[3] = (uint8_t)(addr >> 16);
+	m.param[4] = (uint8_t)(addr >> 24);
+	m.param[5] = (uint8_t)n;
+	m.param[6] = (uint8_t)(n >> 8);
+	m.param_len = 7u;
+	(void)dect_base_send(b, &m);
+}
+
+/*
+ * On the 7412's 06.88 STUB a memory read (task 0x23) sent right behind
+ * 0x020A/0x0247 (task 0x02) is answered before they take effect: the read 40
+ * ms after a 0x020A found the record missing, a sweep 1 s later found it in
+ * place (observed 2026-10-29). There, the read-back and the slot audit wait
+ * chip.check_delay_ms.
+ */
+static int sub_check_defer(struct dect_base *b, uint64_t now)
+{
+	if (!b->chip.check_delay_ms || b->check.firing)
+		return 0;
+	b->check.at = now + b->chip.check_delay_ms;
+	return 1;
+}
+
+static const char *stub_name(const struct dect_base *b)
+{
+	return b->chip.stub ? b->chip.stub : "unknown";
+}
+
+/*
+ * Read back the subscription record we just wrote, and say whether it landed.
+ *
+ * `[CR A-0085]`: 0x020A copies the 16-byte UAK to
+ *
+ *	table + (slot - 1) * 0x11
+ *
+ * with a flag at +0x10, six slots (the 08.25 build: table 0x9518, ending at
+ * 0x957E). The handler is a direct memcpy that returns immediately, and the
+ * chip processes mails in order, so a read issued after the write sees the
+ * finished result.
+ *
+ * `[CR A-0086]` is why this one command gets a check when we decided the
+ * others do not need one:
+ *
+ *   - The chip has **no rejection path and no error indication at all.** Not
+ *     for this command, not for any of them. Accepted and dropped look
+ *     identical, so a read-back is the only verification that can exist.
+ *   - Stock does not verify either -- but stock periodically **re-asserts**
+ *     most subscription state, so a lost write self-heals. The UAK is the
+ *     exception: written once at enrolment and never re-asserted. Stock has
+ *     our exact failure mode here and no way to notice it.
+ *
+ * So: one write-once, unprotected, silently-droppable command, carrying the
+ * credential the handset needs to attach. That is worth one read.
+ *
+ * The UAK is key material. We compare it and report the verdict; the bytes
+ * are never logged.
+ */
+void dect_base_uak_verify(struct dect_base *b, uint8_t slot, uint64_t now)
+{
+	uint32_t addr;
+
+	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
+		return;
+	if (sub_check_defer(b, now)) {
+		b->check.want_uak = 1;
+		b->check.want_slot = slot;
+		return;
+	}
+	if (!b->chip.uak_table) {
+		dect_base_log(b, "sub: UAK read-back skipped -- STUB %s is "
+			      "loaded, and the table address we hold is the "
+			      "08.25 build's [CR A-0085, Q-0059]", stub_name(b));
+		return;
+	}
+	addr = b->chip.uak_table + (uint32_t)(slot - 1u) * DECT_BASE_UAK_STRIDE;
+	b->check.uak_addr = addr;
+	b->check.uak_slot = slot;
+	/* 16 key bytes + the flag */
+	dect_base_mem_read(b, addr, DECT_BASE_UAK_STRIDE);
+}
+
+/*
+ * Audit every subscription slot the chip holds, and say so out loud.
+ *
+ * This is the one that has actually bitten us. The chip's subscription table
+ * **survives our daemon**: we write one slot, and a handset enrolled in some
+ * earlier session stays reachable in another slot for ever. `vF426` measured
+ * it -- 51 connections, every one from a handset our store did not contain.
+ * We now clear foreign slots at bring-up, and until today we never checked
+ * that the clear worked.
+ *
+ * `[CR A-0086]` says stock gets away without verifying because it
+ * periodically **re-asserts** subscription state, so a lost write self-heals.
+ * We re-assert at start-up and send 0x017C after every change [CR A-0129],
+ * but a slot cleared or written once can still be lost, and only a read
+ * shows it.
+ *
+ * Occupancy only -- a slot holds key material or it does not. We never log
+ * the key, and we cannot yet say WHICH handset a slot belongs to: that is the
+ * per-handset config above the table, whose layout we do not have (Q-0054).
+ */
+void dect_base_slot_audit(struct dect_base *b, uint8_t mine, uint8_t kept,
+			  uint64_t now)
+{
+	uint8_t slot;
+
+	if (sub_check_defer(b, now)) {
+		b->check.want_audit = 1;
+		b->check.want_mine = mine;
+		b->check.want_kept = kept;
+		return;
+	}
+	b->check.pending = 0;
+	b->check.occupied = 0;
+	b->check.mine = mine;
+	b->check.kept = kept;
+	if (!b->chip.uak_table) {
+		dect_base_log(b, "sub: slot audit skipped -- STUB %s is loaded, "
+			      "and the table address we hold is the 08.25 "
+			      "build's", stub_name(b));
+		return;
+	}
+	for (slot = 1u; slot <= DECT_MM_MAX_SLOT; slot++) {
+		uint32_t addr = b->chip.uak_table
+			      + (uint32_t)(slot - 1u) * DECT_BASE_UAK_STRIDE;
+
+		b->check.pending |= (uint8_t)(1u << (slot - 1u));
+		dect_base_mem_read(b, addr, DECT_BASE_UAK_STRIDE);
+	}
+}
+
+void dect_base_sub_check_tick(struct dect_base *b, uint64_t now)
+{
+	if (!b->check.at || now < b->check.at)
+		return;
+	b->check.at = 0;
+	b->check.firing = 1;
+	if (b->check.want_audit)
+		dect_base_slot_audit(b, b->check.want_mine, b->check.want_kept,
+				     now);
+	if (b->check.want_uak)
+		dect_base_uak_verify(b, b->check.want_slot, now);
+	b->check.want_audit = b->check.want_uak = 0;
+	b->check.firing = 0;
+}
+
+static void audit_reply(struct dect_base *b, uint32_t addr,
+			const uint8_t *rec, size_t len)
+{
+	struct dect_base_sub_check *c = &b->check;
+	uint8_t slot, bit, mine_bit, kept, foreign;
+	char line[96];
+	size_t at;
+	unsigned i;
+	int occupied = 0;
+
+	if (addr < b->chip.uak_table)
+		return;
+	if ((addr - b->chip.uak_table) % DECT_BASE_UAK_STRIDE)
+		return;
+	if ((addr - b->chip.uak_table) / DECT_BASE_UAK_STRIDE >= DECT_MM_MAX_SLOT)
+		return;
+	slot = (uint8_t)((addr - b->chip.uak_table) / DECT_BASE_UAK_STRIDE + 1u);
+	bit = (uint8_t)(1u << (slot - 1u));
+	if (!(c->pending & bit))
+		return;
+	c->pending &= (uint8_t)~bit;
+
+	for (i = 0; i < DECT_MM_UAK_LEN && i < len; i++)
+		if (rec[i])
+			occupied = 1;
+	if (occupied)
+		c->occupied |= bit;
+
+	if (c->pending)
+		return;			/* wait for the rest */
+
+	mine_bit = (uint8_t)(c->mine >= 1u && c->mine <= DECT_MM_MAX_SLOT
+			     ? 1u << (c->mine - 1u) : 0u);
+	/* our other handsets' slots are kept, not foreign */
+	kept = (uint8_t)(c->kept & ~mine_bit);
+	foreign = (uint8_t)(c->occupied & ~(mine_bit | kept));
+
+	at = (size_t)snprintf(line, sizeof(line), "sub: chip slot audit:");
+	for (i = 1u; i <= DECT_MM_MAX_SLOT && at < sizeof(line); i++)
+		at += (size_t)snprintf(line + at, sizeof(line) - at, " %u=%s", i,
+				!(c->occupied & (1u << (i - 1u))) ? "-" :
+				i == c->mine ? "OURS" :
+				kept & (1u << (i - 1u)) ? "ours" : "held");
+	dect_base_log(b, "%s", line);
+	if (mine_bit && !(c->occupied & mine_bit))
+		dect_base_log(b, "sub: *** OUR OWN SLOT %u IS EMPTY *** the "
+			      "subscription did not land; the handset will "
+			      "not attach", c->mine);
+	if (foreign)
+		dect_base_log(b, "sub: *** %u FOREIGN SLOT(S) STILL HELD *** "
+			      "the clear did not take. A handset we hold no "
+			      "record for can attach [vF426]",
+			      (unsigned)__builtin_popcount(foreign));
+	if (b->chip.uak_guess)
+		dect_base_log(b, "sub: (the audit reads the 08.25 build's "
+			      "address; nothing says which STUB is loaded)");
+	if (!foreign && (!mine_bit || (c->occupied & mine_bit)))
+		dect_base_log(b, "sub: slot table is as we intend it");
+}
+
+void dect_base_mem_reply(struct dect_base *b, const struct dect_mail *m)
+{
+	uint32_t addr;
+
+	if (m->prim != 0xFFF1u || m->param_len < 7u || m->param[0] != 0x08u)
+		return;
+	addr = (uint32_t)m->param[1] | ((uint32_t)m->param[2] << 8)
+	     | ((uint32_t)m->param[3] << 16) | ((uint32_t)m->param[4] << 24);
+	if (b->check.pending)
+		audit_reply(b, addr, &m->param[7], (size_t)(m->param_len - 7u));
+	if (!b->check.uak_addr || addr != b->check.uak_addr)
+		return;			/* some other read */
+	b->check.uak_addr = 0;
+
+	if (m->param_len < 7u + DECT_MM_UAK_LEN) {
+		dect_base_log(b, "sub: UAK read-back for slot %u came back "
+			      "short (%u bytes) -- CANNOT VERIFY",
+			      b->check.uak_slot, (unsigned)m->param_len);
+		return;
+	}
+	if (!memcmp(&m->param[7], b->rec.uak, DECT_MM_UAK_LEN)) {
+		dect_base_log(b, "sub: UAK read-back slot %u at 0x%05X: MATCHES "
+			      "(16 bytes, flag %02x)", b->check.uak_slot,
+			      (unsigned)addr,
+			      m->param_len > 7u + DECT_MM_UAK_LEN
+				      ? m->param[7 + DECT_MM_UAK_LEN] : 0u);
+	} else {
+		/*
+		 * The chip took the mail and did not store it, or stored it
+		 * somewhere else. There is no error indication to have
+		 * missed: this is the only way the failure is visible.
+		 */
+		dect_base_log(b, "sub: *** UAK READ-BACK MISMATCH *** slot %u "
+			      "at 0x%05X -- the subscription did NOT land. The "
+			      "handset will not attach. [CR A-0085/A-0086]%s",
+			      b->check.uak_slot, (unsigned)addr,
+			      b->chip.uak_guess
+				      ? " Unless the STUB is not 08.25: nothing "
+					"says which build is loaded" : "");
+	}
+}
+
 void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 			 uint8_t handle, const struct dect_mm_cfg *cfg,
 			 unsigned hold_mask)
@@ -4924,6 +5183,7 @@ void dect_base_tick(struct dect_base *b, uint64_t now, int radio_on)
 {
 	unsigned k;
 
+	dect_base_sub_check_tick(b, now);
 	dect_base_main_dial_tick(b, now);
 	dect_base_info_tick(b, now);
 	dect_base_cs_connect_tick(b, now);
