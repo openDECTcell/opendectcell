@@ -751,3 +751,8 @@ and dect_base_chip_key() (0x0208, the call key): a call's ciphering (S3a).
 **102.** dect_base.h, 2026-10-30: struct dect_base_link gains the call
 state both kinds of link keep: `dial_len`, `dial_change_ms`, `ic_tried`,
 `cipher_done`, `auth_refused` (S3b).
+
+**103.** dect_base.h, 2026-10-30: struct dect_base_call and struct
+dect_base's `calls[DECT_BASE_CALLS]`, the external calls the bridge
+carries (was dect-stubd's struct bcall), with DECT_BASE_PARTY_PAGING and
+DECT_BASE_PARTY_NONE (S3c). dect_base.h now includes dect_clip.h.

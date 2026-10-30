@@ -219,6 +219,12 @@ call check, the cipher's outcome) is `dect_base_link`'s. Data only; the
 main link and side links still reset it at their own points. Traces
 unchanged.
 
-Next in S3: the bridge's call table (`struct bcall`), then the ring
+**S3c.** The bridge's call table is `dect_base`'s: `struct
+dect_base_call`, `calls[3]`, one per audio channel (was dect-stubd's
+`struct bcall`; its constants are aliases now). Data only; traces
+unchanged.
+
+Next in S3, the behaviour: the call table's functions (find, allocate,
+free, the events to the bridge as a host callback), then the ring
 sequence, the main link's connect staging, and the internal call.
 

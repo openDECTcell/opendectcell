@@ -425,53 +425,10 @@ struct xlane {
 	uint32_t rx_prev;
 };
 
-/*
- * A call the bridge carries (docs/bridge-interface.md §2): its id, the link
- * it is on and the events already sent.
- */
-#define BC_MAX		3u	/* the chip's audio channels */
-#define BC_PAGING	(-3)	/* a side ring paging its handset, no link yet */
-#define BC_NONE		(-4)	/* no link */
-
-struct bcall {
-	unsigned id;		/* 0 = free */
-	int      party;		/* -1 the main link, else a side index */
-	unsigned line;		/* the pool line, 1 or 2 */
-	/*
-	 * The SIP side is narrowband (a caller who offered no G.722, a far
-	 * end that answered G.711): the handset's leg is too, so neither the
-	 * box nor baresip converts.
-	 */
-	int      narrow;
-	int      out;		/* 1: the handset called out, 0: call-in */
-	int      busy_seen;	/* the CC call existed */
-	int      rang, answered;	/* events sent */
-	uint64_t since;
-	/*
-	 * A call-in rung on a side link (a side ring): its handset (table
-	 * index), paged while BC_PAGING, and the caller it is shown.
-	 */
-	int      target;
-	uint8_t  tpui[3];
-	unsigned pages;
-	uint64_t page_at;
-	struct dect_clip clip;
-	int      info_sent;	/* its display text sent */
-	int      cs_sent;	/* ... and its CS call connect */
-	/*
-	 * Parallel calls on one link, to a Part 3 handset (TS 102 527-3
-	 * §7.4.3): par, a call riding another's transaction in {CC-INFO} (a
-	 * waiting call, or one placed with 1CH 15H); for every call its id on
-	 * the handset and what the handset was told of it last (DECT_CS_*).
-	 * The lane carries the one in CS call connect.
-	 */
-	int      par;
-	uint8_t  dect_id, cs;
-	int      dtmf;		/* the link's keypad is this call's DTMF */
-	int      dialing;	/* 1CH 15H: the number still coming */
-	uint64_t dial_ms;	/* its last digit */
-	char     num[DECT_CC_KEYPAD_MAX + 1];
-};
+/* The bridge's calls are dect_base's (dect_base.h, S3c). */
+#define BC_MAX		DECT_BASE_CALLS
+#define BC_PAGING	DECT_BASE_PARTY_PAGING
+#define BC_NONE		DECT_BASE_PARTY_NONE
 
 /*
  * One lane's speech on the audio socket: lane 0 is the main link's, 1 + i
@@ -636,12 +593,6 @@ struct stubd {
 		int      bridge;	/* the client that said "bridge", -1 */
 		unsigned next_call;	/* call ids, 1..127 */
 	} ctl;
-	/*
-	 * The external calls the bridge carries (docs/bridge-interface.md
-	 * §2), one per audio channel: on the main link (party -1), on a side
-	 * link (its index), or paging its handset for a side ring (BC_PAGING).
-	 */
-	struct bcall bc[BC_MAX];
 	/*
 	 * The bridged calls' speech (docs/bridge-interface.md §3): one
 	 * listening SOCK_SEQPACKET socket, a connection per call, 20 ms
@@ -3316,7 +3267,7 @@ static uint8_t alloc_call_id(const struct stubd *s, const struct dect_link *me)
 			    s->side[k].bl.link.cc.status_call_id == id)
 				used = 1;
 		for (k = 0; !used && k < BC_MAX; k++)
-			if (s->bc[k].id && s->bc[k].dect_id == id)
+			if (s->base.calls[k].id && s->base.calls[k].dect_id == id)
 				used = 1;	/* a parallel call's */
 		if (!used)
 			return (uint8_t)id;
@@ -4368,14 +4319,14 @@ static uint8_t ring_page_info(const struct stubd *s, int narrow)
 			  ? RING_PAGE_WIDEBAND : 0u));
 }
 
-/* The main link's ring is for a narrowband call (struct bcall). */
+/* The main link's ring is for a narrowband call (struct dect_base_call). */
 static int main_ring_narrow(const struct stubd *s)
 {
 	unsigned i;
 
 	for (i = 0; i < BC_MAX; i++)
-		if (s->bc[i].id && s->bc[i].party == -1)
-			return s->bc[i].narrow;
+		if (s->base.calls[i].id && s->base.calls[i].party == -1)
+			return s->base.calls[i].narrow;
 	return 0;
 }
 
@@ -4566,8 +4517,8 @@ static void ring_callinfo(struct stubd *s, int on)
 	ci.has_line = 1;
 	ci.line_id = STUBD_LINE_ID;
 	for (i = 0; i < BC_MAX; i++)
-		if (s->bc[i].id && s->bc[i].party == -1)
-			ci.line_id = (uint8_t)s->bc[i].line;	/* the called one */
+		if (s->base.calls[i].id && s->base.calls[i].party == -1)
+			ci.line_id = (uint8_t)s->base.calls[i].line;	/* the called one */
 	ci.has_line_type = 1;
 	ci.line_type = DECT_CALLINFO_NDT_DELAY;
 	ci.has_call_id = 1;
@@ -6708,7 +6659,7 @@ static int lanes_available(const struct stubd *s, const struct side_link *me)
 		if (!s->xl[i].used)
 			n++;
 	for (i = 0; i < BC_MAX; i++)
-		if (s->bc[i].id && s->bc[i].party == BC_PAGING)
+		if (s->base.calls[i].id && s->base.calls[i].party == BC_PAGING)
 			n--;
 	for (i = 0; i < SIDE_MAX; i++) {
 		const struct side_link *o = &s->side[i];
@@ -7683,7 +7634,7 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
  * from it, as SIGUSR2 and SIGUSR1 do. Nothing a SIP peer says reaches MM
  * through here except these two configuration commands (§4).
  */
-static void bc_clear(struct stubd *s, struct bcall *b);
+static void bc_clear(struct stubd *s, struct dect_base_call *b);
 
 static void ctl_drop(struct stubd *s, int c, const char *why)
 {
@@ -7698,7 +7649,7 @@ static void ctl_drop(struct stubd *s, int c, const char *why)
 
 		s->ctl.bridge = -1;
 		for (i = 0; i < BC_MAX; i++) {
-			struct bcall *b = &s->bc[i];
+			struct dect_base_call *b = &s->base.calls[i];
 			int p = b->party;
 
 			if (!b->id)
@@ -7824,7 +7775,7 @@ static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
 /*
  * The bridge (docs/bridge-interface.md §2, step 2 of §5): a client that
  * sent "bridge" carries the external calls, up to BC_MAX at once, on the
- * main link or on side links (struct bcall). Out: a handset's number goes
+ * main link or on side links (struct dect_base_call). Out: a handset's number goes
  * out as call-out, and remote-ringing, remote-answered and remote-released
  * drive ALERTING, CONNECT and the release. In: call-in rings the handset
  * hs= names (the first without it), on the main link or, while that is
@@ -7839,7 +7790,7 @@ static unsigned bridge_new_id(struct stubd *s)
 	do {
 		s->ctl.next_call = s->ctl.next_call % 127u + 1u;
 		for (i = 0; i < BC_MAX; i++)
-			if (s->bc[i].id == s->ctl.next_call)
+			if (s->base.calls[i].id == s->ctl.next_call)
 				break;
 	} while (i < BC_MAX);
 	return s->ctl.next_call;
@@ -7872,36 +7823,36 @@ static int party_has_line2(const struct stubd *s, int p)
 	return a >= 0 && (unsigned)a < s->base.n_hs && s->hs[a].line2;
 }
 
-static struct bcall *bc_by_id(struct stubd *s, unsigned id)
+static struct dect_base_call *bc_by_id(struct stubd *s, unsigned id)
 {
 	unsigned i;
 
 	for (i = 0; id && i < BC_MAX; i++)
-		if (s->bc[i].id == id)
-			return &s->bc[i];
+		if (s->base.calls[i].id == id)
+			return &s->base.calls[i];
 	return NULL;
 }
 
 /* The bridged call on link p (-1 the main link), or NULL. */
-static struct bcall *bc_on(struct stubd *s, int p)
+static struct dect_base_call *bc_on(struct stubd *s, int p)
 {
 	unsigned i;
 
 	for (i = 0; i < BC_MAX; i++)
-		if (s->bc[i].id && s->bc[i].party == p)
-			return &s->bc[i];
+		if (s->base.calls[i].id && s->base.calls[i].party == p)
+			return &s->base.calls[i];
 	return NULL;
 }
 
 /* A free entry, zeroed; it is taken once its id is set. NULL: all taken. */
-static struct bcall *bc_new(struct stubd *s)
+static struct dect_base_call *bc_new(struct stubd *s)
 {
 	unsigned i;
 
 	for (i = 0; i < BC_MAX; i++)
-		if (!s->bc[i].id) {
-			memset(&s->bc[i], 0, sizeof(s->bc[i]));
-			return &s->bc[i];
+		if (!s->base.calls[i].id) {
+			memset(&s->base.calls[i], 0, sizeof(s->base.calls[i]));
+			return &s->base.calls[i];
 		}
 	return NULL;
 }
@@ -7912,7 +7863,7 @@ static struct bcall *bc_new(struct stubd *s)
  * ring_now is set, so a ring left in PAGING would hold the main link
  * "busy" for good (code review, 2026-10-29).
  */
-static void bc_clear(struct stubd *s, struct bcall *b)
+static void bc_clear(struct stubd *s, struct dect_base_call *b)
 {
 	if (b->party == -1) {
 		s->ring_now = 0;
@@ -7923,7 +7874,7 @@ static void bc_clear(struct stubd *s, struct bcall *b)
 	b->id = 0;
 }
 
-static void bridge_event(struct stubd *s, const struct bcall *b,
+static void bridge_event(struct stubd *s, const struct dect_base_call *b,
 			 const char *verb, const char *k2, const char *v2)
 {
 	struct dect_ctl_out o;
@@ -7944,7 +7895,7 @@ static int bridge_call_out(struct stubd *s, int p, uint64_t now)
 {
 	struct dect_cc *cc = ic_cc(s, p);
 	struct dect_ctl_out o;
-	struct bcall *b;
+	struct dect_base_call *b;
 	const uint8_t *k;
 	size_t len;
 	char num[DECT_CTL_VAL_MAX];
@@ -8018,32 +7969,32 @@ static unsigned bc_live(const struct stubd *s, int p)
 	unsigned i, n = 0;
 
 	for (i = 0; i < BC_MAX; i++)
-		if (s->bc[i].id && s->bc[i].party == p)
+		if (s->base.calls[i].id && s->base.calls[i].party == p)
 			n++;
 	return n;
 }
 
 /* The call link p's lane carries -- in CS call connect -- or NULL. */
-static struct bcall *bc_active(struct stubd *s, int p)
+static struct dect_base_call *bc_active(struct stubd *s, int p)
 {
 	unsigned i;
 
 	for (i = 0; i < BC_MAX; i++)
-		if (s->bc[i].id && s->bc[i].party == p &&
-		    s->bc[i].cs == DECT_CS_CALL_CONNECT)
-			return &s->bc[i];
+		if (s->base.calls[i].id && s->base.calls[i].party == p &&
+		    s->base.calls[i].cs == DECT_CS_CALL_CONNECT)
+			return &s->base.calls[i];
 	return NULL;
 }
 
 /* Link p's call the handset knows by call id id, or NULL. */
-static struct bcall *bc_by_dect(struct stubd *s, int p, uint8_t id)
+static struct dect_base_call *bc_by_dect(struct stubd *s, int p, uint8_t id)
 {
 	unsigned i;
 
 	for (i = 0; id && i < BC_MAX; i++)
-		if (s->bc[i].id && s->bc[i].party == p &&
-		    s->bc[i].dect_id == id)
-			return &s->bc[i];
+		if (s->base.calls[i].id && s->base.calls[i].party == p &&
+		    s->base.calls[i].dect_id == id)
+			return &s->base.calls[i];
 	return NULL;
 }
 
@@ -8061,7 +8012,7 @@ static const char *cs_name(uint8_t cs)
 }
 
 /* Tell the handset call b's new status (§7.4.6.4) in {CC-INFO}. */
-static void par_status(struct stubd *s, struct bcall *b, uint8_t cs,
+static void par_status(struct stubd *s, struct dect_base_call *b, uint8_t cs,
 		       uint64_t now)
 {
 	struct dect_cc *cc = ic_cc(s, b->party);
@@ -8080,7 +8031,7 @@ static void par_status(struct stubd *s, struct bcall *b, uint8_t cs,
 static void par_nack(struct stubd *s, int p, uint8_t id, uint8_t reason,
 		     uint64_t now)
 {
-	const struct bcall *b = bc_by_dect(s, p, id);
+	const struct dect_base_call *b = bc_by_dect(s, p, id);
 
 	if (dect_cc_call_status(ic_cc(s, p), id, b ? b->cs : DECT_CS_IDLE,
 				reason, DECT_SIGNAL_NEGATIVE_ACK_TONE) == 0)
@@ -8092,7 +8043,7 @@ static void par_nack(struct stubd *s, int p, uint8_t id, uint8_t reason,
 /* The active call on link p goes on hold, at the far end too. */
 static void par_hold(struct stubd *s, int p, uint64_t now)
 {
-	struct bcall *a = bc_active(s, p);
+	struct dect_base_call *a = bc_active(s, p);
 
 	if (!a)
 		return;
@@ -8101,7 +8052,7 @@ static void par_hold(struct stubd *s, int p, uint64_t now)
 }
 
 /* Call b becomes the active one; verb, if any, tells the bridge. */
-static void par_connect(struct stubd *s, struct bcall *b, const char *verb,
+static void par_connect(struct stubd *s, struct dect_base_call *b, const char *verb,
 			uint64_t now)
 {
 	par_status(s, b, DECT_CS_CALL_CONNECT, now);
@@ -8145,7 +8096,7 @@ static int waiting_party(struct stubd *s, unsigned t)
 }
 
 /* Call waiting (§7.4.3.5.2) for call-in b on link p. 0, or -1. */
-static int cw_start(struct stubd *s, struct bcall *b, int p,
+static int cw_start(struct stubd *s, struct dect_base_call *b, int p,
 		    const struct dect_clip *clip, uint64_t now)
 {
 	struct dect_callinfo ci;
@@ -8174,7 +8125,7 @@ static int cw_start(struct stubd *s, struct bcall *b, int p,
 }
 
 /* A parallel call's number is complete: to the bridge. */
-static void par_dial_out(struct stubd *s, struct bcall *d, uint64_t now)
+static void par_dial_out(struct stubd *s, struct dect_base_call *d, uint64_t now)
 {
 	struct dect_ctl_out o;
 
@@ -8202,7 +8153,7 @@ static void par_dial_out(struct stubd *s, struct bcall *d, uint64_t now)
 static void par_control(struct stubd *s, int p, uint8_t code, uint8_t id,
 			uint64_t now)
 {
-	struct bcall *b = bc_by_dect(s, p, id), *a = bc_active(s, p);
+	struct dect_base_call *b = bc_by_dect(s, p, id), *a = bc_active(s, p);
 
 	switch (code) {
 	case 0x35u:			/* accept the waiting call ... */
@@ -8303,7 +8254,7 @@ static void par_control(struct stubd *s, int p, uint8_t code, uint8_t id,
 static void par_tick(struct stubd *s, int p, uint64_t now)
 {
 	struct dect_cc *cc = ic_cc(s, p);
-	struct bcall *d = NULL, *a;
+	struct dect_base_call *d = NULL, *a;
 	const uint8_t *k;
 	uint8_t code, id;
 	size_t len, i, n;
@@ -8311,8 +8262,8 @@ static void par_tick(struct stubd *s, int p, uint64_t now)
 	if (dect_cc_take_control(cc, &code, &id))
 		par_control(s, p, code, id, now);
 	for (i = 0; i < BC_MAX; i++)
-		if (s->bc[i].id && s->bc[i].party == p && s->bc[i].dialing)
-			d = &s->bc[i];
+		if (s->base.calls[i].id && s->base.calls[i].party == p && s->base.calls[i].dialing)
+			d = &s->base.calls[i];
 	k = dect_cc_keypad(cc, &len);
 	if (d) {
 		n = strlen(d->num);
@@ -8338,7 +8289,7 @@ static void par_tick(struct stubd *s, int p, uint64_t now)
 		 * is held or waiting, and the digits are for none of them.
 		 */
 		for (i = 0; i < BC_MAX; i++)
-			if (s->bc[i].id && s->bc[i].party == p && s->bc[i].cs) {
+			if (s->base.calls[i].id && s->base.calls[i].party == p && s->base.calls[i].cs) {
 				dect_cc_clear_keypad(cc);
 				break;
 			}
@@ -8370,9 +8321,9 @@ static int hs_in_call(const struct stubd *s, unsigned t)
 		    dect_cc_busy(&s->side[k].bl.link.cc))
 			return 1;
 	for (k = 0; k < BC_MAX; k++)
-		if (s->bc[k].id && !s->bc[k].out &&
-		    ((s->bc[k].party == -1 && s->ring_hs == t) ||
-		     (s->bc[k].party == BC_PAGING && s->bc[k].target == (int)t)))
+		if (s->base.calls[k].id && !s->base.calls[k].out &&
+		    ((s->base.calls[k].party == -1 && s->ring_hs == t) ||
+		     (s->base.calls[k].party == BC_PAGING && s->base.calls[k].target == (int)t)))
 			return 1;
 	return 0;
 }
@@ -8386,7 +8337,7 @@ static int main_free(struct stubd *s)
 }
 
 /* Ring handset t on the main link for b; ring_tick() pages it. */
-static void ring_main(struct stubd *s, struct bcall *b, unsigned t)
+static void ring_main(struct stubd *s, struct dect_base_call *b, unsigned t)
 {
 	b->party = -1;
 	s->ring_hs = t;
@@ -8406,7 +8357,7 @@ static void ring_main(struct stubd *s, struct bcall *b, unsigned t)
  * and name method, and to a Part 3 handset the line, call id and CS call
  * setup [CR A-0125]. Each call pages its own handset.
  */
-static void sr_page(struct stubd *s, struct bcall *b)
+static void sr_page(struct stubd *s, struct dect_base_call *b)
 {
 	const uint8_t p[3] = { ring_page_info(s, b->narrow), b->tpui[1],
 			       b->tpui[2] };
@@ -8417,7 +8368,7 @@ static void sr_page(struct stubd *s, struct bcall *b)
 	       hs_slot(s, (unsigned)b->target), b->id, b->pages, IC_PAGES);
 }
 
-static void sr_start(struct stubd *s, struct bcall *b, unsigned t,
+static void sr_start(struct stubd *s, struct dect_base_call *b, unsigned t,
 		     uint64_t now)
 {
 	struct dect_mm_cfg cfg;
@@ -8443,7 +8394,7 @@ static int sr_part3(const struct stubd *s, unsigned t)
 }
 
 /* Side ring b's SETUP to its handset, on side link k. */
-static void sr_setup(struct stubd *s, struct bcall *b, unsigned k,
+static void sr_setup(struct stubd *s, struct dect_base_call *b, unsigned k,
 		     uint64_t now, const char *how)
 {
 	struct dect_link *l = &s->side[k].bl.link;
@@ -8503,7 +8454,7 @@ static int sr_target_link(struct stubd *s, struct side_link *sl,
 	unsigned i;
 
 	for (i = 0; i < BC_MAX; i++) {
-		struct bcall *b = &s->bc[i];
+		struct dect_base_call *b = &s->base.calls[i];
 
 		if (!b->id || b->party != BC_PAGING ||
 		    !page_adopt(s, sl, ind, b->target, " (external call)"))
@@ -8515,7 +8466,7 @@ static int sr_target_link(struct stubd *s, struct side_link *sl,
 	return 0;
 }
 
-static void sr_tick(struct stubd *s, struct bcall *b, uint64_t now)
+static void sr_tick(struct stubd *s, struct dect_base_call *b, uint64_t now)
 {
 	unsigned k;
 
@@ -8550,7 +8501,7 @@ static void sr_tick(struct stubd *s, struct bcall *b, uint64_t now)
  * (info_tick() for the main link), CS call connect to a Part 3 handset
  * once it answered (cs_connect_tick()).
  */
-static void sr_call_tick(struct stubd *s, struct bcall *b, uint64_t now)
+static void sr_call_tick(struct stubd *s, struct dect_base_call *b, uint64_t now)
 {
 	struct dect_cc *cc = ic_cc(s, b->party);
 	unsigned t = (unsigned)b->target;
@@ -8582,7 +8533,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			  uint64_t now)
 {
 	struct dect_ctl_out o;
-	struct bcall *b;
+	struct dect_base_call *b;
 	unsigned id;
 	int p;
 
@@ -8921,7 +8872,7 @@ static void bridge_tick(struct stubd *s, uint64_t now)
 			par_tick(s, p, now);
 	}
 	for (i = 0; i < BC_MAX; i++) {
-		struct bcall *b = &s->bc[i];
+		struct dect_base_call *b = &s->base.calls[i];
 		struct dect_cc *cc;
 		int busy;
 
@@ -9065,7 +9016,7 @@ static void ab_close(struct stubd *s)
 }
 
 /* The bridged call whose speech lane i carries now, or NULL. */
-static const struct bcall *ab_call_of(struct stubd *s, unsigned i, int *wb)
+static const struct dect_base_call *ab_call_of(struct stubd *s, unsigned i, int *wb)
 {
 	const struct xlane *x;
 	unsigned k;
@@ -9147,7 +9098,7 @@ static void ab_tick(struct stubd *s, uint64_t now)
 	/* each lane: the call on it, announced once its speech is bound */
 	for (i = 0; i < AB_LANES; i++) {
 		struct ab_lane *l = &s->ab.l[i];
-		const struct bcall *b;
+		const struct dect_base_call *b;
 		struct dect_ctl_out o;
 		int wb;
 

@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "dect_cc.h"
+#include "dect_clip.h"
 #include "dect_link.h"
 #include "dect_mail.h"
 #include "dect_mm.h"
@@ -108,6 +109,57 @@ struct dect_base_link {
 	int      auth_refused;		/* authfirst: ended, the key unproven */
 };
 
+/*
+ * Stage S3c: the external calls the bridge carries
+ * (docs/bridge-interface.md §2), one per audio channel of the chip: on the
+ * main link (party -1), on a side link (its index), or paging its handset
+ * for a side ring (DECT_BASE_PARTY_PAGING).
+ */
+#define DECT_BASE_CALLS		3u
+#define DECT_BASE_PARTY_PAGING	(-3)	/* a side ring paging, no link yet */
+#define DECT_BASE_PARTY_NONE	(-4)	/* no link */
+
+struct dect_base_call {
+	unsigned id;		/* 0 = free */
+	int      party;		/* -1 the main link, else a side index */
+	unsigned line;		/* the pool line, 1 or 2 */
+	/*
+	 * The SIP side is narrowband (a caller who offered no G.722, a far
+	 * end that answered G.711): the handset's leg is too, so neither the
+	 * box nor baresip converts.
+	 */
+	int      narrow;
+	int      out;		/* 1: the handset called out, 0: call-in */
+	int      busy_seen;	/* the CC call existed */
+	int      rang, answered;	/* events sent */
+	uint64_t since;
+	/*
+	 * A call-in rung on a side link (a side ring): its handset (table
+	 * index), paged while DECT_BASE_PARTY_PAGING, and the caller it
+	 * is shown.
+	 */
+	int      target;
+	uint8_t  tpui[3];
+	unsigned pages;
+	uint64_t page_at;
+	struct dect_clip clip;
+	int      info_sent;	/* its display text sent */
+	int      cs_sent;	/* ... and its CS call connect */
+	/*
+	 * Parallel calls on one link, to a Part 3 handset (TS 102 527-3
+	 * §7.4.3): par, a call riding another's transaction in {CC-INFO} (a
+	 * waiting call, or one placed with 1CH 15H); for every call its id on
+	 * the handset and what the handset was told of it last (DECT_CS_*).
+	 * The lane carries the one in CS call connect.
+	 */
+	int      par;
+	uint8_t  dect_id, cs;
+	int      dtmf;		/* the link's keypad is this call's DTMF */
+	int      dialing;	/* 1CH 15H: the number still coming */
+	uint64_t dial_ms;	/* its last digit */
+	char     num[DECT_CC_KEYPAD_MAX + 1];
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
@@ -115,6 +167,7 @@ struct dect_base {
 	struct dect_base_link main_link;	/* calls, enrolment */
 	/* subslot=: record 0's chip slot instead of its own, 0 = none */
 	unsigned slot0;
+	struct dect_base_call calls[DECT_BASE_CALLS];
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	unsigned n_hs;			/* records in use, hs[0] first */
 	unsigned cur;			/* the current one */
