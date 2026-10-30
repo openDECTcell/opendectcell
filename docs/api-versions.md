@@ -776,3 +776,9 @@ MM's rule) and dect_base_page() (0x0300) (S3g).
 **108.** dect_base.h, 2026-10-30: struct dect_base gains `prof[]`, each
 record's handset profile (was dect-stubd's per-handset copy) (S3h).
 dect_base.h now includes dect_profile.h.
+
+**109.** dect_base.h, 2026-10-30: struct dect_base_cfg and struct
+dect_base's `cfg`: how the base runs calls (narrowband, two calls,
+authfirst, locauth, overlap and the dial pause, alerting and binding,
+call status, nlr, SETUP retries, the signal, the basic service, ring
+timing, the periodic date and time) (S3i).

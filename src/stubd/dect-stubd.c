@@ -3230,7 +3230,7 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
 	printf("cap: %s reports %s%s\n", h->path,
 	       tc->ng_part3 ? "NG-DECT Part 3" :
 	       tc->ng_part1 ? "NG-DECT Part 1" : "GAP only",
-	       tc->ng_part3 || s->audio.all_call_status ?
+	       tc->ng_part3 || s->base.cfg.all_call_status ?
 	       "" : " -- no call status to it");
 	fflush(stdout);
 }
@@ -3317,9 +3317,9 @@ static int call_status_for(void *ctx, const uint8_t *ipui, size_t len)
 
 	if (i >= 0 && s->base.prof[i].cc_call_status != DECT_PROF_AUTO)
 		return s->base.prof[i].cc_call_status == DECT_PROF_ON;
-	if (i < 0 || !s->hs[i].cap_known || s->audio.all_call_status)
+	if (i < 0 || !s->hs[i].cap_known || s->base.cfg.all_call_status)
 		return -1;
-	return !s->audio.no_call_status && s->hs[i].cap_part3;
+	return !s->base.cfg.no_call_status && s->hs[i].cap_part3;
 }
 
 /*
@@ -3359,7 +3359,7 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 		s->reg.nlr_disc_at = 0;
 	}
 	s->reg.cc_was_busy = busy;
-	if (!s->audio.nlr || !s->reg.nlr_armed ||
+	if (!s->base.cfg.nlr || !s->reg.nlr_armed ||
 	    l->lapc.outstanding || l->lapc.txq_count)
 		return;
 	{
@@ -3469,16 +3469,16 @@ static void dial_route(struct stubd *s, uint64_t now)
 	}
 	if (bridge_call_out(s, -1, now))
 		return;
-	if (s->audio.alert_ms || s->audio.bind_first) {
+	if (s->base.cfg.alert_ms || s->base.cfg.bind_first) {
 		/* the steps a routed call takes; connect_tick() finishes */
 		if (dect_cc_proceed(&s->base.main_link.link.cc) == 0) {
-			if (s->audio.alert_ms) {
+			if (s->base.cfg.alert_ms) {
 				(void)dect_cc_alert(&s->base.main_link.link.cc);
 				printf("call: ALERTING sent, CONNECT in %u ms\n",
-				       s->audio.alert_ms);
+				       s->base.cfg.alert_ms);
 			}
 			s->reg.connect_staged = 1;
-			s->reg.connect_at = now + s->audio.alert_ms;
+			s->reg.connect_at = now + s->base.cfg.alert_ms;
 			dect_link_drain(&s->base.main_link.link, now);
 			pump_lapc(s);
 		}
@@ -3501,7 +3501,7 @@ static void dial_route(struct stubd *s, uint64_t now)
  */
 static int call_auth_ok(const struct stubd *s, const struct dect_link *l)
 {
-	return !s->audio.auth_first || s->no_cipher || l->mm.authenticated;
+	return !s->base.cfg.auth_first || s->no_cipher || l->mm.authenticated;
 }
 
 /*
@@ -3550,13 +3550,13 @@ static void dial_tick(struct stubd *s, uint64_t now)
 		s->base.main_link.dial_change_ms = now;
 		return;
 	}
-	if (!len || now - s->base.main_link.dial_change_ms < s->audio.dial_wait_ms)
+	if (!len || now - s->base.main_link.dial_change_ms < s->base.cfg.dial_wait_ms)
 		return;		/* no digit yet: F<CC.01> covers it */
 	if (!call_auth_ok(s, &s->base.main_link.link))
 		return;		/* the number waits for the proof */
 	printf("call: dialled \"%.*s\" -- complete after %u ms without a "
 	       "digit, connecting\n", (int)len, (const char *)k,
-	       s->audio.dial_wait_ms);
+	       s->base.cfg.dial_wait_ms);
 	fflush(stdout);
 	dial_route(s, now);
 }
@@ -3572,12 +3572,12 @@ static void connect_tick(struct stubd *s, uint64_t now)
 		return;
 	}
 	if (now < s->reg.connect_at ||
-	    (s->audio.bind_first && !s->reg.audio_connected))
+	    (s->base.cfg.bind_first && !s->reg.audio_connected))
 		return;
 	s->reg.connect_staged = 0;
 	printf("call: CONNECT now%s%s\n",
-	       s->audio.alert_ms ? ", after ALERTING" : "",
-	       s->audio.bind_first ? ", the U-plane is up (0x022D sent)" : "");
+	       s->base.cfg.alert_ms ? ", after ALERTING" : "",
+	       s->base.cfg.bind_first ? ", the U-plane is up (0x022D sent)" : "");
 	fflush(stdout);
 	if (dect_cc_connect(&s->base.main_link.link.cc) == 0) {
 		dect_link_drain(&s->base.main_link.link, now);
@@ -4309,7 +4309,7 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 static uint8_t ring_page_info(const struct stubd *s, int narrow)
 {
 	return (uint8_t)(RING_PAGE_CC |
-			 ((s->audio.basic_svc & 0x0Fu) == 0x08u && !narrow
+			 ((s->base.cfg.basic_svc & 0x0Fu) == 0x08u && !narrow
 			  ? RING_PAGE_WIDEBAND : 0u));
 }
 
@@ -4413,7 +4413,7 @@ static void send_page(struct stubd *s)
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
 	       s->base.ring.pages, RING_PAGE_RETRIES, p[0],
-	       tpui[1], tpui[2], s->audio.basic_svc,
+	       tpui[1], tpui[2], s->base.cfg.basic_svc,
 	       /*
 		* We page BY the TPUI we assigned. If the handset never
 		* acknowledged the assignment (EN 300 175-5 §13.2.2,
@@ -4455,7 +4455,7 @@ static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
  */
 static uint8_t ring_svc(const struct stubd *s, unsigned t, int narrow)
 {
-	uint8_t svc = target_svc(s, (int)t, s->audio.basic_svc);
+	uint8_t svc = target_svc(s, (int)t, s->base.cfg.basic_svc);
 
 	return narrow ? (uint8_t)(svc & 0xF0u) : svc;
 }
@@ -4531,7 +4531,7 @@ static void cs_connect_tick(struct stubd *s, uint64_t now)
 	}
 	if (s->reg.cs_connect_sent || !cc->incoming ||
 	    cc->state != DECT_CC_ST_ACTIVE || !ring_target_part3(s) ||
-	    s->audio.no_call_status)
+	    s->base.cfg.no_call_status)
 		return;
 	s->reg.cs_connect_sent = 1;
 	dect_callinfo_init(&ci);
@@ -4604,7 +4604,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 			&s->base.prof[s->base.ring.hs] : NULL;
 
 		ring_clip = s->clip;
-		if (hp && !s->audio.signal_set &&
+		if (hp && !s->base.cfg.signal_set &&
 		    hp->cc_signal_external != DECT_SIGNAL_ALERT_PATTERN1)
 			dect_cc_set_signal(&s->base.main_link.link.cc, 1,
 					   hp->cc_signal_external);
@@ -4630,8 +4630,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 		       why);
 		return;
 	}
-	if (++s->base.ring.setup_tries >= (s->audio.setup_tries ?
-				      s->audio.setup_tries : RING_SETUP_TRIES)) {
+	if (++s->base.ring.setup_tries >= (s->base.cfg.setup_tries ?
+				      s->base.cfg.setup_tries : RING_SETUP_TRIES)) {
 		s->base.ring.state = RING_DONE;
 		printf("ring: CC-SETUP refused %u times, the handset's own call "
 		       "never cleared; giving up\n", s->base.ring.setup_tries);
@@ -4640,7 +4640,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	s->base.ring.resp_deadline = now + RING_SETUP_RETRY_MS;
 	printf("ring: CC-SETUP refused (a call is in progress), retry %u of %u "
 	       "in %u ms\n", s->base.ring.setup_tries,
-	       s->audio.setup_tries ? s->audio.setup_tries : RING_SETUP_TRIES,
+	       s->base.cfg.setup_tries ? s->base.cfg.setup_tries : RING_SETUP_TRIES,
 	       RING_SETUP_RETRY_MS);
 }
 
@@ -4684,7 +4684,7 @@ static void ring_watch_tick(struct stubd *s)
 
 static void ring_tick(struct stubd *s, uint64_t now)
 {
-	if ((!s->audio.ring_ms && !s->audio.ring_attach_ms && !s->base.ring.now) ||
+	if ((!s->base.cfg.ring_ms && !s->base.cfg.ring_attach_ms && !s->base.ring.now) ||
 	    s->sess.state != DECT_SESS_UP)
 		return;
 	ring_watch_tick(s);
@@ -4707,12 +4707,12 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	if (s->base.ring.state == RING_IDLE) {
 		if (s->base.ring.now) {
 			/* a call-in from the bridge: now */
-		} else if (s->audio.ring_attach_ms) {
+		} else if (s->base.cfg.ring_attach_ms) {
 			/* Count from the handset's first contact, not ours. */
 			if (!s->first_contact_ms ||
-			    now - s->first_contact_ms < s->audio.ring_attach_ms)
+			    now - s->first_contact_ms < s->base.cfg.ring_attach_ms)
 				return;
-		} else if (now - g_start < s->audio.ring_ms) {
+		} else if (now - g_start < s->base.cfg.ring_ms) {
 			return;
 		}
 		if (!ring_target_fixed_len(s)) {
@@ -5191,9 +5191,9 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 	fprintf(f, ",\"api\":%u,\"cipher\":%s,\"locauth\":%s,"
 		"\"wideband\":%s,\"twocalls\":%s,\"line\":",
 		OPENDECTCELL_API_VERSION, s->no_cipher ? "false" : "true",
-		s->audio.locauth ? "true" : "false",
-		s->audio.narrowband ? "false" : "true",
-		s->audio.two_calls ? "true" : "false");
+		s->base.cfg.locauth ? "true" : "false",
+		s->base.cfg.narrowband ? "false" : "true",
+		s->base.cfg.two_calls ? "true" : "false");
 	json_str(f, s->audio.line_name ? s->audio.line_name : "Line 1");
 	fprintf(f, ",\"handsets\":[");
 	first = 1;
@@ -5473,12 +5473,12 @@ static void main_cc_setup(struct stubd *s)
 				       s->audio.codeclist_len);
 	else
 		dect_cc_set_codec_list(&s->base.main_link.link.cc, NULL, 0);
-	dect_cc_set_signal(&s->base.main_link.link.cc, s->audio.signal_on,
-			   s->audio.signal_value);
-	dect_cc_set_wideband(&s->base.main_link.link.cc, !s->audio.narrowband);
-	dect_cc_set_overlap(&s->base.main_link.link.cc, !s->audio.no_overlap);
+	dect_cc_set_signal(&s->base.main_link.link.cc, s->base.cfg.signal_on,
+			   s->base.cfg.signal_value);
+	dect_cc_set_wideband(&s->base.main_link.link.cc, !s->base.cfg.narrowband);
+	dect_cc_set_overlap(&s->base.main_link.link.cc, !s->base.cfg.no_overlap);
 	dect_cc_set_route_complete(&s->base.main_link.link.cc, 1);
-	dect_cc_set_call_status(&s->base.main_link.link.cc, !s->audio.no_call_status,
+	dect_cc_set_call_status(&s->base.main_link.link.cc, !s->base.cfg.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
 	s->base.main_link.link.call_status_for = call_status_for;
@@ -5517,7 +5517,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	if (s->pin)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
-	mcfg.narrowband_only = (uint8_t)s->audio.narrowband;
+	mcfg.narrowband_only = (uint8_t)s->base.cfg.narrowband;
 	if (s->have_rfpi)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
 	/*
@@ -5528,7 +5528,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	 * new handset needs a store of its own as the first -s.
 	 */
 	mcfg.defer_unknown = s->audio.remote_path != NULL;
-	mcfg.auth_locate = (uint8_t)s->audio.locauth;
+	mcfg.auth_locate = (uint8_t)s->base.cfg.locauth;
 	mcfg.locate_validity = (uint8_t)s->audio.locate_validity;
 	s->fetch_retrans_seen = 0;	/* MM's counter restarts with the link */
 	mcfg.registration = reg_policy(s);
@@ -6553,8 +6553,8 @@ static int side_start(struct stubd *s, uint8_t handle)
 	if (s->pin)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
-	mcfg.narrowband_only = (uint8_t)s->audio.narrowband;
-	mcfg.auth_locate = (uint8_t)s->audio.locauth;
+	mcfg.narrowband_only = (uint8_t)s->base.cfg.narrowband;
+	mcfg.auth_locate = (uint8_t)s->base.cfg.locauth;
 	if (s->have_rfpi)
 		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
 	/*
@@ -6582,14 +6582,14 @@ static int side_start(struct stubd *s, uint8_t handle)
 		dect_iwu_add_handset(&sl->bl->link.cc.iwu, (uint8_t)hs_slot(s, i),
 				     name);
 	}
-	dect_cc_set_signal(&sl->bl->link.cc, s->audio.signal_on,
-			   s->audio.signal_value);
+	dect_cc_set_signal(&sl->bl->link.cc, s->base.cfg.signal_on,
+			   s->base.cfg.signal_value);
 	/* no audio path here, unless -a twocalls gives it a lane */
-	dect_cc_set_busy(&sl->bl->link.cc, !s->audio.two_calls);
-	dect_cc_set_wideband(&sl->bl->link.cc, !s->audio.narrowband);
-	dect_cc_set_overlap(&sl->bl->link.cc, !s->audio.no_overlap);
+	dect_cc_set_busy(&sl->bl->link.cc, !s->base.cfg.two_calls);
+	dect_cc_set_wideband(&sl->bl->link.cc, !s->base.cfg.narrowband);
+	dect_cc_set_overlap(&sl->bl->link.cc, !s->base.cfg.no_overlap);
 	dect_cc_set_route_complete(&sl->bl->link.cc, 1);
-	dect_cc_set_call_status(&sl->bl->link.cc, !s->audio.no_call_status,
+	dect_cc_set_call_status(&sl->bl->link.cc, !s->base.cfg.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
 	sl->bl->link.call_status_for = call_status_for;
@@ -6751,7 +6751,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 {
 	struct dect_cc *cc = &sl->bl->link.cc;
 
-	if (!s->audio.two_calls)
+	if (!s->base.cfg.two_calls)
 		return;
 	if (!dect_cc_busy(cc))	/* decided for the next SETUP only */
 		dect_cc_set_busy(cc, sl->lane < 0 &&
@@ -6768,7 +6768,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 			sl->bl->dial_len = len;
 			sl->bl->dial_change_ms = now;
 		} else if (len && now - sl->bl->dial_change_ms >=
-			   s->audio.dial_wait_ms && call_auth_ok(s, &sl->bl->link)) {
+			   s->base.cfg.dial_wait_ms && call_auth_ok(s, &sl->bl->link)) {
 			printf("side: dialled on handle %u -- connecting\n",
 			       sl->bl->handle);
 			side_route(s, sl, now);
@@ -6867,7 +6867,7 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 	for (j = 0; k && j < len; j++)
 		if (k[j] >= '0' && k[j] <= '9')
 			slot = slot * 10u + (unsigned)(k[j] - '0');
-	if (!s->audio.two_calls || s->ic.st != IC_IDLE) {
+	if (!s->base.cfg.two_calls || s->ic.st != IC_IDLE) {
 		/*
 		 * With a reason the handset can show (EN 300 175-5 §7.7.18):
 		 * another internal call in the way is the system busy (TS 102
@@ -6875,9 +6875,9 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 		 * off "service not implemented". It went without one.
 		 */
 		printf("intern: internal call refused (%s)\n",
-		       s->audio.two_calls ? "one at a time" :
+		       s->base.cfg.two_calls ? "one at a time" :
 		       "needs -a twocalls");
-		if (s->audio.two_calls)
+		if (s->base.cfg.two_calls)
 			(void)dect_cc_busy_system(cc);
 		else
 			(void)dect_cc_release_reason(cc,
@@ -6966,7 +6966,7 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 	 * does the same, A-StockTrace-1). The SETUP is built here, so the
 	 * link's configured value is restored at once.
 	 */
-	dect_cc_set_signal(&l->cc, s->audio.signal_on,
+	dect_cc_set_signal(&l->cc, s->base.cfg.signal_on,
 			   DECT_SIGNAL_ALERT_PATTERN0);
 	/*
 	 * Who is calling (EN 300 444 §8.43/§8.44): the caller's terminal
@@ -7003,7 +7003,7 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 		 */
 		dect_callinfo_init(&ci);
 		if (s->hs[s->ic.target].cap_known &&
-		    s->hs[s->ic.target].cap_part3 && !s->audio.no_call_status) {
+		    s->hs[s->ic.target].cap_part3 && !s->base.cfg.no_call_status) {
 			ci.has_call_id = 1;
 			ci.call_id = l->cc.status_call_id;
 			ci.has_call_status = 1;
@@ -7023,14 +7023,14 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 				num_only.name[0] = '\0';
 			r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
 					     target_svc(s, s->ic.target,
-						s->audio.narrowband ? 0x90u
+						s->base.cfg.narrowband ? 0x90u
 								    : IC_BASIC_SVC),
 					     slot ? &num_only : NULL);
 		}
 		dect_cc_set_callinfo(&l->cc, &prev);
 		if (r) {
-			dect_cc_set_signal(&l->cc, s->audio.signal_on,
-					   s->audio.signal_value);
+			dect_cc_set_signal(&l->cc, s->base.cfg.signal_on,
+					   s->base.cfg.signal_value);
 			printf("intern: could not queue the SETUP to the target\n");
 			return;
 		}
@@ -7039,7 +7039,7 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 			       name, ci.has_call_status ?
 			       ", call id and CS call setup (Part 3)" : "");
 	}
-	dect_cc_set_signal(&l->cc, s->audio.signal_on, s->audio.signal_value);
+	dect_cc_set_signal(&l->cc, s->base.cfg.signal_on, s->base.cfg.signal_value);
 	s->ic.tside = p;
 	s->ic.st = IC_SETUP;
 	printf("intern: the target %s on %s link %u -- SETUP sent\n", how,
@@ -7450,7 +7450,7 @@ static void time_next(struct stubd *s)
  */
 static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 {
-	uint64_t every = (uint64_t)s->audio.time_every_min * 60000u;
+	uint64_t every = (uint64_t)s->base.cfg.time_every_min * 60000u;
 	struct dect_link *l;
 	struct dect_time dt;
 	long off_s;
@@ -7482,7 +7482,7 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 		s->tu.st = TIME_IDLE;
 		if (s->tu.with_time)
 			printf("time: update round, every %u min\n",
-			       s->audio.time_every_min);
+			       s->base.cfg.time_every_min);
 	}
 
 	if (s->tu.st == TIME_IDLE) {
@@ -7695,8 +7695,8 @@ static void ctl_hs_to(struct stubd *s, int c, unsigned i, const char *state)
 		if (s->hs[i].cap_known)
 			dect_ctl_add_uint(&o, "part3", s->hs[i].cap_part3 ? 1 : 0);
 		/* 0: we call it narrowband, so its account may answer G.711 */
-		dect_ctl_add_uint(&o, "wideband", !s->audio.narrowband &&
-				  (target_svc(s, (int)i, s->audio.basic_svc) &
+		dect_ctl_add_uint(&o, "wideband", !s->base.cfg.narrowband &&
+				  (target_svc(s, (int)i, s->base.cfg.basic_svc) &
 				   0x0Fu) == 0x08u);
 	}
 	if (c >= 0) {
@@ -8194,7 +8194,7 @@ static void par_tick(struct stubd *s, int p, uint64_t now)
 		if (len) {
 			d->dial_ms = now;
 			dect_cc_clear_keypad(cc);
-		} else if (n && now - d->dial_ms >= s->audio.dial_wait_ms) {
+		} else if (n && now - d->dial_ms >= s->base.cfg.dial_wait_ms) {
 			par_dial_out(s, d, now);
 		}
 		return;
@@ -8305,7 +8305,7 @@ static int sr_part3(const struct stubd *s, unsigned t)
 	const struct dect_callinfo *o = &s->audio.callinfo;
 
 	return !o->has_line && !o->has_call_id && !o->has_call_status &&
-	       !s->audio.no_call_status && s->hs[t].cap_known &&
+	       !s->base.cfg.no_call_status && s->hs[t].cap_known &&
 	       s->hs[t].cap_part3;
 }
 
@@ -8342,7 +8342,7 @@ static void sr_setup(struct stubd *s, struct dect_base_call *b, unsigned k,
 		ci.call_status = DECT_CS_CALL_SETUP;
 	}
 	dect_cc_set_callinfo(&l->cc, &ci);
-	if (!s->audio.signal_set &&
+	if (!s->base.cfg.signal_set &&
 	    hp->cc_signal_external != DECT_SIGNAL_ALERT_PATTERN1)
 		dect_cc_set_signal(&l->cc, 1, hp->cc_signal_external);
 	if (hp->cc_name_method == 1 || hp->cc_name_method == 3)
@@ -8350,7 +8350,7 @@ static void sr_setup(struct stubd *s, struct dect_base_call *b, unsigned k,
 	r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
 			     ring_svc(s, t, b->narrow), &clip);
 	dect_cc_set_callinfo(&l->cc, &prev);
-	dect_cc_set_signal(&l->cc, s->audio.signal_on, s->audio.signal_value);
+	dect_cc_set_signal(&l->cc, s->base.cfg.signal_on, s->base.cfg.signal_value);
 	if (r) {
 		printf("bridge: could not queue the SETUP to DECT %u -- "
 		       "trying again\n", hs_slot(s, t));
@@ -8613,7 +8613,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			wp = b ? waiting_party(s, t) : BC_NONE;
 			if (wp == BC_NONE)
 				why = "in-call";
-		} else if (!b || (!main_free(s) && (!s->audio.two_calls ||
+		} else if (!b || (!main_free(s) && (!s->base.cfg.two_calls ||
 			   lanes_available(s, NULL) <= 0))) {
 			why = "channels";
 		}
@@ -9622,8 +9622,8 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 	int a = l->mm.adopted;
 
 	if (l->mm.cipher_state == DECT_MM_CIPHER_NONE && !s->no_cipher &&
-	    dect_cc_busy(cc) && (a >= 0 || s->audio.auth_first) &&
-	    (s->audio.auth_first ||
+	    dect_cc_busy(cc) && (a >= 0 || s->base.cfg.auth_first) &&
+	    (s->base.cfg.auth_first ||
 	     ((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
 	     cc->state == DECT_CC_ST_ACTIVE)) {
 		const uint8_t *uak = a < 0 ? NULL :
@@ -9631,7 +9631,7 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 
 		if (!uak) {
 			/* authfirst: nothing to prove it against (A1) */
-			if (s->audio.auth_first && !sl->bl->auth_refused) {
+			if (s->base.cfg.auth_first && !sl->bl->auth_refused) {
 				sl->bl->auth_refused = 1;
 				(void)dect_cc_release_reason(&l->cc, 0x09u);
 				printf("side: released -- no key to "
@@ -9665,7 +9665,7 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 		       : l->mm.stats.auth_mismatch ? "WRONG RES"
 		       : "the handset refused");
 		/* EN 300 444 8.23.2.3, as on the main link */
-		if ((l->mm.stats.auth_mismatch || s->audio.auth_first) &&
+		if ((l->mm.stats.auth_mismatch || s->base.cfg.auth_first) &&
 		    dect_cc_busy(cc)) {
 			(void)dect_cc_release_reason(&l->cc, 0x09u);
 			printf("side: released -- the handset failed "
@@ -10233,7 +10233,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 
 	if (!s->reg.call_bound && call_auth_ok(s, &s->base.main_link.link) &&
 	    (s->base.main_link.link.cc.state == DECT_CC_ST_ACTIVE ||
-	     (s->audio.bind_first && s->reg.connect_staged &&
+	     (s->base.cfg.bind_first && s->reg.connect_staged &&
 	      s->base.main_link.link.cc.state == DECT_CC_ST_PROCEEDING)) &&
 	    (s->base.main_link.link.cc.incoming ||
 	     dect_cc_peer_is_speech(&s->base.main_link.link.cc))) {
@@ -10254,7 +10254,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * the bind is ours to choose (flags= with bit 6 set is a lab
 		 * run that picked its own).
 		 */
-		s->reg.call_wideband = !s->audio.narrowband &&
+		s->reg.call_wideband = !s->base.cfg.narrowband &&
 			!(s->audio.flags & 0x40u) &&
 			dect_cc_codec(&s->base.main_link.link.cc) == DECT_CC_CODEC_G722;
 		printf("call: codec %s -- %s bind\n",
@@ -10298,7 +10298,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * until it answers. Without a key for the identity it claims there is
 	 * nothing to check it against, so the call ends.
 	 */
-	if (s->audio.auth_first && !s->no_cipher && !s->reg.cipher_started &&
+	if (s->base.cfg.auth_first && !s->no_cipher && !s->reg.cipher_started &&
 	    !s->base.main_link.auth_refused && s->base.main_link.active &&
 	    dect_cc_busy(&s->base.main_link.link.cc)) {
 		if (s->base.rec.uak_valid) {
@@ -10362,7 +10362,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * no reply, a refusal or a missing RES as well (A1).
 		 */
 		if ((s->base.main_link.link.mm.stats.auth_mismatch ||
-		     s->audio.auth_first) &&
+		     s->base.cfg.auth_first) &&
 		    dect_cc_busy(&s->base.main_link.link.cc)) {
 			(void)dect_cc_release_reason(&s->base.main_link.link.cc,
 						     0x09u /* auth failed */);
@@ -12885,6 +12885,27 @@ int main(int argc, char **argv)
 	if (!s.audio.basic_svc_set)
 		s.audio.basic_svc = s.audio.narrowband ? RING_BASIC_SVC
 						       : RING_BASIC_SVC_WB;
+	/* how calls run: the library's copy (dect_base.h, S3i) */
+	s.base.cfg.narrowband = s.audio.narrowband;
+	s.base.cfg.two_calls = s.audio.two_calls;
+	s.base.cfg.auth_first = s.audio.auth_first;
+	s.base.cfg.locauth = s.audio.locauth;
+	s.base.cfg.no_overlap = s.audio.no_overlap;
+	s.base.cfg.dial_wait_ms = s.audio.dial_wait_ms;
+	s.base.cfg.alert_ms = s.audio.alert_ms;
+	s.base.cfg.bind_first = s.audio.bind_first;
+	s.base.cfg.no_call_status = s.audio.no_call_status;
+	s.base.cfg.all_call_status = s.audio.all_call_status;
+	s.base.cfg.nlr = s.audio.nlr;
+	s.base.cfg.setup_tries = s.audio.setup_tries;
+	s.base.cfg.signal_on = s.audio.signal_on;
+	s.base.cfg.signal_value = s.audio.signal_value;
+	s.base.cfg.signal_set = s.audio.signal_set;
+	s.base.cfg.basic_svc = s.audio.basic_svc;
+	s.base.cfg.basic_svc_set = s.audio.basic_svc_set;
+	s.base.cfg.ring_ms = s.audio.ring_ms;
+	s.base.cfg.ring_attach_ms = s.audio.ring_attach_ms;
+	s.base.cfg.time_every_min = s.audio.time_every_min;
 
 	s.stub_build = stub_build_read(s.stub_name, sizeof(s.stub_name));
 	printf("chip: STUB second stage %s\n",

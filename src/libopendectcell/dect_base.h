@@ -199,6 +199,33 @@ struct dect_base_ring {
 	uint64_t last;			/* when the last one went out */
 };
 
+/*
+ * Stage S3i: how the base runs calls, the host's options (dect-stubd's -a
+ * keys of the same names). Set once at start.
+ */
+struct dect_base_cfg {
+	int      narrowband;	/* the speech is narrowband: G.726, no G.722 */
+	int      two_calls;	/* up to three calls (twocalls) */
+	int      auth_first;	/* a handset proves its key before its call goes anywhere */
+	int      locauth;	/* authenticate on location registration */
+	int      no_overlap;	/* no overlap sending: the number en bloc */
+	unsigned dial_wait_ms;	/* the dial pause that ends a number */
+	unsigned alert_ms;	/* ALERTING this long before CONNECT (alertms=) */
+	int      bind_first;	/* the audio bound before CONNECT (bindfirst) */
+	int      no_call_status;	/* no TS 102 527-3 call status at all */
+	int      all_call_status;	/* call status to every handset */
+	int      nlr;	/* the base releases the link after a call */
+	unsigned setup_tries;	/* refused CC-SETUPs before a ring gives up, 0 = default */
+	int      signal_on;	/* <<SIGNAL>> in FP-originated SETUPs */
+	uint8_t  signal_value;	/* ... its value */
+	int      signal_set;	/* ... given as an option, not the profile's */
+	uint8_t  basic_svc;	/* <<BASIC-SERVICE>> of an incoming call */
+	int      basic_svc_set;	/* ... given as an option */
+	unsigned ring_ms;	/* ring= test timing */
+	unsigned ring_attach_ms;	/* ringattach= test timing */
+	unsigned time_every_min;	/* the periodic date and time */
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
@@ -213,6 +240,7 @@ struct dect_base {
 	unsigned slot0;
 	struct dect_base_call calls[DECT_BASE_CALLS];
 	struct dect_base_ring ring;
+	struct dect_base_cfg cfg;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	/*
 	 * Each record's handset profile (docs/handset-profiles.md), resolved

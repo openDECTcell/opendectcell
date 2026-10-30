@@ -259,3 +259,14 @@ the stack (call status, signal, the name's method, the release after a
 call), so it sits beside the record. The host still resolves it from the
 model and the profile files. Data only; traces unchanged.
 
+**S3i.** How the base runs calls is `dect_base.cfg`: twenty options
+dect-stubd parses (`-a` keys of the same names) are copied in once at
+start, after main has resolved their defaults, and every read at run
+time is the library's copy. Nothing before the copy reads them. Traces
+unchanged.
+
+Next in S3: `ring_tick()`, `ring_queue_setup()`, the connect staging and
+the internal call can now move on `dect_base` alone, except for the CLIP
+and call information the bridge supplies per call, and the audio binds,
+which are chip-specific mails like the slot writers.
+
