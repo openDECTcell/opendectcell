@@ -67,8 +67,8 @@ Once the packages and the chip firmware are installed
 
 ## 2. Network > DECT
 
-The page has up to five tabs: *General*, *Handsets*, *VoIP Profiles*,
-*Phonebook* (only with the `opendectcell-carddav` package) and *Advanced*. If
+The page has up to six tabs: *General*, *Handsets*, *VoIP Profiles*,
+*Phonebook* (only with the `opendectcell-carddav` package), *Firmware* and *Advanced*. If
 the box is a cell of a controller, the page looks different: see
 [section 4](#4-cell-mode-the-box-as-a-controllers-cell).
 
@@ -76,7 +76,7 @@ the box is a cell of a controller, the page looks different: see
 
 | Field | Default | What it does |
 |---|---|---|
-| **Enable the DECT base** | off | Boots the DECT chip and puts the base on the air. Needs the chip firmware ([install.md](install.md) step 3). Off: the radio is parked and nothing transmits |
+| **Enable the DECT base** | off | Boots the DECT chip and puts the base on the air. Needs the chip firmware (tab *Firmware*, [install.md](install.md) step 3). Off: the radio is parked and nothing transmits |
 | **Encrypt calls** | on | DECT standard encryption on every call and every list session (phonebook, call lists). Switch off only to debug audio |
 | **Check handsets when they report in** | on | Each handset proves it holds its key whenever it reports in to the base; a handset that cannot is turned away |
 | **Wideband audio (HD)** | on | G.722 (HD voice) when the handset offers it. Off keeps every call narrowband |
@@ -326,7 +326,24 @@ Nextcloud, Baïkal or a mail provider's. It works both ways:
 
 More about the phonebook: [phonebook.md](phonebook.md).
 
-### 2.5 Advanced
+### 2.5 Firmware
+
+The two files the DECT chip boots from. openDECTcell cannot ship them: take them
+from the FRITZ!OS image of your box with `tools/dect-fw-extract.py` on your
+PC ([install.md](install.md) step 3), then upload the two `.hex` files here.
+One row per file:
+
+| Column | What it is |
+|---|---|
+| **File**, **Name** | First or second stage, and the file name the box keeps it under |
+| **Expected SHA-256** | The build this box's profile pins (the first 12 digits; hover for all of it). On a 7520 the profile pins nothing and any build openDECTcell knows is taken, under the name that build belongs to |
+| **State** | *verified*; *missing*; *wrong build* (not the pinned one); *unknown build* (not one openDECTcell knows); *known build, kept under another build's name* (set the file name under Advanced to the one it names, save, upload again) |
+| **Upload…**, **Delete** | Pick the file on your PC; the box checks it before it replaces anything and keeps the old file if the check fails. A file over 400 000 bytes is refused in the browser. The new file is used the next time the chip boots (a restart of the DECT service) |
+
+In cell mode the same table is on the page's only tab. The files stay on the
+box across OpenWrt upgrades.
+
+### 2.6 Advanced
 
 Settings for unusual set-ups and for developers. Every field shows in grey
 the value the service uses when it is left empty, taken from the box's

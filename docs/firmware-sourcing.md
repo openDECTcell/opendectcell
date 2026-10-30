@@ -1,6 +1,6 @@
 # Firmware sourcing: how users get the STUB onto their box
 
-Status: **decided** 2026-10-17. **Built** 2026-10-25: `tools/dect-fw-extract.py` (tar, SquashFS or folder; synthetic tests in `tests/test_fw_extract.py`; not yet run on a real image), the package's `/etc/opendectcell/firmware/` with `keep.d`. The on-box SHA-256 check in the init script is built too (refuses unknown builds unless `fw_allow_unverified`; tested on the box).
+Status: **decided** 2026-10-17. **Upload page built** 2026-10-31 (§2a). **Built** 2026-10-25: `tools/dect-fw-extract.py` (tar, SquashFS or folder; synthetic tests in `tests/test_fw_extract.py`; not yet run on a real image), the package's `/etc/opendectcell/firmware/` with `keep.d`. The on-box SHA-256 check in the init script is built too (refuses unknown builds unless `fw_allow_unverified`; tested on the box).
 
 ## 1. Why every user needs it
 
@@ -16,10 +16,21 @@ The per-device **calibration data** is different: it is read at runtime from the
    - extracts the `dectfw_*.hex` files
    - checks their SHA-256 against the known builds and says which model and STUB build they belong to
    - prints the exact upload command for the next step
-3. The user uploads the files to the box: with `scp` into `/etc/opendectcell/firmware/`, or later with the upload button in the LuCI app.
+3. The user uploads the files to the box: in LuCI (Network > DECT > Firmware: one *Upload…* button per file), or with `scp` into `/etc/opendectcell/firmware/`.
 4. On the box, the init script checks the files against `fw_*_sha256` in the board profile (busybox `sha256sum`) and refuses to start with an unknown or wrong build, with a clear message saying which file is expected.
 
 **Requirements for the PC tool:** a single tool in `tools/`, Python 3 standard library only, so it runs unchanged on Linux, macOS and Windows with a plain Python 3 install and no extra packages. (Linux distributions include Python; Windows and macOS users install it from python.org, and the user docs must say so.) Messages are written for non-technical users.
+
+### 2a. The LuCI upload page (2026-10-31)
+
+The page does **not** read an AVM image in the browser: the user runs the extractor on the PC first, then uploads the two `.hex` files it wrote (option 2c; reading the image in JavaScript stays possible later). On the Firmware tab, and on the cell page in cell mode, one row per file the board needs: its name, the SHA-256 the board profile pins (or "any build openDECTcell knows" on the 7520, whose profile has no pin), its state, *Upload…* and *Delete*.
+
+- The browser refuses a file over 400 000 bytes before sending it, and LuCI's own `cgi-upload` leaves it in `/tmp/opendectcell-fw-upload.<role>`.
+- `/usr/share/opendectcell/firmware.sh install <role> <file>` (the package `opendectcell`) takes it from there: it accepts only that path (no `..`, no symlink), takes the destination name from the board profile or the `first`/`second` options, never from the browser, and checks the SHA-256. Wrong build for the board, unknown build, or a known build under another build's name (the name decides the chip RAM addresses the daemon uses) are refused, and the old file stays. With `fw_allow_unverified` it lets them in, as the init script lets them run. A good file is written to `.<name>.new` with mode 0600 and moved into place.
+- A new file takes effect at the next chip boot, not at once.
+- ACL: `luci-app-opendectcell` may run only `firmware.sh status|install *|delete *`, write `/tmp/opendectcell-fw-upload.*` and use `cgi-io` upload.
+- The hash table is kept in three places: this script, the init script (hashes) and `tools/dect-fw-extract.py` (hashes and names). `tests/test_firmware_sh.py` (in `make check`) fails if they drift. The extractor also knows the 7362 SL build, which no board profile uses.
+- Tested: the script, under dash and busybox ash, against a scratch folder, board profile and `uci`. **Not yet tested on a box:** the browser side (file picker, `cgi-upload` and its ACL, the table, delete) and the extractor on a real image.
 
 ## 3. Storage on the box and upgrades
 

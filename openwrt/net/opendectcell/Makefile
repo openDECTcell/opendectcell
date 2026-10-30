@@ -171,6 +171,7 @@ define Package/opendectcell/install
 	$(INSTALL_BIN) ./files/opendectcell.voip-migrate \
 		$(1)/etc/uci-defaults/91-opendectcell-voip
 	$(INSTALL_DIR) $(1)/usr/share/opendectcell/boards
+	$(INSTALL_BIN) ./files/firmware.sh $(1)/usr/share/opendectcell/firmware.sh
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/boards/avm,fritzbox-7530 \
 		$(PKG_BUILD_DIR)/boards/avm,fritz7412 \
 		$(1)/usr/share/opendectcell/boards/

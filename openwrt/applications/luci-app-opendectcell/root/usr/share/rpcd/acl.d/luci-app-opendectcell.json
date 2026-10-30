@@ -23,7 +23,8 @@
 				"/var/run/opendectcell/carddav.json": [ "read" ],
 				"/tmp/run/opendectcell/carddav.json": [ "read" ],
 				"/var/run/opendectcell/carddav-books.json": [ "read" ],
-				"/tmp/run/opendectcell/carddav-books.json": [ "read" ]
+				"/tmp/run/opendectcell/carddav-books.json": [ "read" ],
+				"/usr/share/opendectcell/firmware.sh status": [ "exec" ]
 			},
 			"ubus": {
 				"service": [ "list" ]
@@ -40,8 +41,12 @@
 				"/etc/init.d/opendectcell enroll *": [ "exec" ],
 				"/etc/init.d/opendectcell cell_leave": [ "exec" ],
 				"/tmp/opendectcell-carddav-discover.json": [ "write" ],
-				"/usr/share/opendectcell/carddav.uc discover *": [ "exec" ]
+				"/usr/share/opendectcell/carddav.uc discover *": [ "exec" ],
+				"/tmp/opendectcell-fw-upload.*": [ "write" ],
+				"/usr/share/opendectcell/firmware.sh install *": [ "exec" ],
+				"/usr/share/opendectcell/firmware.sh delete *": [ "exec" ]
 			},
+			"cgi-io": [ "upload" ],
 			"uci": [ "opendectcell" ]
 		}
 	}

@@ -5,6 +5,7 @@
 'require ui';
 'require uci';
 'require rpc';
+'require request';
 'require dom';
 
 /*
@@ -46,6 +47,9 @@ var CARDDAV = '/usr/share/opendectcell/carddav.uc';
 var CARDDAV_STATE = '/var/run/opendectcell/carddav.json';
 var CARDDAV_BOOKS = '/var/run/opendectcell/carddav-books.json';
 var CARDDAV_REQ = '/tmp/opendectcell-carddav-discover.json';
+var FW = '/usr/share/opendectcell/firmware.sh';
+var FW_TMP = '/tmp/opendectcell-fw-upload.';
+var FW_MAX = 400000;	/* the box's check refuses more; the two files are under 200 KB */
 
 var callServices = rpc.declare({
 	object: 'service',
@@ -424,8 +428,143 @@ function leaveDialog() {
 	]);
 }
 
+/*
+ * Chip firmware (docs/firmware-sourcing.md): the two files the DECT chip
+ * boots from, which the user extracts on a PC with tools/dect-fw-extract.py.
+ * firmware.sh on the box says what is there and what the board needs, and
+ * checks an upload (SHA-256 against the board's pin) before it replaces
+ * anything. The file goes up to /tmp by LuCI's own upload (cgi-upload),
+ * then firmware.sh install moves it into place.
+ */
+function readFw() {
+	return L.resolveDefault(fs.exec(FW, [ 'status' ]), null).then(function(r) {
+		try { return r && r.stdout ? JSON.parse(r.stdout) : null; } catch (e) { return null; }
+	});
+}
+
+function fwAnswer(r) {
+	var j = null;
+
+	try { j = r && r.stdout ? JSON.parse(r.stdout) : null; } catch (e) {}
+	if (r && r.code == 0 && j && !j.error)
+		return null;
+	return (j && j.error) || (r && r.stderr) || _('no answer from the box');
+}
+
+function fwFail(msg) {
+	ui.hideModal();
+	ui.addNotification(null, E('p', {}, [ _('Firmware not changed: %s').format(msg) ]), 'danger');
+}
+
+function fwDone(msg) {
+	ui.hideModal();
+	ui.addNotification(null, E('p', {}, msg), 'info');
+	window.setTimeout(function() { window.location.reload(); }, 1500);
+}
+
+function fwUpload(f) {
+	var input = E('input', { 'type': 'file', 'style': 'display:none' });
+
+	input.addEventListener('change', function() {
+		var file = input.files && input.files[0], data;
+
+		input.parentNode.removeChild(input);
+		if (!file)
+			return;
+		if (file.size <= 0 || file.size > FW_MAX)
+			return fwFail(_('%s is %d bytes; a chip firmware file is smaller than %d.').format(file.name, file.size, FW_MAX));
+		ui.showModal(_('Checking the firmware'), [ E('p', { 'class': 'spinning' }, file.name) ]);
+		data = new FormData();
+		data.append('sessionid', rpc.getSessionID());
+		data.append('filename', FW_TMP + f.role);
+		data.append('filedata', file);
+		request.post(L.env.cgi_base + '/cgi-upload', data, { timeout: 0 }).then(function(res) {
+			if (!res.ok)
+				throw new Error(res.statusText || ('HTTP ' + res.status));
+			return fs.exec(FW, [ 'install', f.role, FW_TMP + f.role ]);
+		}).then(function(r) {
+			var err = fwAnswer(r);
+
+			if (err)
+				return fwFail(err);
+			fwDone(_('%s is in place. The chip loads it the next time it boots (a restart of the DECT service, or of the box).').format(f.name));
+		}).catch(function(e) {
+			fwFail(e.message || e);
+		});
+	});
+	document.body.appendChild(input);
+	input.click();
+}
+
+function fwDelete(f) {
+	ui.showModal(_('Delete %s?').format(f.name), [
+		E('p', {}, _('The DECT chip cannot boot without it, so the base does not start until a firmware file is uploaded again.')),
+		E('div', { 'class': 'right' }, [
+			E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
+			E('button', { 'class': 'btn cbi-button-negative', 'click': function() {
+				ui.showModal(_('Deleting'), [ E('p', { 'class': 'spinning' }, f.name) ]);
+				return fs.exec(FW, [ 'delete', f.role ]).then(function(r) {
+					var err = fwAnswer(r);
+
+					if (err)
+						return fwFail(err);
+					fwDone(_('%s is deleted.').format(f.name));
+				});
+			} }, _('Delete'))
+		])
+	]);
+}
+
+/* The Firmware table: one row per file the board needs. */
+function fwNode(fw) {
+	var STATES = {
+		ok: _('verified'),
+		mismatch: _('wrong build'),
+		unknown: _('unknown build'),
+		wrongname: _('known build, kept under another build\'s name (see Advanced)'),
+		missing: _('missing')
+	};
+	var ROLES = { first: _('First stage'), second: _('Second stage') };
+	var rows;
+
+	if (!fw)
+		return E('p', {}, _('The firmware check is not installed on this box.'));
+	rows = (fw.files || []).map(function(f) {
+		var st = f.state;
+
+		return E('tr', { 'class': 'tr' }, [
+			E('td', { 'class': 'td' }, ROLES[f.role] || f.role),
+			E('td', { 'class': 'td' }, f.name),
+			E('td', { 'class': 'td' }, f.expected ?
+				E('span', { 'title': f.expected }, f.expected.substr(0, 12) + '…') :
+				_('any build opendectcell knows')),
+			E('td', { 'class': 'td' }, E('strong', { 'style': st == 'ok' ? 'color:#2a7d2a' :
+				st == 'missing' ? '' : 'color:#b32d2d' }, STATES[st] || st)),
+			E('td', { 'class': 'td' }, [
+				E('button', { 'class': 'btn cbi-button cbi-button-action',
+					'click': function() { fwUpload(f); } }, _('Upload…')), ' ',
+				st == 'missing' ? '' : E('button', { 'class': 'btn cbi-button cbi-button-negative',
+					'click': function() { fwDelete(f); } }, _('Delete'))
+			])
+		]);
+	});
+	return E('div', {}, [
+		E('p', {}, _('The DECT chip boots from two firmware files of the FRITZ!OS version this box came with. opendectcell cannot ship them: extract them on your PC with tools/dect-fw-extract.py (needs Python 3; its messages say which image to use) and upload the two .hex files here. They are kept in %s and survive a firmware upgrade of the box.').format(fw.dir)),
+		E('table', { 'class': 'table cbi-section-table' }, [
+			E('tr', { 'class': 'tr table-titles' }, [
+				E('th', { 'class': 'th' }, _('File')),
+				E('th', { 'class': 'th' }, _('Name')),
+				E('th', { 'class': 'th' }, _('Expected SHA-256')),
+				E('th', { 'class': 'th' }, _('State')),
+				E('th', { 'class': 'th' }, '')
+			])
+		].concat(rows)),
+		fw.unverified ? E('p', {}, _('Allow unknown firmware is on (Advanced): an upload that is not the expected build is accepted.')) : ''
+	]);
+}
+
 /* Cell mode: the controller link, and nothing of the base. */
-function renderCell(link) {
+function renderCell(link, fw) {
 	var m, s, o;
 	var state = link ? link.state : null;
 
@@ -464,6 +603,9 @@ function renderCell(link) {
 	o.inputtitle = _('Leave cell mode…');
 	o.inputstyle = 'negative';
 	o.onclick = leaveDialog;
+
+	o = s.option(form.DummyValue, '_fw', _('Chip firmware'));
+	o.cfgvalue = function() { return fwNode(fw); };
 
 	return m.render();
 }
@@ -893,7 +1035,8 @@ return view.extend({
 			L.resolveDefault(fs.stat(CELL_BIN), null),
 			L.resolveDefault(fs.stat(CARDDAV), null),
 			L.resolveDefault(fs.read(CARDDAV_STATE), ''),
-			L.resolveDefault(fs.read(CARDDAV_BOOKS), '')
+			L.resolveDefault(fs.read(CARDDAV_BOOKS), ''),
+			readFw()
 		]).then(function(r) {
 			var st = r[1], profiles = r[2], voip = r[4];
 
@@ -919,7 +1062,7 @@ return view.extend({
 				/* the section the Phonebook options live in */
 				if (r[8] && !uci.get('opendectcell', 'carddav'))
 					uci.add('opendectcell', 'carddav', 'carddav');
-				return [ st, profiles, choices, r[3], voip, r[5], r[6], r[7], r[8], cd, found ];
+				return [ st, profiles, choices, r[3], voip, r[5], r[6], r[7], r[8], cd, found, r[11] ];
 			});
 		});
 	},
@@ -934,7 +1077,7 @@ return view.extend({
 		var board = data[5], cellInstalled = !!data[7];
 
 		if (uci.get('opendectcell', 'main', 'role') == 'cell')
-			return renderCell(data[6]);
+			return renderCell(data[6], data[11]);
 		var running = st && st.radio === 'up';
 		var bySlot = {}, choiceBySlot = {};
 		var m, s, o, ss;
@@ -957,6 +1100,7 @@ return view.extend({
 		s.tab('voip', _('VoIP Profiles'));
 		if (data[8])
 			s.tab('phonebook', _('Phonebook'));
+		s.tab('firmware', _('Firmware'));
 		s.tab('advanced', _('Advanced'));
 
 		/* General */
@@ -1463,6 +1607,10 @@ return view.extend({
 				})));
 			};
 		}
+
+		/* Firmware */
+		o = s.taboption('firmware', form.DummyValue, '_fw', _('Chip firmware'));
+		o.cfgvalue = function() { return fwNode(data[11]); };
 
 		/* Advanced; a placeholder is what the service takes when it is empty */
 		o = s.taboption('advanced', form.Value, 'firmware_dir', _('Chip firmware directory'),

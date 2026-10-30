@@ -54,7 +54,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 | Network > DECT: Phonebook (CardDAV) | 🟡 | With `opendectcell-carddav`; set up with a Nextcloud account (2026-10-30) |
 | Network > DECT: cell mode (enrol with a controller, leave) | 🟡 | With `opendectcell-cell`; enrolment, link and leave tested on a 7412 against a controller in Docker (2026-10-30), radio parked |
 | Status > DECT: DECT, VoIP and Log tabs | ✅ | Live view of the base, the handsets, SIP registrations and running calls with codec and encryption |
-| Uploading the chip firmware in the web page | ❌ | Copy it with `scp` for now |
+| Uploading the chip firmware in the web page | 🟡 | Network > DECT > Firmware (2026-10-31): upload the two `.hex` files from `tools/dect-fw-extract.py`; the box checks them. Backend tested with a fake board; the browser side (upload, check, delete) not yet clicked through on a box. `scp` still works |
 
 ## Hardware
 

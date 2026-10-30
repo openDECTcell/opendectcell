@@ -242,6 +242,7 @@ check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done
 	@python3 -I tests/test_fw_extract.py
 	@python3 -I tests/test_luci_js.py
+	@python3 -I tests/test_firmware_sh.py
 
 clean:
 	rm -rf $(BUILD)

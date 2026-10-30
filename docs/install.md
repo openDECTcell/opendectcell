@@ -122,6 +122,11 @@ image for your box, on your own PC. Why, and which builds are known:
    Run them. They use OpenWrt's default address 192.168.1.1; for another
    one, add `--box root@ADDRESS` to the first command.
 
+   Instead of `scp`, you can upload the two `.hex` files in the web
+   interface: **Network > DECT**, tab *Firmware*, *Upload…* for each. The
+   box checks them against the build it needs before it keeps them
+   ([luci-manual.md](luci-manual.md) section 2.5).
+
 The files stay on the box across OpenWrt upgrades.
 
 ## 4. Switch on and register
