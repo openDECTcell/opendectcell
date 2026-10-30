@@ -325,6 +325,32 @@ int main(void)
 	CHECK_EQ(sent[3].param[1], 0x01);
 	b.ops = NULL;
 
+	/* the ring's SETUP helpers (S3l) */
+	{
+		memset(b.calls, 0, sizeof(b.calls));
+		memset(b.cap, 0, sizeof(b.cap));
+		memset(b.prof, 0, sizeof(b.prof));
+		b.cfg.basic_svc = 0x88;
+		CHECK_EQ(dect_base_basic_svc(&b, 0, 0x88), 0x88);
+		b.cap[0].known = 1;			/* a pure GAP handset */
+		CHECK_EQ(dect_base_basic_svc(&b, 0, 0x88), 0x80);
+		b.prof[1].cc_basic_service = 2;		/* its profile: narrow */
+		CHECK_EQ(dect_base_basic_svc(&b, 1, 0x88), 0x80);
+		CHECK_EQ(dect_base_ring_svc(&b, 2, 1), 0x80);
+		CHECK_EQ(dect_base_page_info(&b, 0), 0x2C);
+		CHECK_EQ(dect_base_page_info(&b, 1), 0x0C);
+		b.calls[0].id = 3;
+		b.calls[0].dect_id = 1;
+		b.main_link.active = 0;
+		CHECK_EQ(dect_base_call_id(&b, NULL), 2);	/* 1 is taken */
+		b.cfg.callinfo.has_call_id = 1;
+		CHECK_EQ(dect_base_call_id(&b, NULL), 0);
+		b.cfg.callinfo.has_call_id = 0;
+		memset(b.calls, 0, sizeof(b.calls));
+		memset(b.cap, 0, sizeof(b.cap));
+		memset(b.prof, 0, sizeof(b.prof));
+	}
+
 	/* the registration completes: key, gate, install, save, once */
 	{
 		struct dect_mm *mm = &b.main_link.link.mm;

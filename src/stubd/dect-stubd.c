@@ -92,7 +92,7 @@ static uint64_t fs_free_bytes(const char *path)
  * bench test 21c sent line 0 against this list's line 1 and the A540 rang
  * silently, as for a line it is not attached to.
  */
-#define STUBD_LINE_ID	1u
+#define STUBD_LINE_ID	DECT_BASE_LINE_ID
 
 /*
  * <<BASIC-SERVICE>>: high nibble call class, low nibble basic service, per
@@ -3237,29 +3237,7 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
  */
 static uint8_t alloc_call_id(const struct stubd *s, const struct dect_link *me)
 {
-	unsigned id, k;
-
-	if (s->base.cfg.callinfo.has_call_id)
-		return 0;
-	for (id = 1; id <= 127u; id++) {
-		int used = 0;
-
-		if (s->base.main_link.active && &s->base.main_link.link != me &&
-		    dect_cc_busy(&s->base.main_link.link.cc) &&
-		    s->base.main_link.link.cc.status_call_id == id)
-			used = 1;
-		for (k = 0; !used && k < SIDE_MAX; k++)
-			if (s->side[k].bl->active && &s->side[k].bl->link != me &&
-			    dect_cc_busy(&s->side[k].bl->link.cc) &&
-			    s->side[k].bl->link.cc.status_call_id == id)
-				used = 1;
-		for (k = 0; !used && k < BC_MAX; k++)
-			if (s->base.calls[k].id && s->base.calls[k].dect_id == id)
-				used = 1;	/* a parallel call's */
-		if (!used)
-			return (uint8_t)id;
-	}
-	return 0;
+	return dect_base_call_id(&s->base, me);
 }
 
 /* dect_link's question for a handset's new call: its call id. */
@@ -4291,26 +4269,19 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
  * them silently changed the page byte as well. We read four experiments over
  * two variables. They were four runs of the same page.
  */
-#define RING_PAGE_CC	0x0Cu		/* CC page */
-#define RING_PAGE_WIDEBAND 0x20u	/* ... wideband SETUP to follow */
+#define RING_PAGE_CC	DECT_BASE_PAGE_CC		/* CC page */
+#define RING_PAGE_WIDEBAND DECT_BASE_PAGE_WIDEBAND	/* ... wideband SETUP to follow */
 
 /* The page for an external call: wideband to follow, unless narrow. */
 static uint8_t ring_page_info(const struct stubd *s, int narrow)
 {
-	return (uint8_t)(RING_PAGE_CC |
-			 ((s->base.cfg.basic_svc & 0x0Fu) == 0x08u && !narrow
-			  ? RING_PAGE_WIDEBAND : 0u));
+	return dect_base_page_info(&s->base, narrow);
 }
 
 /* The main link's ring is for a narrowband call (struct dect_base_call). */
 static int main_ring_narrow(const struct stubd *s)
 {
-	unsigned i;
-
-	for (i = 0; i < BC_MAX; i++)
-		if (s->base.calls[i].id && s->base.calls[i].party == -1)
-			return s->base.calls[i].narrow;
-	return 0;
+	return dect_base_ring_narrow(&s->base);
 }
 
 #define RING_RELEASE_WAIT_MS	3000u	/* [CR A-0053] DLC arms a ~5 s guard */
@@ -4426,15 +4397,7 @@ static struct dect_clip ring_clip;	/* s->clip as the target's profile wants it *
  */
 static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
 {
-	if (i >= 0 && (unsigned)i < s->base.n_hs && s->base.prof[i].cc_basic_service)
-		/* the profile: 1 wideband, 2 basic speech; the class stays */
-		return (uint8_t)((configured & 0xF0u) |
-				 (s->base.prof[i].cc_basic_service == 1 ? 0x08u
-								      : 0x00u));
-	if (i >= 0 && (unsigned)i < s->base.n_hs && s->base.cap[i].known &&
-	    !s->base.cap[i].ng)
-		return 0x80u;
-	return configured;
+	return dect_base_basic_svc(&s->base, i, configured);
 }
 
 /*
@@ -4444,9 +4407,7 @@ static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
  */
 static uint8_t ring_svc(const struct stubd *s, unsigned t, int narrow)
 {
-	uint8_t svc = target_svc(s, (int)t, s->base.cfg.basic_svc);
-
-	return narrow ? (uint8_t)(svc & 0xF0u) : svc;
+	return dect_base_ring_svc(&s->base, t, narrow);
 }
 
 /*
@@ -4455,11 +4416,7 @@ static uint8_t ring_svc(const struct stubd *s, unsigned t, int narrow)
  */
 static int ring_target_part3(const struct stubd *s)
 {
-	const struct dect_callinfo *o = &s->base.cfg.callinfo;
-
-	return !o->has_line && !o->has_call_id && !o->has_call_status &&
-	       s->base.n_hs && s->base.cap[s->base.ring.hs].known &&
-	       s->base.cap[s->base.ring.hs].part3;
+	return dect_base_ring_part3(&s->base);
 }
 
 /*
@@ -4474,33 +4431,7 @@ static int ring_target_part3(const struct stubd *s)
  */
 static void ring_callinfo(struct stubd *s, int on)
 {
-	struct dect_callinfo ci;
-	unsigned i;
-
-	if (!on || !ring_target_part3(s)) {
-		dect_cc_set_callinfo(&s->base.main_link.link.cc, &s->base.cfg.callinfo);
-		if (on && s->base.n_hs && !s->base.cap[s->base.ring.hs].known)
-			printf("ring: the target's terminal capability is not "
-			       "known yet -- no call information (an A540 "
-			       "then rings silently)\n");
-		return;
-	}
-	dect_callinfo_init(&ci);
-	ci.has_line = 1;
-	ci.line_id = STUBD_LINE_ID;
-	for (i = 0; i < BC_MAX; i++)
-		if (s->base.calls[i].id && s->base.calls[i].party == -1)
-			ci.line_id = (uint8_t)s->base.calls[i].line;	/* the called one */
-	ci.has_line_type = 1;
-	ci.line_type = DECT_CALLINFO_NDT_DELAY;
-	ci.has_call_id = 1;
-	ci.call_id = s->base.main_link.link.cc.status_call_id;
-	ci.has_call_status = 1;
-	ci.call_status = DECT_CS_CALL_SETUP;
-	dect_cc_set_callinfo(&s->base.main_link.link.cc, &ci);
-	printf("ring: full call information for a Part 3 handset "
-	       "(line %u, VoIP, call id %u, CS call setup)\n",
-	       (unsigned int)ci.line_id, (unsigned int)ci.call_id);
+	dect_base_ring_callinfo(&s->base, on);
 }
 
 /*

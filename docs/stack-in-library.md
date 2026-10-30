@@ -281,3 +281,10 @@ them. Unit test; traces unchanged.
 `cfg.callinfo`. Data only, with what the ring's SETUP needs now in the
 library; traces unchanged.
 
+**S3l.** The ring SETUP's helpers are the library's: a free call id, the
+full call information for a Part 3 handset, the basic service by
+profile and capability, the page byte. dect-stubd's names wrap them.
+Unit tests; traces unchanged. What is left of the ring is its sequencing
+(`ring_tick()`, `ring_queue_setup()`), which reads the host's ring timing
+and the CLIP the bridge sets per call.
+

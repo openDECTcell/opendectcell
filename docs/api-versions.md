@@ -791,3 +791,8 @@ _audio_path() (0x022D) and _audio_release() (0x0233) (S3j).
 dect_base's `cap[]` (each record's terminal capability), and
 dect_base_cfg's `callinfo` (S3k). dect_base.h now includes
 dect_callinfo.h.
+
+**112.** dect_base.h, 2026-10-30: DECT_BASE_LINE_ID, DECT_BASE_PAGE_CC,
+DECT_BASE_PAGE_WIDEBAND and the ring SETUP's helpers: dect_base_call_id(),
+_ring_part3(), _ring_callinfo(), _basic_svc(), _ring_svc(),
+_ring_narrow(), _page_info() (S3l).

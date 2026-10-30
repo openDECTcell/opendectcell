@@ -58,6 +58,15 @@ struct dect_hs_rec {
  * current record when the stack says it changed.
  */
 #define DECT_BASE_HS_MAX	DECT_MM_MAX_SLOT
+/*
+ * The base's one line, as the line list (TS 102 527-3 7.4.11) names it; a
+ * <<CALL-INFORMATION>> line identifier must name the same line (bench 21c:
+ * line 0 against the list's line 1, and the A540 rang silently).
+ */
+#define DECT_BASE_LINE_ID	1u
+/* The page information byte: a CC page, and a wideband SETUP to follow. */
+#define DECT_BASE_PAGE_CC	0x0Cu
+#define DECT_BASE_PAGE_WIDEBAND	0x20u
 #define DECT_BASE_SIDES		3u
 
 /* What the host does for the stack (S1c, S2.1). Any may be NULL. */
@@ -452,6 +461,33 @@ void dect_base_audio_assign(struct dect_base *b, uint8_t handle,
 void dect_base_audio_path(struct dect_base *b, uint8_t handle);
 /* 0x0233 {link, 01}: the audio channel released [CR A-0127]. */
 void dect_base_audio_release(struct dect_base *b, uint8_t handle);
+
+/*
+ * The ring's SETUP (S3l). A call id 1..127 no other call uses, for a call
+ * on link `me`; 0 when the call information option fixes it.
+ */
+uint8_t dect_base_call_id(const struct dect_base *b,
+			  const struct dect_link *me);
+/* The handset rung gets stock's full call information: Part 3, known. */
+int dect_base_ring_part3(const struct dect_base *b);
+/*
+ * The main link's <<CALL-INFORMATION>> for its next SETUP: on, the external
+ * call's for a Part 3 handset (our line, VoIP, call id, CS call setup
+ * [CR A-0125]); off or not Part 3, the fixed option.
+ */
+void dect_base_ring_callinfo(struct dect_base *b, int on);
+/*
+ * The <<BASIC-SERVICE>> of a SETUP to record i: the profile's, a pure GAP
+ * handset's (0x80: EN 300 444 table 21), else `configured`.
+ */
+uint8_t dect_base_basic_svc(const struct dect_base *b, int i,
+			    uint8_t configured);
+/* ... of the ring's SETUP to record t; narrow drops the wideband bit. */
+uint8_t dect_base_ring_svc(const struct dect_base *b, unsigned t, int narrow);
+/* The main link's bridged call is narrowband. */
+int dect_base_ring_narrow(const struct dect_base *b);
+/* The page information byte for a call (narrow: no wideband SETUP). */
+uint8_t dect_base_page_info(const struct dect_base *b, int narrow);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

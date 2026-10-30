@@ -477,3 +477,107 @@ void dect_base_audio_release(struct dect_base *b, uint8_t handle)
 
 	chip_mail(b, 0x0233u, p, sizeof(p));
 }
+
+uint8_t dect_base_call_id(const struct dect_base *b,
+			  const struct dect_link *me)
+{
+	unsigned id, k;
+
+	if (b->cfg.callinfo.has_call_id)
+		return 0;
+	for (id = 1; id <= 127u; id++) {
+		int used = 0;
+
+		if (b->main_link.active && &b->main_link.link != me &&
+		    dect_cc_busy(&b->main_link.link.cc) &&
+		    b->main_link.link.cc.status_call_id == id)
+			used = 1;
+		for (k = 0; !used && k < DECT_BASE_SIDES; k++)
+			if (b->side[k].active && &b->side[k].link != me &&
+			    dect_cc_busy(&b->side[k].link.cc) &&
+			    b->side[k].link.cc.status_call_id == id)
+				used = 1;
+		for (k = 0; !used && k < DECT_BASE_CALLS; k++)
+			if (b->calls[k].id && b->calls[k].dect_id == id)
+				used = 1;	/* a parallel call's */
+		if (!used)
+			return (uint8_t)id;
+	}
+	return 0;
+}
+
+int dect_base_ring_part3(const struct dect_base *b)
+{
+	const struct dect_callinfo *o = &b->cfg.callinfo;
+
+	return !o->has_line && !o->has_call_id && !o->has_call_status &&
+	       b->n_hs && b->cap[b->ring.hs].known && b->cap[b->ring.hs].part3;
+}
+
+void dect_base_ring_callinfo(struct dect_base *b, int on)
+{
+	struct dect_callinfo ci;
+	unsigned i;
+
+	if (!on || !dect_base_ring_part3(b)) {
+		dect_cc_set_callinfo(&b->main_link.link.cc, &b->cfg.callinfo);
+		if (on && b->n_hs && !b->cap[b->ring.hs].known)
+			dect_base_log(b, "ring: the target's terminal capability "
+				      "is not known yet -- no call information "
+				      "(an A540 then rings silently)");
+		return;
+	}
+	dect_callinfo_init(&ci);
+	ci.has_line = 1;
+	ci.line_id = DECT_BASE_LINE_ID;
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == -1)
+			ci.line_id = (uint8_t)b->calls[i].line;	/* the called one */
+	ci.has_line_type = 1;
+	ci.line_type = DECT_CALLINFO_NDT_DELAY;
+	ci.has_call_id = 1;
+	ci.call_id = b->main_link.link.cc.status_call_id;
+	ci.has_call_status = 1;
+	ci.call_status = DECT_CS_CALL_SETUP;
+	dect_cc_set_callinfo(&b->main_link.link.cc, &ci);
+	dect_base_log(b, "ring: full call information for a Part 3 handset "
+		      "(line %u, VoIP, call id %u, CS call setup)",
+		      (unsigned)ci.line_id, (unsigned)ci.call_id);
+}
+
+uint8_t dect_base_basic_svc(const struct dect_base *b, int i,
+			    uint8_t configured)
+{
+	if (i >= 0 && (unsigned)i < b->n_hs && b->prof[i].cc_basic_service)
+		return (uint8_t)((configured & 0xF0u) |
+				 (b->prof[i].cc_basic_service == 1 ? 0x08u
+								    : 0x00u));
+	if (i >= 0 && (unsigned)i < b->n_hs && b->cap[i].known &&
+	    !b->cap[i].ng)
+		return 0x80u;
+	return configured;
+}
+
+uint8_t dect_base_ring_svc(const struct dect_base *b, unsigned t, int narrow)
+{
+	uint8_t svc = dect_base_basic_svc(b, (int)t, b->cfg.basic_svc);
+
+	return narrow ? (uint8_t)(svc & 0xF0u) : svc;
+}
+
+int dect_base_ring_narrow(const struct dect_base *b)
+{
+	unsigned i;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == -1)
+			return b->calls[i].narrow;
+	return 0;
+}
+
+uint8_t dect_base_page_info(const struct dect_base *b, int narrow)
+{
+	return (uint8_t)(DECT_BASE_PAGE_CC |
+			 ((b->cfg.basic_svc & 0x0Fu) == 0x08u && !narrow
+			  ? DECT_BASE_PAGE_WIDEBAND : 0u));
+}
