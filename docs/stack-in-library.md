@@ -79,11 +79,12 @@ S0 is complete with these six (2026-10-30). Further traces come with the
 stage that needs them (parallel calls and call waiting with S3, the other
 lists with S4).
 
-Seen while recording, kept as it is (S0 records, it does not fix): after a
-new handset's first location registration the subscription install
-(slot clears, `0x020A`, `0x017C`) goes to the chip twice in a row, once
-from the registration and once from the start-up restore, which now finds
-a UAK (`register.trace`).
+Seen while recording: after a new handset's first location registration
+the subscription install (slot clears, `0x020A`, `0x017C`) went to the
+chip twice in a row, once from the registration and once from the
+start-up restore, which then found a UAK (`register.trace`). Fixed as
+task T2 of `docs/tasks-2026-10-30.md`: the registration's install counts
+as the restore; the trace lost the 15 repeated mails.
 
 The harness sends the chip's contact answer `0xF601` at start with a
 made-up RFPI, `00 01 23 45 60`, the PARK the traces' handsets name.

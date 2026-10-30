@@ -28,6 +28,7 @@ Added as the tasks land; each with the commit it needs.
 
 | test | needs | pass | fail and what it means |
 |---|---|---|---|
+| N1. Register a handset afresh (deregister the C430A or the AS690H first), then call out from it, then restart the service and call again | T2 | registration, the first locate, then **one** `sub: cleared chip subscription slots` and, until the restart, no `sub: stored subscription reloaded into the chip` (after the restart it appears, as at every start); both calls go through | the second call is refused or the handset shows "no base" after the restart: the chip lacked the record, so the second install was needed after all; revert T2 |
 
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 

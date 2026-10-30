@@ -10347,6 +10347,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       s->base.rec.port_id_len);
 		}
 		send_subscription(s);
+		/*
+		 * The chip now holds what the start-up restore would write:
+		 * without this the restore in loop_tick() saw the new UAK and
+		 * sent the whole install a second time (register.trace,
+		 * 2026-10-30).
+		 */
+		s->sub_restored = 1;
 		dect_base_changed(&s->base);
 		if (s->reg_profile[0])
 			reg_profile_apply(s);
