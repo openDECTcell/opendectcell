@@ -28,9 +28,9 @@ cable.
 | File | What it is | Needed |
 |---|---|---|
 | `kmod-opendectcell-ipq40xx-…_ipq40xx-generic.apk` | kernel module, FRITZ!Box 7520/7530 | yes, on a 7520/7530 |
-| `kmod-opendectcell-lantiq-…_lantiq-xrx200.apk` | kernel module, FRITZ!Box 7412 | yes, on a 7412 (not yet tested on one) |
+| `kmod-opendectcell-lantiq-…_lantiq-xrx200.apk` | kernel module, FRITZ!Box 7412 | yes, on a 7412 (experimental, see below) |
 | `opendectcell-…_<arch>.apk` | the DECT base: firmware loader, daemon, service | yes |
-| `luci-app-opendectcell-…_all.apk` | web pages: Network > DECT and Status > DECT | recommended |
+| `luci-app-opendectcell-…_all.apk` | web pages: Network > DECT and Status > DECT ([luci-manual.md](luci-manual.md)) | recommended |
 | `opendectcell-baresip-…_<arch>.apk` | SIP: connects the handsets' lines to a SIP provider or telephone system | for phone calls outside the house |
 
 `<arch>` is `arm_cortex-a7_neon-vfpv4` for the 7520/7530 and
@@ -146,7 +146,8 @@ Status > DECT now shows the base as on the air. Then, in Network > DECT, tab
 
 Registration is open only while you are registering: it closes after one
 handset has registered, or after two minutes. The handset then appears in
-the list as *DECT 1*, *DECT 2* and so on; *Edit* renames it.
+the list as *DECT 1*, *DECT 2* and so on; *Edit* renames it. Every field of
+the web pages is described in [luci-manual.md](luci-manual.md).
 
 ## 5. Phone lines (SIP)
 

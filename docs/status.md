@@ -50,7 +50,9 @@ tested · ❌ not built yet · ➖ out of scope for now
 
 | Feature | State | Notes |
 |---|---|---|
-| Network > DECT: settings, handsets, VoIP profiles | ✅ | |
+| Network > DECT: settings, handsets, VoIP profiles | ✅ | Field by field in [luci-manual.md](luci-manual.md) |
+| Network > DECT: Phonebook (CardDAV) | 🟡 | With `opendectcell-carddav`; set up with a Nextcloud account (2026-10-30) |
+| Network > DECT: cell mode (enrol with a controller, leave) | 🟡 | With `opendectcell-cell`; enrolment, link and leave tested on a 7412 against a controller in Docker (2026-10-30), radio parked |
 | Status > DECT: DECT, VoIP and Log tabs | ✅ | Live view of the base, the handsets, SIP registrations and running calls with codec and encryption |
 | Uploading the chip firmware in the web page | ❌ | Copy it with `scp` for now |
 
@@ -60,7 +62,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 |---|---|---|
 | FRITZ!Box 7520 | ✅ | The development box |
 | FRITZ!Box 7530 | 🟡 | Same hardware as the 7520 and the same OpenWrt image, but not tested on one yet |
-| FRITZ!Box 7412 | 🟡 | With the `kmod-lantiq-ssc-pcm` transport (2026-10-29): two handsets registered, SIP calls in and out with HD voice, a call between handsets. Not released yet ([bench-7412.md](bench-7412.md)) |
+| FRITZ!Box 7412 | 🟡 | With the `kmod-lantiq-ssc-pcm` transport (2026-10-29): two handsets registered, SIP calls in and out with HD voice, a call between handsets; unattended start, restore and key read-back on the current code (2026-10-30). The transport module is not released yet ([bench-7412.md](bench-7412.md)) |
 | FRITZ!Box 7362 SL | ❌ | Analysed only |
 | Other FRITZ!Boxes | ❌ | Many use the same DECT chip; see [hardware-abstraction.md](hardware-abstraction.md) for what a new model needs |
 
@@ -92,8 +94,11 @@ handsets are very welcome; see [CONTRIBUTING.md](../CONTRIBUTING.md).
 ## Later, or out of scope
 
 - **Several boxes as one DECT system** (multi-cell, roaming between boxes):
-  researched, with a separate controller project. Handover during a call
-  needs the boxes to be synchronised, which is unsolved. ➖ for now.
+  a separate controller project. A box can already join a controller as a
+  cell (`opendectcell-cell`), and the DECT stack now sits in the shared library
+  `libopendectcell` so the controller can run it; the controller running
+  handsets through its cells is the next step. Handover during a call
+  needs the boxes to be synchronised, which is unsolved.
 - **ULE** (DECT smart-home devices) and **SUOTA** (handset firmware updates):
   ➖.
 

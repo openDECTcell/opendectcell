@@ -17,6 +17,7 @@ Where to start depends on what you want:
 |---|---|
 | [status.md](status.md) | What works, what doesn't yet, tested boxes and handsets |
 | [install.md](install.md) | Installing a release, the chip firmware, registering handsets, phone lines |
+| [luci-manual.md](luci-manual.md) | The web pages (Network > DECT, Status > DECT), field by field, with troubleshooting |
 | [firmware-sourcing.md](firmware-sourcing.md) | Why you supply the DECT chip firmware yourself, and which FRITZ!OS builds are known |
 | [handset-profiles.md](handset-profiles.md) | Handset profiles: per-model settings in `/etc/opendectcell/profiles/`, and how to write one |
 | [handset-compatibility.md](handset-compatibility.md) | What each tested handset did against openDECTcell, in detail |
@@ -34,6 +35,9 @@ Where to start depends on what you want:
 | [capacity.md](capacity.md) | How many handsets and calls one box carries, and how to go beyond |
 | [multicell-experiments.md](multicell-experiments.md) | Experiments towards several boxes as one DECT system |
 | [notes-for-the-controller.md](notes-for-the-controller.md) | Interface notes for the separate multi-cell controller project |
+| [stack-in-library.md](stack-in-library.md) | How the DECT stack moved from `dect-stubd` into `libopendectcell` (`struct dect_base`), stage by stage, so the controller can host it |
+| [api-versions.md](api-versions.md) | What changed in `libopendectcell`'s public interface at each API version |
+| [multicell-identities.md](multicell-identities.md) | Identities (RFPI, IPUI) for many cells under one controller |
 
 ## Reference: the DECT chip interface
 
@@ -49,7 +53,7 @@ chip. They are the basis for the code.
 | [mac-bringup.md](mac-bringup.md) | Switching the base on: the radio, the beacon, registration mode |
 | [pcm-tdm-ipq4019.md](pcm-tdm-ipq4019.md) | The IPQ4019's PCM/TDM hardware (FRITZ!Box 7520/7530) |
 | [kmod-spec.md](kmod-spec.md) | Specification of the kernel driver for the 7520/7530 |
-| [7412-spi-tdm-and-loader.md](7412-spi-tdm-and-loader.md) | The FRITZ!Box 7412's bus and loader (not yet tested on hardware) |
+| [7412-spi-tdm-and-loader.md](7412-spi-tdm-and-loader.md) | The FRITZ!Box 7412's bus and loader (running since 2026-10-29) |
 | [models/7520-DECT-analysis.md](models/7520-DECT-analysis.md) | FRITZ!Box 7520: DECT hardware and components |
 | [models/7412-DECT-analysis.md](models/7412-DECT-analysis.md) | FRITZ!Box 7412: DECT hardware and components |
 | [models/7362SL-DECT-analysis.md](models/7362SL-DECT-analysis.md) | FRITZ!Box 7362 SL: DECT hardware and components |
@@ -76,8 +80,9 @@ says at the top what it was for.
 | [registration-g6.md](registration-g6.md) | Getting the first handset to register (gate G6) |
 | [call-g7.md](call-g7.md) | Getting a handset to ring and talk (gate G7): the long log of every run |
 | [why-the-handsets-never-rang.md](why-the-handsets-never-rang.md) | The search for why the Gigasets would not ring, and the answer |
-| [tasks-2026-10-28.md](tasks-2026-10-28.md) | Task list, still current for some open details |
-| [bench-2026-10-25.md](bench-2026-10-25.md), [bench-next.md](bench-next.md), [bench-7412.md](bench-7412.md) | Bench test cards and their results; `bench-next.md` holds the open ones, `bench-7412.md` the first handset on a 7412 |
+| [tasks-2026-10-28.md](tasks-2026-10-28.md), [tasks-2026-10-30.md](tasks-2026-10-30.md) | Task lists, still current for some open details |
+| [bench-later.md](bench-later.md) | Every open bench test on one card, with the outcomes written before the run, and the unattended runs' results |
+| [bench-2026-10-25.md](bench-2026-10-25.md), [bench-next.md](bench-next.md), [bench-7412.md](bench-7412.md) | Older bench test cards and their results; `bench-7412.md` the first handset on a 7412 |
 
 The project-wide history and hand-over notes are in
 the maintainers' notes; the plan is in [ROADMAP.md](../ROADMAP.md).
