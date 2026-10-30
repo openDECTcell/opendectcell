@@ -288,6 +288,23 @@ int main(void)
 		b.ops = NULL;
 	}
 
+	/* a record's TPUI and a page (S3g) */
+	{
+		uint8_t tpui[3];
+
+		dect_base_tpui(&b, 1, tpui);		/* slot 2 */
+		CHECK_EQ(tpui[1], 0x11);
+		CHECK_EQ(tpui[2], 0x02);
+		b.ops = &ops;
+		n_sent = 0;
+		dect_base_page(&b, 0x2C, tpui);
+		CHECK_EQ(n_sent, 1u);
+		CHECK_EQ(sent[0].prim, 0x0300u);
+		CHECK_EQ(sent[0].param[0], 0x2C);
+		CHECK_EQ(sent[0].param[2], 0x02);
+		b.ops = NULL;
+	}
+
 	/* the registration completes: key, gate, install, save, once */
 	{
 		struct dect_mm *mm = &b.main_link.link.mm;

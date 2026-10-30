@@ -4391,18 +4391,7 @@ static void log_nwk_out(void *ctx, const uint8_t *msg, size_t len)
  */
 static void ring_target_tpui(const struct stubd *s, uint8_t tpui[3])
 {
-	struct dect_mm_cfg cfg;
-	struct dect_mm mm;
-
-	memset(&cfg, 0, sizeof(cfg));
-	if (s->base.cur == s->base.ring.hs || !s->base.n_hs)
-		cfg.sub_slot = stubd_sub_slot(s);
-	else
-		cfg.sub_slot = (uint8_t)(s->audio.sub_slot && !s->base.ring.hs
-					 ? s->audio.sub_slot
-					 : s->base.hs[s->base.ring.hs].slot);
-	dect_mm_init(&mm, &cfg);
-	dect_mm_tpui(&mm, tpui);
+	dect_base_tpui(&s->base, s->base.ring.hs, tpui);
 }
 
 static void send_page(struct stubd *s)
@@ -4419,7 +4408,7 @@ static void send_page(struct stubd *s)
 	p[0] = ring_page_info(s, main_ring_narrow(s));
 	p[1] = tpui[1];
 	p[2] = tpui[2];
-	chip_mail(s, 0x0300u, p, sizeof(p));
+	dect_base_page(&s->base, p[0], tpui);
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
 	       s->base.ring.pages, RING_PAGE_RETRIES, p[0],
@@ -6852,11 +6841,7 @@ static int ic_has_lane(const struct stubd *s, int p)
 
 static void ic_page(struct stubd *s)
 {
-	const uint8_t p[3] = {
-		RING_PAGE_CC | RING_PAGE_WIDEBAND, s->ic.tpui[1], s->ic.tpui[2],
-	};
-
-	chip_mail(s, 0x0300u, p, sizeof(p));
+	dect_base_page(&s->base, RING_PAGE_CC | RING_PAGE_WIDEBAND, s->ic.tpui);
 	s->ic.pages++;
 	printf("intern: paged %s, attempt %u of %u\n", s->hs[s->ic.target].path,
 	       s->ic.pages, IC_PAGES);
@@ -7356,10 +7341,7 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 		}
 		{
 			/* stock's page for this: C-plane only, the TPUI */
-			uint8_t p[3] = { 0x08, s->dereg.tpui[1],
-					 s->dereg.tpui[2] };
-
-			chip_mail(s, 0x0300u, p, 3);
+			dect_base_page(&s->base, 0x08, s->dereg.tpui);
 		}
 		s->dereg.pages++;
 		s->dereg.page_at = now + DEREG_PAGE_MS;
@@ -7587,9 +7569,7 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 		}
 		{
 			/* C-plane only, the TPUI: the deregistration's page */
-			uint8_t p[3] = { 0x08, s->tu.tpui[1], s->tu.tpui[2] };
-
-			chip_mail(s, 0x0300u, p, 3);
+			dect_base_page(&s->base, 0x08, s->tu.tpui);
 		}
 		if (!s->tu.pages)
 			printf("time: DECT %u has no link -- paging it\n",
@@ -8297,10 +8277,7 @@ static void ring_main(struct stubd *s, struct dect_base_call *b, unsigned t)
  */
 static void sr_page(struct stubd *s, struct dect_base_call *b)
 {
-	const uint8_t p[3] = { ring_page_info(s, b->narrow), b->tpui[1],
-			       b->tpui[2] };
-
-	chip_mail(s, 0x0300u, p, sizeof(p));
+	dect_base_page(&s->base, ring_page_info(s, b->narrow), b->tpui);
 	b->pages++;
 	printf("bridge: paged DECT %u for call %u, attempt %u of %u\n",
 	       hs_slot(s, (unsigned)b->target), b->id, b->pages, IC_PAGES);

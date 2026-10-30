@@ -426,3 +426,21 @@ void dect_base_call_event(struct dect_base *b, const struct dect_base_call *c,
 		dect_ctl_add(&o, k2, v2);
 	b->ops->event(b->ctx, &o);
 }
+
+void dect_base_tpui(const struct dect_base *b, unsigned i, uint8_t tpui[3])
+{
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.sub_slot = (uint8_t)dect_base_slot(b, i);
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tpui(&mm, tpui);
+}
+
+void dect_base_page(struct dect_base *b, uint8_t info, const uint8_t tpui[3])
+{
+	const uint8_t p[3] = { info, tpui[1], tpui[2] };
+
+	chip_mail(b, 0x0300u, p, sizeof(p));
+}

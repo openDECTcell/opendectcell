@@ -242,7 +242,15 @@ unchanged.
 pages, the record rung); dect-stubd's `RING_*` names are aliases. Data
 only; traces unchanged.
 
-Next in S3: the ring sequence's behaviour (`ring_tick()`, 273 lines, the
-page, `ring_queue_setup()`), the main link's connect staging, and the
-internal call.
+**S3g.** The page: `dect_base_tpui()` (a record's TPUI by MM's rule for
+its slot) and `dect_base_page()` (0x0300 with the page information byte
+the host chose). All five pages dect-stubd sends (a ring, a side ring, an
+internal call, two in deregistration) go through it. Unit test; traces
+unchanged.
+
+Next in S3: `ring_tick()` (273 lines) and `ring_queue_setup()`, the main
+link's connect staging, and the internal call. These carry most of the
+host's options (ring timing, profiles, the line names): moving them means
+first giving `dect_base` the call configuration the host now keeps in its
+`audio_cfg`.
 

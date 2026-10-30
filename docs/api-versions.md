@@ -769,3 +769,6 @@ gains event(), and dect_base_party_slot(), _call_slot(), _call_event()
 **106.** dect_base.h, 2026-10-30: enum dect_base_ring_state, struct
 dect_base_ring and struct dect_base's `ring`: the ring sequence's state
 (was dect-stubd's ring_* fields) (S3f).
+
+**107.** dect_base.h, 2026-10-30: dect_base_tpui() (a record's TPUI by
+MM's rule) and dect_base_page() (0x0300) (S3g).

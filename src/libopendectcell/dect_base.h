@@ -378,6 +378,19 @@ unsigned dect_base_call_slot(const struct dect_base *b,
 void dect_base_call_event(struct dect_base *b, const struct dect_base_call *c,
 			  const char *verb, const char *k2, const char *v2);
 
+/*
+ * Record i's TPUI by MM's own rule for its chip slot (S3g). Not a link's
+ * MM: that is whichever handset the link last served (run 32, 2026-10-25:
+ * a page for the C430A went out with the A540's TPUI).
+ */
+void dect_base_tpui(const struct dect_base *b, unsigned i, uint8_t tpui[3]);
+
+/*
+ * Page a handset: 0x0300 {info, the TPUI's low 16 bits}. info is the page
+ * information byte the host chose for the call (its basic service).
+ */
+void dect_base_page(struct dect_base *b, uint8_t info, const uint8_t tpui[3]);
+
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
