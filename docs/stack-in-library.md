@@ -96,3 +96,15 @@ current handset (the loose `uak`, `sub_port_id`, `cc_*` and `sub_slot`
 fields of `struct stubd`) are now both this type, so `hs_load()` and
 `hs_stash()` are struct copies. A rename by pattern, checked by the
 compiler; the six traces unchanged.
+
+**S1b, 2026-10-30.** `struct dect_base` (`dect_base.[ch]`): the table of
+records, how many are in use, which is current and its working copy;
+`dect_base_switch()` stashes and loads. dect-stubd embeds one as
+`s->base`; its `struct handset` keeps only what is the daemon's (the
+store's path, names, profile, MWI, capabilities), at the same index.
+`tests/test_base.c` tests the swap; the six traces unchanged.
+
+Next (S1c): the save. dect-stubd decides in three places that the
+current record changed and writes its file (`sub_save()`); the stack
+should say "record changed" and the host store it.
+

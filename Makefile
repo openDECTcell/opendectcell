@@ -15,7 +15,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls $(BUILD)/test_stubd
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls $(BUILD)/test_stubd $(BUILD)/test_base
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 
 # Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
@@ -31,7 +31,7 @@ STUBD_SRC := src/stubd/dect-stubd.c src/stubd/ssc_align.c src/libopendectcell/de
 	src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_audio.c \
 	src/libopendectcell/dect_g722.c src/libopendectcell/dect_link.c src/libopendectcell/dect_time.c \
 	src/libopendectcell/dect_diag.c src/libopendectcell/dect_profile.c src/libopendectcell/dect_ctl.c \
-	src/libopendectcell/dect_cell.c
+	src/libopendectcell/dect_cell.c src/libopendectcell/dect_base.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
 .PHONY: all check cross clean baresip-mod dect-cell
@@ -123,6 +123,10 @@ $(BUILD)/test_stubd: tests/test_stubd.c $(STUBD_SRC) src/stubd/ssc_align.h tests
 	$(CC) $(CFLAGS) $(DEFS) $(SAN) $(STUBD_INC) -DSTUBD_TEST -DDECT_RUN_DIR='"$(BUILD)/stubd-test-run"' \
 		-DAB_PATH='"$(BUILD)/stubd-test-run/audio.sock"' \
 		-o $@ tests/test_stubd.c $(filter-out src/stubd/dect-stubd.c,$(STUBD_SRC)) -lm
+
+$(BUILD)/test_base: tests/test_base.c src/libopendectcell/dect_base.c src/libopendectcell/dect_base.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_base.c src/libopendectcell/dect_base.c
 
 $(BUILD)/test_calls: tests/test_calls.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_calls.h src/libopendectcell/dect_iwu.h tests/check.h
 	@mkdir -p $(BUILD)

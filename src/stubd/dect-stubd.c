@@ -336,7 +336,6 @@ static uint64_t mono_ms(void)
 struct handset {
 	const char *path;
 	int      loaded;
-	struct dect_hs_rec rec;	/* what its store holds */
 	uint64_t last_seen_ms;	/* runtime only: last segment from it */
 	int      remote;	/* remote=: a roamer the cell must fetch */
 	int      absent;	/* the file does not exist: free for enrolment */
@@ -718,16 +717,16 @@ struct stubd {
 	uint64_t contacts_at;
 	long long contacts_mtime;
 	long long contacts_size;
-	struct handset hs[DECT_MM_MAX_SLOT];	/* every -s store, [0] = ring target */
-	unsigned n_hs;
-	unsigned cur;		/* which of them the fields here belong to */
 	/*
-	 * hs[cur]'s record, the working copy: the handset this run serves
-	 * (dect_base.h). hs_stash() puts it back into the table.
-	 * reg_start() pushes its port_id into the MM state machine, so a
-	 * location registration from a handset we do not hold is rejected.
+	 * Every -s store, [0] = ring target: the records in base.hs[], the
+	 * rest of each handset (its file, names, profile) in hs[] at the same
+	 * index. base.rec is the current handset's working copy
+	 * (dect_base.h); reg_start() pushes its port_id into the MM state
+	 * machine, so a location registration from a handset we do not hold
+	 * is rejected.
 	 */
-	struct dect_hs_rec rec;
+	struct handset hs[DECT_BASE_HS_MAX];
+	struct dect_base base;
 	int         cc_id_foreign_warned;
 	int         cc_id_unarmed_warned;
 	/* rejected_identity of this connection's CC, as last reported */
@@ -2778,24 +2777,26 @@ struct sub_record {
  */
 static uint8_t stubd_sub_slot(const struct stubd *s)
 {
-	unsigned v = s->audio.sub_slot && s->cur == 0 ? s->audio.sub_slot
-						      : s->rec.slot;
+	unsigned v = s->audio.sub_slot && s->base.cur == 0 ? s->audio.sub_slot
+						      : s->base.rec.slot;
 
 	return (v >= 1u && v <= DECT_MM_MAX_SLOT) ? (uint8_t)v
 						  : (uint8_t)DECT_MM_REG_SLOT;
 }
 
-static void hs_stash(struct stubd *s, unsigned i)
-{
-	s->hs[i].rec = s->rec;
-}
-
-static void hs_load(struct stubd *s, unsigned i)
+/* Handset i became current: its file, and its warnings not given yet. */
+static void hs_took(struct stubd *s, unsigned i)
 {
 	s->sub_path = s->hs[i].path;
-	s->rec = s->hs[i].rec;
 	s->cc_id_foreign_warned = 0;
 	s->cc_id_unarmed_warned = 0;
+}
+
+/* Handset i's record as the working copy, at start (dect_base_load()). */
+static void hs_load(struct stubd *s, unsigned i)
+{
+	dect_base_load(&s->base, i);
+	hs_took(s, i);
 }
 
 static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot);
@@ -2803,11 +2804,9 @@ static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot);
 /* Make handset i the current one; a no-op if it already is. */
 static void hs_switch(struct stubd *s, unsigned i, const char *why)
 {
-	if (i == s->cur || i >= s->n_hs)
+	if (!dect_base_switch(&s->base, i))
 		return;
-	hs_stash(s, s->cur);
-	hs_load(s, i);
-	s->cur = i;
+	hs_took(s, i);
 	printf("sub: now serving %s (slot %u)%s\n", s->sub_path,
 	       stubd_sub_slot(s), why);
 }
@@ -2818,18 +2817,18 @@ static void hs_switch(struct stubd *s, unsigned i, const char *why)
  */
 static size_t ring_target_fixed_len(const struct stubd *s)
 {
-	return s->cur == s->ring_hs || !s->n_hs ? s->rec.cc_fixed_id_len
-		: s->hs[s->ring_hs].rec.cc_fixed_id_len;
+	return s->base.cur == s->ring_hs || !s->base.n_hs ? s->base.rec.cc_fixed_id_len
+		: s->base.hs[s->ring_hs].cc_fixed_id_len;
 }
 
 static const uint8_t *ring_target_port_id(const struct stubd *s, size_t *len)
 {
-	if (s->cur == s->ring_hs || !s->n_hs) {
-		*len = s->rec.cc_port_id_len;
-		return s->rec.cc_port_id;
+	if (s->base.cur == s->ring_hs || !s->base.n_hs) {
+		*len = s->base.rec.cc_port_id_len;
+		return s->base.rec.cc_port_id;
 	}
-	*len = s->hs[s->ring_hs].rec.cc_port_id_len;
-	return s->hs[s->ring_hs].rec.cc_port_id;
+	*len = s->base.hs[s->ring_hs].cc_port_id_len;
+	return s->base.hs[s->ring_hs].cc_port_id;
 }
 
 static void sub_save(struct stubd *s)
@@ -2837,25 +2836,25 @@ static void sub_save(struct stubd *s)
 	struct sub_record r;
 	int fd;
 
-	if (!s->sub_path || !s->rec.uak_valid)
+	if (!s->sub_path || !s->base.rec.uak_valid)
 		return;
 	memset(&r, 0, sizeof(r));
 	r.magic = SUB_MAGIC;
 	r.slot = stubd_sub_slot(s);
-	memcpy(r.uak, s->rec.uak, DECT_MM_UAK_LEN);
+	memcpy(r.uak, s->base.rec.uak, DECT_MM_UAK_LEN);
 	r.magic = SUB_MAGIC2;
 	/* the current handset's identity; the link MM may serve another */
-	if (s->rec.port_id_len) {
-		r.port_id_len = (uint8_t)s->rec.port_id_len;
-		memcpy(r.port_id, s->rec.port_id, sizeof(r.port_id));
+	if (s->base.rec.port_id_len) {
+		r.port_id_len = (uint8_t)s->base.rec.port_id_len;
+		memcpy(r.port_id, s->base.rec.port_id, sizeof(r.port_id));
 	} else {
 		r.port_id_len = (uint8_t)s->reg.link.mm.port_id_len;
 		memcpy(r.port_id, s->reg.link.mm.port_id, sizeof(r.port_id));
 	}
-	r.cc_port_id_len = (uint8_t)s->rec.cc_port_id_len;
-	memcpy(r.cc_port_id, s->rec.cc_port_id, sizeof(r.cc_port_id));
-	r.cc_fixed_id_len = (uint8_t)s->rec.cc_fixed_id_len;
-	memcpy(r.cc_fixed_id, s->rec.cc_fixed_id, sizeof(r.cc_fixed_id));
+	r.cc_port_id_len = (uint8_t)s->base.rec.cc_port_id_len;
+	memcpy(r.cc_port_id, s->base.rec.cc_port_id, sizeof(r.cc_port_id));
+	r.cc_fixed_id_len = (uint8_t)s->base.rec.cc_fixed_id_len;
+	memcpy(r.cc_fixed_id, s->base.rec.cc_fixed_id, sizeof(r.cc_fixed_id));
 
 	/*
 	 * Replace the store atomically: write a temporary file beside it,
@@ -2905,9 +2904,9 @@ static void sub_save(struct stubd *s)
 			}
 		}
 		printf("sub: subscription saved to %s\n", s->sub_path);
-		if (s->cur < s->n_hs) {
-			s->hs[s->cur].loaded = 1;	/* it exists now */
-			s->hs[s->cur].absent = 0;	/* and is no longer free */
+		if (s->base.cur < s->base.n_hs) {
+			s->hs[s->base.cur].loaded = 1;	/* it exists now */
+			s->hs[s->base.cur].absent = 0;	/* and is no longer free */
 		}
 	}
 }
@@ -2937,8 +2936,8 @@ static int sub_load(struct stubd *s)
 	      (n == (ssize_t)sizeof(r) && r.magic == SUB_MAGIC2)) ||
 	    r.port_id_len > DECT_MM_PORTID_MAX)
 		return 0;
-	memcpy(s->rec.uak, r.uak, DECT_MM_UAK_LEN);
-	s->rec.uak_valid = 1;
+	memcpy(s->base.rec.uak, r.uak, DECT_MM_UAK_LEN);
+	s->base.rec.uak_valid = 1;
 	/*
 	 * The record has always carried the MM portable identity and we have
 	 * never restored it, so the identity gate in on_locate_request() could
@@ -2946,15 +2945,15 @@ static int sub_load(struct stubd *s)
 	 * its location registration accepted anyway.
 	 */
 	if (r.port_id_len && r.port_id_len <= DECT_MM_PORTID_MAX) {
-		memcpy(s->rec.port_id, r.port_id, r.port_id_len);
-		s->rec.port_id_len = r.port_id_len;
+		memcpy(s->base.rec.port_id, r.port_id, r.port_id_len);
+		s->base.rec.port_id_len = r.port_id_len;
 	}
 	if (r.magic == SUB_MAGIC2 && r.cc_port_id_len <= DECT_CC_ID_MAX &&
 	    r.cc_fixed_id_len <= DECT_CC_ID_MAX) {
-		memcpy(s->rec.cc_port_id, r.cc_port_id, sizeof(s->rec.cc_port_id));
-		s->rec.cc_port_id_len = r.cc_port_id_len;
-		memcpy(s->rec.cc_fixed_id, r.cc_fixed_id, sizeof(s->rec.cc_fixed_id));
-		s->rec.cc_fixed_id_len = r.cc_fixed_id_len;
+		memcpy(s->base.rec.cc_port_id, r.cc_port_id, sizeof(s->base.rec.cc_port_id));
+		s->base.rec.cc_port_id_len = r.cc_port_id_len;
+		memcpy(s->base.rec.cc_fixed_id, r.cc_fixed_id, sizeof(s->base.rec.cc_fixed_id));
+		s->base.rec.cc_fixed_id_len = r.cc_fixed_id_len;
 		/*
 		 * Older records carry no MM identity -- sub_save() stores
 		 * reg.mm.port_id, which is empty unless the handset registered
@@ -2965,10 +2964,10 @@ static int sub_load(struct stubd *s)
 		 * <<PORTABLE-IDENTITY>>. Use it so the gate has something to
 		 * compare against.
 		 */
-		if (!s->rec.port_id_len && r.cc_port_id_len &&
+		if (!s->base.rec.port_id_len && r.cc_port_id_len &&
 		    r.cc_port_id_len <= DECT_MM_PORTID_MAX) {
-			memcpy(s->rec.port_id, r.cc_port_id, r.cc_port_id_len);
-			s->rec.port_id_len = r.cc_port_id_len;
+			memcpy(s->base.rec.port_id, r.cc_port_id, r.cc_port_id_len);
+			s->base.rec.port_id_len = r.cc_port_id_len;
 		}
 		/*
 		 * Call identities that are not the subscribed handset's were
@@ -2978,34 +2977,34 @@ static int sub_load(struct stubd *s)
 		 * the identity it registered with, so the two must agree.
 		 * Drop them; the handset's next call teaches the right pair.
 		 */
-		if (s->rec.cc_port_id_len &&
-		    (s->rec.cc_port_id_len != s->rec.port_id_len ||
-		     memcmp(s->rec.cc_port_id, s->rec.port_id,
-			    s->rec.port_id_len))) {
-			memset(s->rec.cc_port_id, 0, sizeof(s->rec.cc_port_id));
-			memset(s->rec.cc_fixed_id, 0, sizeof(s->rec.cc_fixed_id));
-			s->rec.cc_port_id_len = 0;
-			s->rec.cc_fixed_id_len = 0;
+		if (s->base.rec.cc_port_id_len &&
+		    (s->base.rec.cc_port_id_len != s->base.rec.port_id_len ||
+		     memcmp(s->base.rec.cc_port_id, s->base.rec.port_id,
+			    s->base.rec.port_id_len))) {
+			memset(s->base.rec.cc_port_id, 0, sizeof(s->base.rec.cc_port_id));
+			memset(s->base.rec.cc_fixed_id, 0, sizeof(s->base.rec.cc_fixed_id));
+			s->base.rec.cc_port_id_len = 0;
+			s->base.rec.cc_fixed_id_len = 0;
 			printf("sub: *** stored call identities belong to "
 			       "ANOTHER handset *** -- dropped; they are "
 			       "relearned from this handset's next call\n");
 		}
 	}
 	printf("sub: identity gate %s (%zu bytes)\n",
-	       s->rec.port_id_len ? "armed" : "DISABLED -- no stored identity",
-	       s->rec.port_id_len);
+	       s->base.rec.port_id_len ? "armed" : "DISABLED -- no stored identity",
+	       s->base.rec.port_id_len);
 	/*
 	 * Honour the slot the record was saved with, unless -a subslot=N said
 	 * otherwise. Without this a handset enrolled in slot 3 came back as
 	 * slot 1 on the next run, taking another handset's UAK slot and TPUI
 	 * with it.
 	 */
-	if ((!s->audio.sub_slot || s->cur != 0) &&
+	if ((!s->audio.sub_slot || s->base.cur != 0) &&
 	    r.slot >= 1u && r.slot <= DECT_MM_MAX_SLOT)
-		s->rec.slot = r.slot;	/* subslot= is the ring target's only */
+		s->base.rec.slot = r.slot;	/* subslot= is the ring target's only */
 	printf("sub: restored subscription for slot %u from %s%s\n",
 	       r.slot, s->sub_path,
-	       s->rec.cc_fixed_id_len ? " (with call identities)" : "");
+	       s->base.rec.cc_fixed_id_len ? " (with call identities)" : "");
 	return 1;
 }
 
@@ -3023,7 +3022,7 @@ static int held_back(const struct stubd *s, unsigned i)
 {
 	if (s->audio.no_chip_keys)	/* every slot cleared, no key at all */
 		return 1;
-	if (i < s->n_hs && s->hs[i].remote && !s->hs[i].fetched)
+	if (i < s->base.n_hs && s->hs[i].remote && !s->hs[i].fetched)
 		return 1;		/* a roamer: not in this cell's chip */
 	return s->audio.holdback_ms && !s->holdback_done && i != 0;
 }
@@ -3044,8 +3043,10 @@ static void fetch_keep(struct stubd *s)
 	h = &s->hs[s->fetch_idx];
 	h->fetched = 1;		/* the next link holds it from hs[] */
 	if (s->reg.active)
-		(void)dect_mm_hold(&s->reg.link.mm, h->rec.port_id,
-				   h->rec.port_id_len, (uint8_t)h->rec.slot, NULL,
+		(void)dect_mm_hold(&s->reg.link.mm,
+				   s->base.hs[s->fetch_idx].port_id,
+				   s->base.hs[s->fetch_idx].port_id_len,
+				   (uint8_t)s->base.hs[s->fetch_idx].slot, NULL,
 				   s->fetch_idx);
 }
 
@@ -3097,9 +3098,9 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 	if (!s->fetch_req_ms) {
 		s->fetch_req_ms = now;
 		s->fetch_idx = -1;
-		for (i = 0; i < s->n_hs; i++)
-			if (s->hs[i].remote && s->hs[i].rec.port_id_len == len &&
-			    !memcmp(s->hs[i].rec.port_id, id, len))
+		for (i = 0; i < s->base.n_hs; i++)
+			if (s->hs[i].remote && s->base.hs[i].port_id_len == len &&
+			    !memcmp(s->base.hs[i].port_id, id, len))
 				s->fetch_idx = (int)i;
 		/*
 		 * A record fetched earlier this run is here already: a
@@ -3147,9 +3148,9 @@ static int hs_by_ipui(const struct stubd *s, const uint8_t *id, size_t len)
 {
 	unsigned i;
 
-	for (i = 0; i < s->n_hs; i++)
-		if (s->hs[i].rec.port_id_len == len && len &&
-		    !memcmp(s->hs[i].rec.port_id, id, len))
+	for (i = 0; i < s->base.n_hs; i++)
+		if (s->base.hs[i].port_id_len == len && len &&
+		    !memcmp(s->base.hs[i].port_id, id, len))
 			return (int)i;
 	return -1;
 }
@@ -3303,12 +3304,12 @@ static int uak_lookup(void *ctx, const uint8_t *id, size_t len,
 
 	if (i < 0)
 		return -1;
-	if ((unsigned)i == s->cur && s->rec.uak_valid) {
-		memcpy(uak, s->rec.uak, DECT_MM_UAK_LEN);
+	if ((unsigned)i == s->base.cur && s->base.rec.uak_valid) {
+		memcpy(uak, s->base.rec.uak, DECT_MM_UAK_LEN);
 		return 0;
 	}
-	if ((unsigned)i != s->cur && s->hs[i].rec.uak_valid) {
-		memcpy(uak, s->hs[i].rec.uak, DECT_MM_UAK_LEN);
+	if ((unsigned)i != s->base.cur && s->base.hs[i].uak_valid) {
+		memcpy(uak, s->base.hs[i].uak, DECT_MM_UAK_LEN);
 		return 0;
 	}
 	return -1;
@@ -3375,9 +3376,9 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 		return;
 	{
 		/* lce.release_after_call = no in the handset's profile */
-		int i = l->mm.adopted >= 0 ? l->mm.adopted : (int)s->cur;
+		int i = l->mm.adopted >= 0 ? l->mm.adopted : (int)s->base.cur;
 
-		if (i >= 0 && (unsigned)i < s->n_hs &&
+		if (i >= 0 && (unsigned)i < s->base.n_hs &&
 		    !s->hs[i].prof.lce_release_after_call) {
 			s->reg.nlr_armed = 0;
 			printf("link: kept after the call (profile: "
@@ -3441,7 +3442,7 @@ static void info_tick(struct stubd *s, uint64_t now)
 	if (s->reg.info_sent || !cc->incoming ||
 	    cc->state != DECT_CC_ST_RINGING)
 		return;
-	r = s->n_hs ? name_display_info(s, cc, s->ring_hs, &s->clip) : 0;
+	r = s->base.n_hs ? name_display_info(s, cc, s->ring_hs, &s->clip) : 0;
 	if (r) {
 		s->reg.info_sent = 1;
 		if (r > 0) {
@@ -3604,9 +3605,9 @@ static void holdback_tick(struct stubd *s, uint64_t now)
 	    now - g_start < s->audio.holdback_ms)
 		return;
 	s->holdback_done = 1;
-	for (i = 1; i < s->n_hs; i++) {
-		const uint8_t *uak = i == s->cur ? s->rec.uak : s->hs[i].rec.uak;
-		int valid = i == s->cur ? s->rec.uak_valid : s->hs[i].rec.uak_valid;
+	for (i = 1; i < s->base.n_hs; i++) {
+		const uint8_t *uak = i == s->base.cur ? s->base.rec.uak : s->base.hs[i].uak;
+		int valid = i == s->base.cur ? s->base.rec.uak_valid : s->base.hs[i].uak_valid;
 
 		if (!s->hs[i].loaded || !valid)
 			continue;
@@ -3624,10 +3625,10 @@ static int any_uak(const struct stubd *s)
 {
 	unsigned i;
 
-	if (s->rec.uak_valid)
+	if (s->base.rec.uak_valid)
 		return 1;
-	for (i = 0; i < s->n_hs; i++)
-		if (i != s->cur && s->hs[i].loaded && s->hs[i].rec.uak_valid)
+	for (i = 0; i < s->base.n_hs; i++)
+		if (i != s->base.cur && s->hs[i].loaded && s->base.hs[i].uak_valid)
 			return 1;
 	return 0;
 }
@@ -3688,30 +3689,30 @@ static void clear_foreign_slots(struct stubd *s, uint8_t keep,
 static void send_subscription(struct stubd *s)
 {
 	uint8_t slot = stubd_sub_slot(s);
-	unsigned keep = s->rec.uak_valid && !held_back(s, s->cur) ? 1u << slot : 0u;
+	unsigned keep = s->base.rec.uak_valid && !held_back(s, s->base.cur) ? 1u << slot : 0u;
 	unsigned i;
 
-	for (i = 0; i < s->n_hs; i++) {
+	for (i = 0; i < s->base.n_hs; i++) {
 		unsigned hsl = hs_slot(s, i);
 
-		if (i != s->cur && s->hs[i].loaded && s->hs[i].rec.uak_valid &&
+		if (i != s->base.cur && s->hs[i].loaded && s->base.hs[i].uak_valid &&
 		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT && !held_back(s, i))
 			keep |= 1u << hsl;
 	}
 	clear_foreign_slots(s, slot, keep);
-	for (i = 0; i < s->n_hs; i++) {
+	for (i = 0; i < s->base.n_hs; i++) {
 		unsigned hsl = hs_slot(s, i);
 
-		if (i != s->cur && s->hs[i].loaded && s->hs[i].rec.uak_valid &&
+		if (i != s->base.cur && s->hs[i].loaded && s->base.hs[i].uak_valid &&
 		    hsl >= 1u && hsl <= DECT_MM_MAX_SLOT && hsl != slot &&
 		    !held_back(s, i)) {
-			install_subscription(s, (uint8_t)hsl, s->hs[i].rec.uak);
+			install_subscription(s, (uint8_t)hsl, s->base.hs[i].uak);
 			printf("sub: %s installed in chip slot %u\n",
 			       s->hs[i].path, hsl);
 		}
 	}
-	if (s->rec.uak_valid && !held_back(s, s->cur)) {
-		install_subscription(s, slot, s->rec.uak);
+	if (s->base.rec.uak_valid && !held_back(s, s->base.cur)) {
+		install_subscription(s, slot, s->base.rec.uak);
 		uak_verify_send(s, slot);	/* [CR A-0085] the only check */
 	}
 	send_subscription_tail(s);
@@ -3771,10 +3772,10 @@ static uint8_t live_slot_mask(const struct stubd *s)
 {
 	unsigned i, mask = 0;
 
-	for (i = 0; i < s->n_hs; i++) {
+	for (i = 0; i < s->base.n_hs; i++) {
 		unsigned sl = hs_slot(s, i);
-		int valid = i == s->cur ? s->rec.uak_valid
-					: s->hs[i].loaded && s->hs[i].rec.uak_valid;
+		int valid = i == s->base.cur ? s->base.rec.uak_valid
+					: s->hs[i].loaded && s->base.hs[i].uak_valid;
 
 		if (valid && sl >= 1u && sl <= DECT_MM_MAX_SLOT &&
 		    !held_back(s, i))
@@ -3986,7 +3987,7 @@ static void uak_verify_reply(struct stubd *s, const struct dect_mail *m)
 		       s->uak_check_slot, (unsigned)m->param_len);
 		return;
 	}
-	if (!memcmp(&m->param[7], s->rec.uak, DECT_MM_UAK_LEN)) {
+	if (!memcmp(&m->param[7], s->base.rec.uak, DECT_MM_UAK_LEN)) {
 		printf("sub: UAK read-back slot %u at 0x%05X: MATCHES "
 		       "(16 bytes, flag %02x)\n", s->uak_check_slot, addr,
 		       m->param_len > 7u + DECT_MM_UAK_LEN
@@ -4460,12 +4461,12 @@ static void ring_target_tpui(const struct stubd *s, uint8_t tpui[3])
 	struct dect_mm mm;
 
 	memset(&cfg, 0, sizeof(cfg));
-	if (s->cur == s->ring_hs || !s->n_hs)
+	if (s->base.cur == s->ring_hs || !s->base.n_hs)
 		cfg.sub_slot = stubd_sub_slot(s);
 	else
 		cfg.sub_slot = (uint8_t)(s->audio.sub_slot && !s->ring_hs
 					 ? s->audio.sub_slot
-					 : s->hs[s->ring_hs].rec.slot);
+					 : s->base.hs[s->ring_hs].slot);
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tpui(&mm, tpui);
 }
@@ -4512,12 +4513,12 @@ static struct dect_clip ring_clip;	/* s->clip as the target's profile wants it *
  */
 static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
 {
-	if (i >= 0 && (unsigned)i < s->n_hs && s->hs[i].prof.cc_basic_service)
+	if (i >= 0 && (unsigned)i < s->base.n_hs && s->hs[i].prof.cc_basic_service)
 		/* the profile: 1 wideband, 2 basic speech; the class stays */
 		return (uint8_t)((configured & 0xF0u) |
 				 (s->hs[i].prof.cc_basic_service == 1 ? 0x08u
 								      : 0x00u));
-	if (i >= 0 && (unsigned)i < s->n_hs && s->hs[i].cap_known &&
+	if (i >= 0 && (unsigned)i < s->base.n_hs && s->hs[i].cap_known &&
 	    !s->hs[i].cap_ng)
 		return 0x80u;
 	return configured;
@@ -4544,7 +4545,7 @@ static int ring_target_part3(const struct stubd *s)
 	const struct dect_callinfo *o = &s->audio.callinfo;
 
 	return !o->has_line && !o->has_call_id && !o->has_call_status &&
-	       s->n_hs && s->hs[s->ring_hs].cap_known &&
+	       s->base.n_hs && s->hs[s->ring_hs].cap_known &&
 	       s->hs[s->ring_hs].cap_part3;
 }
 
@@ -4565,7 +4566,7 @@ static void ring_callinfo(struct stubd *s, int on)
 
 	if (!on || !ring_target_part3(s)) {
 		dect_cc_set_callinfo(&s->reg.link.cc, &s->audio.callinfo);
-		if (on && s->n_hs && !s->hs[s->ring_hs].cap_known)
+		if (on && s->base.n_hs && !s->hs[s->ring_hs].cap_known)
 			printf("ring: the target's terminal capability is not "
 			       "known yet -- no call information (an A540 "
 			       "then rings silently)\n");
@@ -4652,7 +4653,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 * another handset is that handset's; a {CC-SETUP} on it would address
 	 * the wrong one. Wait for it to clear, as for a busy CC entity.
 	 */
-	if (s->cur != s->ring_hs) {
+	if (s->base.cur != s->ring_hs) {
 		printf("ring: this link serves %s, not the handset we ring -- "
 		       "waiting\n", s->sub_path);
 		s->ring_resp_deadline = now + RING_SETUP_RETRY_MS;
@@ -4675,7 +4676,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	{
 		/* the ring target's profile: its alerting pattern, unless
 		 * -a signal= chose one, and whether the name goes as CNIP */
-		const struct dect_hs_profile *hp = s->n_hs ?
+		const struct dect_hs_profile *hp = s->base.n_hs ?
 			&s->hs[s->ring_hs].prof : NULL;
 
 		ring_clip = s->clip;
@@ -4692,8 +4693,8 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 * every 17 s and holds it for about 13 s. Retry while the paging window
 	 * is still open rather than lose the ring on the first refusal.
 	 */
-	if (!dect_cc_setup_id(&s->reg.link.cc, s->rec.cc_port_id, s->rec.cc_port_id_len,
-			      s->rec.cc_fixed_id, s->rec.cc_fixed_id_len,
+	if (!dect_cc_setup_id(&s->reg.link.cc, s->base.rec.cc_port_id, s->base.rec.cc_port_id_len,
+			      s->base.rec.cc_fixed_id, s->base.rec.cc_fixed_id_len,
 			      ring_svc(s, s->ring_hs, main_ring_narrow(s)),
 			      &ring_clip)) {
 		ring_callinfo(s, 0);
@@ -5101,7 +5102,7 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 	d.call_frames = s->reg.frames_total;
 	dect_diag_from_link(&s->reg.link, &d);
 	if (d.handset_tag < 0)		/* serving the current store */
-		d.handset_tag = (int)s->cur;
+		d.handset_tag = (int)s->base.cur;
 	if (dect_diag_json(&d, s->show_params, js, sizeof(js)))
 		printf("diag: %s\n", js);
 }
@@ -5258,7 +5259,7 @@ static void state_link(struct stubd *s, FILE *f, const struct dect_link *l,
 	d.call_frames = frames;
 	dect_diag_from_link(l, &d);
 	if (d.handset_tag < 0 && l == &s->reg.link)
-		d.handset_tag = (int)s->cur;	/* the current store */
+		d.handset_tag = (int)s->base.cur;	/* the current store */
 	if (dect_diag_json(&d, s->show_params, js, sizeof(js))) {
 		fprintf(f, "%s%s", *first ? "" : ",", js);
 		*first = 0;
@@ -5304,12 +5305,12 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 	json_str(f, s->audio.line_name ? s->audio.line_name : "Line 1");
 	fprintf(f, ",\"handsets\":[");
 	first = 1;
-	for (i = 0; i < s->n_hs; i++) {
+	for (i = 0; i < s->base.n_hs; i++) {
 		unsigned k, linked = 0;
 		uint64_t seen = s->hs[i].last_seen_ms;
 
 		/* the handsets the base holds: not a store just deregistered */
-		if ((i != s->cur && !s->hs[i].loaded) || s->hs[i].absent)
+		if ((i != s->base.cur && !s->hs[i].loaded) || s->hs[i].absent)
 			continue;
 		/*
 		 * parked: no handset has a link, whatever was up at exit.
@@ -5319,7 +5320,7 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		 */
 		if (radio_on && s->reg.active &&
 		    (s->reg.link.mm.adopted == (int)i ||
-		     (s->reg.link.mm.adopted < 0 && i == s->cur &&
+		     (s->reg.link.mm.adopted < 0 && i == s->base.cur &&
 		      s->reg.link.mm.port_id_len)))
 			linked = 1;
 		for (k = 0; radio_on && k < SIDE_MAX; k++)
@@ -5338,7 +5339,7 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		{
 			char ipei[DECT_IPEI_TEXT_LEN];
 
-			if (!dect_ipei_text(s->hs[i].rec.port_id, s->hs[i].rec.port_id_len,
+			if (!dect_ipei_text(s->base.hs[i].port_id, s->base.hs[i].port_id_len,
 					    ipei, sizeof(ipei))) {
 				fprintf(f, ",\"ipei\":");
 				json_str(f, ipei);
@@ -5418,7 +5419,7 @@ static int hs_free(const struct stubd *s)
 {
 	unsigned i;
 
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->base.n_hs; i++)
 		if (!s->hs[i].loaded && !s->hs[i].remote && s->hs[i].absent)
 			return (int)i;
 	return -1;
@@ -5436,7 +5437,7 @@ static uint8_t reg_policy(const struct stubd *s)
 		return DECT_MM_REG_CLOSED;
 	if (hs_free(s) >= 0)
 		return DECT_MM_REG_OPEN;
-	return s->rec.port_id_len ? DECT_MM_REG_SAME : DECT_MM_REG_OPEN;
+	return s->base.rec.port_id_len ? DECT_MM_REG_SAME : DECT_MM_REG_OPEN;
 }
 
 /*
@@ -5499,7 +5500,7 @@ static void enrol_route(struct stubd *s)
 	int target = -1;
 	char name[DECT_IWU_NAME_MAX];
 
-	for (i = 0; i < s->n_hs && target < 0; i++) {
+	for (i = 0; i < s->base.n_hs && target < 0; i++) {
 		const uint8_t *p = hs_port_id(s, i, &l);
 
 		if (len && l == len && !memcmp(p, id, len))
@@ -5507,7 +5508,7 @@ static void enrol_route(struct stubd *s)
 	}
 	if (target < 0)
 		target = hs_free(s);
-	if (target < 0 || (unsigned)target == s->cur) {
+	if (target < 0 || (unsigned)target == s->base.cur) {
 		printf("reg: enrolment into %s (slot %u)\n", s->sub_path,
 		       (unsigned)stubd_sub_slot(s));
 		return;
@@ -5548,18 +5549,18 @@ static void main_cc_setup(struct stubd *s)
 		dect_iwu_set_line(&s->reg.link.cc.iwu, STUBD_LINE_ID,
 				  s->audio.line_name ? s->audio.line_name
 						     : "Line 1");
-		if (s->n_hs && s->cur < s->n_hs)
-			hs_name(s, s->cur, hsname, sizeof(hsname));
+		if (s->base.n_hs && s->base.cur < s->base.n_hs)
+			hs_name(s, s->base.cur, hsname, sizeof(hsname));
 		else
 			snprintf(hsname, sizeof(hsname), "DECT %u",
 				 (unsigned)tid);
 		dect_iwu_add_handset(&s->reg.link.cc.iwu, tid, hsname);
-		for (i = 0; i < s->n_hs; i++) {
-			if (i == s->cur || !s->hs[i].loaded)
+		for (i = 0; i < s->base.n_hs; i++) {
+			if (i == s->base.cur || !s->hs[i].loaded)
 				continue;
 			hs_name(s, i, hsname, sizeof(hsname));
 			dect_iwu_add_handset(&s->reg.link.cc.iwu,
-					     (uint8_t)s->hs[i].rec.slot, hsname);
+					     (uint8_t)s->base.hs[i].slot, hsname);
 		}
 		dect_iwu_set_own(&s->reg.link.cc.iwu, tid);
 		iwu_lines(s, &s->reg.link.cc.iwu, tid);
@@ -5678,30 +5679,31 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	 * location registration from a handset we do not hold is rejected.
 	 * Must come AFTER dect_mm_init(), which clears it.
 	 */
-	if (s->rec.port_id_len) {
-		memcpy(s->reg.link.mm.port_id, s->rec.port_id, s->rec.port_id_len);
-		s->reg.link.mm.port_id_len = s->rec.port_id_len;
+	if (s->base.rec.port_id_len) {
+		memcpy(s->reg.link.mm.port_id, s->base.rec.port_id, s->base.rec.port_id_len);
+		s->reg.link.mm.port_id_len = s->base.rec.port_id_len;
 	}
 	/*
 	 * ...and every other handset we hold, so its location registration
 	 * and its calls are served rather than turned away. MM adopts
 	 * whichever one this link turns out to carry; reg_segment() follows.
 	 */
-	for (i = 0; i < s->n_hs; i++) {
+	for (i = 0; i < s->base.n_hs; i++) {
 		const struct handset *h = &s->hs[i];
+		const struct dect_hs_rec *r = &s->base.hs[i];
 
-		if (i == s->cur || !h->loaded || !h->rec.port_id_len ||
+		if (i == s->base.cur || !h->loaded || !r->port_id_len ||
 		    (h->remote && !h->fetched))
 			continue;
-		if (dect_mm_hold(&s->reg.link.mm, h->rec.port_id, h->rec.port_id_len,
-				 (uint8_t)h->rec.slot, NULL, (int)i) < 0)
+		if (dect_mm_hold(&s->reg.link.mm, r->port_id, r->port_id_len,
+				 (uint8_t)r->slot, NULL, (int)i) < 0)
 			printf("sub: could not hold %s on this link\n",
 			       h->path);
 	}
-	if (s->rec.port_id_len)
-		(void)dect_mm_hold(&s->reg.link.mm, s->rec.port_id,
-				   s->rec.port_id_len, stubd_sub_slot(s), NULL,
-				   (int)s->cur);
+	if (s->base.rec.port_id_len)
+		(void)dect_mm_hold(&s->reg.link.mm, s->base.rec.port_id,
+				   s->base.rec.port_id_len, stubd_sub_slot(s), NULL,
+				   (int)s->base.cur);
 	main_cc_setup(s);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
 }
@@ -5709,11 +5711,11 @@ static void reg_start(struct stubd *s, uint8_t handle)
 /* Slot and identity of handset table entry i, current or stashed. */
 static unsigned hs_slot(const struct stubd *s, unsigned i)
 {
-	if (i == s->cur)
+	if (i == s->base.cur)
 		return stubd_sub_slot(s);
 	if (i == 0 && s->audio.sub_slot)	/* subslot= is the target's */
 		return s->audio.sub_slot;
-	return s->hs[i].rec.slot;
+	return s->base.hs[i].slot;
 }
 
 /* The handset's name for the lists and the internal caller: its own, or
@@ -5781,10 +5783,10 @@ static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
 	iwu->contacts = s->contacts_path ? &stubd_contacts : NULL;
 	iwu->calls = &stubd_calls;
 
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->base.n_hs; i++)
 		if (hs_slot(s, i) == slot)
 			break;
-	if (!slot || i == s->n_hs)
+	if (!slot || i == s->base.n_hs)
 		return;
 	dect_iwu_clear_lines(iwu);
 	(void)dect_iwu_add_line(iwu, STUBD_LINE_ID, s->hs[i].line_name[0][0]
@@ -6005,8 +6007,8 @@ static int hs_of_link(const struct stubd *s, const struct dect_link *l)
 	int i = l->mm.adopted;
 
 	if (i < 0 && l == &s->reg.link)
-		i = (int)s->cur;
-	return i >= 0 && (unsigned)i < s->n_hs ? i : -1;
+		i = (int)s->base.cur;
+	return i >= 0 && (unsigned)i < s->base.n_hs ? i : -1;
 }
 
 static int profile_load(const char *path, struct dect_profile *p);
@@ -6151,10 +6153,10 @@ static void reg_profile_apply(struct stubd *s)
 	unsigned i;
 	FILE *f;
 
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->base.n_hs; i++)
 		if (s->sub_path && !strcmp(s->hs[i].path, s->sub_path))
 			break;
-	if (i == s->n_hs)
+	if (i == s->base.n_hs)
 		return;
 	snprintf(path, sizeof(path), "%s.profile", s->hs[i].path);
 	f = fopen(path, "w");
@@ -6189,7 +6191,7 @@ static void profiles_resolve_all(struct stubd *s, const char *why)
 	unsigned i;
 
 	printf("profile: resolving the handsets' profiles (%s)\n", why);
-	for (i = 0; i < s->n_hs; i++) {
+	for (i = 0; i < s->base.n_hs; i++) {
 		profile_resolve(s, i);
 		lines_load(s, i);	/* their line names travel with it */
 	}
@@ -6419,7 +6421,7 @@ static void missed_changed_tick(struct stubd *s)
 	if (!stubd_calls.missed_changed)
 		return;
 	stubd_calls.missed_changed = 0;
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->base.n_hs; i++)
 		missed_due(s, i, hs_lines(s, i), 0);
 }
 
@@ -6473,10 +6475,10 @@ static void names_take(struct stubd *s, struct dect_link *l)
 		if (!(iwu->names_changed & (1u << b)))
 			continue;
 		iwu->names_changed &= ~(1u << b);
-		for (j = 0; j < s->n_hs; j++)
+		for (j = 0; j < s->base.n_hs; j++)
 			if (hs_slot(s, j) == h->terminal_id)
 				break;
-		if (j == s->n_hs)
+		if (j == s->base.n_hs)
 			continue;
 		snprintf(s->hs[j].name, sizeof(s->hs[j].name), "%s", h->name);
 		name_save(s, j);
@@ -6514,15 +6516,15 @@ static void names_spread(struct stubd *s, unsigned i)
 static void uak_for_link(struct stubd *s, struct dect_link *l, int main)
 {
 	int i = l->mm.adopted >= 0 ? l->mm.adopted
-				   : main ? (int)s->cur : -1;
+				   : main ? (int)s->base.cur : -1;
 
-	if (i < 0 || (unsigned)i >= s->n_hs)
+	if (i < 0 || (unsigned)i >= s->base.n_hs)
 		return;
-	if ((unsigned)i == s->cur) {
-		if (s->rec.uak_valid)
-			dect_mm_set_uak(&l->mm, s->rec.uak);
-	} else if (s->hs[i].rec.uak_valid) {
-		dect_mm_set_uak(&l->mm, s->hs[i].rec.uak);
+	if ((unsigned)i == s->base.cur) {
+		if (s->base.rec.uak_valid)
+			dect_mm_set_uak(&l->mm, s->base.rec.uak);
+	} else if (s->base.hs[i].uak_valid) {
+		dect_mm_set_uak(&l->mm, s->base.hs[i].uak);
 	}
 }
 
@@ -6633,12 +6635,12 @@ static void names_tick(struct stubd *s)
 static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
 				 size_t *len)
 {
-	if (i == s->cur) {
-		*len = s->rec.port_id_len;
-		return s->rec.port_id;
+	if (i == s->base.cur) {
+		*len = s->base.rec.port_id_len;
+		return s->base.rec.port_id;
 	}
-	*len = s->hs[i].rec.port_id_len;
-	return s->hs[i].rec.port_id;
+	*len = s->base.hs[i].port_id_len;
+	return s->base.hs[i].port_id;
 }
 
 static struct side_link *side_find(struct stubd *s, uint8_t handle)
@@ -6706,12 +6708,12 @@ static int side_start(struct stubd *s, uint8_t handle)
 	/* every handset we hold; strangers meet the gates as usual */
 	dect_iwu_set_line(&sl->link.cc.iwu, STUBD_LINE_ID,
 			  s->audio.line_name ? s->audio.line_name : "Line 1");
-	for (i = 0; i < s->n_hs; i++) {
+	for (i = 0; i < s->base.n_hs; i++) {
 		size_t len;
 		const uint8_t *id = hs_port_id(s, i, &len);
 		char name[DECT_IWU_NAME_MAX];
 
-		if (!len || (i != s->cur && !s->hs[i].loaded) ||
+		if (!len || (i != s->base.cur && !s->hs[i].loaded) ||
 		    (s->hs[i].remote && !s->hs[i].fetched))
 			continue;
 		(void)dect_mm_hold(&sl->link.mm, id, len,
@@ -6946,12 +6948,12 @@ static struct dect_cc *ic_cc(struct stubd *s, int side)
 static void hs_cc_ids(const struct stubd *s, unsigned i, const uint8_t **port,
 		      size_t *plen, const uint8_t **fixed, size_t *flen)
 {
-	if (i == s->cur) {
-		*port = s->rec.cc_port_id; *plen = s->rec.cc_port_id_len;
-		*fixed = s->rec.cc_fixed_id; *flen = s->rec.cc_fixed_id_len;
+	if (i == s->base.cur) {
+		*port = s->base.rec.cc_port_id; *plen = s->base.rec.cc_port_id_len;
+		*fixed = s->base.rec.cc_fixed_id; *flen = s->base.rec.cc_fixed_id_len;
 	} else {
-		*port = s->hs[i].rec.cc_port_id; *plen = s->hs[i].rec.cc_port_id_len;
-		*fixed = s->hs[i].rec.cc_fixed_id; *flen = s->hs[i].rec.cc_fixed_id_len;
+		*port = s->base.hs[i].cc_port_id; *plen = s->base.hs[i].cc_port_id_len;
+		*fixed = s->base.hs[i].cc_fixed_id; *flen = s->base.hs[i].cc_fixed_id_len;
 	}
 }
 
@@ -7035,10 +7037,10 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 		(void)dect_cc_busy_system(cc);
 		return 1;
 	}
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->base.n_hs; i++)
 		if (s->hs[i].loaded && hs_slot(s, i) == slot)
 			break;
-	if (i >= s->n_hs || (side < 0 && i == s->cur) ||
+	if (i >= s->base.n_hs || (side < 0 && i == s->base.cur) ||
 	    (side >= 0 && (int)i == s->side[side].adopted)) {
 		printf("intern: no other handset in slot %u -- releasing, "
 		       "\"user unknown\"\n", slot);
@@ -7119,7 +7121,7 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 	 * and passed". Bench test 5 (2026-10-28): the C430A showed no caller.
 	 */
 	{
-		int ci_hs = s->ic.caller < 0 ? (int)s->cur
+		int ci_hs = s->ic.caller < 0 ? (int)s->base.cur
 			    : s->side[s->ic.caller].adopted;
 		unsigned slot = ci_hs >= 0 ? hs_slot(s, (unsigned)ci_hs) : 0u;
 		char num[12], name[DECT_IWU_NAME_MAX + 12];
@@ -7247,18 +7249,18 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	snprintf(to, sizeof(to), "%s.deregistered", from);
 	(void)rename(from, to);
 	s->hs[i].loaded = 0;
-	s->hs[i].rec.uak_valid = 0;
+	s->base.hs[i].uak_valid = 0;
 	s->hs[i].absent = 1;		/* free for a new enrolment */
 	s->hs[i].name[0] = '\0';
 	s->hs[i].cap_known = 0;
 	memset(s->hs[i].mwi, 0, sizeof(s->hs[i].mwi));
 	s->hs[i].mwi_known = s->hs[i].mwi_due = 0;
 	s->tu.want &= ~(1u << i);
-	if ((unsigned)i == s->cur) {
-		s->rec.uak_valid = 0;
-		s->rec.port_id_len = 0;
-		s->rec.cc_port_id_len = 0;
-		s->rec.cc_fixed_id_len = 0;
+	if ((unsigned)i == s->base.cur) {
+		s->base.rec.uak_valid = 0;
+		s->base.rec.port_id_len = 0;
+		s->base.rec.cc_port_id_len = 0;
+		s->base.rec.cc_fixed_id_len = 0;
 	}
 	if (s->reg.active)
 		(void)dect_iwu_remove_handset(&s->reg.link.cc.iwu,
@@ -7275,7 +7277,7 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 /*
  * The link that carries handset i by its own word: MM adopted it (its
  * LOCATE-REQUEST, a call it placed, or its page response below). Not the
- * presumption that a main link which has adopted no one serves s->cur (as
+ * presumption that a main link which has adopted no one serves s->base.cur (as
  * ic_tick still makes) -- a deregistration sent on that went to whichever
  * handset connected next
  * (bench, 2026-10-28: the C430A's location registration got the AS690H's
@@ -7313,7 +7315,7 @@ static int page_adopt(struct stubd *s, struct side_link *sl,
 	(void)dect_mm_adopt(&l->mm, ind->page_id, ind->page_id_len);
 	if (sl) {
 		sl->adopted = i;
-	} else if ((unsigned)i != s->cur) {
+	} else if ((unsigned)i != s->base.cur) {
 		hs_switch(s, (unsigned)i, why);
 		dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
 		iwu_lines(s, &s->reg.link.cc.iwu, stubd_sub_slot(s));
@@ -7391,10 +7393,10 @@ static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
 	struct dect_mm_cfg cfg;
 	struct dect_mm mm;
 
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->base.n_hs; i++)
 		if (s->hs[i].loaded && hs_slot(s, i) == slot)
 			break;
-	if (!slot || i == s->n_hs) {
+	if (!slot || i == s->base.n_hs) {
 		printf("dereg: %s, but no handset we hold is in slot %u\n", who,
 		       slot);
 		return;
@@ -7447,8 +7449,8 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 			continue;
 		pl->mm.term_by_pt = 0;
 		i = pl->mm.adopted >= 0 ? pl->mm.adopted
-		    : (pl == &s->reg.link ? (int)s->cur : -1);
-		if (i >= 0 && (unsigned)i < s->n_hs && s->hs[i].loaded)
+		    : (pl == &s->reg.link ? (int)s->base.cur : -1);
+		if (i >= 0 && (unsigned)i < s->base.n_hs && s->hs[i].loaded)
 			dereg_erase(s, i, "the handset deregistered itself "
 				    "(accepted)");
 	}
@@ -7633,12 +7635,12 @@ static void time_tick(struct stubd *s, uint64_t now, int radio_on)
 	}
 
 	if (s->tu.st == TIME_IDLE) {
-		while (s->tu.next < s->n_hs &&
+		while (s->tu.next < s->base.n_hs &&
 		       (!s->hs[s->tu.next].loaded ||
 			(!s->tu.with_time &&
 			 !(s->tu.want & (1u << s->tu.next)))))
 			s->tu.next++;
-		if (s->tu.next >= s->n_hs) {
+		if (s->tu.next >= s->base.n_hs) {
 			s->tu.in_round = 0;
 			if (s->tu.with_time)
 				printf("time: update round done\n");
@@ -7820,7 +7822,7 @@ static void ctl_send_bridge(struct stubd *s, struct dect_ctl_out *o)
 /* The handsets the base holds: the ones `hs` lines name. */
 static int ctl_listed(const struct stubd *s, unsigned i)
 {
-	return i < s->n_hs && (i == s->cur || s->hs[i].loaded) &&
+	return i < s->base.n_hs && (i == s->base.cur || s->hs[i].loaded) &&
 	       !s->hs[i].absent;
 }
 
@@ -7831,7 +7833,7 @@ static void ctl_hs_to(struct stubd *s, int c, unsigned i, const char *state)
 	char nm[DECT_IWU_NAME_MAX];
 	unsigned k;
 
-	if (i >= s->n_hs)
+	if (i >= s->base.n_hs)
 		return;
 	dect_ctl_begin(&o, "hs");
 	dect_ctl_add_uint(&o, "hs", hs_slot(s, i));
@@ -7869,14 +7871,14 @@ static void ctl_hello(struct stubd *s)
 	struct dect_ctl_out o;
 	unsigned i, n = 0;
 
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->base.n_hs; i++)
 		n += (unsigned)ctl_listed(s, i);
 	dect_ctl_begin(&o, "hello");
 	dect_ctl_add_uint(&o, "api", OPENDECTCELL_API_VERSION);
 	dect_ctl_add_uint(&o, "lines", 1);
 	dect_ctl_add_uint(&o, "hs", n);
 	ctl_send(s, &o);
-	for (i = 0; i < s->n_hs; i++)
+	for (i = 0; i < s->base.n_hs; i++)
 		if (ctl_listed(s, i))
 			ctl_hs_to(s, s->ctl.cur, i, "registered");
 }
@@ -7923,7 +7925,7 @@ static unsigned main_hs_slot(struct stubd *s)
 {
 	int a = s->reg.link.mm.adopted;
 
-	return hs_slot(s, a >= 0 ? (unsigned)a : s->cur);
+	return hs_slot(s, a >= 0 ? (unsigned)a : s->base.cur);
 }
 
 /* The handset a call's party serves, as its slot; 0 = nobody yet. */
@@ -7940,10 +7942,10 @@ static unsigned party_hs_slot(struct stubd *s, int p)
 static int party_has_line2(const struct stubd *s, int p)
 {
 	int a = p == -1 ? (s->reg.link.mm.adopted >= 0 ?
-			   s->reg.link.mm.adopted : (int)s->cur)
+			   s->reg.link.mm.adopted : (int)s->base.cur)
 			: p >= 0 ? s->side[p].adopted : -1;
 
-	return a >= 0 && (unsigned)a < s->n_hs && s->hs[a].line2;
+	return a >= 0 && (unsigned)a < s->base.n_hs && s->hs[a].line2;
 }
 
 static struct bcall *bc_by_id(struct stubd *s, unsigned id)
@@ -8191,7 +8193,7 @@ static int party_hs_index(const struct stubd *s, int p)
 
 	if (p == -1) {
 		a = s->reg.link.mm.adopted;
-		return a >= 0 ? a : (int)s->cur;
+		return a >= 0 ? a : (int)s->base.cur;
 	}
 	return p >= 0 ? s->side[p].adopted : -1;
 }
@@ -8437,7 +8439,7 @@ static int hs_in_call(const struct stubd *s, unsigned t)
 	int a = s->reg.link.mm.adopted;
 
 	if (s->reg.active && dect_cc_busy(&s->reg.link.cc) &&
-	    (a >= 0 ? (unsigned)a : s->cur) == t)
+	    (a >= 0 ? (unsigned)a : s->base.cur) == t)
 		return 1;
 	for (k = 0; k < SIDE_MAX; k++)
 		if (s->side[k].active && s->side[k].adopted == (int)t &&
@@ -8685,10 +8687,10 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			ctl_reply(s, m->verb, "malformed", NULL, 0);
 			return 1;
 		}
-		for (t = 0; t < s->n_hs; t++)
+		for (t = 0; t < s->base.n_hs; t++)
 			if (ctl_listed(s, t) && hs_slot(s, t) == want)
 				break;
-		if (t == s->n_hs) {
+		if (t == s->base.n_hs) {
 			ctl_reply(s, m->verb, "no-handset", "hs", want);
 			return 1;
 		}
@@ -8768,7 +8770,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		       list == DECT_CALLS_OUTGOING ? "to " : "from ",
 		       num && *num ? num : "(no number)");
 		if (list == DECT_CALLS_MISSED)
-			for (i = 0; i < s->n_hs; i++) {
+			for (i = 0; i < s->base.n_hs; i++) {
 				unsigned tid = hs_slot(s, i);
 
 				if (tid < DECT_CALLS_TERMINALS && line[tid])
@@ -8795,10 +8797,10 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 				ctl_reply(s, m->verb, "bad-hs", NULL, 0);
 				return 1;
 			}
-			for (t = 0; t < s->n_hs; t++)
+			for (t = 0; t < s->base.n_hs; t++)
 				if (ctl_listed(s, t) && hs_slot(s, t) == want)
 					break;
-			if (t == s->n_hs) {
+			if (t == s->base.n_hs) {
 				ctl_reply(s, m->verb, "no-handset", "hs", want);
 				return 1;
 			}
@@ -8816,7 +8818,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		b = bc_new(s);
 		/* a Part 3 handset in a bridged call: call waiting */
 		wp = BC_NONE;
-		if (s->n_hs && hs_in_call(s, t)) {
+		if (s->base.n_hs && hs_in_call(s, t)) {
 			wp = b ? waiting_party(s, t) : BC_NONE;
 			if (wp == BC_NONE)
 				why = "in-call";
@@ -9339,10 +9341,10 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 			ctl_reply(s, m.verb, "bad-hs", NULL, 0);
 			return;
 		}
-		for (i = 0; i < s->n_hs; i++)
+		for (i = 0; i < s->base.n_hs; i++)
 			if (ctl_listed(s, i) && hs_slot(s, i) == v)
 				break;
-		if (i == s->n_hs) {
+		if (i == s->base.n_hs) {
 			ctl_reply(s, m.verb, "no-handset", "hs", v);
 			return;
 		}
@@ -9381,10 +9383,10 @@ static void ctl_command(struct stubd *s, const char *line, size_t len,
 			ctl_reply(s, m.verb, "bad-hs", NULL, 0);
 			return;
 		}
-		for (i = 0; i < s->n_hs; i++)
+		for (i = 0; i < s->base.n_hs; i++)
 			if (ctl_listed(s, i) && hs_slot(s, i) == v)
 				break;
-		if (i == s->n_hs) {
+		if (i == s->base.n_hs) {
 			ctl_reply(s, m.verb, "no-handset", "hs", v);
 			return;
 		}
@@ -9629,7 +9631,7 @@ static void ic_tick(struct stubd *s, uint64_t now)
 		/*
 		 * or the main link, if the caller is not on it (finding 5) --
 		 * only once it has adopted the target. A main link that has
-		 * adopted no one is not presumed to serve s->cur: whichever
+		 * adopted no one is not presumed to serve s->base.cur: whichever
 		 * handset connects next would get the SETUP (the deregistration
 		 * did exactly that on the bench, 2026-10-28). The target's
 		 * page response is matched by identity in ic_target_link().
@@ -9755,7 +9757,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	    dect_cc_busy(&sl->link.cc))
 		return 0;
 	old_main = s->reg.link.mm.adopted >= 0 ? s->reg.link.mm.adopted :
-		   s->reg.link.mm.port_id_len ? (int)s->cur : -1;
+		   s->reg.link.mm.port_id_len ? (int)s->base.cur : -1;
 	tmp = s->reg.link;
 	s->reg.link = sl->link;
 	sl->link = tmp;
@@ -9805,7 +9807,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->reg.time_sent_for = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
 	       "link; handle %u (%s) is a side link now\n", s->reg.handle,
-	       sl->handle, (unsigned)old_main < s->n_hs ?
+	       sl->handle, (unsigned)old_main < s->base.n_hs ?
 	       s->hs[old_main].path : "?");
 	ring_queue_setup(s, now, "page response received on a side link");
 	dect_link_drain(&s->reg.link, now);
@@ -9833,10 +9835,10 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 	    (s->audio.auth_first ||
 	     ((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
 	     cc->state == DECT_CC_ST_ACTIVE)) {
-		const uint8_t *uak = a < 0 || (unsigned)a >= s->n_hs ? NULL :
-			(unsigned)a == s->cur
-			? (s->rec.uak_valid ? s->rec.uak : NULL)
-			: (s->hs[a].rec.uak_valid ? s->hs[a].rec.uak : NULL);
+		const uint8_t *uak = a < 0 || (unsigned)a >= s->base.n_hs ? NULL :
+			(unsigned)a == s->base.cur
+			? (s->base.rec.uak_valid ? s->base.rec.uak : NULL)
+			: (s->base.hs[a].uak_valid ? s->base.hs[a].uak : NULL);
 		uint8_t crand[8], crs[16];
 
 		if (!uak) {
@@ -9904,9 +9906,9 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 	}
 	side_call_tick(s, sl, now);
 	a = sl->link.mm.adopted;
-	if (a >= 0 && (unsigned)a < s->n_hs)
+	if (a >= 0 && (unsigned)a < s->base.n_hs)
 		s->hs[a].last_seen_ms = now;
-	if (a >= 0 && a != sl->adopted && (unsigned)a < s->n_hs) {
+	if (a >= 0 && a != sl->adopted && (unsigned)a < s->base.n_hs) {
 		sl->adopted = a;
 		dect_iwu_set_own(&sl->link.cc.iwu,
 				 (uint8_t)hs_slot(s, (unsigned)a));
@@ -9982,12 +9984,12 @@ static void start_call_cipher(struct stubd *s, uint64_t now)
 	if (s->no_cipher) {
 		s->reg.cipher_started = 1;
 		printf("call: cipher: suppressed (-C), call stays in the clear\n");
-	} else if (s->rec.uak_valid) {
+	} else if (s->base.rec.uak_valid) {
 		uint8_t crand[8], crs[16];
 
 		gen_rand(s, crand, sizeof(crand));
 		gen_rand(s, crs, sizeof(crs));
-		dect_mm_start_cipher(&s->reg.link.mm, s->rec.uak, crand, crs);
+		dect_mm_start_cipher(&s->reg.link.mm, s->base.rec.uak, crand, crs);
 		s->reg.cipher_started = 1;
 		printf("call: cipher: authenticating handset\n");
 		drain_nwk(s, now);
@@ -10025,7 +10027,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	}
 	pump_lapc(s);			/* at least the LAPC ack */
 	if (s->reg.link.mm.adopted >= 0 &&
-	    (unsigned)s->reg.link.mm.adopted < s->n_hs)
+	    (unsigned)s->reg.link.mm.adopted < s->base.n_hs)
 		s->hs[s->reg.link.mm.adopted].last_seen_ms = now;
 
 	/*
@@ -10035,7 +10037,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * the list-access session that follows its {CC-SETUP} asks for it.
 	 */
 	if (s->reg.link.mm.adopted >= 0 &&
-	    (unsigned)s->reg.link.mm.adopted != s->cur) {
+	    (unsigned)s->reg.link.mm.adopted != s->base.cur) {
 		hs_switch(s, (unsigned)s->reg.link.mm.adopted, "");
 		dect_iwu_set_own(&s->reg.link.cc.iwu, stubd_sub_slot(s));
 		iwu_lines(s, &s->reg.link.cc.iwu, stubd_sub_slot(s));
@@ -10151,7 +10153,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		ind.page_response = 0;
 	}
 	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP) {
-		if (s->cur != s->ring_hs)
+		if (s->base.cur != s->ring_hs)
 			hs_switch(s, s->ring_hs, " (the ring target answered)");
 		ring_queue_setup(s, now, "page response received");
 		/*
@@ -10214,10 +10216,10 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * first pair we see and persist it, so calling the handset later needs
 	 * no guesswork about identity types, bit lengths or padding.
 	 */
-	if (ind.cc_message && !s->rec.cc_id_learned &&
+	if (ind.cc_message && !s->base.rec.cc_id_learned &&
 	    s->reg.link.cc.peer_fixed_id_len &&
-	    !dect_cc_peer_is(&s->reg.link.cc, s->rec.port_id,
-			     s->rec.port_id_len)) {
+	    !dect_cc_peer_is(&s->reg.link.cc, s->base.rec.port_id,
+			     s->base.rec.port_id_len)) {
 		/*
 		 * A CC transaction from a handset we are not subscribed to.
 		 * Learning from it would persist ANOTHER handset's identities
@@ -10238,8 +10240,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "not saving\n");
 			fflush(stdout);
 		}
-	} else if (ind.cc_message && !s->rec.cc_id_learned &&
-		   s->reg.link.cc.peer_fixed_id_len && !s->rec.port_id_len) {
+	} else if (ind.cc_message && !s->base.rec.cc_id_learned &&
+		   s->reg.link.cc.peer_fixed_id_len && !s->base.rec.port_id_len) {
 		/*
 		 * No handset registered yet, so nothing to check the caller
 		 * against, and dect_cc_peer_is() says yes to anyone. On
@@ -10256,20 +10258,20 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "against\n");
 			fflush(stdout);
 		}
-	} else if (ind.cc_message && !s->rec.cc_id_learned &&
+	} else if (ind.cc_message && !s->base.rec.cc_id_learned &&
 		   s->reg.link.cc.peer_fixed_id_len &&
 		   /* not from whoever named its IPUI (audit A3) */
 		   s->reg.link.mm.authenticated) {
-		memcpy(s->rec.cc_port_id, s->reg.link.cc.peer_port_id,
-		       sizeof(s->rec.cc_port_id));
-		s->rec.cc_port_id_len = s->reg.link.cc.peer_port_id_len;
-		memcpy(s->rec.cc_fixed_id, s->reg.link.cc.peer_fixed_id,
-		       sizeof(s->rec.cc_fixed_id));
-		s->rec.cc_fixed_id_len = s->reg.link.cc.peer_fixed_id_len;
-		s->rec.cc_id_learned = 1;
+		memcpy(s->base.rec.cc_port_id, s->reg.link.cc.peer_port_id,
+		       sizeof(s->base.rec.cc_port_id));
+		s->base.rec.cc_port_id_len = s->reg.link.cc.peer_port_id_len;
+		memcpy(s->base.rec.cc_fixed_id, s->reg.link.cc.peer_fixed_id,
+		       sizeof(s->base.rec.cc_fixed_id));
+		s->base.rec.cc_fixed_id_len = s->reg.link.cc.peer_fixed_id_len;
+		s->base.rec.cc_id_learned = 1;
 		printf("call: learned the identities for calling the handset "
 		       "(%zu + %zu bytes), saving\n",
-		       s->rec.cc_port_id_len, s->rec.cc_fixed_id_len);
+		       s->base.rec.cc_port_id_len, s->base.rec.cc_fixed_id_len);
 		sub_save(s);
 	}
 
@@ -10288,23 +10290,23 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * does not need it either. A handset that never places a call, or a
 	 * freshly registered one, could not be rung at all.
 	 */
-	if (!s->rec.cc_fixed_id_len && s->have_rfpi && s->rec.port_id_len &&
-	    s->rec.port_id_len <= sizeof(s->rec.cc_port_id)) {
+	if (!s->base.rec.cc_fixed_id_len && s->have_rfpi && s->base.rec.port_id_len &&
+	    s->base.rec.port_id_len <= sizeof(s->base.rec.cc_port_id)) {
 		uint8_t fid[DECT_CC_ID_MAX];
 		size_t n = dect_mm_fixed_identity(&s->reg.link.mm, fid,
 						  sizeof(fid));
 
 		if (n) {
 			/* this handset's identity, not the link MM's */
-			memcpy(s->rec.cc_port_id, s->rec.port_id,
-			       s->rec.port_id_len);
-			s->rec.cc_port_id_len = s->rec.port_id_len;
-			memcpy(s->rec.cc_fixed_id, fid, n);
-			s->rec.cc_fixed_id_len = n;
+			memcpy(s->base.rec.cc_port_id, s->base.rec.port_id,
+			       s->base.rec.port_id_len);
+			s->base.rec.cc_port_id_len = s->base.rec.port_id_len;
+			memcpy(s->base.rec.cc_fixed_id, fid, n);
+			s->base.rec.cc_fixed_id_len = n;
 			printf("call: derived the identities for calling the "
 			       "handset (%zu + %zu bytes) from the "
 			       "subscription, saving\n",
-			       s->rec.cc_port_id_len, s->rec.cc_fixed_id_len);
+			       s->base.rec.cc_port_id_len, s->base.rec.cc_fixed_id_len);
 			sub_save(s);
 		}
 	}
@@ -10315,8 +10317,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 */
 	if (!s->reg.persisted && s->reg.link.mm.subscribed && s->reg.link.mm.stats.located) {
 		/* Keep the UAK for the later call's ciphering, and across restarts. */
-		memcpy(s->rec.uak, s->reg.link.mm.uak, DECT_MM_UAK_LEN);
-		s->rec.uak_valid = 1;
+		memcpy(s->base.rec.uak, s->reg.link.mm.uak, DECT_MM_UAK_LEN);
+		s->base.rec.uak_valid = 1;
 		/*
 		 * Arm the identity gate for every later link of this run, the
 		 * way sub_load() arms it for a stored handset. Since 7e7e5f4 a
@@ -10326,13 +10328,13 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 * losing its registration.
 		 */
 		if (s->reg.link.mm.port_id_len &&
-		    s->reg.link.mm.port_id_len <= sizeof(s->rec.port_id)) {
-			memcpy(s->rec.port_id, s->reg.link.mm.port_id,
+		    s->reg.link.mm.port_id_len <= sizeof(s->base.rec.port_id)) {
+			memcpy(s->base.rec.port_id, s->reg.link.mm.port_id,
 			       s->reg.link.mm.port_id_len);
-			s->rec.port_id_len = s->reg.link.mm.port_id_len;
+			s->base.rec.port_id_len = s->reg.link.mm.port_id_len;
 			printf("sub: identity gate armed for the newly "
 			       "registered handset (%zu bytes)\n",
-			       s->rec.port_id_len);
+			       s->base.rec.port_id_len);
 		}
 		send_subscription(s);
 		sub_save(s);
@@ -10421,15 +10423,15 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	if (s->reg.link.mm.state != s->reg.reported_state &&
 	    s->reg.link.mm.state == DECT_MM_REGISTERED) {
 		printf("reg: handset registered\n");
-		if (s->n_hs && s->cur < s->n_hs)
-			names_spread(s, s->cur);  /* into every link's list */
+		if (s->base.n_hs && s->base.cur < s->base.n_hs)
+			names_spread(s, s->base.cur);  /* into every link's list */
 		names_notify(s);	/* §7.4.10.2.2: one added */
 	}
 	else if (s->reg.link.mm.state != s->reg.reported_state &&
 		 s->reg.link.mm.state == DECT_MM_FAILED) {
 		printf("reg: registration rejected%s\n",
-		       s->n_hs && s->cur < s->n_hs &&
-		       s->hs[s->cur].prof.reg_tries_0000_first &&
+		       s->base.n_hs && s->base.cur < s->base.n_hs &&
+		       s->hs[s->base.cur].prof.reg_tries_0000_first &&
 		       s->reg.link.mm.stats.auth_fail
 		       ? " (expected: this model tries PIN 0000 by itself "
 			 "first, profile reg.tries_0000_first)" : "");
@@ -10539,7 +10541,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	if (s->audio.auth_first && !s->no_cipher && !s->reg.cipher_started &&
 	    !s->reg.auth_refused && s->reg.active &&
 	    dect_cc_busy(&s->reg.link.cc)) {
-		if (s->rec.uak_valid) {
+		if (s->base.rec.uak_valid) {
 			printf("call: authenticating the handset before the "
 			       "call goes anywhere\n");
 			start_call_cipher(s, now);
@@ -10563,7 +10565,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * allowed" (bench, 2026-10-28). The call stays in PROCEEDING (no
 	 * CONNECT on a list call), so this does not wait for the connect.
 	 */
-	if (!s->reg.cipher_started && (s->rec.uak_valid || s->no_cipher) &&
+	if (!s->reg.cipher_started && (s->base.rec.uak_valid || s->no_cipher) &&
 	    !s->reg.link.cc.incoming && dect_cc_busy(&s->reg.link.cc) &&
 	    (s->reg.link.cc.peer_basic_service >> 4) == 0x2u /* LiA */) {
 		printf("call: list-access call -- ciphering it "
@@ -12887,12 +12889,12 @@ int main(int argc, char **argv)
 				sub_off = 1;
 				break;
 			}
-			if (s.n_hs >= DECT_MM_MAX_SLOT) {
+			if (s.base.n_hs >= DECT_MM_MAX_SLOT) {
 				fprintf(stderr, "-s: at most %u stores\n",
 					DECT_MM_MAX_SLOT);
 				return 2;
 			}
-			s.hs[s.n_hs++].path = optarg;
+			s.hs[s.base.n_hs++].path = optarg;
 			s.sub_path = s.hs[0].path;
 			break;
 		case 'C': s.no_cipher = 1; break;
@@ -12979,10 +12981,10 @@ int main(int argc, char **argv)
 	}
 	if (sub_off) {			/* -s "" */
 		s.sub_path = NULL;
-		s.n_hs = 0;
-	} else if (!s.n_hs && s.sub_path) {
+		s.base.n_hs = 0;
+	} else if (!s.base.n_hs && s.sub_path) {
 		s.hs[0].path = s.sub_path;	/* the default store */
-		s.n_hs = 1;
+		s.base.n_hs = 1;
 	}
 	contacts_init(&s);
 	if (!s.audio.remode_set && !(s.audio.flags & 0x40u))
@@ -13024,17 +13026,17 @@ int main(int argc, char **argv)
 		printf("chip: 06.88 bring-up: radio off before the "
 		       "configuration\n");
 	}
-	if (s.do_register && s.n_hs) {
+	if (s.do_register && s.base.n_hs) {
 		unsigned i, j;
 
 		/* restores the UAKs; chip reload once up */
-		for (i = 0; i < s.n_hs; i++) {
+		for (i = 0; i < s.base.n_hs; i++) {
 			struct stat sst;
 
-			s.cur = i;
+			s.base.cur = i;
 			hs_load(&s, i);		/* path set, the rest empty */
 			s.hs[i].loaded = sub_load(&s);
-			hs_stash(&s, i);
+			dect_base_stash(&s.base);
 			/*
 			 * Only a store that does not exist yet may take an
 			 * enrolment. One that exists but did not load (wrong
@@ -13046,28 +13048,28 @@ int main(int argc, char **argv)
 				stat(s.hs[i].path, &sst) != 0 && errno == ENOENT;
 			for (j = 0; s.hs[i].loaded && j < i; j++) {
 				if (!s.hs[j].loaded ||
-				    s.hs[j].rec.slot != s.hs[i].rec.slot)
+				    s.base.hs[j].slot != s.base.hs[i].slot)
 					continue;
 				printf("sub: %s claims slot %u, which %s "
 				       "holds -- not loaded\n", s.hs[i].path,
-				       s.hs[i].rec.slot, s.hs[j].path);
+				       s.base.hs[i].slot, s.hs[j].path);
 				s.hs[i].loaded = 0;
 			}
 		}
 		/* remote=: one more store, marked as a roamer (test M4) */
-		if (s.audio.remote_path && s.n_hs < DECT_MM_MAX_SLOT) {
-			i = s.n_hs++;
+		if (s.audio.remote_path && s.base.n_hs < DECT_MM_MAX_SLOT) {
+			i = s.base.n_hs++;
 			s.hs[i].path = s.audio.remote_path;
-			s.cur = i;
+			s.base.cur = i;
 			hs_load(&s, i);
 			s.hs[i].loaded = sub_load(&s);
-			hs_stash(&s, i);
+			dect_base_stash(&s.base);
 			s.hs[i].remote = 1;
 			printf("sub: %s is a roamer: not held, not in the chip, "
 			       "fetched on demand after %u ms\n",
 			       s.audio.remote_path, s.audio.fetch_delay_ms);
 		}
-		for (i = 0; i < s.n_hs; i++) {
+		for (i = 0; i < s.base.n_hs; i++) {
 			name_load(&s, i);
 			cap_load(&s, i);
 		}
@@ -13081,9 +13083,9 @@ int main(int argc, char **argv)
 		if (!s.hs[0].loaded && !s.audio.sub_slot) {
 			unsigned used = 0, slot;
 
-			for (i = 1; i < s.n_hs; i++)
+			for (i = 1; i < s.base.n_hs; i++)
 				if (s.hs[i].loaded)
-					used |= 1u << s.hs[i].rec.slot;
+					used |= 1u << s.base.hs[i].slot;
 			for (slot = 1; slot <= DECT_MM_MAX_SLOT &&
 			     (used & (1u << slot)); slot++)
 				;
@@ -13092,7 +13094,7 @@ int main(int argc, char **argv)
 					"by the other stores\n");
 				return 2;
 			}
-			s.hs[0].rec.slot = slot;
+			s.base.hs[0].slot = slot;
 			printf("sub: %s is new; it gets chip slot %u\n",
 			       s.hs[0].path, slot);
 		}
@@ -13102,15 +13104,15 @@ int main(int argc, char **argv)
 		 * own as well, distinct from the loaded stores and from each
 		 * other.
 		 */
-		for (i = 1; i < s.n_hs; i++) {
+		for (i = 1; i < s.base.n_hs; i++) {
 			unsigned used = 0, slot, k;
 
 			if (s.hs[i].loaded || s.hs[i].remote ||
 			    !s.hs[i].absent)
 				continue;
-			for (k = 0; k < s.n_hs; k++) {
+			for (k = 0; k < s.base.n_hs; k++) {
 				unsigned ks = k == 0 && s.audio.sub_slot ?
-					      s.audio.sub_slot : s.hs[k].rec.slot;
+					      s.audio.sub_slot : s.base.hs[k].slot;
 
 				if (k != i && (s.hs[k].loaded ||
 				    (k < i && !s.hs[k].remote)))
@@ -13125,19 +13127,19 @@ int main(int argc, char **argv)
 				s.hs[i].remote = 1;	/* never a free store */
 				continue;
 			}
-			s.hs[i].rec.slot = slot;
+			s.base.hs[i].slot = slot;
 			printf("sub: %s is free for an enrolment, chip slot %u\n",
 			       s.hs[i].path, slot);
 		}
 		if (!s.hs[0].loaded && s.audio.sub_slot) {
-			for (i = 1; i < s.n_hs; i++)
+			for (i = 1; i < s.base.n_hs; i++)
 				if (s.hs[i].loaded &&
-				    s.hs[i].rec.slot == s.audio.sub_slot)
+				    s.base.hs[i].slot == s.audio.sub_slot)
 					printf("sub: *** subslot=%u is %s's slot "
 					       "-- enrolling here overwrites it ***\n",
 					       s.audio.sub_slot, s.hs[i].path);
 		}
-		s.cur = 0;
+		s.base.cur = 0;
 		hs_load(&s, 0);
 	}
 
