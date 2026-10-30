@@ -217,6 +217,28 @@ int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
  */
 int dect_base_main_registered(struct dect_base *b);
 
+/*
+ * Stage S3a, a call's ciphering. Record i's key (the working copy for the
+ * current one), or NULL if it has none.
+ */
+const uint8_t *dect_base_uak(const struct dect_base *b, unsigned i);
+
+/*
+ * Challenge the handset on link bl with key uak, so both sides derive the
+ * call's cipher key (DCK); the challenges come from the host's random().
+ */
+void dect_base_cipher_start(struct dect_base *b, struct dect_base_link *bl,
+			    const uint8_t uak[DECT_MM_UAK_LEN]);
+
+/*
+ * The call key to the chip before the over-air {CIPHER-REQUEST}, as stock
+ * does [CR A-0126]: 0x0208 {link, DCK[8] in its own order, 00 x15, FF FF,
+ * 00 00}. Without it the chip switches to ciphering with no key and drops
+ * the link. 0, or -1 when MM holds no DCK. The mail carries a key: the host
+ * must not log its parameters.
+ */
+int dect_base_chip_key(struct dect_base *b, const struct dect_base_link *bl);
+
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));

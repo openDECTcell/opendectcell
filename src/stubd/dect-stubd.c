@@ -1368,6 +1368,8 @@ static int mail_byte_is_key(const struct dect_mail *m, unsigned int i)
 
 	if (m->prim == 0x020Au)
 		return i >= 1u && i <= DECT_MM_UAK_LEN;
+	if (m->prim == 0x0208u)		/* the call key */
+		return i >= 1u && i <= DECT_MM_DCK_LEN;
 	if (m->prim != 0xFFF1u || m->param_len < 7u || m->param[0] != 0x08u
 	    || i < 7u)
 		return 0;
@@ -5122,41 +5124,9 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
  * guessed selector and RES/RAND_F in bytes 9..20, and was inert
  * (2026-10-19).
  */
-static void send_chip_cipher_link(struct stubd *s, const struct dect_mm *mm,
-				  uint8_t handle)
-{
-	struct dect_mail m;
-	uint8_t dck[DECT_MM_DCK_LEN];
-	size_t n = 0, i;
-
-	if (!dect_mm_cipher_dck(mm, dck))
-		return;
-
-	memset(&m, 0, sizeof(m));
-	m.src = DECT_TASK_PCM;
-	m.dst = DECT_TASK_CONTACT_DST;
-	m.prim = 0x0208u;		/* call key [CR A-0126] */
-	m.param[n++] = handle;
-	for (i = 0; i < DECT_MM_DCK_LEN; i++)
-		m.param[n + i] = dck[i];
-	n += DECT_MM_DCK_LEN;
-	n += 15u;			/* param[9..23]: 00 (memset) */
-	m.param[n++] = 0xFFu;
-	m.param[n++] = 0xFFu;
-	m.param[n++] = 0x00u;
-	m.param[n++] = 0x00u;
-	m.param_len = (uint16_t)n;	/* 28 */
-	send_mail(s, (unsigned int)s->tx_slot, &m);
-	memset(dck, 0, sizeof(dck));
-	memset(&m, 0, sizeof(m));	/* the mail held the key */
-	/* Never log this mail's parameters: they carry the cipher key. */
-	printf("call: cipher: call key to the chip (0x0208, link %u, %u bytes, "
-	       "plain order)\n", (unsigned int)handle, (unsigned int)n);
-}
-
 static void send_chip_cipher(struct stubd *s)
 {
-	send_chip_cipher_link(s, &s->base.main_link.link.mm, s->base.main_link.handle);
+	(void)dect_base_chip_key(&s->base, &s->base.main_link);
 }
 
 /*
@@ -9799,11 +9769,8 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 	    (s->audio.auth_first ||
 	     ((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
 	     cc->state == DECT_CC_ST_ACTIVE)) {
-		const uint8_t *uak = a < 0 || (unsigned)a >= s->base.n_hs ? NULL :
-			(unsigned)a == s->base.cur
-			? (s->base.rec.uak_valid ? s->base.rec.uak : NULL)
-			: (s->base.hs[a].uak_valid ? s->base.hs[a].uak : NULL);
-		uint8_t crand[8], crs[16];
+		const uint8_t *uak = a < 0 ? NULL :
+				     dect_base_uak(&s->base, (unsigned)a);
 
 		if (!uak) {
 			/* authfirst: nothing to prove it against (A1) */
@@ -9818,9 +9785,7 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 			}
 			return;
 		}
-		dect_base_random(&s->base, crand, sizeof(crand));
-		dect_base_random(&s->base, crs, sizeof(crs));
-		dect_mm_start_cipher(&l->mm, uak, crand, crs);
+		dect_base_cipher_start(&s->base, &sl->bl, uak);
 		sl->cipher_done = 0;
 		printf("side: cipher: authenticating the handset on handle %u\n",
 		       sl->bl.handle);
@@ -9833,7 +9798,7 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 	if (l->mm.cipher_state == DECT_MM_CIPHER_READY) {
 		sl->cipher_done = 1;
 		if (!s->chip_cipher.disabled)
-			send_chip_cipher_link(s, &l->mm, sl->bl.handle);
+			(void)dect_base_chip_key(&s->base, &sl->bl);
 		printf("side: cipher: DCK derived, CIPHER-REQUEST sent on "
 		       "handle %u\n", sl->bl.handle);
 	} else if (l->mm.cipher_state == DECT_MM_CIPHER_FAILED) {
@@ -9946,11 +9911,8 @@ static void start_call_cipher(struct stubd *s, uint64_t now)
 		s->reg.cipher_started = 1;
 		printf("call: cipher: suppressed (-C), call stays in the clear\n");
 	} else if (s->base.rec.uak_valid) {
-		uint8_t crand[8], crs[16];
-
-		dect_base_random(&s->base, crand, sizeof(crand));
-		dect_base_random(&s->base, crs, sizeof(crs));
-		dect_mm_start_cipher(&s->base.main_link.link.mm, s->base.rec.uak, crand, crs);
+		dect_base_cipher_start(&s->base, &s->base.main_link,
+				       s->base.rec.uak);
 		s->reg.cipher_started = 1;
 		printf("call: cipher: authenticating handset\n");
 		drain_nwk(s, now);

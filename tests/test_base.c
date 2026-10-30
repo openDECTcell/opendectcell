@@ -213,6 +213,17 @@ int main(void)
 		CHECK_EQ(bl.link.mm.held[1].slot, 3);
 	}
 
+	/* a record's key: the working copy for the current one (S3a) */
+	b.hs[1].uak_valid = 1;
+	b.hs[1].uak[0] = 0x11;
+	b.hs[2].uak_valid = 0;
+	b.rec.uak_valid = 1;
+	b.rec.uak[0] = 0x22;
+	CHECK_EQ(dect_base_uak(&b, 1)[0], 0x11);
+	CHECK(dect_base_uak(&b, 2) == NULL);
+	CHECK_EQ(dect_base_uak(&b, b.cur)[0], 0x22);
+	CHECK(dect_base_uak(&b, DECT_BASE_HS_MAX) == NULL);
+
 	/* the registration completes: key, gate, install, save, once */
 	{
 		struct dect_mm *mm = &b.main_link.link.mm;

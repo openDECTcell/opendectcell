@@ -272,3 +272,53 @@ int dect_base_link_segment(struct dect_base *b, struct dect_base_link *bl,
 	dect_base_random(b, rs, sizeof(rs));
 	return dect_link_rx_segment(&bl->link, m, now, rand_f, rs, ind);
 }
+
+const uint8_t *dect_base_uak(const struct dect_base *b, unsigned i)
+{
+	const struct dect_hs_rec *r;
+
+	if (i >= b->n_hs || i >= DECT_BASE_HS_MAX)
+		return NULL;
+	r = i == b->cur ? &b->rec : &b->hs[i];
+	return r->uak_valid ? r->uak : NULL;
+}
+
+void dect_base_cipher_start(struct dect_base *b, struct dect_base_link *bl,
+			    const uint8_t uak[DECT_MM_UAK_LEN])
+{
+	uint8_t crand[8], crs[16];
+
+	dect_base_random(b, crand, sizeof(crand));
+	dect_base_random(b, crs, sizeof(crs));
+	dect_mm_start_cipher(&bl->link.mm, uak, crand, crs);
+}
+
+int dect_base_chip_key(struct dect_base *b, const struct dect_base_link *bl)
+{
+	struct dect_mail m;
+	uint8_t dck[DECT_MM_DCK_LEN];
+	size_t n = 0;
+
+	if (!dect_mm_cipher_dck(&bl->link.mm, dck))
+		return -1;
+	memset(&m, 0, sizeof(m));
+	m.src = DECT_TASK_PCM;
+	m.dst = DECT_TASK_CONTACT_DST;
+	m.prim = 0x0208u;
+	m.param[n++] = bl->handle;
+	memcpy(&m.param[n], dck, DECT_MM_DCK_LEN);	/* plain order (bench) */
+	n += DECT_MM_DCK_LEN;
+	n += 15u;					/* 00 (memset) */
+	m.param[n++] = 0xFFu;
+	m.param[n++] = 0xFFu;
+	m.param[n++] = 0x00u;
+	m.param[n++] = 0x00u;
+	m.param_len = (uint16_t)n;			/* 28 */
+	(void)dect_base_send(b, &m);
+	memset(dck, 0, sizeof(dck));
+	memset(&m, 0, sizeof(m));			/* it held the key */
+	dect_base_log(b, "call: cipher: call key to the chip (0x0208, link %u, "
+		      "%u bytes, plain order)", (unsigned)bl->handle,
+		      (unsigned)n);
+	return 0;
+}

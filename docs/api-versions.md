@@ -744,3 +744,6 @@ Incoming Calls List (09H) as a view over the missed and accepted lists.
 dect_iwu.c serves it (TS 102 527-3 7.4.10.5.11): the List of Supported
 Lists gains 09H; an accepted call reads 'read', one call, and its 'Read
 status' is not editable.
+
+**101.** dect_base.h, 2026-10-30: dect_base_uak(), dect_base_cipher_start()
+and dect_base_chip_key() (0x0208, the call key): a call's ciphering (S3a).

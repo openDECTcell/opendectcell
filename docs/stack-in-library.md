@@ -203,3 +203,18 @@ the links' set-up, their segment entry, adoption and the registration's
 completion. **Next is S3, calls**, which carries most of what remains in
 `reg_segment()` and the main link's `reg` state.
 
+## S3, calls (started 2026-10-30)
+
+**S3a.** A call's ciphering: `dect_base_uak()`, `dect_base_cipher_start()`
+(the challenges and MM's cipher authentication) and
+`dect_base_chip_key()` (0x0208, the call key in the chip's layout), for
+the main link and side links alike. When to start and what to do on a
+failure (release under `authfirst`) stays with the host for now.
+dect-stubd's mail log masks 0x0208's key octets as well (it never logged
+the mail before; through the library it would have under `-v -p`).
+Traces unchanged.
+
+Next in S3: the per-link call state both kinds of link keep (dialling,
+cipher progress, the connect staging) into `dect_base_link`; then the
+bridge's call table (`struct bcall`) and the ring sequence.
+
