@@ -1132,9 +1132,6 @@ struct stubd {
 		uint64_t frames_total;	/* unwrapped frame count for this call */
 		int have_counters;
 		struct dect_diag_status last_status;	/* for the state file */
-		int cipher_started;	/* call-time authentication kicked off */
-		int cipher_reject_seen;	/* CIPHER-REJECT already reported */
-		int cipher_timeout_seen;	/* <MM_cipher.1> already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
 	} reg;
 };
@@ -4286,28 +4283,6 @@ static void report_conn_status(struct stubd *s, const struct dect_mail *m)
 }
 
 /*
- * Load the call's key into the chip (0x0208) before our over-air
- * {CIPHER-REQUEST}, as stock does [CR A-0126]; docs/stub-api.md §2.1:
- *
- *   param[0]      the link (connection handle)
- *   param[1..8]   the 8-byte call key: our DCK in its own byte order
- *                 (bench 2026-10-28; [CR A-0028]'s reversal is wrong here)
- *   param[9..23]  00
- *   param[24..25] FF FF
- *   param[26..27] 00 00
- *
- * Without it the chip's MAC switches to ciphering on the handset's signal
- * with no key and drops the link ~200 ms later (bench test 17). The chip
- * answers with a one-byte 0x0209 <link>. Our earlier layout carried a
- * guessed selector and RES/RAND_F in bytes 9..20, and was inert
- * (2026-10-19).
- */
-static void send_chip_cipher(struct stubd *s)
-{
-	(void)dect_base_chip_key(&s->base, &s->base.main_link);
-}
-
-/*
  * The Fon/DECT LED. The 7520 has no LED of its own for DECT: its front
  * panel shares one "Fon/DECT" LED, green:fon under OpenWrt, which nothing
  * else drives. On while the radio is up, blinking while C-plane traffic
@@ -4804,11 +4779,11 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.call_wideband = 0;
 	s->base.main_link.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
-	s->reg.cipher_started = 0;
+	s->base.main_link.cipher_started = 0;
 	s->base.main_link.cipher_done = 0;
-	s->reg.cipher_reject_seen = 0;
+	s->base.main_link.cipher_reject_seen = 0;
 	s->base.main_link.auth_refused = 0;
-	s->reg.cipher_timeout_seen = 0;
+	s->base.main_link.cipher_timeout_seen = 0;
 	/* the other handsets this link may turn out to be: loaded ones, and a
 	 * roamer once fetched */
 	for (i = 0; i < s->base.n_hs; i++)
@@ -6730,15 +6705,15 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	/* what reg_start() resets for a new connection (review, finding 8) */
 	s->base.main_link.persisted = 0;
 	/* a side link's cipher (side_cipher_tick) came along with it */
-	s->reg.cipher_started =
+	s->base.main_link.cipher_started =
 		s->base.main_link.link.mm.cipher_state != DECT_MM_CIPHER_NONE;
 	s->base.main_link.cipher_done =
 		s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_READY ||
 		s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_FAILED;
 	sl->bl->cipher_done = 1;	/* the old main's was the main link's to do */
-	s->reg.cipher_reject_seen = 0;
+	s->base.main_link.cipher_reject_seen = 0;
 	s->base.main_link.auth_refused = 0;
-	s->reg.cipher_timeout_seen = 0;
+	s->base.main_link.cipher_timeout_seen = 0;
 	s->base.main_link.path_on = 0;
 	s->reg.time_sent_for = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
@@ -6752,73 +6727,11 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	return 1;
 }
 
-/*
- * Cipher a side link's call as the main link's (start_call_cipher()): a
- * speech call once connected, a list-access call at once (TS 102 527-3
- * C.7.2). The second handset's call in bench test 10 ran in the clear,
- * and a list session here could not take the PIN. The UAK is the one of
- * the handset the link adopted; a link that adopted no one stays clear.
- */
+/* A side link's call ciphered as the main link's (dect_base.h, S3v). */
 static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 			     uint64_t now)
 {
-	struct dect_link *l = &sl->bl->link;
-	const struct dect_cc *cc = &l->cc;
-	int a = l->mm.adopted;
-
-	if (l->mm.cipher_state == DECT_MM_CIPHER_NONE && !s->no_cipher &&
-	    dect_cc_busy(cc) && (a >= 0 || s->base.cfg.auth_first) &&
-	    (s->base.cfg.auth_first ||
-	     ((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
-	     cc->state == DECT_CC_ST_ACTIVE)) {
-		const uint8_t *uak = a < 0 ? NULL :
-				     dect_base_uak(&s->base, (unsigned)a);
-
-		if (!uak) {
-			/* authfirst: nothing to prove it against (A1) */
-			if (s->base.cfg.auth_first && !sl->bl->auth_refused) {
-				sl->bl->auth_refused = 1;
-				(void)dect_cc_release_reason(&l->cc, 0x09u);
-				printf("side: released -- no key to "
-				       "authenticate the handset on handle "
-				       "%u with\n", sl->bl->handle);
-				dect_link_drain(l, now);
-				side_pump(s, sl);
-			}
-			return;
-		}
-		dect_base_cipher_start(&s->base, sl->bl, uak);
-		sl->bl->cipher_done = 0;
-		printf("side: cipher: authenticating the handset on handle %u\n",
-		       sl->bl->handle);
-		dect_link_drain(l, now);
-		side_pump(s, sl);
-		return;
-	}
-	if (sl->bl->cipher_done)
-		return;
-	if (l->mm.cipher_state == DECT_MM_CIPHER_READY) {
-		sl->bl->cipher_done = 1;
-		if (!s->chip_cipher.disabled)
-			(void)dect_base_chip_key(&s->base, sl->bl);
-		printf("side: cipher: DCK derived, CIPHER-REQUEST sent on "
-		       "handle %u\n", sl->bl->handle);
-	} else if (l->mm.cipher_state == DECT_MM_CIPHER_FAILED) {
-		sl->bl->cipher_done = 1;
-		printf("side: cipher: authentication FAILED on handle %u (%s)\n",
-		       sl->bl->handle, l->mm.stats.auth_timeouts ? "no reply in 10 s"
-		       : l->mm.stats.auth_mismatch ? "WRONG RES"
-		       : "the handset refused");
-		/* EN 300 444 8.23.2.3, as on the main link */
-		if ((l->mm.stats.auth_mismatch || s->base.cfg.auth_first) &&
-		    dect_cc_busy(cc)) {
-			(void)dect_cc_release_reason(&l->cc, 0x09u);
-			printf("side: released -- the handset failed "
-			       "authentication (EN 300 444 8.23.2.3)\n");
-			dect_link_drain(l, now);
-			side_pump(s, sl);
-		}
-	}
+	dect_base_side_cipher_tick(&s->base, (unsigned)(sl - s->side), now);
 }
 
 static void side_segment(struct stubd *s, struct side_link *sl,
@@ -6907,20 +6820,7 @@ static void drain_nwk(struct stubd *s, uint64_t now)
  */
 static void start_call_cipher(struct stubd *s, uint64_t now)
 {
-	if (s->reg.cipher_started)
-		return;
-	if (s->no_cipher) {
-		s->reg.cipher_started = 1;
-		printf("call: cipher: suppressed (-C), call stays in the clear\n");
-	} else if (s->base.rec.uak_valid) {
-		dect_base_cipher_start(&s->base, &s->base.main_link,
-				       s->base.rec.uak);
-		s->reg.cipher_started = 1;
-		printf("call: cipher: authenticating handset\n");
-		drain_nwk(s, now);
-	} else {
-		printf("call: cipher: no UAK (handset must enrol this session)\n");
-	}
+	dect_base_main_cipher_start(&s->base, now);
 }
 static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now)
 {
@@ -7436,95 +7336,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		start_call_cipher(s, now);
 	}
 
-	/*
-	 * Authenticate first (A1, call_auth_ok()): challenge the handset as
-	 * soon as a call exists on the link, in either direction, as a
-	 * list-access call always was (below). Nothing is routed or passed on
-	 * until it answers. Without a key for the identity it claims there is
-	 * nothing to check it against, so the call ends.
-	 */
-	if (s->base.cfg.auth_first && !s->no_cipher && !s->reg.cipher_started &&
-	    !s->base.main_link.auth_refused && s->base.main_link.active &&
-	    dect_cc_busy(&s->base.main_link.link.cc)) {
-		if (s->base.rec.uak_valid) {
-			printf("call: authenticating the handset before the "
-			       "call goes anywhere\n");
-			start_call_cipher(s, now);
-		} else {
-			s->base.main_link.auth_refused = 1;
-			(void)dect_cc_release_reason(&s->base.main_link.link.cc,
-						     0x09u /* auth failed */);
-			printf("call: released -- no key to authenticate this "
-			       "handset with\n");
-			dect_link_drain(&s->base.main_link.link, now);
-			pump_lapc(s);
-		}
-	}
-
-	/*
-	 * A list-access call is ciphered as well. TS 102 527-3 C.7.2 shows the
-	 * FP's {CIPHER-REQUEST} right after the LiA {CC-SETUP}, and the PIN
-	 * fields of the System Settings List travel only on a ciphered link
-	 * (7.4.11.1): without this the PIN, the PIN-guarded delete and the
-	 * A540's "Mobilteil abmelden" were refused with "procedure not
-	 * allowed" (bench, 2026-10-28). The call stays in PROCEEDING (no
-	 * CONNECT on a list call), so this does not wait for the connect.
-	 */
-	if (!s->reg.cipher_started && (s->base.rec.uak_valid || s->no_cipher) &&
-	    !s->base.main_link.link.cc.incoming && dect_cc_busy(&s->base.main_link.link.cc) &&
-	    (s->base.main_link.link.cc.peer_basic_service >> 4) == 0x2u /* LiA */) {
-		printf("call: list-access call -- ciphering it "
-		       "(TS 102 527-3 C.7.2)\n");
-		start_call_cipher(s, now);
-	}
-
-	/* Never log key material: state only. */
-	if (s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_READY && !s->base.main_link.cipher_done) {
-		s->base.main_link.cipher_done = 1;
-		/*
-		 * Key material first, then the over-air request: A-0027 Q5 makes
-		 * loading the chip and negotiating the cipher distinct steps in
-		 * that order. The CIPHER-REQUEST is only queued here; it still has
-		 * to travel through LAPC, so the mail below wins the race.
-		 */
-		if (!s->chip_cipher.disabled)
-			send_chip_cipher(s);
-		printf("call: cipher: DCK derived, CIPHER-REQUEST sent\n");
-	} else if (s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_FAILED &&
-		   !s->base.main_link.cipher_done) {
-		s->base.main_link.cipher_done = 1;
-		printf("call: cipher: authentication FAILED (%s)\n",
-		       s->base.main_link.link.mm.stats.auth_timeouts ? "no reply in 10 s"
-		       : s->base.main_link.link.mm.stats.auth_mismatch ? "WRONG RES"
-		       : "the handset refused");
-		/*
-		 * A wrong RES means the handset is not the one subscribed
-		 * under that identity: EN 300 444 §8.23.2.3, "any failure ...
-		 * shall result on the interruption of any call in progress".
-		 * We let the call go on unciphered (spec sweep, N.9) -- and
-		 * so did anyone who named a held IPUI and then ignored or
-		 * refused the challenge. With authfirst any failure ends it:
-		 * no reply, a refusal or a missing RES as well (A1).
-		 */
-		if ((s->base.main_link.link.mm.stats.auth_mismatch ||
-		     s->base.cfg.auth_first) &&
-		    dect_cc_busy(&s->base.main_link.link.cc)) {
-			(void)dect_cc_release_reason(&s->base.main_link.link.cc,
-						     0x09u /* auth failed */);
-			printf("call: released -- the handset failed "
-			       "authentication (EN 300 444 8.23.2.3)\n");
-		}
-	}
-	if (s->base.main_link.link.mm.stats.cipher_timeouts && !s->reg.cipher_timeout_seen) {
-		s->reg.cipher_timeout_seen = 1;
-		printf("call: cipher: no cipher-on (0x0209) 10 s after "
-		       "CIPHER-REQUEST -- <MM_cipher.1>, the call is kept\n");
-	}
-	if (s->base.main_link.link.mm.cipher_rejected && !s->reg.cipher_reject_seen) {
-		s->reg.cipher_reject_seen = 1;
-		printf("call: cipher: the handset sent CIPHER-REJECT -- the call "
-		       "stays in the clear\n");
-	}
+	/* the call's cipher steps are the library's (dect_base.h, S3v) */
+	dect_base_main_cipher_tick(&s->base, now);
 
 	pump_lapc(s);
 }
@@ -10036,6 +9849,7 @@ int main(int argc, char **argv)
 	s.base.cfg.two_calls = s.audio.two_calls;
 	s.base.cfg.auth_first = s.audio.auth_first;
 	s.base.cfg.no_cipher = s.no_cipher;
+	s.base.cfg.no_chip_key = s.chip_cipher.disabled;
 	s.base.cfg.locauth = s.audio.locauth;
 	s.base.cfg.no_overlap = s.audio.no_overlap;
 	s.base.cfg.dial_wait_ms = s.audio.dial_wait_ms;

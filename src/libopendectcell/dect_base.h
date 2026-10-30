@@ -156,6 +156,9 @@ struct dect_base_link {
 	int      ic_tried;		/* checked for an internal call */
 	int      cipher_done;		/* the cipher's outcome handled */
 	int      auth_refused;		/* authfirst: ended, the key unproven */
+	int      cipher_started;	/* main link: the call's challenge sent (S3v) */
+	int      cipher_reject_seen;	/* ... CIPHER-REJECT reported */
+	int      cipher_timeout_seen;	/* ... <MM_cipher.1> reported */
 	/* Stage S3p, the main link's call: */
 	int      bound;			/* its audio channel bound */
 	int      path_on;		/* ... and connected (0x022D sent) */
@@ -263,6 +266,7 @@ struct dect_base_cfg {
 	int      two_calls;	/* up to three calls (twocalls) */
 	int      auth_first;	/* a handset proves its key before its call goes anywhere */
 	int      no_cipher;	/* -C, a lab option: no ciphering, no proof */
+	int      no_chip_key;	/* -k off: the call key withheld from the chip */
 	int      locauth;	/* authenticate on location registration */
 	int      no_overlap;	/* no overlap sending: the number en bloc */
 	unsigned dial_wait_ms;	/* the dial pause that ends a number */
@@ -1002,6 +1006,28 @@ void dect_base_lists_tick(struct dect_base *b, uint64_t now);
  * lce.release_after_call = no keeps the link (S3u).
  */
 void dect_base_nlr_tick(struct dect_base *b, uint64_t now);
+
+/*
+ * A call's ciphering, when and what follows (S3v). The main link:
+ * challenge the handset with the stored UAK so both sides derive the DCK;
+ * the CIPHER-REQUEST and the chip's key (0x0208) follow once it answers.
+ * Once per connection; cfg.no_cipher keeps every call in the clear.
+ */
+void dect_base_main_cipher_start(struct dect_base *b, uint64_t now);
+/*
+ * After each main-link segment: authenticate first (cfg.auth_first), a
+ * list-access call ciphered at once (TS 102 527-3 C.7.2), the outcome
+ * (the chip's key, or the release EN 300 444 §8.23.2.3 asks for), and the
+ * cipher's timeout and rejection reported once.
+ */
+void dect_base_main_cipher_tick(struct dect_base *b, uint64_t now);
+/*
+ * Side link k's call ciphered as the main link's: a speech call once
+ * connected, a list-access call at once. The UAK is the one of the
+ * handset the link adopted; a link that adopted no one stays clear.
+ */
+void dect_base_side_cipher_tick(struct dect_base *b, unsigned k,
+				uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

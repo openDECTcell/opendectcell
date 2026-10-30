@@ -295,6 +295,23 @@ void dect_base_cipher_start(struct dect_base *b, struct dect_base_link *bl,
 	dect_mm_start_cipher(&bl->link.mm, uak, crand, crs);
 }
 
+/*
+ * Load the call's key into the chip (0x0208) before our over-air
+ * {CIPHER-REQUEST}, as stock does [CR A-0126]; docs/stub-api.md §2.1:
+ *
+ *   param[0]      the link (connection handle)
+ *   param[1..8]   the 8-byte call key: our DCK in its own byte order
+ *                 (bench 2026-10-28; [CR A-0028]'s reversal is wrong here)
+ *   param[9..23]  00
+ *   param[24..25] FF FF
+ *   param[26..27] 00 00
+ *
+ * Without it the chip's MAC switches to ciphering on the handset's signal
+ * with no key and drops the link ~200 ms later (bench test 17). The chip
+ * answers with a one-byte 0x0209 <link>. Our earlier layout carried a
+ * guessed selector and RES/RAND_F in bytes 9..20, and was inert
+ * (2026-10-19).
+ */
 int dect_base_chip_key(struct dect_base *b, const struct dect_base_link *bl)
 {
 	struct dect_mail m;
@@ -3425,4 +3442,181 @@ void dect_base_nlr_tick(struct dect_base *b, uint64_t now)
 	dect_base_log(b, "link: released after the %s (0x0202 on handle %u, "
 		      "nlr)", bl->nlr_lia ? "list session, DISC first" : "call",
 		      (unsigned)bl->handle);
+}
+
+void dect_base_main_cipher_start(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+
+	if (bl->cipher_started)
+		return;
+	if (b->cfg.no_cipher) {
+		bl->cipher_started = 1;
+		dect_base_log(b, "call: cipher: suppressed (-C), call stays in "
+			      "the clear");
+	} else if (b->rec.uak_valid) {
+		dect_base_cipher_start(b, bl, b->rec.uak);
+		bl->cipher_started = 1;
+		dect_base_log(b, "call: cipher: authenticating handset");
+		dect_base_drain(b, -1, now);
+	} else {
+		dect_base_log(b, "call: cipher: no UAK (handset must enrol this "
+			      "session)");
+	}
+}
+
+void dect_base_main_cipher_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+	struct dect_link *l = &bl->link;
+
+	/*
+	 * Authenticate first (A1, dect_base_call_auth_ok()): challenge the
+	 * handset as soon as a call exists on the link, in either direction,
+	 * as a list-access call always was (below). Nothing is routed or
+	 * passed on until it answers. Without a key for the identity it
+	 * claims there is nothing to check it against, so the call ends.
+	 */
+	if (b->cfg.auth_first && !b->cfg.no_cipher && !bl->cipher_started &&
+	    !bl->auth_refused && bl->active && dect_cc_busy(&l->cc)) {
+		if (b->rec.uak_valid) {
+			dect_base_log(b, "call: authenticating the handset "
+				      "before the call goes anywhere");
+			dect_base_main_cipher_start(b, now);
+		} else {
+			bl->auth_refused = 1;
+			(void)dect_cc_release_reason(&l->cc,
+						     0x09u /* auth failed */);
+			dect_base_log(b, "call: released -- no key to "
+				      "authenticate this handset with");
+			dect_base_drain(b, -1, now);
+		}
+	}
+
+	/*
+	 * A list-access call is ciphered as well. TS 102 527-3 C.7.2 shows the
+	 * FP's {CIPHER-REQUEST} right after the LiA {CC-SETUP}, and the PIN
+	 * fields of the System Settings List travel only on a ciphered link
+	 * (7.4.11.1): without this the PIN, the PIN-guarded delete and the
+	 * A540's "Mobilteil abmelden" were refused with "procedure not
+	 * allowed" (bench, 2026-10-28). The call stays in PROCEEDING (no
+	 * CONNECT on a list call), so this does not wait for the connect.
+	 */
+	if (!bl->cipher_started && (b->rec.uak_valid || b->cfg.no_cipher) &&
+	    !l->cc.incoming && dect_cc_busy(&l->cc) &&
+	    (l->cc.peer_basic_service >> 4) == 0x2u /* LiA */) {
+		dect_base_log(b, "call: list-access call -- ciphering it "
+			      "(TS 102 527-3 C.7.2)");
+		dect_base_main_cipher_start(b, now);
+	}
+
+	/* Never log key material: state only. */
+	if (l->mm.cipher_state == DECT_MM_CIPHER_READY && !bl->cipher_done) {
+		bl->cipher_done = 1;
+		/*
+		 * Key material first, then the over-air request: A-0027 Q5
+		 * makes loading the chip and negotiating the cipher distinct
+		 * steps in that order. The CIPHER-REQUEST is only queued here;
+		 * it still has to travel through LAPC, so the mail wins the
+		 * race.
+		 */
+		if (!b->cfg.no_chip_key)
+			(void)dect_base_chip_key(b, bl);
+		dect_base_log(b, "call: cipher: DCK derived, CIPHER-REQUEST "
+			      "sent");
+	} else if (l->mm.cipher_state == DECT_MM_CIPHER_FAILED &&
+		   !bl->cipher_done) {
+		bl->cipher_done = 1;
+		dect_base_log(b, "call: cipher: authentication FAILED (%s)",
+			      l->mm.stats.auth_timeouts ? "no reply in 10 s"
+			      : l->mm.stats.auth_mismatch ? "WRONG RES"
+			      : "the handset refused");
+		/*
+		 * A wrong RES means the handset is not the one subscribed
+		 * under that identity: EN 300 444 §8.23.2.3, "any failure ...
+		 * shall result on the interruption of any call in progress".
+		 * We let the call go on unciphered (spec sweep, N.9) -- and so
+		 * did anyone who named a held IPUI and then ignored or refused
+		 * the challenge. With authfirst any failure ends it: no reply,
+		 * a refusal or a missing RES as well (A1).
+		 */
+		if ((l->mm.stats.auth_mismatch || b->cfg.auth_first) &&
+		    dect_cc_busy(&l->cc)) {
+			(void)dect_cc_release_reason(&l->cc,
+						     0x09u /* auth failed */);
+			dect_base_log(b, "call: released -- the handset failed "
+				      "authentication (EN 300 444 8.23.2.3)");
+		}
+	}
+	if (l->mm.stats.cipher_timeouts && !bl->cipher_timeout_seen) {
+		bl->cipher_timeout_seen = 1;
+		dect_base_log(b, "call: cipher: no cipher-on (0x0209) 10 s after "
+			      "CIPHER-REQUEST -- <MM_cipher.1>, the call is "
+			      "kept");
+	}
+	if (l->mm.cipher_rejected && !bl->cipher_reject_seen) {
+		bl->cipher_reject_seen = 1;
+		dect_base_log(b, "call: cipher: the handset sent CIPHER-REJECT "
+			      "-- the call stays in the clear");
+	}
+}
+
+void dect_base_side_cipher_tick(struct dect_base *b, unsigned k,
+				uint64_t now)
+{
+	struct dect_base_link *bl = &b->side[k];
+	struct dect_link *l = &bl->link;
+	const struct dect_cc *cc = &l->cc;
+	int a = l->mm.adopted;
+
+	if (l->mm.cipher_state == DECT_MM_CIPHER_NONE && !b->cfg.no_cipher &&
+	    dect_cc_busy(cc) && (a >= 0 || b->cfg.auth_first) &&
+	    (b->cfg.auth_first ||
+	     ((cc->peer_basic_service >> 4) == 0x2u && !cc->incoming) ||
+	     cc->state == DECT_CC_ST_ACTIVE)) {
+		const uint8_t *uak = a < 0 ? NULL : dect_base_uak(b, (unsigned)a);
+
+		if (!uak) {
+			/* authfirst: nothing to prove it against (A1) */
+			if (b->cfg.auth_first && !bl->auth_refused) {
+				bl->auth_refused = 1;
+				(void)dect_cc_release_reason(&l->cc, 0x09u);
+				dect_base_log(b, "side: released -- no key to "
+					      "authenticate the handset on "
+					      "handle %u with", bl->handle);
+				dect_base_drain(b, (int)k, now);
+			}
+			return;
+		}
+		dect_base_cipher_start(b, bl, uak);
+		bl->cipher_done = 0;
+		dect_base_log(b, "side: cipher: authenticating the handset on "
+			      "handle %u", bl->handle);
+		dect_base_drain(b, (int)k, now);
+		return;
+	}
+	if (bl->cipher_done)
+		return;
+	if (l->mm.cipher_state == DECT_MM_CIPHER_READY) {
+		bl->cipher_done = 1;
+		if (!b->cfg.no_chip_key)
+			(void)dect_base_chip_key(b, bl);
+		dect_base_log(b, "side: cipher: DCK derived, CIPHER-REQUEST sent "
+			      "on handle %u", bl->handle);
+	} else if (l->mm.cipher_state == DECT_MM_CIPHER_FAILED) {
+		bl->cipher_done = 1;
+		dect_base_log(b, "side: cipher: authentication FAILED on handle "
+			      "%u (%s)", bl->handle,
+			      l->mm.stats.auth_timeouts ? "no reply in 10 s"
+			      : l->mm.stats.auth_mismatch ? "WRONG RES"
+			      : "the handset refused");
+		/* EN 300 444 8.23.2.3, as on the main link */
+		if ((l->mm.stats.auth_mismatch || b->cfg.auth_first) &&
+		    dect_cc_busy(cc)) {
+			(void)dect_cc_release_reason(&l->cc, 0x09u);
+			dect_base_log(b, "side: released -- the handset failed "
+				      "authentication (EN 300 444 8.23.2.3)");
+			dect_base_drain(b, (int)k, now);
+		}
+	}
 }

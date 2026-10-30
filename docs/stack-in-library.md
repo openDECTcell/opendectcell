@@ -367,6 +367,15 @@ handset took. Unit test; the eleven traces unchanged.
 `dect_base_link`. Seven trace runs take it (six after a call, one after a
 list session with the DISC first); the fourteen traces unchanged.
 
+**S3v.** When a call is ciphered and what follows is the library's: the
+main link's challenge (`dect_base_main_cipher_start()`), authenticate
+first, a list-access call ciphered at once, the chip's key or the
+release on a failure, the timeout and rejection reported once
+(`dect_base_main_cipher_tick()`), and the same for side links
+(`dect_base_side_cipher_tick()`). `-k off` is `cfg.no_chip_key`. The
+call-in, call-out and internal-call traces take both paths; the fourteen
+traces unchanged.
+
 ## S5, the control verbs (started 2026-10-30)
 
 **S5a.** The bridge's call verbs are the library's:
