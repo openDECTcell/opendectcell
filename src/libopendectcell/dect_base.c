@@ -59,7 +59,7 @@ void dect_base_random(struct dect_base *b, uint8_t *out, size_t n)
 
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 {
-	char line[256];
+	char line[1024];
 	va_list ap;
 
 	if (!b->ops || !b->ops->log)
@@ -735,10 +735,12 @@ void dect_base_ring_page(struct dect_base *b)
 		      tpui[1], tpui[2], b->cfg.basic_svc,
 		      /*
 		       * We page BY the TPUI we assigned. If the handset never
-		       * acknowledged the assignment (EN 300 175-5 §13.2.2) it
-		       * may not be listening for it, and the page is silent in
-		       * a way that looks exactly like a handset that will not
-		       * answer. Say so rather than letting it look normal.
+		       * acknowledged the assignment (EN 300 175-5 §13.2.2,
+		       * {TEMPORARY-IDENTITY-ASSIGN-ACK}) it may not be
+		       * listening for it, and the page is silent in a way that
+		       * looks exactly like a handset that will not answer --
+		       * which we have chased more than once. Say so rather
+		       * than letting it look normal.
 		       */
 		      dect_mm_tpui_confirmed(&b->main_link.link.mm)
 		      ? "" : " -- WARNING: TPUI never acknowledged");
@@ -1910,8 +1912,8 @@ int dect_base_call_waiting(struct dect_base *b, struct dect_base_call *c, int p,
 /* A parallel call's number is complete: to the bridge. */
 static void par_dial_out(struct dect_base *b, struct dect_base_call *d,
 			 uint64_t now)
-			 {
-			 struct dect_ctl_out o;
+{
+	struct dect_ctl_out o;
 
 	d->dialing = 0;
 	if (!b->bridge) {
@@ -4241,7 +4243,8 @@ void dect_base_main_cc_setup(struct dect_base *b)
 	 * (`e0 80`) already means G.726. TS 102 527-1 §7.3.3 lets a list in
 	 * {CC-SETUP} only if it holds at least G.722 and G.726; a G.726-only
 	 * list was non-conformant. Runs 31-33 (2026-10-25): all three Gigasets
-	 * ring without it. codeclist=HEX still sends one.
+	 * ring without it. codeclist=HEX still sends one, e.g.
+	 * codeclist=90020084 for the old list.
 	 */
 	if (b->cfg.codeclist_len)
 		dect_cc_set_codec_list(&l->cc, b->cfg.codeclist,
@@ -4606,7 +4609,7 @@ static void log_keypad(struct dect_base *b)
 /* -v: the segment's framing and its NWK message (local only: it carries IPUIs). */
 static void log_segment(struct dect_base *b, const struct dect_link_ind *ind)
 {
-	char hex[3 * 64 + 1];
+	char hex[3 * DECT_LAPC_MSG_MAX + 1];
 	size_t i, o = 0;
 
 	dect_base_log(b, "reg: cs in %02x %02x %02x (addr/ctrl/li), lc_rc=%d",

@@ -2816,6 +2816,7 @@ static void base_call_up(void *ctx, uint64_t now);
 static void base_side_call(void *ctx, unsigned k, uint64_t now);
 static void base_swapped(void *ctx, unsigned k);
 static void base_cap_learned(void *ctx, unsigned i);
+static void base_call_down(void *ctx);
 static void base_wall(void *ctx, struct dect_time *dt);
 
 static const struct dect_base_ops base_ops = {
@@ -2827,6 +2828,7 @@ static const struct dect_base_ops base_ops = {
 	.side_down = base_side_down, .registered = base_registered,
 	.call_up = base_call_up, .side_call = base_side_call,
 	.swapped = base_swapped, .cap_learned = base_cap_learned,
+	.call_down = base_call_down,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -6082,6 +6084,18 @@ static void base_side_call(void *ctx, unsigned k, uint64_t now)
 	struct stubd *s = ctx;
 
 	side_call_tick(s, &s->side[k], now);
+}
+
+/*
+ * dect_base's call_down(): the main call is over, its audio channel goes
+ * (dect_base_tick(); loop_tick() does the same in its own order).
+ */
+static void base_call_down(void *ctx)
+{
+	struct stubd *s = ctx;
+
+	send_audio_disconnect(s, s->base.main_link.handle);
+	s->reg.call_wideband = 0;
 }
 
 /* dect_base's swapped(): side link k and the main link changed places. */

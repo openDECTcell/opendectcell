@@ -1044,16 +1044,28 @@ void dect_base_dereg_tick(struct dect_base *b, uint64_t now);
 
 /*
  * The date and time, and the notices for handsets with no link (S4c).
+ * cfg.time_every_min (-a timeupdate=MIN): the date and time to every
+ * handset we hold, every MIN minutes (maintainer, 2026-10-29). One interval
+ * for the base, not one per handset: a handset that attached a minute
+ * before a round gets it twice, which is harmless.
+ *
  * TS 102 527-3 §7.4.2.0 makes it "the responsibility of the entity to
  * ensure that time and date information within the peer entity is up to
- * date", and §7.4.2.1 says how to reach a handset with no link: a page
- * with the LCE header "000" (no U-plane), as the deregistration's. Then
- * the {FACILITY}, and once it is acknowledged the link we brought up is
- * released, as after a call (EN 300 175-5 §14.2.7). One handset at a
- * time, only while the base is otherwise idle; a handset that does not
- * answer DECT_BASE_TIME_PAGES pages is skipped until the next round. No
- * trustworthy clock (clock()), no time. The host calls the tick while the
- * radio is on.
+ * date", and §7.4.2.1 says how to reach a handset with no link: "the FP
+ * shall initiate indirect link establishment" -- a page, as for a call,
+ * with the LCE header "000" (no U-plane). That is the C-plane page the
+ * deregistration sends. Then the {FACILITY} (dect_link_send_time), and
+ * once it is acknowledged the link we brought up is released, as after a
+ * call (EN 300 175-5 §14.2.7). A handset that already has a link gets it
+ * there and keeps its link.
+ *
+ * One handset at a time, and only while the base is otherwise idle
+ * (dect_base_time_busy()); a handset that does not answer
+ * DECT_BASE_TIME_PAGES pages is off or out of range and is skipped until
+ * the next round. No trustworthy clock (clock()), no time. The same round
+ * visits a handset with no link that has a notice to hear (page_want,
+ * §7.4.1.2 wants it sent to every attached handset); outside a time round,
+ * only those. The host calls the tick while the radio is on.
  */
 int dect_base_time_busy(const struct dect_base *b);
 /* Push what link l has queued towards the chip. */
@@ -1284,12 +1296,12 @@ void dect_base_main_dial_tick(struct dect_base *b, uint64_t now);
 /*
  * Every stack step of a tick, in dect-stubd's order, for a host that runs
  * no steps of its own in between (dect-stubd interleaves its own: the
- * control and audio sockets, diagnostics). radio_on: the chip is up and
- * transmitting, for the ring and the date and time.
+ * control and audio sockets, diagnostics). radio_on: the chip's session
+ * is up (dect-stubd: sess.state UP), for the ring and the date and time.
  */
 void dect_base_tick(struct dect_base *b, uint64_t now, int radio_on);
 
-/* A log line, printf-style, cut at 255 octets; nothing without log(). */
+/* A log line, printf-style, cut at 1023 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
 
