@@ -6130,6 +6130,23 @@ static void locate_notify(const struct stubd *s, struct dect_link *l)
 			printf("reg: list change notice sent for line %u "
 			       "(Line Settings List)\n", iwu->lines[i].id);
 	}
+	/*
+	 * With a Contact List, one for the List of Supported Lists too (no
+	 * line field, so no line; one entry). A handset keeps the copy it
+	 * read once: the A540 re-reads only 06 and 08 when it reconnects,
+	 * so it never learned of the Contact List until told (2026-10-30).
+	 */
+	if (iwu->contacts) {
+		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
+					 DECT_LIA_LIST_SUPPORTED, 1 };
+		uint8_t msg[DECT_LAPC_MSG_MAX];
+		size_t n = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
+						      DECT_EVENT_NO_LINE, 0);
+
+		if (n && dect_link_send_ciss(l, msg, n) == 0)
+			printf("reg: list change notice sent (List of Supported "
+			       "Lists: the Contact List)\n");
+	}
 }
 
 /*
