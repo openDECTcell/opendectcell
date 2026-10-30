@@ -391,3 +391,14 @@ handset whose link reported Part 3 even before it authenticated, while
 those that wait for a link (`dect_base_missed_due()`) count only a
 capability learned after authentication (audit A3). Harmless (a notice
 carries counts, no data), but not one rule; left as it is.
+
+**S4b.** Deregistration is the library's: the request on the handset's
+link or a C-plane page first, the queue, the erasure (chip slot, record
+state, the lists) with or without the handset's answer, and a handset
+that deregistered itself. The host keeps the store files (`forget()`
+moves them aside and tells the clients) and the locked-in mask policy
+(`mask()`), and SIGUSR2's request file. One order changed: a SIGUSR2
+request is now taken before a self-deregistration seen in the same tick
+(was after); both are erased either way. New trace `deregister.trace`
+(DECT 2 paged, the request, its accept, the erasure), replayed unchanged
+on the commit before; the other twelve unchanged.

@@ -1,0 +1,51 @@
+# Deregistering a handset from the control socket (maintainer,
+# 2026-10-28; stock's order, [CR A-0128]): DECT 2 has no link, so it is
+# paged (C-plane only); it answers, gets {ACCESS-RIGHTS-TERMINATE-REQUEST}
+# and accepts; its chip slot is cleared and the mask rewritten. -C: no
+# ciphering. Identities, keys and numbers are made up.
+sub 1 80 a8 03 11 22 33 44
+sub 2 80 a8 03 55 66 77 88
+args -C
+start
+ev hello api=N lines=1 hs=2
+ev hs hs=1 state=registered name="DECT 1" wideband=1
+ev hs hs=2 state=registered name="DECT 2" wideband=1
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 02 01 00
+mail 020a 02 c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 ca cb cc cd ce cf 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 03
+ctl deregister hs=2
+ev ok verb=deregister hs=2
+tick 200
+mail 0300 08 11 02
+# DECT 2 answers the page on handle 1: {LCE-PAGE-RESPONSE}.
+up 1
+pp 00 71 05 07 80 a8 03 55 66 77 88
+fp 05 48 05 07 80 a8 03 55 66 77 88 06 07 a0 a5 00 01 23 45 60
+tick 500
+# {ACCESS-RIGHTS-TERMINATE-ACCEPT}.
+pp 85 49
+ev hs hs=2 state=gone
+mail 0247 02 00 00
+mail 020a 02 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+mail 017c 00 01
+tick 500
+down
+tick 1000

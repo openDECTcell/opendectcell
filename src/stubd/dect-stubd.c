@@ -522,21 +522,7 @@ struct stubd {
 	struct xlane xl[XLANE_MAX];
 	/* An internal call: base.ic (dect_base.h, S3q); its codec mismatch reported */
 	int ic_warned;
-	/*
-	 * Deregistering a handset (maintainer, 2026-10-28; stock's order from
-	 * [CR A-0128]): ACCESS-RIGHTS-TERMINATE-REQUEST on its link, paging it
-	 * first if it has none, then the erasure -- also without an answer,
-	 * so a lost or broken handset still goes.
-	 */
-	struct {
-		enum { DEREG_IDLE, DEREG_PAGING, DEREG_REQUESTED } st;
-		int      target;	/* handset table index */
-		uint8_t  tpui[3];
-		unsigned pages;
-		uint64_t page_at;
-		unsigned queue[DECT_MM_MAX_SLOT];	/* slots asked meanwhile */
-		unsigned nq;
-	} dereg;
+	/* Deregistering a handset: base.dereg (dect_base.h, S4b) */
 	/*
 	 * The periodic date and time (-a timeupdate=MIN): one round over all
 	 * handsets every MIN minutes, one handset at a time -- on its link
@@ -2880,10 +2866,14 @@ static int base_lanes(void *ctx, int p)
 	return lanes_available(s, p >= 0 ? &s->side[p] : NULL);
 }
 
+static void base_forget(void *ctx, unsigned i, const char *why);
+static void base_mask(void *ctx);
+
 static const struct dect_base_ops base_ops = {
 	.save = base_save, .send = base_send, .random = base_random,
 	.log = base_log, .install = base_install, .event = base_event,
-	.pump = base_pump, .lanes = base_lanes,
+	.pump = base_pump, .lanes = base_lanes, .forget = base_forget,
+	.mask = base_mask,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -5932,42 +5922,31 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 
 static int ic_wideband(const struct stubd *s, int p);
 
-#define DEREG_PAGES	10u		/* 3 s apart: 30 s to reach it */
-#define DEREG_PAGE_MS	3000u
+#define DEREG_IDLE	DECT_BASE_DEREG_IDLE
+#define DEREG_PAGING	DECT_BASE_DEREG_PAGING
+#define DEREG_REQUESTED	DECT_BASE_DEREG_REQUESTED
 #define DEREG_REQ_PATH	DECT_RUN_DIR "/deregister"
 
 /*
- * Erase handset i from the base, as stock does after the handset's
- * ACCEPT [CR A-0128]: the slot's 0x0247 entry cleared, its 0x020A record
- * overwritten with zeros, then 0x017C without its bit ([CR A-0129]: the
- * locked-in handset mask; stock rewrites it on every deregistration).
- * The store, its
+ * dect_base's forget() (S4b): handset i is deregistered. The store, its
  * .name, .profile and .cap move aside (<store>.deregistered), so a mistake
- * can be undone by moving them back. Then the lists lose the entry and say so.
+ * can be undone by moving them back; the clients hear it is gone.
  */
-static void dereg_erase(struct stubd *s, int i, const char *why)
+static void base_forget(void *ctx, unsigned i, const char *why)
 {
-	unsigned slot = hs_slot(s, (unsigned)i), k;
-	uint8_t p[1 + DECT_MM_UAK_LEN + 1];
+	struct stubd *s = ctx;
 	char from[256], to[288];
 
-	printf("dereg: DECT %u (%s): %s\n", slot, s->hs[i].path, why);
-	ctl_hs(s, (unsigned)i, "gone");
-	if (slot >= 1u && slot <= DECT_MM_MAX_SLOT) {
-		memset(p, 0, sizeof(p));
-		p[0] = (uint8_t)slot;
-		chip_mail(s, 0x0247u, p, 3);		/* slot, 00, 00 */
-		chip_mail(s, 0x020Au, p, sizeof(p));	/* slot, 17 zeros */
-		printf("dereg: chip slot %u cleared (0x0247, 0x020A zeros)\n",
-		       slot);
-	}
+	(void)why;
+	printf("dereg: DECT %u is %s\n", hs_slot(s, i), s->hs[i].path);
+	ctl_hs(s, i, "gone");
 	snprintf(to, sizeof(to), "%s.deregistered", s->hs[i].path);
 	if (rename(s->hs[i].path, to))
 		printf("dereg: could not move %s aside: %s\n", s->hs[i].path,
 		       strerror(errno));
 	else
 		printf("dereg: %s moved to %s\n", s->hs[i].path, to);
-	name_path(s, (unsigned)i, from, sizeof(from));
+	name_path(s, i, from, sizeof(from));
 	snprintf(to, sizeof(to), "%s.deregistered", from);
 	(void)rename(from, to);
 	/* and its model and capability: the next one here is another */
@@ -5977,30 +5956,13 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	snprintf(from, sizeof(from), "%s.cap", s->hs[i].path);
 	snprintf(to, sizeof(to), "%s.deregistered", from);
 	(void)rename(from, to);
-	s->base.loaded[i] = 0;
-	s->base.hs[i].uak_valid = 0;
-	s->base.absent[i] = 1;		/* free for a new enrolment */
-	s->base.name[i][0] = '\0';
-	s->base.cap[i].known = 0;
-	memset(s->base.note[i].mwi, 0, sizeof(s->base.note[i].mwi));
-	s->base.note[i].mwi_known = s->base.note[i].mwi_due = 0;
-	s->base.page_want &= ~(1u << i);
-	if ((unsigned)i == s->base.cur) {
-		s->base.rec.uak_valid = 0;
-		s->base.rec.port_id_len = 0;
-		s->base.rec.cc_port_id_len = 0;
-		s->base.rec.cc_fixed_id_len = 0;
-	}
-	if (s->base.main_link.active)
-		(void)dect_iwu_remove_handset(&s->base.main_link.link.cc.iwu,
-					      (uint8_t)slot);
-	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl->active)
-			(void)dect_iwu_remove_handset(&s->side[k].bl->link.cc.iwu,
-						      (uint8_t)slot);
-	send_subscription_tail(s);	/* the mask without it */
-	names_notify(s);		/* §7.4.10.2.2: one removed */
 	fflush(stdout);
+}
+
+/* dect_base's mask(): the locked-in handsets, again. */
+static void base_mask(void *ctx)
+{
+	send_subscription_tail(ctx);
 }
 
 /*
@@ -6053,9 +6015,9 @@ static int page_adopt(struct stubd *s, struct side_link *sl,
 static int dereg_page_response(struct stubd *s, struct side_link *sl,
 			       const struct dect_link_ind *ind)
 {
-	int i = s->dereg.target;
+	int i = s->base.dereg.target;
 
-	if (s->dereg.st != DEREG_PAGING || !ind->page_response ||
+	if (s->base.dereg.st != DEREG_PAGING || !ind->page_response ||
 	    !page_adopt(s, sl, ind, i, " (deregistration)"))
 		return 0;
 	printf("dereg: DECT %u answered the page with its own identity\n",
@@ -6110,138 +6072,17 @@ static void dereg_start(struct stubd *s, uint64_t now)
 static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
 			const char *who)
 {
-	unsigned i;
-	struct dect_link *l;
-	struct dect_mm_cfg cfg;
-	struct dect_mm mm;
-
-	for (i = 0; i < s->base.n_hs; i++)
-		if (s->base.loaded[i] && hs_slot(s, i) == slot)
-			break;
-	if (!slot || i == s->base.n_hs) {
-		printf("dereg: %s, but no handset we hold is in slot %u\n", who,
-		       slot);
-		return;
-	}
-	printf("dereg: DECT %u, asked by %s\n", slot, who);
-	if (s->dereg.st != DEREG_IDLE) {
-		unsigned k;
-
-		for (k = 0; k < s->dereg.nq; k++)
-			if (s->dereg.queue[k] == slot)
-				break;
-		if (k == s->dereg.nq && s->dereg.nq < DECT_MM_MAX_SLOT &&
-		    (int)i != s->dereg.target)
-			s->dereg.queue[s->dereg.nq++] = slot;
-		printf("dereg: one at a time -- DECT %u waits its turn (%u "
-		       "waiting)\n", slot, s->dereg.nq);
-		return;
-	}
-	s->dereg.target = (int)i;
-	s->dereg.pages = 0;
-	s->dereg.page_at = now;
-	l = link_known_hs(s, (int)i);
-	if (l && dect_mm_terminate(&l->mm) == 0) {
-		s->dereg.st = DEREG_REQUESTED;
-		printf("dereg: DECT %u: ACCESS-RIGHTS-TERMINATE-REQUEST on its "
-		       "link\n", slot);
-		return;
-	}
-	memset(&cfg, 0, sizeof(cfg));
-	cfg.sub_slot = (uint8_t)slot;
-	dect_mm_init(&mm, &cfg);
-	dect_mm_tpui(&mm, s->dereg.tpui);
-	s->dereg.st = DEREG_PAGING;
-	printf("dereg: DECT %u has no link -- paging it\n", slot);
+	dect_base_dereg_begin(&s->base, slot, now, who);
 }
 
+/* The deregistration is the library's (dect_base.h, S4b); SIGUSR2 ours. */
 static void dereg_tick(struct stubd *s, uint64_t now)
 {
-	struct dect_link *l;
-	unsigned k;
-	int i;
-
-	/* a handset that deregistered itself: erase it the same way */
-	for (k = 0; k <= SIDE_MAX; k++) {
-		struct dect_link *pl = k < SIDE_MAX
-			? (s->side[k].bl->active ? &s->side[k].bl->link : NULL)
-			: (s->base.main_link.active ? &s->base.main_link.link : NULL);
-
-		if (!pl || !pl->mm.term_by_pt)
-			continue;
-		pl->mm.term_by_pt = 0;
-		i = pl->mm.adopted >= 0 ? pl->mm.adopted
-		    : (pl == &s->base.main_link.link ? (int)s->base.cur : -1);
-		if (i >= 0 && (unsigned)i < s->base.n_hs && s->base.loaded[i])
-			dereg_erase(s, i, "the handset deregistered itself "
-				    "(accepted)");
-	}
 	if (want_deregister) {
 		want_deregister = 0;
 		dereg_start(s, now);
 	}
-	if (s->dereg.st == DEREG_IDLE && s->dereg.nq) {
-		unsigned slot = s->dereg.queue[0];
-
-		s->dereg.nq--;
-		memmove(s->dereg.queue, s->dereg.queue + 1,
-			s->dereg.nq * sizeof(s->dereg.queue[0]));
-		dereg_begin(s, slot, now, "the queue");
-	}
-	if (s->dereg.st == DEREG_IDLE)
-		return;
-	i = s->dereg.target;
-	l = link_known_hs(s, i);
-	if (s->dereg.st == DEREG_PAGING) {
-		if (l && dect_mm_terminate(&l->mm) == 0) {
-			s->dereg.st = DEREG_REQUESTED;
-			printf("dereg: DECT %u came up -- "
-			       "ACCESS-RIGHTS-TERMINATE-REQUEST\n",
-			       hs_slot(s, (unsigned)i));
-			return;
-		}
-		if (now < s->dereg.page_at)
-			return;
-		if (s->dereg.pages >= DEREG_PAGES) {
-			s->dereg.st = DEREG_IDLE;
-			dereg_erase(s, i, "not reachable (paged 10 times): "
-				    "deleted WITHOUT its confirmation");
-			return;
-		}
-		{
-			/* stock's page for this: C-plane only, the TPUI */
-			dect_base_page(&s->base, 0x08, s->dereg.tpui);
-		}
-		s->dereg.pages++;
-		s->dereg.page_at = now + DEREG_PAGE_MS;
-		return;
-	}
-	/* REQUESTED */
-	if (!l) {
-		s->dereg.st = DEREG_IDLE;
-		dereg_erase(s, i, "its link went down before it answered: "
-			    "deleted WITHOUT its confirmation");
-		return;
-	}
-	switch (l->mm.term_state) {
-	case DECT_MM_TERM_ACCEPTED:
-		s->dereg.st = DEREG_IDLE;
-		dereg_erase(s, i, "the handset confirmed (TERMINATE-ACCEPT)");
-		break;
-	case DECT_MM_TERM_REJECTED:
-		s->dereg.st = DEREG_IDLE;
-		dereg_erase(s, i, "the handset REFUSED (TERMINATE-REJECT): "
-			    "deleted from the base anyway");
-		break;
-	case DECT_MM_TERM_FAILED:
-		s->dereg.st = DEREG_IDLE;
-		dereg_erase(s, i, "no answer to the request, sent twice "
-			    "(<MM_access.2>): deleted WITHOUT its "
-			    "confirmation");
-		break;
-	default:
-		break;
-	}
+	dect_base_dereg_tick(&s->base, now);
 }
 
 #define TIME_PAGES	5u		/* 3 s apart, as a ring's */
@@ -6259,7 +6100,7 @@ static int time_base_busy(struct stubd *s)
 {
 	unsigned k;
 
-	if (s->dereg.st != DEREG_IDLE || s->base.ic.st != IC_IDLE ||
+	if (s->base.dereg.st != DEREG_IDLE || s->base.ic.st != IC_IDLE ||
 	    (s->base.ring.state != RING_IDLE && s->base.ring.state != RING_DONE))
 		return 1;
 	if (s->base.main_link.active && dect_cc_busy(&s->base.main_link.link.cc))

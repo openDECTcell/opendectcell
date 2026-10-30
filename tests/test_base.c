@@ -718,5 +718,36 @@ int main(void)
 		dect_base_missed_due(&b, 1, 1, 0);
 		CHECK_EQ(b.note[1].mc_due, 0);
 	}
+
+	/* deregistration (S4b) */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.hs[0].slot = 1;
+		b.hs[1].slot = 2;
+		b.loaded[0] = b.loaded[1] = 1;
+		b.main_link.link.mm.adopted = -1;
+		n_sent = 0;
+		dect_base_dereg_begin(&b, 5, 0, "test");	/* nobody there */
+		CHECK_EQ(b.dereg.st, DECT_BASE_DEREG_IDLE);
+		dect_base_dereg_begin(&b, 2, 0, "test");	/* no link: page */
+		CHECK_EQ(b.dereg.st, DECT_BASE_DEREG_PAGING);
+		dect_base_dereg_begin(&b, 1, 0, "test");	/* waits */
+		CHECK_EQ(b.dereg.nq, 1u);
+		dect_base_dereg_tick(&b, 0);
+		CHECK_EQ(n_sent, 1u);
+		CHECK_EQ(sent[0].prim, 0x0300);
+		CHECK_EQ(sent[0].param[0], 0x08);
+		b.dereg.pages = DECT_BASE_DEREG_PAGES;	/* unreachable */
+		dect_base_dereg_tick(&b, DECT_BASE_DEREG_PAGE_MS);
+		CHECK_EQ(b.loaded[1], 0);
+		CHECK_EQ(b.absent[1], 1);
+		CHECK_EQ(sent[1].prim, 0x0247);
+		CHECK_EQ(sent[2].prim, 0x020A);
+		dect_base_dereg_tick(&b, DECT_BASE_DEREG_PAGE_MS);
+		CHECK_EQ(b.dereg.nq, 0u);		/* the queue's turn */
+		CHECK_EQ(b.dereg.target, 0);
+	}
 	return CHECK_DONE();
 }

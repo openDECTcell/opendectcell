@@ -100,6 +100,13 @@ struct dect_base_ops {
 	 * count on (S3q): the host's lanes. NULL: as many as needed.
 	 */
 	int  (*lanes)(void *ctx, int p);
+	/*
+	 * Record i is deregistered (S4b): the host moves its store aside and
+	 * tells its clients, before the chip's slot is cleared.
+	 */
+	void (*forget)(void *ctx, unsigned i, const char *why);
+	/* The records in the chip changed: write the locked-in mask (0x017C). */
+	void (*mask)(void *ctx);
 };
 
 /*
@@ -315,6 +322,32 @@ struct dect_base_notice {
 	uint8_t  mc_due, mc_new;
 };
 
+/*
+ * Stage S4b: deregistering a handset (maintainer, 2026-10-28; stock's
+ * order from [CR A-0128]): ACCESS-RIGHTS-TERMINATE-REQUEST on its link,
+ * paging it first if it has none, then the erasure -- also without an
+ * answer, so a lost or broken handset still goes. One at a time; slots
+ * asked for meanwhile wait in the queue.
+ */
+enum dect_base_dereg_state {
+	DECT_BASE_DEREG_IDLE,
+	DECT_BASE_DEREG_PAGING,
+	DECT_BASE_DEREG_REQUESTED,
+};
+
+#define DECT_BASE_DEREG_PAGES	10u	/* 3 s apart: 30 s to reach it */
+#define DECT_BASE_DEREG_PAGE_MS	3000u
+
+struct dect_base_dereg {
+	enum dect_base_dereg_state st;
+	int      target;	/* the record */
+	uint8_t  tpui[3];
+	unsigned pages;
+	uint64_t page_at;
+	unsigned queue[DECT_MM_MAX_SLOT];	/* slots asked meanwhile */
+	unsigned nq;
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
@@ -343,6 +376,7 @@ struct dect_base {
 	/* the caller's identity for the next FP-originated SETUP (S3m) */
 	struct dect_clip clip;
 	struct dect_base_ic ic;
+	struct dect_base_dereg dereg;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	/* record i holds a subscription (the host's store had one) */
 	int      loaded[DECT_BASE_HS_MAX];
@@ -854,6 +888,20 @@ void dect_base_missed_due(struct dect_base *b, unsigned i, uint8_t lines,
 void dect_base_missed_changed_tick(struct dect_base *b);
 /* The Internal Names List changed: every handset that is up hears it. */
 void dect_base_names_notify(struct dect_base *b);
+
+/*
+ * Deregistration (S4b). Erase record i from the base, as stock does after
+ * the handset's ACCEPT [CR A-0128]: the host forgets it (forget()), the
+ * slot's 0x0247 entry cleared, its 0x020A record overwritten with zeros,
+ * then 0x017C without its bit (mask(); [CR A-0129]: stock rewrites it on
+ * every deregistration). Then the lists lose the entry and say so.
+ */
+void dect_base_dereg_erase(struct dect_base *b, int i, const char *why);
+/* Deregister the handset in slot `slot`, asked by `who`. */
+void dect_base_dereg_begin(struct dect_base *b, unsigned slot, uint64_t now,
+			   const char *who);
+/* The deregistration's progress, and handsets that deregistered themselves. */
+void dect_base_dereg_tick(struct dect_base *b, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

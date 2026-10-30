@@ -2743,3 +2743,181 @@ void dect_base_names_notify(struct dect_base *b)
 	}
 }
 
+
+void dect_base_dereg_erase(struct dect_base *b, int i, const char *why)
+{
+	unsigned slot = dect_base_slot(b, (unsigned)i), k;
+	uint8_t p[1 + DECT_MM_UAK_LEN + 1];
+
+	dect_base_log(b, "dereg: DECT %u: %s", slot, why);
+	if (b->ops && b->ops->forget)
+		b->ops->forget(b->ctx, (unsigned)i, why);
+	if (slot >= 1u && slot <= DECT_MM_MAX_SLOT) {
+		memset(p, 0, sizeof(p));
+		p[0] = (uint8_t)slot;
+		chip_mail(b, 0x0247u, p, 3);		/* slot, 00, 00 */
+		chip_mail(b, 0x020Au, p, sizeof(p));	/* slot, 17 zeros */
+		dect_base_log(b, "dereg: chip slot %u cleared (0x0247, 0x020A "
+			      "zeros)", slot);
+	}
+	b->loaded[i] = 0;
+	b->hs[i].uak_valid = 0;
+	b->absent[i] = 1;		/* free for a new enrolment */
+	b->name[i][0] = '\0';
+	b->cap[i].known = 0;
+	memset(b->note[i].mwi, 0, sizeof(b->note[i].mwi));
+	b->note[i].mwi_known = b->note[i].mwi_due = 0;
+	b->page_want &= ~(1u << i);
+	if ((unsigned)i == b->cur) {
+		b->rec.uak_valid = 0;
+		b->rec.port_id_len = 0;
+		b->rec.cc_port_id_len = 0;
+		b->rec.cc_fixed_id_len = 0;
+	}
+	if (b->main_link.active)
+		(void)dect_iwu_remove_handset(&b->main_link.link.cc.iwu,
+					      (uint8_t)slot);
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active)
+			(void)dect_iwu_remove_handset(&b->side[k].link.cc.iwu,
+						      (uint8_t)slot);
+	if (b->ops && b->ops->mask)
+		b->ops->mask(b->ctx);		/* the mask without it */
+	dect_base_names_notify(b);		/* §7.4.10.2.2: one removed */
+}
+
+void dect_base_dereg_begin(struct dect_base *b, unsigned slot, uint64_t now,
+			   const char *who)
+{
+	struct dect_base_dereg *d = &b->dereg;
+	unsigned i;
+	struct dect_link *l;
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
+	for (i = 0; i < b->n_hs; i++)
+		if (b->loaded[i] && dect_base_slot(b, i) == slot)
+			break;
+	if (!slot || i == b->n_hs) {
+		dect_base_log(b, "dereg: %s, but no handset we hold is in slot "
+			      "%u", who, slot);
+		return;
+	}
+	dect_base_log(b, "dereg: DECT %u, asked by %s", slot, who);
+	if (d->st != DECT_BASE_DEREG_IDLE) {
+		unsigned k;
+
+		for (k = 0; k < d->nq; k++)
+			if (d->queue[k] == slot)
+				break;
+		if (k == d->nq && d->nq < DECT_MM_MAX_SLOT &&
+		    (int)i != d->target)
+			d->queue[d->nq++] = slot;
+		dect_base_log(b, "dereg: one at a time -- DECT %u waits its "
+			      "turn (%u waiting)", slot, d->nq);
+		return;
+	}
+	d->target = (int)i;
+	d->pages = 0;
+	d->page_at = now;
+	l = dect_base_link_known(b, (int)i);
+	if (l && dect_mm_terminate(&l->mm) == 0) {
+		d->st = DECT_BASE_DEREG_REQUESTED;
+		dect_base_log(b, "dereg: DECT %u: ACCESS-RIGHTS-TERMINATE-"
+			      "REQUEST on its link", slot);
+		return;
+	}
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.sub_slot = (uint8_t)slot;
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tpui(&mm, d->tpui);
+	d->st = DECT_BASE_DEREG_PAGING;
+	dect_base_log(b, "dereg: DECT %u has no link -- paging it", slot);
+}
+
+void dect_base_dereg_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_dereg *d = &b->dereg;
+	struct dect_link *l;
+	unsigned k;
+	int i;
+
+	/* a handset that deregistered itself: erase it the same way */
+	for (k = 0; k <= DECT_BASE_SIDES; k++) {
+		struct dect_link *pl = k < DECT_BASE_SIDES
+			? (b->side[k].active ? &b->side[k].link : NULL)
+			: (b->main_link.active ? &b->main_link.link : NULL);
+
+		if (!pl || !pl->mm.term_by_pt)
+			continue;
+		pl->mm.term_by_pt = 0;
+		i = pl->mm.adopted >= 0 ? pl->mm.adopted
+		    : (pl == &b->main_link.link ? (int)b->cur : -1);
+		if (i >= 0 && (unsigned)i < b->n_hs && b->loaded[i])
+			dect_base_dereg_erase(b, i, "the handset deregistered "
+					      "itself (accepted)");
+	}
+	if (d->st == DECT_BASE_DEREG_IDLE && d->nq) {
+		unsigned slot = d->queue[0];
+
+		d->nq--;
+		memmove(d->queue, d->queue + 1, d->nq * sizeof(d->queue[0]));
+		dect_base_dereg_begin(b, slot, now, "the queue");
+	}
+	if (d->st == DECT_BASE_DEREG_IDLE)
+		return;
+	i = d->target;
+	l = dect_base_link_known(b, i);
+	if (d->st == DECT_BASE_DEREG_PAGING) {
+		if (l && dect_mm_terminate(&l->mm) == 0) {
+			d->st = DECT_BASE_DEREG_REQUESTED;
+			dect_base_log(b, "dereg: DECT %u came up -- "
+				      "ACCESS-RIGHTS-TERMINATE-REQUEST",
+				      dect_base_slot(b, (unsigned)i));
+			return;
+		}
+		if (now < d->page_at)
+			return;
+		if (d->pages >= DECT_BASE_DEREG_PAGES) {
+			d->st = DECT_BASE_DEREG_IDLE;
+			dect_base_dereg_erase(b, i, "not reachable (paged 10 "
+					      "times): deleted WITHOUT its "
+					      "confirmation");
+			return;
+		}
+		/* stock's page for this: C-plane only, the TPUI */
+		dect_base_page(b, 0x08, d->tpui);
+		d->pages++;
+		d->page_at = now + DECT_BASE_DEREG_PAGE_MS;
+		return;
+	}
+	/* REQUESTED */
+	if (!l) {
+		d->st = DECT_BASE_DEREG_IDLE;
+		dect_base_dereg_erase(b, i, "its link went down before it "
+				      "answered: deleted WITHOUT its "
+				      "confirmation");
+		return;
+	}
+	switch (l->mm.term_state) {
+	case DECT_MM_TERM_ACCEPTED:
+		d->st = DECT_BASE_DEREG_IDLE;
+		dect_base_dereg_erase(b, i, "the handset confirmed "
+				      "(TERMINATE-ACCEPT)");
+		break;
+	case DECT_MM_TERM_REJECTED:
+		d->st = DECT_BASE_DEREG_IDLE;
+		dect_base_dereg_erase(b, i, "the handset REFUSED "
+				      "(TERMINATE-REJECT): deleted from the "
+				      "base anyway");
+		break;
+	case DECT_MM_TERM_FAILED:
+		d->st = DECT_BASE_DEREG_IDLE;
+		dect_base_dereg_erase(b, i, "no answer to the request, sent "
+				      "twice (<MM_access.2>): deleted WITHOUT "
+				      "its confirmation");
+		break;
+	default:
+		break;
+	}
+}
