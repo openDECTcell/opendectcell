@@ -97,10 +97,11 @@ from `a30793a`. Each box ends parked with the park verified.
 | U1. 7412: install, start, five minutes running | `control slot found` within 90 s; `sub: restored subscription` per store; `sub: cleared chip subscription slots other than`; `sub: locked-in handset mask 0x017c`; the same dect-stubd pid after five minutes; no `LOST`, no `***`, no `ASSERT`/`AddressSanitizer`; `/var/run/opendectcell/state.json` rewritten | no control slot: bring-up or transport (not moved; compare `f3a2f4f`); a new pid or a procd respawn: a crash in the moved stack, logread before it says where; no restore lines: the start-up restore (`sub_restored`, `dect_base_slot_*`) |
 | U1b. If a handset happens to locate meanwhile | `reg: connection up`, `LOCATE-ACCEPT` in its `nwk out` when -v, `reg: sent the date and time` (or the clock-not-right line) | `LOCATE-REJECT`/`IPUI unknown` for a handset that located on `f3a2f4f`: the identity gate or `dect_base_main_segment()`/`dect_base_serve()` |
 | U2. 7412: bench N4 (class B RFPI, radio parked), as written above | N4a and N4b's pass | N4a/N4b's fail columns |
-| U3. 7412: stop | `/var/run/opendectcell/parked` says `verified` | anything else: the park (not moved) |
+| U3. 7412: bench N6 and N7 (STATS, resume) against the Go controller in Docker on the desk PC, radio parked, as written above; then the cell credentials forgotten, role base again | N6's and N7's pass | N6's and N7's fail columns |
+| U4. 7412: stop | `/var/run/opendectcell/parked` says `verified` | anything else: the park (not moved) |
 
 U1 transmits for five minutes (the base beacons, as at any start); U2
-does not (cell role, radio parked). The 7520 runs follow once the
+and U3 do not (cell role, radio parked). The 7520 runs follow once the
 maintainer says what that box may be used for: it runs 0.3.0 with the
 radio on and may be the household's working VoIP base.
 
