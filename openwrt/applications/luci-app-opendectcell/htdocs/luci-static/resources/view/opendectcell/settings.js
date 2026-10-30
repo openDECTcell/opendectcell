@@ -47,6 +47,27 @@ var CARDDAV_STATE = '/var/run/opendectcell/carddav.json';
 var CARDDAV_BOOKS = '/var/run/opendectcell/carddav-books.json';
 var CARDDAV_REQ = '/tmp/opendectcell-carddav-discover.json';
 
+var callServices = rpc.declare({
+	object: 'service',
+	method: 'list',
+	params: [ 'name' ],
+	expect: { '': {} }
+});
+
+/*
+ * Save & Apply reloads the service through its procd trigger, which exists
+ * only while procd knows the service: after "/etc/init.d/opendectcell stop" it
+ * does not, and saving "Enable the DECT base" did nothing (2026-10-30, the
+ * maintainer). So after an apply, a service procd does not know is
+ * started; with the base disabled that only registers the trigger.
+ */
+function startIfStopped() {
+	return L.resolveDefault(callServices('opendectcell'), {}).then(function(res) {
+		if (!res || !res.opendectcell)
+			return fs.exec(INIT, [ 'start' ]);
+	});
+}
+
 /*
  * The address books of the CardDAV account: "Fetch address books" asks the
  * server (carddav.uc discover; the form's URL and credentials go over in a
@@ -905,6 +926,11 @@ return view.extend({
 
 	render: function(data) {
 		var st = data[0], profiles = data[1], choices = data[2], keys = data[3], voip = data[4];
+
+		if (!this.applyHook) {
+			this.applyHook = true;
+			document.addEventListener('uci-applied', startIfStopped);
+		}
 		var board = data[5], cellInstalled = !!data[7];
 
 		if (uci.get('opendectcell', 'main', 'role') == 'cell')

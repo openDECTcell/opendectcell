@@ -33,6 +33,7 @@
 		"write": {
 			"file": {
 				"/etc/init.d/opendectcell forget *": [ "exec" ],
+				"/etc/init.d/opendectcell start": [ "exec" ],
 				"/usr/sbin/dect-stubd --ctl *": [ "exec" ],
 				"/usr/sbin/dect-stubd --profile-keys": [ "exec" ],
 				"/etc/opendectcell-sub.*.profile": [ "write" ],
