@@ -305,6 +305,26 @@ int main(void)
 		b.ops = NULL;
 	}
 
+	/* the audio binds (S3j) */
+	b.ops = &ops;
+	n_sent = 0;
+	dect_base_audio_param(&b, 1, 2, 0x2B);
+	dect_base_audio_assign(&b, 1, 0x41, 0x0204, 0x00, 0x00);
+	dect_base_audio_path(&b, 1);
+	dect_base_audio_release(&b, 1);
+	CHECK_EQ(n_sent, 4u);
+	CHECK_EQ(sent[0].prim, 0x0251u);
+	CHECK_EQ(sent[0].param[2], 0x2B);
+	CHECK_EQ(sent[1].prim, 0x0230u);
+	CHECK_EQ(sent[1].param_len, 6u);
+	CHECK_EQ(sent[1].param[2], 0x04);	/* mask, little-endian */
+	CHECK_EQ(sent[1].param[3], 0x02);
+	CHECK_EQ(sent[2].prim, 0x022Du);
+	CHECK_EQ(sent[2].param[1], 0x00);
+	CHECK_EQ(sent[3].prim, 0x0233u);
+	CHECK_EQ(sent[3].param[1], 0x01);
+	b.ops = NULL;
+
 	/* the registration completes: key, gate, install, save, once */
 	{
 		struct dect_mm *mm = &b.main_link.link.mm;

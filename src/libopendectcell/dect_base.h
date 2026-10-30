@@ -425,6 +425,23 @@ void dect_base_tpui(const struct dect_base *b, unsigned i, uint8_t tpui[3]);
  */
 void dect_base_page(struct dect_base *b, uint8_t info, const uint8_t tpui[3]);
 
+/*
+ * The audio binds (S3j), the chip's mails for a call's speech path; the
+ * values (selector, gain, the TDM mask, mode and codec bytes) are the
+ * host's, which knows its bus [CR A-CodecModes-1].
+ */
+/* 0x0251 SET_CHANNEL_PARAM {link, selector, gain}. */
+void dect_base_audio_param(struct dect_base *b, uint8_t handle, uint8_t sel,
+			   uint8_t gain);
+/* 0x0230 ASSIGN_AUDIO_CHANNEL {link, flags, mask (LE), mode, codec}. */
+void dect_base_audio_assign(struct dect_base *b, uint8_t handle,
+			    uint8_t flags, uint16_t mask, uint8_t mode,
+			    uint8_t codec);
+/* 0x022D AUDIO_PATH_ON_OFF {link, 00}: connect. */
+void dect_base_audio_path(struct dect_base *b, uint8_t handle);
+/* 0x0233 {link, 01}: the audio channel released [CR A-0127]. */
+void dect_base_audio_release(struct dect_base *b, uint8_t handle);
+
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));

@@ -782,3 +782,7 @@ dect_base's `cfg`: how the base runs calls (narrowband, two calls,
 authfirst, locauth, overlap and the dial pause, alerting and binding,
 call status, nlr, SETUP retries, the signal, the basic service, ring
 timing, the periodic date and time) (S3i).
+
+**110.** dect_base.h, 2026-10-30: the audio binds:
+dect_base_audio_param() (0x0251), _audio_assign() (0x0230),
+_audio_path() (0x022D) and _audio_release() (0x0233) (S3j).

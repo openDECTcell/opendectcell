@@ -444,3 +444,36 @@ void dect_base_page(struct dect_base *b, uint8_t info, const uint8_t tpui[3])
 
 	chip_mail(b, 0x0300u, p, sizeof(p));
 }
+
+void dect_base_audio_param(struct dect_base *b, uint8_t handle, uint8_t sel,
+			   uint8_t gain)
+{
+	const uint8_t p[3] = { handle, sel, gain };
+
+	chip_mail(b, 0x0251u, p, sizeof(p));
+}
+
+void dect_base_audio_assign(struct dect_base *b, uint8_t handle,
+			    uint8_t flags, uint16_t mask, uint8_t mode,
+			    uint8_t codec)
+{
+	const uint8_t p[6] = {
+		handle, flags, (uint8_t)mask, (uint8_t)(mask >> 8), mode, codec,
+	};
+
+	chip_mail(b, 0x0230u, p, sizeof(p));
+}
+
+void dect_base_audio_path(struct dect_base *b, uint8_t handle)
+{
+	const uint8_t p[2] = { handle, 0x00u };	/* bit 7 clear: connect */
+
+	chip_mail(b, 0x022Du, p, sizeof(p));
+}
+
+void dect_base_audio_release(struct dect_base *b, uint8_t handle)
+{
+	const uint8_t p[2] = { handle, 0x01u };	/* [1] must be non-zero */
+
+	chip_mail(b, 0x0233u, p, sizeof(p));
+}

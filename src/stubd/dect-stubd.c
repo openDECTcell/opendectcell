@@ -1783,11 +1783,7 @@ static void chip_mem_read(struct stubd *s, uint32_t addr, uint16_t n)
 static void chip_assign(struct stubd *s, uint8_t handle, uint8_t flags,
 			uint16_t mask, uint8_t mode, uint8_t codec)
 {
-	const uint8_t p[6] = {
-		handle, flags, (uint8_t)mask, (uint8_t)(mask >> 8), mode, codec,
-	};
-
-	chip_mail(s, 0x0230u, p, sizeof(p));
+	dect_base_audio_assign(&s->base, handle, flags, mask, mode, codec);
 }
 
 /* A received lane word that carries bearer data rather than a fill. */
@@ -4066,14 +4062,13 @@ static void sub_audit_reply(struct stubd *s, uint32_t addr,
 static void send_audio_bind(struct stubd *s, uint8_t handle)
 {
 	const struct audio_cfg *a = &s->audio;
-	/* selector valid 1..6 [CR A-CodecModes-3]; the STUB stores gain << 8 */
-	const uint8_t p[3] = { handle, a->sel, a->gain };
 	/* a wideband call: stock's bind, flags 0x41 and codec byte 0 */
 	int wb = s->reg.call_wideband;
 	uint8_t flags = wb ? (uint8_t)(a->flags | 0x40u) : a->flags;
 	uint8_t codec = wb ? 0u : a->codec;
 
-	chip_mail(s, 0x0251u, p, sizeof(p));	/* SET_CHANNEL_PARAM */
+	/* selector valid 1..6 [CR A-CodecModes-3]; the STUB stores gain << 8 */
+	dect_base_audio_param(&s->base, handle, a->sel, a->gain);
 	chip_assign(s, handle, flags, a->mask, a->mode, codec);
 	printf("call: audio assign: 0x0251 (sel %u gain 0x%02x), "
 	       "0x0230 {%02x %04x %02x %02x} -- 0x022D waits for 0x0242\n",
@@ -4092,9 +4087,7 @@ static void send_audio_bind(struct stubd *s, uint8_t handle)
  */
 static void send_audio_disconnect(struct stubd *s, uint8_t handle)
 {
-	const uint8_t p[2] = { handle, 0x01u /* [3] must be non-zero */ };
-
-	chip_mail(s, 0x0233u, p, sizeof(p));
+	dect_base_audio_release(&s->base, handle);
 	printf("call: audio disconnected (0x0233 on handle %u)\n", handle);
 }
 
@@ -4115,7 +4108,6 @@ static void send_audio_disconnect(struct stubd *s, uint8_t handle)
 static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 {
 	const struct audio_cfg *a = &s->audio;
-	const uint8_t p[2] = { handle, 0x00u };	/* bit 7 clear: connect */
 
 	if (s->reg.audio_connected)
 		return;
@@ -4123,7 +4115,7 @@ static void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan)
 	s->reg.remode_handle = handle;
 	if (a->remode_ms)
 		s->reg.remode_at = mono_ms() + a->remode_ms;
-	chip_mail(s, 0x022Du, p, sizeof(p));	/* AUDIO_PATH_ON_OFF */
+	dect_base_audio_path(&s->base, handle);	/* AUDIO_PATH_ON_OFF */
 	printf("call: audio connect: 0x022D on channel %u\n", chan);
 }
 
@@ -6675,7 +6667,7 @@ static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
 {
 	struct xlane *x = &s->xl[i];
 	const struct audio_cfg *a = &s->audio;
-	uint8_t p[3], flags, codec;
+	uint8_t flags, codec;
 	uint16_t mask;
 
 	memset(x, 0, sizeof(*x));
@@ -6688,10 +6680,8 @@ static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
 	sl->lane = i;
 	mask = (uint16_t)(1u << x->channel);
 
-	p[0] = x->handle;
-	p[1] = x->channel;		/* selector */
-	p[2] = a->gain;
-	chip_mail(s, 0x0251u, p, sizeof(p));
+	dect_base_audio_param(&s->base, x->handle, x->channel /* selector */,
+			      a->gain);
 	flags = (uint8_t)((a->flags & 0xB0u) | (1u << (x->channel - 1u)) |
 			  (x->wideband ? 0x40u : 0u));
 	codec = x->wideband ? 0u : a->codec;
@@ -6704,13 +6694,10 @@ static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
 
 static void xlane_connect(struct stubd *s, struct xlane *x)
 {
-	uint8_t p[2] = { 0, 0x00u };
-
 	if (x->connected)
 		return;
 	x->connected = 1;
-	p[0] = x->handle;
-	chip_mail(s, 0x022Du, p, sizeof(p));	/* bit 7 clear: connect */
+	dect_base_audio_path(&s->base, x->handle);
 	printf("side: audio connect: 0x022D on handle %u (channel %u)\n",
 	       x->handle, x->channel);
 }

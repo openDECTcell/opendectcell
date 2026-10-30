@@ -270,3 +270,9 @@ the internal call can now move on `dect_base` alone, except for the CLIP
 and call information the bridge supplies per call, and the audio binds,
 which are chip-specific mails like the slot writers.
 
+**S3j.** The audio binds are library writers: 0x0251, 0x0230, 0x022D,
+0x0233, with the host passing its bus's values (selector, gain, the TDM
+mask, mode and codec bytes). In cell mode the controller sends exactly
+these through the tunnel. Every audio mail dect-stubd sends goes through
+them. Unit test; traces unchanged.
+
