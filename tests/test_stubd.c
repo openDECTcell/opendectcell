@@ -368,6 +368,7 @@ int stubd_test_run(struct stubd *s)
 	s->sess.state = DECT_SESS_UP;
 	s->rand_fd = open(DECT_RUN_DIR "/random", O_RDONLY);
 	g_start = stubd_test_ms;
+	s->base.start_ms = stubd_test_ms;
 	s->audio.ctl_path = DECT_RUN_DIR "/ctl.sock";
 	ctl_open(s);
 	{

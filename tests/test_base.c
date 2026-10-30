@@ -61,9 +61,19 @@ static void install(void *ctx)
 	installs++;
 }
 
+static unsigned pumps;
+
+static void pump(void *ctx, struct dect_base_link *bl)
+{
+	(void)ctx;
+	(void)bl;
+	pumps++;
+}
+
 static const struct dect_base_ops ops = { .save = save, .send = send,
 					  .random = rnd, .log = log_line,
-					  .install = install, .event = event };
+					  .install = install, .event = event,
+					  .pump = pump };
 
 int main(void)
 {
@@ -377,6 +387,104 @@ int main(void)
 		CHECK_EQ(b.main_link.persisted, 1);
 		CHECK_EQ(dect_base_main_registered(&b), 0);	/* once */
 		CHECK_EQ(installs, 1u);
+	}
+
+	/* the ring's sequencing (S3n) */
+	{
+		struct dect_base_ring *r = &b.ring;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.rec.slot = 1;
+		b.rec.cc_fixed_id_len = 5;
+		CHECK_EQ(dect_base_link_use(&b.main_link.link), 0);
+		n_sent = 0;
+		dect_base_ring_tick(&b, 1000);		/* nothing asked */
+		CHECK_EQ(n_sent, 0u);
+		r->now = 1;				/* a call-in */
+		dect_base_ring_tick(&b, 1000);
+		CHECK_EQ(r->state, DECT_BASE_RING_PAGING);
+		CHECK_EQ(r->pages, 1u);
+		CHECK_EQ(n_sent, 1u);
+		CHECK_EQ(sent[0].prim, 0x0300);
+		dect_base_ring_tick(&b, 1000 + DECT_BASE_PAGE_INTERVAL_MS - 1);
+		CHECK_EQ(n_sent, 1u);			/* not yet */
+		dect_base_ring_tick(&b, 1000 + DECT_BASE_PAGE_INTERVAL_MS);
+		CHECK_EQ(n_sent, 2u);
+		r->pages = DECT_BASE_PAGE_RETRIES;	/* unanswered, no link */
+		dect_base_ring_tick(&b, 100000);
+		CHECK_EQ(r->state, DECT_BASE_RING_DONE);
+		CHECK_EQ(n_sent, 2u);
+
+		/* a linked handset: released first, then paged */
+		memset(r, 0, sizeof(*r));
+		r->now = 1;
+		b.main_link.active = 1;
+		pumps = 0;
+		n_sent = 0;
+		dect_base_ring_tick(&b, 2000);
+		CHECK_EQ(r->state, DECT_BASE_RING_RELEASING);
+		CHECK_EQ(pumps, 1u);
+		CHECK_EQ(n_sent, 0u);
+		dect_base_ring_tick(&b, 2000 + DECT_BASE_RELEASE_WAIT_MS - 1);
+		CHECK_EQ(n_sent, 0u);			/* still waiting */
+		b.main_link.active = 0;			/* the chip: it is down */
+		dect_base_ring_tick(&b, 2001);
+		CHECK_EQ(r->state, DECT_BASE_RING_PAGING);
+		CHECK_EQ(n_sent, 1u);
+
+		/* a voice call on the main link: busy, nothing released */
+		memset(r, 0, sizeof(*r));
+		r->now = 1;
+		b.main_link.active = 1;
+		b.main_link.link.cc.state = DECT_CC_ST_ACTIVE;
+		CHECK_EQ(dect_base_link_use(&b.main_link.link), 2);
+		pumps = 0;
+		dect_base_ring_tick(&b, 3000);
+		CHECK_EQ(r->state, DECT_BASE_RING_DONE);
+		CHECK_EQ(pumps, 0u);
+		b.main_link.link.cc.state = DECT_CC_ST_NULL;
+
+		/* no identities to ring with */
+		memset(r, 0, sizeof(*r));
+		r->now = 1;
+		b.main_link.active = 0;
+		b.rec.cc_fixed_id_len = 0;
+		CHECK_EQ(dect_base_ring_fixed_len(&b), 0u);
+		dect_base_ring_tick(&b, 4000);
+		CHECK_EQ(r->state, DECT_BASE_RING_DONE);
+		b.rec.cc_fixed_id_len = 5;
+
+		/* ring= counts from the host's start */
+		memset(r, 0, sizeof(*r));
+		b.cfg.ring_ms = 5000;
+		b.start_ms = 1000;
+		n_sent = 0;
+		dect_base_ring_tick(&b, 5999);
+		CHECK_EQ(n_sent, 0u);
+		dect_base_ring_tick(&b, 6000);
+		CHECK_EQ(n_sent, 1u);
+		b.cfg.ring_ms = 0;
+
+		/* a queued SETUP lost to the handset's crossing call: again */
+		memset(r, 0, sizeof(*r));
+		r->now = 1;
+		r->state = DECT_BASE_RING_DONE;
+		r->watch = 1;
+		b.main_link.active = 1;
+		b.main_link.link.cc.stats.collisions = 1;
+		dect_base_ring_watch(&b);
+		CHECK_EQ(r->state, DECT_BASE_RING_IDLE);
+		CHECK_EQ(r->requeues, 1u);
+		CHECK_EQ(r->watch, 0);
+		r->state = DECT_BASE_RING_DONE;		/* ... and it alerts */
+		r->watch = 1;
+		r->alert0 = 0;
+		b.main_link.link.cc.stats.alerting = 1;
+		dect_base_ring_watch(&b);
+		CHECK_EQ(r->watch, 0);
+		CHECK_EQ(r->requeues, 1u);
 	}
 	return CHECK_DONE();
 }

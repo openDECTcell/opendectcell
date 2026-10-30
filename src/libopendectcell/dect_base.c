@@ -648,3 +648,302 @@ void dect_base_ring_setup(struct dect_base *b, uint64_t now, const char *why)
 		      "retry %u of %u in %u ms", b->ring.setup_tries, tries,
 		      DECT_BASE_SETUP_RETRY_MS);
 }
+
+static void pump(struct dect_base *b, struct dect_base_link *bl)
+{
+	if (b->ops && b->ops->pump)
+		b->ops->pump(b->ctx, bl);
+}
+
+/*
+ * EN 300 175-5 §14.2.3 pages only when no suitable link exists, and the
+ * release before paging that the chip needs ([CR A-0053]) cut whatever the
+ * link carried: a ring during a call ended the call (spec sweep F-2, LCE1).
+ */
+int dect_base_link_use(const struct dect_link *l)
+{
+	if (dect_cc_busy(&l->cc))
+		return (l->cc.peer_basic_service >> 4) == 0x2u && !l->cc.incoming
+		       ? 1 : 2;
+	if (l->mm.state == DECT_MM_WAIT_AUTH || l->mm.ident_pending ||
+	    l->mm.cipher_state == DECT_MM_CIPHER_WAIT_REPLY ||
+	    dect_mm_locate_pending(&l->mm, NULL, NULL))
+		return 1;
+	return 0;
+}
+
+/*
+ * The identities of the handset we ring, wherever they are: in the
+ * working copy while it is current, in the table while the link serves
+ * another one.
+ */
+size_t dect_base_ring_fixed_len(const struct dect_base *b)
+{
+	return b->cur == b->ring.hs || !b->n_hs ? b->rec.cc_fixed_id_len
+		: b->hs[b->ring.hs].cc_fixed_id_len;
+}
+
+void dect_base_ring_page(struct dect_base *b)
+{
+	uint8_t tpui[3], info;
+
+	/*
+	 * The page carries the low 16 bits of the TPUI we assigned, by MM's
+	 * rule for the target's slot: with a pool-assigned TPUI a page built
+	 * from the slot would address the wrong handset.
+	 */
+	dect_base_tpui(b, b->ring.hs, tpui);
+	info = dect_base_page_info(b, dect_base_ring_narrow(b));
+	dect_base_page(b, info, tpui);
+	dect_base_log(b, "ring: paged the handset, attempt %u of %u "
+		      "(0x0300 {%02x %02x %02x}, basic service %02x)%s",
+		      b->ring.pages, DECT_BASE_PAGE_RETRIES, info,
+		      tpui[1], tpui[2], b->cfg.basic_svc,
+		      /*
+		       * We page BY the TPUI we assigned. If the handset never
+		       * acknowledged the assignment (EN 300 175-5 §13.2.2) it
+		       * may not be listening for it, and the page is silent in
+		       * a way that looks exactly like a handset that will not
+		       * answer. Say so rather than letting it look normal.
+		       */
+		      dect_mm_tpui_confirmed(&b->main_link.link.mm)
+		      ? "" : " -- WARNING: TPUI never acknowledged");
+}
+
+/*
+ * The queued SETUP is gone without an ALERTING: if a {CC-SETUP} of the
+ * handset's crossed it (EN 300 175-5 §9.5.2.3), ring again from the start
+ * once the link is free. The A540 opens a list call right after a location
+ * registration with a list change notice, and does not wait P<CC.06> for
+ * our re-presentation, so the ring was lost (bench, 2026-10-28).
+ */
+void dect_base_ring_watch(struct dect_base *b)
+{
+	struct dect_base_ring *r = &b->ring;
+	const struct dect_base_link *bl = &b->main_link;
+	const struct dect_cc *cc = &bl->link.cc;
+
+	if (r->state != DECT_BASE_RING_DONE || !r->watch)
+		return;
+	if (bl->active && cc->stats.alerting != r->alert0) {
+		r->watch = 0;			/* it rings */
+		return;
+	}
+	if (bl->active && cc->incoming && dect_cc_busy(cc))
+		return;				/* still presented */
+	r->watch = 0;
+	if (!bl->active || cc->stats.collisions == r->coll0)
+		return;				/* refused or ended otherwise */
+	if (r->requeues >= DECT_BASE_REQUEUE_MAX) {
+		dect_base_log(b, "ring: lost to the handset's own call again -- "
+			      "giving up after %u new attempts", r->requeues);
+		return;
+	}
+	r->requeues++;
+	r->state = DECT_BASE_RING_IDLE;
+	r->setup_tries = 0;
+	r->pages = 0;
+	r->wait_since = 0;
+	dect_base_log(b, "ring: our call was lost to the handset's own call "
+		      "(collision, 9.5.2.3) -- ringing again when the link is "
+		      "free (%u of %u)", r->requeues, DECT_BASE_REQUEUE_MAX);
+}
+
+/*
+ * A link in use is not released under the handset (§14.2.3): a voice call
+ * on it -- the ring target's or, on the main link, another handset's --
+ * makes this ring "busy" (call waiting is not built yet,
+ * lines-and-calls.md step 5); a list session or an MM procedure is waited
+ * out, for at most DECT_BASE_IN_USE_WAIT_MS, then released as before.
+ * 0: go on; 1: wait or stop (the state says which).
+ */
+static int ring_in_use(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_ring *r = &b->ring;
+	int use = b->main_link.active ? dect_base_link_use(&b->main_link.link)
+				      : 0;
+	unsigned k;
+
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active && b->side[k].adopted == (int)r->hs &&
+		    dect_base_link_use(&b->side[k].link) == 2)
+			use = 2;		/* the target, elsewhere */
+	if (use == 2) {
+		dect_base_log(b, "ring: the handset (or the main link) is in a "
+			      "call -- busy, nothing released, ring abandoned");
+		r->state = DECT_BASE_RING_DONE;
+		return 1;
+	}
+	if (use == 1 && !r->wait_since) {
+		r->wait_since = now;
+		dect_base_log(b, "ring: the link carries a list session or an "
+			      "MM procedure -- waiting for it to end");
+	}
+	if (use == 1 && now - r->wait_since < DECT_BASE_IN_USE_WAIT_MS)
+		return 1;
+	if (use == 1)
+		dect_base_log(b, "ring: still in use after %u ms -- releasing "
+			      "it all the same", DECT_BASE_IN_USE_WAIT_MS);
+	else if (r->wait_since)
+		dect_base_log(b, "ring: the link is free after %llu ms",
+			      (unsigned long long)(now - r->wait_since));
+	r->wait_since = 0;
+	return 0;
+}
+
+void dect_base_ring_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_ring *r = &b->ring;
+	struct dect_base_link *bl = &b->main_link;
+
+	if (!b->cfg.ring_ms && !b->cfg.ring_attach_ms && !r->now)
+		return;
+	dect_base_ring_watch(b);
+	if (r->state == DECT_BASE_RING_DONE)
+		return;
+
+	/*
+	 * Waiting for the page response. Send the SETUP anyway once the
+	 * deadline passes, so a handset that never answers the page the way
+	 * we expect still gets a call rather than silence.
+	 */
+	if (r->state == DECT_BASE_RING_WAIT_PAGE_RESP) {
+		if (now >= r->resp_deadline)
+			dect_base_ring_setup(b, now, r->setup_tries
+					     ? "retrying after a refusal"
+					     : "no page response, deadline");
+		return;
+	}
+
+	if (r->state == DECT_BASE_RING_IDLE) {
+		if (r->now) {
+			/* a call-in from the bridge: now */
+		} else if (b->cfg.ring_attach_ms) {
+			/* Count from the handset's first contact, not ours. */
+			if (!b->first_contact_ms ||
+			    now - b->first_contact_ms < b->cfg.ring_attach_ms)
+				return;
+		} else if (now - b->start_ms < b->cfg.ring_ms) {
+			return;
+		}
+		if (!dect_base_ring_fixed_len(b)) {
+			dect_base_log(b, "ring: no call identities -- the handset "
+				      "is not registered here, or -s is off so "
+				      "nothing was stored");
+			r->state = DECT_BASE_RING_DONE;
+			return;
+		}
+		if (ring_in_use(b, now))
+			return;
+		/*
+		 * **Page for every call, even when the handset is attached.**
+		 *
+		 * This used to take a shortcut: a link is already up, so the
+		 * handset does not need paging and the SETUP can go straight
+		 * out. That shortcut was the whole of defect 2's intermittency.
+		 *
+		 * Measured 2026-10-23 over seven runs, a clean 7/7 split:
+		 *
+		 *   "page response received" -> the mode-2 re-assign takes ->
+		 *       audio works
+		 *   "a link was already up"  -> the enable word never reaches 1,
+		 *       however often mode 2 is asked for (eight times in vF415)
+		 *       -> no audio at all
+		 *
+		 * [CR A-0052] names the mechanism. The link that is already up
+		 * is the ATTACHMENT/signalling link, not a traffic bearer. Stock
+		 * sets up a call's traffic bearer by PAGING (0x0300, page type
+		 * 0x11), and the causal chain is: page -> the handset answers
+		 * over the air -> the chip allocates the traffic bearer -> MAC
+		 * bearer event 0x20 -> event 0x70 -> the configurator binds the
+		 * audio channel. Skip the page and nothing ever asks the chip for
+		 * a traffic bearer, so 0x20/0x70 never fire, the configurator
+		 * never runs, and the channel keeps its unconfigured default
+		 * (enable = 0, dest 6 = the silence source) no matter what we
+		 * assign afterwards.
+		 *
+		 * Paging an idle-locked attached handset is the ordinary DECT
+		 * mechanism and does not un-attach it, so this is light, not
+		 * heavy: no release, no re-attach. An earlier fix here waited up
+		 * to 20 s for the link to "clear" -- vF420/vF420b showed the C4
+		 * attaches a second after the base comes up and holds the link
+		 * indefinitely, so the wait never fired and could not have.
+		 */
+		/*
+		 * [CR A-0053]: stock never pages a linked handset. It releases
+		 * the link first and always pages from idle-locked, and the
+		 * release does NOT un-attach the handset -- attachment and
+		 * location registration are persistent and separate from the
+		 * CC/DLC link, so the handset returns to idle-locked and
+		 * pageable without re-registering. Release once per call.
+		 *
+		 * vF423 is the measurement behind this: with the link up, 16
+		 * pages went unanswered, where vF411 -- same build, same mails,
+		 * no link up -- got a page response on attempt 1.
+		 */
+		if (bl->active) {
+			dect_base_log(b, "ring: releasing the link before paging "
+				      "-- a linked handset does not answer "
+				      "pages, and the page is what makes the "
+				      "chip allocate a traffic bearer");
+			dect_lapc_disconnect(&bl->link.lapc);
+			pump(b, bl);
+			r->release_until = now + DECT_BASE_RELEASE_WAIT_MS;
+			r->state = DECT_BASE_RING_RELEASING;
+			return;
+		}
+		r->state = DECT_BASE_RING_PAGING;
+	}
+
+	/*
+	 * Wait for the link to actually go down before paging: active is
+	 * cleared on the chip's connection-down. Page anyway when the wait
+	 * expires: an unanswered page costs one ring attempt, and the
+	 * fallback below still rings the handset over the old link.
+	 */
+	if (r->state == DECT_BASE_RING_RELEASING) {
+		if (bl->active && now < r->release_until)
+			return;
+		dect_base_log(b, "ring: link %s -- paging now",
+			      bl->active ? "did not go down in time, paging "
+					   "anyway" : "released");
+		r->state = DECT_BASE_RING_PAGING;
+	}
+
+	if (r->pages && now - r->last < DECT_BASE_PAGE_INTERVAL_MS)
+		return;
+	if (r->pages >= DECT_BASE_PAGE_RETRIES) {
+		/*
+		 * An attached handset does not answer our page. Measured
+		 * 2026-10-23 (vF423): with the attachment link up, 16 pages
+		 * went unanswered, where vF411 -- same build, same mails, no
+		 * link up -- got a page response on attempt 1. So [CR A-0052]'s
+		 * "paging an idle-locked attached handset is routine" does not
+		 * hold for this handset in this state: the C4 ignores the page
+		 * while it holds a link.
+		 *
+		 * Fall back to the SETUP on the existing link so the handset
+		 * still rings. That call will have no audio -- the chip never
+		 * allocates a traffic bearer without a page response, so the
+		 * configurator never runs -- but a call that rings and is
+		 * silent beats a handset that does not ring at all, which is
+		 * what paging alone gives us here.
+		 */
+		if (bl->active) {
+			dect_base_log(b, "ring: %u pages unanswered -- the "
+				      "handset is attached and ignores them; "
+				      "falling back to the SETUP on the "
+				      "existing link; EXPECT NO AUDIO",
+				      r->pages);
+			dect_base_ring_setup(b, now, "a link was already up");
+			return;
+		}
+		dect_base_log(b, "ring: the handset did not answer %u pages, "
+			      "giving up", r->pages);
+		r->state = DECT_BASE_RING_DONE;
+		return;
+	}
+	r->pages++;
+	r->last = now;
+	dect_base_ring_page(b);
+}

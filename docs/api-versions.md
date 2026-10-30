@@ -800,3 +800,10 @@ _ring_narrow(), _page_info() (S3l).
 **113.** dect_base.h, 2026-10-30: struct dect_base's `clip` (the caller
 for the next FP-originated SETUP), dect_base_ring_setup() (the ring's
 {CC-SETUP}), DECT_BASE_SETUP_RETRY_MS and DECT_BASE_SETUP_TRIES (S3m).
+
+**114.** dect_base.h, 2026-10-30: dect_base_ops' `pump` (queued C-plane
+frames to the chip), struct dect_base's `start_ms` and
+`first_contact_ms`, the ring's timing constants (DECT_BASE_PAGE_*,
+_REQUEUE_MAX, _RELEASE_WAIT_MS, _IN_USE_WAIT_MS) and its sequencing:
+dect_base_link_use(), _ring_fixed_len(), _ring_page(), _ring_watch(),
+_ring_tick() (S3n).

@@ -69,6 +69,8 @@ struct dect_hs_rec {
 #define DECT_BASE_PAGE_WIDEBAND	0x20u
 #define DECT_BASE_SIDES		3u
 
+struct dect_base_link;
+
 /* What the host does for the stack (S1c, S2.1). Any may be NULL. */
 struct dect_base_ops {
 	/* Store record i, which changed (r is it, the working copy). */
@@ -86,6 +88,11 @@ struct dect_base_ops {
 	void (*install)(void *ctx);
 	/* A line for the bridge (docs/bridge-interface.md §2.1) (S3e). */
 	void (*event)(void *ctx, struct dect_ctl_out *o);
+	/*
+	 * C-plane frames are queued on bl's link: hand the chip what it can
+	 * take now (S3n).
+	 */
+	void (*pump)(void *ctx, struct dect_base_link *bl);
 };
 
 /*
@@ -259,6 +266,8 @@ struct dect_base {
 	unsigned slot0;
 	struct dect_base_call calls[DECT_BASE_CALLS];
 	struct dect_base_ring ring;
+	uint64_t start_ms;		/* the host's start, for ring= */
+	uint64_t first_contact_ms;	/* a handset's first C-plane segment, for ringattach= */
 	struct dect_base_cfg cfg;
 	/* the caller's identity for the next FP-originated SETUP (S3m) */
 	struct dect_clip clip;
@@ -502,6 +511,39 @@ uint8_t dect_base_page_info(const struct dect_base *b, int narrow);
 #define DECT_BASE_SETUP_RETRY_MS	2000u
 #define DECT_BASE_SETUP_TRIES		8u
 void dect_base_ring_setup(struct dect_base *b, uint64_t now, const char *why);
+
+/*
+ * The ring's sequencing (S3n). Release a link that is up first, page
+ * every DECT_BASE_PAGE_INTERVAL_MS until the handset brings up a link
+ * (DECT_BASE_PAGE_RETRIES at most), then the SETUP once it answered the
+ * page or DECT_BASE_PAGE_RESP_MS passed. A ring lost to a crossing
+ * {CC-SETUP} of the handset's starts again, DECT_BASE_REQUEUE_MAX times.
+ */
+/*
+ * Pages before giving up: enough to cover a handset still re-synchronising
+ * after the base was off the air (it shows "Synchronisiere"), which can
+ * take over half a minute. An unanswered page costs nothing.
+ */
+#define DECT_BASE_PAGE_RETRIES		20u	/* pages before giving up (60 s) */
+#define DECT_BASE_PAGE_INTERVAL_MS	3000u	/* <LCE.03> (EN 300 175-5 A.6) */
+#define DECT_BASE_PAGE_RESP_MS		1500u	/* wait this long for the page response */
+#define DECT_BASE_REQUEUE_MAX		2u	/* rings again after a lost collision */
+#define DECT_BASE_RELEASE_WAIT_MS	3000u	/* [CR A-0053] DLC arms a ~5 s guard */
+#define DECT_BASE_IN_USE_WAIT_MS	30000u	/* a list session or MM, at most */
+/*
+ * What a link is doing, for the ring: 0 nothing the NWK layer holds, 1 a
+ * list-access session or an MM procedure (wait for it), 2 a voice call
+ * (the handset is busy).
+ */
+int dect_base_link_use(const struct dect_link *l);
+/* The ring target's fixed identity length: 0, it has none to ring with. */
+size_t dect_base_ring_fixed_len(const struct dect_base *b);
+/* Page the handset rung, by its TPUI, with the call's page byte. */
+void dect_base_ring_page(struct dect_base *b);
+/* After the SETUP: ring again if a crossing call of the handset's took it. */
+void dect_base_ring_watch(struct dect_base *b);
+/* The ring, driven by time; the host calls it while the chip is up. */
+void dect_base_ring_tick(struct dect_base *b, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

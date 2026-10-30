@@ -295,3 +295,12 @@ is `dect_base.clip` (set by the bridge's `call-in` or the `clip=`
 options). One log line now names the record instead of the store's
 file. Traces unchanged. Left of the ring: `ring_tick()`'s sequencing.
 
+**S3n.** The ring's sequencing is the library's: `dect_base_ring_tick()`
+(the release before the page, the in-use wait, the pages, the
+page-response deadline, the fallback SETUP on a held link) and
+`dect_base_ring_watch()` (a ring lost to a crossing call starts again).
+The host gives the stack its start time and the handset's first contact
+(`start_ms`, `first_contact_ms`) for the test timings, and a new callback,
+`pump()`, sends the frames a link has queued (the LAPC release before the
+page). dect-stubd's `ring_tick()` only checks that the chip is up. Unit
+tests; traces unchanged.
