@@ -37,8 +37,8 @@ if [ -n "${TAG:-}" ] && [ "$TAG" != "v$version" ]; then
 fi
 
 # source packages to compile, and the binary packages they make
-sources="opendectcell luci-app-opendectcell"
-packages="opendectcell opendectcell-baresip opendectcell-cell opendectcell-carddav luci-app-opendectcell"
+sources="opendectcell luci-app-opendectcell ucode-mod-opendectcell-uclient"
+packages="opendectcell opendectcell-baresip opendectcell-cell opendectcell-carddav ucode-mod-opendectcell-uclient luci-app-opendectcell"
 case $target in
 ipq40xx/*) packages="$packages kmod-opendectcell-ipq40xx" ;;
 lantiq/*) packages="$packages kmod-opendectcell-lantiq" ;;

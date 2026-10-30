@@ -1,0 +1,61 @@
+From: ctandi <ctandi@users.noreply.github.com>
+Subject: uclient-http: send a request body of known length as it is
+
+A request with a body always went out with "Transfer-Encoding: chunked".
+Servers that cannot read a chunked request body (WSGI servers such as
+Radicale's own, PHP behind a FastCGI proxy) then see an empty one. When
+the caller sets a Content-Length header, send the body unframed instead.
+Without that header nothing changes.
+
+--- a/uclient-http.c
++++ b/uclient-http.c
+@@ -114,6 +114,7 @@
+ 
+ 	long read_chunked;
+ 	long content_length;
++	bool send_sized;
+ 
+ 	int usock_flags;
+ 
+@@ -706,10 +707,19 @@
+ 		url->port ? ":" : "",
+ 		url->port ? url->port : "");
+ 
+-	blobmsg_for_each_attr(cur, uh->headers.head, rem)
++	uh->send_sized = false;
++	blobmsg_for_each_attr(cur, uh->headers.head, rem) {
+ 		ustream_printf(uh->us, "%s: %s\r\n", blobmsg_name(cur), (char *) blobmsg_data(cur));
++		if (!strcasecmp(blobmsg_name(cur), "Content-Length"))
++			uh->send_sized = true;
++	}
+ 
+-	if (uclient_request_supports_body(uh->req_type))
++	/*
++	 * A body whose length the caller gave goes out as it is: some
++	 * servers (WSGI ones, PHP behind FastCGI proxies) cannot read a
++	 * chunked request body and see an empty one.
++	 */
++	if (uclient_request_supports_body(uh->req_type) && !uh->send_sized)
+ 		ustream_printf(uh->us, "Transfer-Encoding: chunked\r\n");
+ 
+ 	err = uclient_http_add_auth_header(uh);
+@@ -1156,7 +1166,9 @@
+ 	if (err)
+ 		return err;
+ 
+-	if (len > 0) {
++	if (len > 0 && uh->send_sized) {
++		ustream_write(uh->us, buf, len, false);
++	} else if (len > 0) {
+ 		ustream_printf(uh->us, "%X\r\n", len);
+ 		ustream_write(uh->us, buf, len, false);
+ 		ustream_printf(uh->us, "\r\n");
+@@ -1178,7 +1190,7 @@
+ 	if (err)
+ 		return err;
+ 
+-	if (uclient_request_supports_body(uh->req_type))
++	if (uclient_request_supports_body(uh->req_type) && !uh->send_sized)
+ 		ustream_printf(uh->us, "0\r\n\r\n");
+ 	uh->state = HTTP_STATE_REQUEST_DONE;
+ 

@@ -16,7 +16,8 @@ address book is https://HOST:PORT/addressbooks/test/, user "test", password
 with: vCard 3.0 and 4.0 (tel: URIs), a company without N, a fax number, a
 photo, folded lines. GET /_dump (with auth) returns every card as JSON, for
 a test to check what the box wrote. --default-ns answers with the DAV:
-namespace as default instead of a "d:" prefix, as some servers do.
+namespace as default instead of a "d:" prefix, as some servers do;
+--no-chunked reads a chunked request body as empty, as WSGI servers do.
 """
 import argparse
 import base64
@@ -88,7 +89,7 @@ def make_certs(d, host):
     return crt, key
 
 
-def handler(book, user, password, default_ns):
+def handler(book, user, password, default_ns, no_chunked=False):
     want = "Basic " + base64.b64encode(("%s:%s" % (user, password)).encode()).decode()
     p = "" if default_ns else "d:"
 
@@ -109,15 +110,17 @@ def handler(book, user, password, default_ns):
             self.wfile.write(body)
 
         def body(self):
-            # uclient sends every request body chunked; nginx and Apache
-            # take that, so this server does too
+            # The stock uclient sends every request body chunked; nginx and
+            # Apache take that, so this server does too -- unless
+            # --no-chunked, where it reads such a body as empty, as a WSGI
+            # server does
             if "chunked" in (self.headers.get("Transfer-Encoding") or ""):
                 out = b""
                 while True:
                     size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
                     if not size:
                         self.rfile.readline()
-                        return out
+                        return b"" if no_chunked else out
                     out += self.rfile.read(size)
                     self.rfile.readline()
             n = int(self.headers.get("Content-Length") or 0)
@@ -236,12 +239,14 @@ def main():
     ap.add_argument("--user", default="test")
     ap.add_argument("--password", default="test")
     ap.add_argument("--default-ns", action="store_true")
+    ap.add_argument("--no-chunked", action="store_true",
+                    help="read a chunked request body as empty, as WSGI servers do")
     a = ap.parse_args()
     crt, key = make_certs(a.dir, a.host)
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(crt, key)
     srv = http.server.ThreadingHTTPServer(
-        ("0.0.0.0", a.port), handler(Book(), a.user, a.password, a.default_ns))
+        ("0.0.0.0", a.port), handler(Book(), a.user, a.password, a.default_ns, a.no_chunked))
     srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
     print("carddav test server: https://%s:%d%s (CA %s)"
           % (a.host, a.port, BOOK, os.path.join(a.dir, "ca.pem")), flush=True)

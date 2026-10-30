@@ -81,7 +81,7 @@ define Package/opendectcell-carddav
   $(call Package/opendectcell/Default)
   TITLE:=opendectcell phonebook from a CardDAV address book
   DEPENDS:=+opendectcell +ucode +ucode-mod-fs +ucode-mod-uci +ucode-mod-uloop \
-	+ucode-mod-uclient +ca-bundle
+	+ucode-mod-opendectcell-uclient +ca-bundle
   PKGARCH:=all
 endef
 

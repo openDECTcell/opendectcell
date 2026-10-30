@@ -5,8 +5,9 @@ repositories are, so that each package can be submitted as it stands:
 
 | here | package(s) | upstream home |
 |---|---|---|
-| `net/opendectcell/` | `opendectcell`, `opendectcell-baresip`, `kmod-opendectcell-ipq40xx`, `kmod-opendectcell-lantiq` | [openwrt/telephony](https://github.com/openwrt/telephony) `net/opendectcell/` (next to baresip) |
+| `net/opendectcell/` | `opendectcell`, `opendectcell-baresip`, `opendectcell-cell`, `opendectcell-carddav`, `kmod-opendectcell-ipq40xx`, `kmod-opendectcell-lantiq` | [openwrt/telephony](https://github.com/openwrt/telephony) `net/opendectcell/` (next to baresip) |
 | `kernel/lantiq-ssc-pcm/` | `kmod-lantiq-ssc-pcm` (the 7412's PCM/TDM transport, from its own repository) | openwrt/telephony, or the core repository's `package/kernel/lantiq/` |
+| `utils/ucode-mod-opendectcell-uclient/` | `ucode-mod-opendectcell-uclient` (uclient's ucode module with sized request bodies, for `opendectcell-carddav`) | none of its own: the patch belongs in [uclient](https://git.openwrt.org/?p=project/uclient.git), and then this package goes |
 | `applications/luci-app-opendectcell/` | `luci-app-opendectcell` | [openwrt/luci](https://github.com/openwrt/luci) `applications/luci-app-opendectcell/` |
 
 Not part of any submission: `luci.mk` (hands `include ../../luci.mk` over

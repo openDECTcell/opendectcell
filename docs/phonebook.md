@@ -15,6 +15,7 @@ The maintainer asked for this on 2026-10-28 (ROADMAP M9b) and approved it on
 | the list | `src/libopendectcell/dect_iwu.c` | Contact List 05H: read, search (by name), query fields, edit, save (existing and new), delete entry, delete list; one store shared by every link, so an entry one handset edits is locked for the others |
 | dect-stubd | `-b FILE` | offers the list, re-reads FILE when it changes, appends the handsets' changes to FILE.changes; an incoming call without a SIP name gets the contact's name |
 | the sync | `openwrt/net/opendectcell/files/carddav.uc`, package `opendectcell-carddav` | ucode, about 20 KB; reads the address book into FILE and writes FILE.changes back |
+| its HTTP client | `openwrt/utils/ucode-mod-opendectcell-uclient` | uclient's ucode module with a patch for sized request bodies, 25 KB installed (see Limits) |
 | LuCI | Network > DECT, Phonebook tab | the settings and the last sync's result |
 
 File formats: the comment at the top of `dect_contacts.h`.
@@ -50,14 +51,21 @@ File formats: the comment at the top of `dect_contacts.h`.
 
 - **One address book, its URL configured.** No discovery from a server
   name.
-- **Chunked uploads.** OpenWrt's HTTP client (uclient) sends every request
-  body with `Transfer-Encoding: chunked` and has no other mode.
+- **Chunked uploads: fixed in our build.** OpenWrt's HTTP client (uclient)
+  sends every request body with `Transfer-Encoding: chunked`.
   - Servers behind nginx, or Apache with mod_php, accept that.
   - A server that cannot (Radicale's built-in server; PHP behind Apache's
-    mod_proxy_fcgi) sees an empty body. Reading still works there, but
-    handset changes fail.
-  - The fix would be a small uclient change that sends Content-Length when
-    the body is known. That is an upstream change; not done.
+    mod_proxy_fcgi) sees an empty body, so handset changes fail there.
+  - Since 2026-10-30 the sync uses `opendectcell_uclient` (package
+    `ucode-mod-opendectcell-uclient`, `openwrt/utils/`): uclient's ucode module,
+    built from the commit the base feed uses, with one patch. A body whose
+    length the caller gives in a Content-Length header goes out unframed.
+    The system's libuclient is left as it is.
+  - Without the package the sync falls back to the stock module, chunked.
+  - Tested on the 7412 against `carddav-testserver.py --no-chunked`, which
+    reads a chunked body as empty, as WSGI servers do: the stock module's
+    edit was refused, and with ours the edit, the delete and the new card
+    all arrived.
 - **No REPORT** (uclient has no such method): each sync first asks for the
   collection's CTag. When the CTag changed, it lists the ETags and fetches
   only the cards that changed.

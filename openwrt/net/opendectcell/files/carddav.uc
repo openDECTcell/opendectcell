@@ -24,7 +24,17 @@
 let fs = require('fs');
 let uci = require('uci');
 let uloop = require('uloop');
-let uclient = require('uclient');
+
+// opendectcell_uclient (package ucode-mod-opendectcell-uclient) sends a body with
+// its Content-Length; the system's uclient can only send it chunked,
+// which some servers read as empty (docs/phonebook.md, Limits).
+let uclient, sized = true;
+try {
+	uclient = require('opendectcell_uclient');
+} catch (e) {
+	uclient = require('uclient');
+	sized = false;
+}
 
 const DIR = '/var/run/opendectcell';
 const FILE = DIR + '/contacts';
@@ -126,9 +136,11 @@ function attempt(method, url, headers, body, challenge) {
 	    !cl.ssl_init({ verify: true, ca_files: [ cfg.ca ] }))
 		return res;
 	cl.set_timeout(20000);
-	let args = { headers: headers || {} };
+	let args = { headers: { ...(headers || {}) } };
 	if (body != null)
 		args.post_data = body;
+	if (sized && index([ 'PUT', 'PROPFIND', 'DELETE', 'POST' ], method) >= 0)
+		args.headers['Content-Length'] = '' + length(body != null ? body : '');
 	for (let tries = 0; tries < (challenge ? 2 : 1); tries++) {
 		res = { status: 0, headers: {}, body: '' };
 		if (!cl.connect() || !cl.request(method, args))
