@@ -745,3 +745,22 @@ heartbeats, a memory read down and its answer up, radio-off applied,
 link loss released after 7 s, parks read back. **The first thing worth
 doing on your side** is an interop run of `internal/cell` against a real
 `dect-cell` (or against `tools/cell-testpeer.py` the other way round).
+
+**Interop with the Go controller, 2026-10-30** (controller af4deec in
+Docker, `docker compose` with `OPENDECTCELL_CELLS_PUBLIC_ADDRESS`; the 7412 on
+the openDECTcell 424017b packages). Every pre-written outcome passed:
+
+- enrolment from an auto-approving token made in the web UI (the `%3A` in
+  `h=` is decoded);
+- mTLS and HELLO; the cell page shows "openDECTcell 0.3.1 · STUB 06.88", round
+  trip 1-2 ms;
+- the link stayed up with no reconnects;
+- 34 mails went up and the controller counted and dropped them (C3 not
+  built); none came down, so the radio stayed parked;
+- state disabled, then active, from the cell page: the cell parked on
+  disabled;
+- a controller restart: the cell reconnected by itself (4 attempts during
+  the restart);
+- teardown: credentials forgotten, park read back.
+
+Not covered: the mail tunnel (C3 on your side) and media.
