@@ -38,6 +38,10 @@ controller `docs/cell-protocol.md` §7.4, `docs/architecture.md` §8, `ROADMAP.m
    (-6 5.3-5.5). Class B is the "system identity" class for larger private
    systems (-6 5.2), but needs an EIC from ETSI, and a class B FP must give
    handsets an IPUI that is **not** type N (GAP table 51). We have neither.
+   **Update 2026-10-30:** the maintainer's goal is now a hosted controller for
+   dozens to hundreds of cells across makerspaces, which class A cannot carry.
+   The route past 7 is a project EIC (class B, §7.7): ETSI sells one for
+   EUR 200.
 2. **Class A caps one system at 7 cells.** The RPN is 3 bits; RPN 0 means
    "single cell, no intercell handover"; RPN 1-7 separate "a maximum of 7
    different cells" (-6 5.1). The controller's design target of 10 cells does
@@ -376,7 +380,7 @@ cells up to 7.
 
 | way | cost | verdict |
 |---|---|---|
-| class B with a project EIC | ETSI allocation; FPN+FPS unique per EIC (12 bits); assigned IPUI O for every handset (GAP table 51); IPUI-keyed records change; unproven on Gigasets | the conformant route; bench B4 first |
+| class B with a project EIC | EUR 200 and an ETSI contract (§7.7); FPN+FPS unique per EIC (12 bits); assigned IPUI O for every handset (GAP table 51); IPUI-keyed records change; unproven on Gigasets | **the chosen route, §7.7**; room Q10-Q11 and bench B4a first |
 | two class A systems (two donors) | a handset holds one active subscription at a time (GAP 14.1); no automatic roaming between the two | groups of ≤ 7 only |
 | a project EMC with blocks of adjacent FPNs, PARK{y < 36} covering a block | ETSI allocation plus a registry of blocks; each cell its own single-cell FP (RPN 0, no handover expected, -6 5.1), PARK{33} covers 8 FPNs, LAL 33 joins them into one LA | conformant **for unsynchronised cells**, which a shared PARI is not (§8.2). Worth considering if sync never comes |
 | reuse RPNs on far-apart cells | -6 allows "geographical separation" for classes B, C, D only; class A RPN is "used to separate a maximum of 7 different cells" (-6 5.1) | not for class A |
@@ -384,6 +388,93 @@ cells up to 7.
 
 Until one of the first three is decided, **the controller caps a system at 7
 cells.** The 10-cell target in `architecture.md` needs a note.
+
+### 7.7 Past 7 cells: a project EIC, for a hosted network
+
+The maintainer's goal (2026-10-30): a hosted controller for dozens to
+hundreds of cells across makerspaces in Germany. Class A cannot carry it:
+7 cells per system, no RPN reuse (-6 5.1). The standard's own pattern for
+this is class B. Its example for a "business, large multi-cell" system is an
+FP broadcasting RFPI B1 and handsets holding "PARK B1 + IPUI O" (-6 annex A,
+figure A.5).
+
+**What one EIC gives** (-6 5.2, 6.1.2):
+
+| level | field | count | ours to allocate |
+|---|---|---|---|
+| project | EIC, 16 bits | 1 | bought from ETSI |
+| system (a site, e.g. one makerspace) | FPN 8 + FPS 4 bits, "unique for each EIC" | 3 825 per EIC (ETSI's EIC form) | yes: "FPN is distributed together with the EIC by the manufacturer to authorized installers"; FPS by "the system operator or installer" |
+| cell | RPN, 8 bits | 256 per system, "larger than 256 through geographical separation" | yes, "by the operator or installer" |
+
+So a site gets one ARI B (= PARI = its handover and location domain) and up to
+256 cells. The project hands out FPNs: per site, or per operator, as the EIC
+holder.
+
+**One subscription for every site.** "A PP may be given access rights to all
+FPs with the same FPN, by use of a PARK{y}, where y includes only the FPN"
+(-6 5.2). With PLI 19 (ARC + EIC) one PARK covers every site under the
+project's EIC, and a handset subscribed once has access rights at every
+makerspace. Unlike class A with a borrowed ARI (§4), a short PLI is safe here:
+every ARI it covers is ours. Choosing between PARK{19} (every site) and
+PARK{27} (one FPN's 15 sub-numbers) is a policy decision for the controller.
+
+**Where the handset is.** Sites have different PARIs, so moving between them
+is a new location area and the handset sends `{LOCATE-REQUEST}` (-6 5.0,
+GAP 13.2). The hosted controller learns the site and pages only there.
+Inside a site, LAL picks the location areas as in §6.
+
+**Handset identity.** A class B FP "shall never send IPUI type N" (GAP
+table 51), so `{ACCESS-RIGHTS-ACCEPT}` assigns an IPUI O ("locally unique ...
+specified by the operator/owner", -6 6.2.3, "used in pair with PARK B"). With
+one controller for all sites, controller-wide uniqueness suffices. IPUI T
+(EIC + up to 11 BCD digits, "to support roaming between private DECT networks
+run by the same owner", -6 6.2.4) is the alternative if sites ever get
+separate controllers. The handset side is obliged: GAP lists `<PUT>` "All" in
+`{ACCESS-RIGHTS-ACCEPT}` (table 51), and a PT derives its default TPUI from
+the allocated IPUI (GAP 13.3). Chip limit to check: the chip's
+subscription table holds 5-byte identities [CR A-0007]. An IPUI O with a
+number of at most 36 bits fits; whether the chip reads the PUT nibble is
+room question Q11.
+
+**Handover** is unchanged by the class. It works inside one PARI (one site),
+and only with synchronised cells (§8). Sites never need handover between
+them.
+
+**Cost and conditions** (ETSI, 2026-10-30; check before applying):
+
+- EUR 200 per code, VAT excluded, administrative fees included; a signed web
+  form plus payment ("Algorithms and codes" page, etsi.org).
+- ETSI's EIC undertaking form:
+  - the applicant states it is "a manufacturer of DECT fixed parts";
+  - it uses the EIC by EN 300 175-6;
+  - it uses most of the EIC's 3 825 class B ARIs before asking for a second;
+  - it returns the EIC if unused within 5 years;
+  - it indemnifies ETSI for breaches;
+  - disputes go to the ICC in Paris, under French law.
+- So the applicant is a legal person that can sign as a fixed-part
+  manufacturer: the project's publisher, an association, or the hosting
+  operator. That is the maintainer's decision, and an outward-facing one.
+- An EMC (also EUR 200, class A, 2^17 FPNs) does not help here: every class A
+  system still stops at 7 cells.
+
+**Gigaset** sells the N870 with 60 base stations per DECT manager and up to
+240 per system (Gigaset's N870 manual and datasheet), far past class A's 7.
+Which ARI class it uses was not found.
+
+**What stands between us and a class B system**, in order:
+
+1. The room: does the chip accept a class B RFPI (8-bit RPN, FMID), and an
+   IPUI O in its subscription table (Q10, Q11)?
+2. Bench B4a, possible today with class A: give a handset an assigned IPUI O
+   in `{ACCESS-RIGHTS-ACCEPT}` (class A may send any type, GAP table 51) and
+   check that the A540, C430A and AS690H accept, store and use it (locate,
+   page by the derived TPUI, a call).
+3. The EIC. Before it arrives, nothing goes on the air with a class B RFPI:
+   any EIC we picked would belong to someone else.
+4. Bench B4b with the EIC: class B RFPI, PARK{19}, IPUI O; the same handsets.
+5. Controller: `system_identity` becomes {class, EIC, FPN+FPS, PLI, LAL}, and
+   `cell.rpn` becomes 0-255. The cell is told its RFPI (§7.4); dect-stubd's
+   MM sends the assigned IPUI and the class B PARK.
 
 ---
 
@@ -513,13 +604,18 @@ route as the conformant shape of an unsynchronised system.
 4. Ask the room Q1-Q4 before any multi-cell bench run.
 5. Bench, two cells (lab 7520 and the 7412), after the room's answers: B1-B3.
 6. Fetch EN 300 175-2 and -7 into `docs/specs/` before any sync design.
-7. Decide later, with the maintainer: apply for an EIC or EMC (§7.6).
+7. ~~Decide later, with the maintainer: apply for an EIC or EMC (§7.6).~~
+   Since 2026-10-30, an EIC (§7.7) is the route for systems past 7 cells.
+   Applying for it is the maintainer's decision. Room Q10-Q11 and bench B4a
+   come first.
 
 ---
 
 ## 10. Open questions
 
 ### 10.1 For the clean room (chip interface facts)
+
+Q1, Q9, Q10 and Q11 were posted as Q-0070 on 2026-10-30.
 
 - **Q1 RFPI.** Is the RFPI only the STUB patch TLV tag 1 at upload, or can a
   mail set it (and the RPN) at runtime? Does the chip broadcast tag 1
@@ -553,6 +649,16 @@ route as the conformant shape of an unsynchronised system.
 - **Q9 Reload cost.** How long from STUB reload to beacon, and does a park
   keep the patched RFPI? (Changing a cell's RPN costs one reload today.)
 
+- **Q10 Class B RFPI.** Does the STUB accept a tag 1 RFPI whose ARC is B
+  (001), and broadcast it verbatim? Does it take the RPN as the last 3 bits
+  (class A) or by class (8 bits for B), anywhere: FMID, handover, a check?
+  Does anything reject or rewrite a non-class-A RFPI?
+- **Q11 Assigned IPUI in the slots.** The subscription table holds 5-byte
+  identities [CR A-0007]. Does the chip read their PUT nibble (type N versus
+  O)? Does it derive a paging identity (TPUI) from a slot's identity, and
+  how? Does it compare a handset's identity in NWK messages with the slots,
+  or is that only the host's?
+
 ### 10.2 For the bench (after the room; write the outcomes first)
 
 - **B1** two unsynchronised cells, same PARI, RPN 1 and 2, LAL 36: the A540
@@ -565,8 +671,12 @@ route as the conformant shape of an unsynchronised system.
   drops; record whether the handset tries a handover (chip counters, a second
   link from the same IPUI on cell 2) and whether that depends on Q2's
   settings.
-- **B4** (only if class B is pursued) a Gigaset given an assigned IPUI O and a
-  class B PARK: does it accept, store and use them?
+- **B4a** (class A, possible now) the base assigns an IPUI O (a number of at
+  most 36 bits) in `{ACCESS-RIGHTS-ACCEPT}`. Pass: the A540, C430A and
+  AS690H store it; after a restart they locate with it; a page by its
+  derived TPUI rings them; a call works. Falsified if any of them rejects the
+  accept, re-registers, or answers only to its IPEI.
+- **B4b** (needs the EIC) the same with a class B RFPI and PARK{19}.
 - **B5** a short radio loss during a call (park one cell for 2 s): does the
   handset keep the call and re-establish (-5 17.9 c)?
 

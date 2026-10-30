@@ -38,7 +38,7 @@ fi
 
 # source packages to compile, and the binary packages they make
 sources="opendectcell luci-app-opendectcell"
-packages="opendectcell opendectcell-baresip luci-app-opendectcell"
+packages="opendectcell opendectcell-baresip opendectcell-cell luci-app-opendectcell"
 case $target in
 ipq40xx/*) packages="$packages kmod-opendectcell-ipq40xx" ;;
 lantiq/*) packages="$packages kmod-opendectcell-lantiq" ;;
