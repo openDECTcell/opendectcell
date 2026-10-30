@@ -107,6 +107,8 @@ struct dect_base {
 	void *ctx;
 	struct dect_base_chip chip;
 	struct dect_base_link main_link;	/* calls, enrolment */
+	/* subslot=: record 0's chip slot instead of its own, 0 = none */
+	unsigned slot0;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	unsigned n_hs;			/* records in use, hs[0] first */
 	unsigned cur;			/* the current one */
@@ -168,6 +170,32 @@ void dect_base_slot_mask(struct dect_base *b, uint8_t mask);
 void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 			 uint8_t handle, const struct dect_mm_cfg *cfg,
 			 unsigned hold_mask);
+
+/*
+ * Record i's chip slot: its own, or slot0 for record 0; the current one
+ * falls back to DECT_MM_REG_SLOT when its slot is not 1..6.
+ */
+unsigned dect_base_slot(const struct dect_base *b, unsigned i);
+
+/*
+ * A side link: a connection while the main link is busy, for location
+ * registration, list access and a second call (S2.4). Its stack starts
+ * with cfg; every record in hold_mask (the current one included) is held
+ * in table order, so MM adopts whichever handset this is, without the
+ * current record changing.
+ */
+void dect_base_side_open(struct dect_base *b, struct dect_base_link *bl,
+			 uint8_t handle, const struct dect_mm_cfg *cfg,
+			 unsigned hold_mask);
+
+/*
+ * A C-plane segment (0x0203) on link bl: the challenges MM may need drawn
+ * from the host's random(), then dect_link_rx_segment() (its result, the
+ * indication in *ind).
+ */
+int dect_base_link_segment(struct dect_base *b, struct dect_base_link *bl,
+			   const struct dect_mail *m, uint64_t now,
+			   struct dect_link_ind *ind);
 
 /*
  * A C-plane segment (0x0203) on the main link: the challenges MM may need

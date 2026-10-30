@@ -189,6 +189,30 @@ int main(void)
 		CHECK_EQ(bl.link.mm.n_held, 2u);	/* hs[1], then hs[0] */
 	}
 
+	/* chip slots and a side link (S2.4) */
+	{
+		struct dect_base_link bl;
+		struct dect_mm_cfg cfg;
+
+		CHECK_EQ(dect_base_slot(&b, 1), 2u);
+		b.slot0 = 5;
+		CHECK_EQ(dect_base_slot(&b, 0), 5u);	/* current, record 0 */
+		b.rec.slot = 9;
+		b.slot0 = 0;
+		CHECK_EQ(dect_base_slot(&b, 0), DECT_MM_REG_SLOT); /* bad slot */
+		b.rec.slot = 1;
+		memset(&cfg, 0, sizeof(cfg));
+		memset(&bl, 0, sizeof(bl));
+		dect_base_side_open(&b, &bl, 5, &cfg, (1u << 0) | (1u << 2));
+		CHECK_EQ(bl.active, 1);
+		CHECK_EQ(bl.handle, 5);
+		CHECK_EQ(bl.link.mm.port_id_len, 0u);	/* nobody expected */
+		CHECK_EQ(bl.link.mm.n_held, 2u);
+		CHECK_EQ(bl.link.mm.held[0].tag, 0);	/* table order */
+		CHECK_EQ(bl.link.mm.held[1].tag, 2);
+		CHECK_EQ(bl.link.mm.held[1].slot, 3);
+	}
+
 	/* the registration completes: key, gate, install, save, once */
 	{
 		struct dect_mm *mm = &b.main_link.link.mm;

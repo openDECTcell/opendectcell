@@ -189,3 +189,17 @@ remaining main-link code is the arbitration on connection-up and the
 reactions to calls, lists and the clock, which move with S2.4, S3 and S4.
 **Bench after S2.3** (`docs/bench-later.md`, N2): register and relocate.
 
+**S2.4, 2026-10-30.** Side links: dect-stubd's `struct side_link` embeds a
+`struct dect_base_link`; `dect_base_side_open()` sets one up (every record
+the host names held in table order, nobody expected), and
+`dect_base_link_segment()` is the segment entry for any link. The chip
+slot rule (`subslot=` for record 0, the fallback slot) is
+`dect_base_slot()`. The side link's arbitration and its call handling stay
+with dect-stubd until S3. Traces unchanged, unit tests added.
+
+**S2 is done** (registration and locate, as far as they go without
+calls): the library now owns the handset records, the chip's slot writes,
+the links' set-up, their segment entry, adoption and the registration's
+completion. **Next is S3, calls**, which carries most of what remains in
+`reg_segment()` and the main link's `reg` state.
+

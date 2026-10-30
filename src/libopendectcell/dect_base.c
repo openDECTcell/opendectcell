@@ -189,13 +189,10 @@ int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
 			   int *switched)
 {
 	struct dect_base_link *bl = &b->main_link;
-	uint8_t rand_f[8], rs[16];
 	int r;
 
 	*switched = 0;
-	dect_base_random(b, rand_f, sizeof(rand_f));
-	dect_base_random(b, rs, sizeof(rs));
-	r = dect_link_rx_segment(&bl->link, m, now, rand_f, rs, ind);
+	r = dect_base_link_segment(b, bl, m, now, ind);
 	if (r >= 0 && bl->link.mm.adopted >= 0 &&
 	    (unsigned)bl->link.mm.adopted != b->cur)
 		*switched = dect_base_switch(b, (unsigned)bl->link.mm.adopted);
@@ -229,4 +226,49 @@ int dect_base_main_registered(struct dect_base *b)
 	dect_base_changed(b);
 	bl->persisted = 1;
 	return 1;
+}
+
+unsigned dect_base_slot(const struct dect_base *b, unsigned i)
+{
+	if (i == b->cur) {
+		unsigned v = b->slot0 && b->cur == 0 ? b->slot0 : b->rec.slot;
+
+		return v >= 1u && v <= DECT_MM_MAX_SLOT ? v : DECT_MM_REG_SLOT;
+	}
+	if (i == 0 && b->slot0)
+		return b->slot0;		/* subslot= is the target's */
+	return i < DECT_BASE_HS_MAX ? b->hs[i].slot : 0u;
+}
+
+void dect_base_side_open(struct dect_base *b, struct dect_base_link *bl,
+			 uint8_t handle, const struct dect_mm_cfg *cfg,
+			 unsigned hold_mask)
+{
+	unsigned i;
+
+	bl->active = 1;
+	bl->persisted = 0;
+	bl->enrol_routed = 0;
+	bl->enrol_switched = 0;
+	bl->handle = handle;
+	dect_link_init(&bl->link, handle, cfg);
+	for (i = 0; i < b->n_hs && i < DECT_BASE_HS_MAX; i++) {
+		const struct dect_hs_rec *r = i == b->cur ? &b->rec : &b->hs[i];
+
+		if (!r->port_id_len || !(hold_mask & (1u << i)))
+			continue;
+		(void)dect_mm_hold(&bl->link.mm, r->port_id, r->port_id_len,
+				   (uint8_t)dect_base_slot(b, i), NULL, (int)i);
+	}
+}
+
+int dect_base_link_segment(struct dect_base *b, struct dect_base_link *bl,
+			   const struct dect_mail *m, uint64_t now,
+			   struct dect_link_ind *ind)
+{
+	uint8_t rand_f[8], rs[16];
+
+	dect_base_random(b, rand_f, sizeof(rand_f));
+	dect_base_random(b, rs, sizeof(rs));
+	return dect_link_rx_segment(&bl->link, m, now, rand_f, rs, ind);
 }

@@ -730,3 +730,7 @@ record made current (S2.3c).
 dect_base_main_registered(): a registration completed on the main link
 (new key and identity into the current record, the host's install and
 save) (S2.3d).
+
+**98.** dect_base.h, 2026-10-30: `slot0` (subslot=) and dect_base_slot(),
+dect_base_side_open() and dect_base_link_segment() (S2.4: side links);
+dect_base_main_segment() now uses dect_base_link_segment().
