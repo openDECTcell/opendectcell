@@ -83,6 +83,27 @@ logread -e rfpi -e 'control slot'; cat /tmp/dect-fwload.log
 
 | N7. Resume: the 7412 as an active cell of the Go controller; cut its link for 4 s (`iptables -I OUTPUT -d <controller> -j DROP; sleep 4; iptables -D OUTPUT -d <controller> -j DROP`), then for 10 s | T11 | 4 s: `controller link resumed` in `logread -e dect-cell`, the controller logs `cell connected resumed=true`, no calls or links released; 10 s: a fresh start (`link up`, `resumed=false`), the cell released its links at 7 s | a fresh start after 4 s: the token or the grace (HELLO tag 13, HELLO_ACK tags 4, 5, 8); the controller rejects the snapshot (ERROR): its layout |
 
+## 1a. T13: unattended runs after the stack move (written 2026-10-30, before the runs)
+
+The maintainer asked for unattended runs on the 7412 and the 7520 once the
+stack is in the library (`docs/stack-in-library.md`, S0-S6c, API 136).
+Nobody is at the handsets: these runs check that the moved stack starts,
+restores the handsets into the chip, holds up and stops cleanly. They
+cannot check anything on the air beyond the base's own mails. Packages
+from `a30793a`. Each box ends parked with the park verified.
+
+| test | pass | fail and what it means |
+|---|---|---|
+| U1. 7412: install, start, five minutes running | `control slot found` within 90 s; `sub: restored subscription` per store; `sub: cleared chip subscription slots other than`; `sub: locked-in handset mask 0x017c`; the same dect-stubd pid after five minutes; no `LOST`, no `***`, no `ASSERT`/`AddressSanitizer`; `/var/run/opendectcell/state.json` rewritten | no control slot: bring-up or transport (not moved; compare `f3a2f4f`); a new pid or a procd respawn: a crash in the moved stack, logread before it says where; no restore lines: the start-up restore (`sub_restored`, `dect_base_slot_*`) |
+| U1b. If a handset happens to locate meanwhile | `reg: connection up`, `LOCATE-ACCEPT` in its `nwk out` when -v, `reg: sent the date and time` (or the clock-not-right line) | `LOCATE-REJECT`/`IPUI unknown` for a handset that located on `f3a2f4f`: the identity gate or `dect_base_main_segment()`/`dect_base_serve()` |
+| U2. 7412: bench N4 (class B RFPI, radio parked), as written above | N4a and N4b's pass | N4a/N4b's fail columns |
+| U3. 7412: stop | `/var/run/opendectcell/parked` says `verified` | anything else: the park (not moved) |
+
+U1 transmits for five minutes (the base beacons, as at any start); U2
+does not (cell role, radio parked). The 7520 runs follow once the
+maintainer says what that box may be used for: it runs 0.3.0 with the
+radio on and may be the household's working VoIP base.
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |
