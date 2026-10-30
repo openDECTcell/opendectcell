@@ -322,6 +322,23 @@ it had been copied over the 0.3.0 package's file. Taking
 record is not in `/var/run/opendectcell` yet). Left for the maintainer, as
 it reboots the radio.
 
+### V1c: the lab 7520 gets the packaged init script (written 2026-10-31, before the run)
+
+The box has run the daemon of `d1cdd37` under its kept 2026-10-28 init
+script (`/etc/init.d/opendectcell`; the package's own is
+`opendectcell.apk-new`, from 2026-10-30 14:22). The maintainer's word: swap them
+("the 7520 is an experimental box as well"); the radio goes away about a
+minute while the chip reboots. Only the init script changes; the daemon
+stays `d1cdd37`. The kept script is copied to
+`/root/opendectcell.init.2026-10-28.kept` first (never overwritten).
+
+| test | pass | fail and what it means |
+|---|---|---|
+| V1c-1. The new init starts the daemon | after `restart`: a dect-stubd with a new pid, the chip firmware loaded, the control slot found, one `sub: restored subscription` per store, the slots cleared, the mask, the radio on within three minutes | the daemon dies or refuses an option in the log: the init passes an option `d1cdd37` does not know (a daemon older than the init); roll back at once: copy the kept script back, `restart` |
+| V1c-2. The same options as before | the command line still has `-P`, the five `-s` stores, `dialwait=3000,regwindow=120` and the LED; the new script may add more options and the daemon accepts all | an option missing: the uci keys are read differently now; compare with the kept script before accepting |
+| V1c-3. The handsets come back | each handset that was registered relocates by itself within ten minutes (`reg: connection up`, no `LOCATE-REJECT`) | `LOCATE-REJECT`: the record store path or the STUB record; roll back |
+| V1c-4. Left running | dect-stubd up at the end, radio on | -- |
+
 ## 1b. M1: the cell's media on air (written 2026-10-30, needs C3)
 
 The controller places or takes a call through a cell (the 7412 in cell
