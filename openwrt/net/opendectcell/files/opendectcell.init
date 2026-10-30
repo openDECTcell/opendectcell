@@ -5,7 +5,8 @@
 #
 # Disabled by default (option enabled '0'): installing the package loads no
 # module and puts nothing on the air. Stopping the service parks the radio:
-# dect-stubd parks it on SIGTERM and reads the park back from the chip.
+# dect-stubd parks it on SIGTERM and reads the park back from the chip;
+# a park it could not confirm puts the chip in reset (park_guard).
 
 START=95
 STOP=10
@@ -32,6 +33,8 @@ log() { logger -t opendectcell "$*"; echo "opendectcell: $*" >&2; }
 : "${factory_offset:=0x3d000}"
 : "${strap:=1}"
 : "${led_path:=/sys/class/leds/green:fon/brightness}"
+: "${reset_chip:=1000000.pinctrl}"
+: "${reset_line:=40}"
 
 dect_load_profile() {
 	local b
@@ -153,6 +156,9 @@ load_chip() {
 	fi
 	# the daemon's files: root only, not the world-writable /tmp
 	mkdir -p /var/run/opendectcell && chmod 700 /var/run/opendectcell
+	# a reset park_guard holds: let go, so the module can claim the line
+	# (the upload below runs again, park_guard removed stub.second)
+	chip_unhold
 	grep -q '^opendectcell ' /proc/modules || insmod opendectcell || {
 		log "insmod opendectcell failed"
 		return 1
@@ -174,6 +180,55 @@ load_chip() {
 	}
 	# dect-stubd reads this to know which build's RAM addresses apply.
 	echo "$second" > /var/run/opendectcell/stub.second
+}
+
+# The chip's reset line in /sys/class/gpio: the board profile's GPIO chip
+# label and line (the openDECTcell module's own lookup table), its number the
+# chip's base plus the line.
+reset_gpio() {
+	local c b
+	for c in /sys/class/gpio/gpiochip*; do
+		[ "$(cat "$c/label" 2>/dev/null)" = "$reset_chip" ] || continue
+		b=$(cat "$c/base") || return 1
+		echo $((b + reset_line))
+		return 0
+	done
+	return 1
+}
+
+chip_unhold() {
+	local n
+	n=$(reset_gpio) || return 0
+	[ -d "/sys/class/gpio/gpio$n" ] && echo "$n" > /sys/class/gpio/unexport
+	return 0
+}
+
+# A chip whose park dect-stubd did not confirm goes into reset at the stop,
+# so nothing transmits whatever the daemon left behind: a crash, a kill
+# after term_timeout, a park the chip read back as not done. The daemon
+# writes /var/run/opendectcell/parked when the park is done (read back, or for
+# a STUB build it cannot read back, the park mails on the wire). A chip we
+# did not boot (no stub.second) is left alone.
+park_guard() {
+	local i=0 n
+	[ -s /var/run/opendectcell/stub.second ] || return 0
+	while pidof dect-stubd >/dev/null && [ $i -lt 15 ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+	[ -e /var/run/opendectcell/parked ] && return 0
+	n=$(reset_gpio) &&
+	{ [ -d "/sys/class/gpio/gpio$n" ] || echo "$n" > /sys/class/gpio/export; } &&
+	echo low > "/sys/class/gpio/gpio$n/direction" || {
+		log "RADIO MAY STILL TRANSMIT: the park was not confirmed and the chip's reset line ($reset_chip $reset_line) could not be held"
+		return 1
+	}
+	rm -f /var/run/opendectcell/stub.second
+	log "the park was not confirmed: the DECT chip is held in reset (GPIO $n); the next start uploads its firmware again"
+}
+
+service_stopped() {
+	park_guard
 }
 
 # A handset's own settings (Network > DECT, Handsets, General): each
@@ -516,9 +571,16 @@ start_service() {
 	local la tc tu role
 	config_load opendectcell
 	config_get_bool enabled main enabled 0
-	[ "$enabled" = 1 ] || return 0
+	if [ "$enabled" != 1 ]; then
+		# switched off by Save & Apply: procd stops the daemon after
+		# this returns, and no service_stopped follows
+		pidof dect-stubd >/dev/null &&
+			( park_guard ) </dev/null >/dev/null 2>&1 &
+		return 0
+	fi
 
 	load_chip || return 1
+	rm -f /var/run/opendectcell/parked
 	config_get role main role base
 	if [ "$role" = cell ]; then
 		start_cell

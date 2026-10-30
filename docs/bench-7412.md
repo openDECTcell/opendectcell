@@ -138,9 +138,12 @@ its frame on its own (Q-0013) is not needed for any loss seen so far; the
 clean room's frame-sync facts [CR A-0014] (FSC as EXIN5, interrupt line
 42) stay on file for a frame-sync alignment later.
 
-A 7412 whose park could not be verified must still be put in reset by
-hand after the stop (the "After the tests" block above); the service's
-stop does not reset the chip.
+A 7412 whose park could not be verified had to be put in reset by hand
+after the stop (the "After the tests" block above). Since 2026-10-30 the
+service's stop does it (`park_guard` in the init script, the profile's
+`reset_chip`/`reset_line`): dect-stubd leaves `/var/run/opendectcell/parked`
+after a confirmed park, and without it the stop holds GPIO33 low and the
+next start uploads the firmware again. Untested on the box: test A14.
 
 ## First calls, 2026-10-29 evening (A540, SIP through baresip)
 
@@ -262,6 +265,7 @@ Outcomes written before the run:
 | A11. Call lists: open the A540's call list menu after A1/A2 | accepted and outgoing calls listed with time and line | an empty list: the lists the A540 asks for (`c3 00 0x` with `-v`); it may want the All Calls List (04), not served |
 | A12. Delete the missed call on the A540 | gone on the A540; `missed: DECT 1, line 1: 0 unread of 0 (update)` | a refusal (`c3 12`) or no update line |
 | A13. Box at `0d9ffb2` or later: with entries in the lists, `/etc/init.d/opendectcell restart`, then open the call lists on the A540 | the same entries; `calls: N missed, N outgoing, N accepted from /var/run/opendectcell/calls` at the start | empty lists and no `calls:` line: the file was not written (`ls -l /var/run/opendectcell/calls`, mode 0600) |
+| A14. Box with the park guard: `kill -9 $(pidof dect-stubd)`, at once `/etc/init.d/opendectcell stop` | `logread`: "the park was not confirmed: the DECT chip is held in reset (GPIO 545)"; `cat /sys/class/gpio/gpio545/value` 0; the A540 loses the base within two minutes; a `start` afterwards uploads the firmware and the A540 finds the base again | "RADIO MAY STILL TRANSMIT": the reset line not found (`cat /sys/class/gpio/gpiochip*/label`); the A540 keeps the base with value 0: GPIO33 is not the reset; procd respawned the daemon before the stop: run the stop again (the park record then decides) |
 
 After the run: the radio parked and read back, the hand edit of the init
 script undone (verbose off).

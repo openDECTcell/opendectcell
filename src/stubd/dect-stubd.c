@@ -3881,6 +3881,24 @@ static void uak_verify_send(struct stubd *s, uint8_t slot)
  * itself (0) once 0x015B 00 has cancelled it; the beacon carrier 0x010C does
  * not tell, it keeps its last value. Both checked on a 7412, 2026-10-29.
  */
+/*
+ * The park done, for the service's stop (opendectcell.init, park_guard): read
+ * back on the chip, or, for a build we cannot read back, the park mails on
+ * the wire. Without this file the stop holds the chip in reset: the daemon
+ * crashed, was killed, or the chip said the radio is still on.
+ */
+#define PARK_RECORD		DECT_RUN_DIR "/parked"
+
+static FILE *fopen_private(const char *path);
+
+static void park_record(const char *how)
+{
+	FILE *f = fopen_private(PARK_RECORD);
+
+	if (!f || fprintf(f, "%s\n", how) < 0 || fclose(f))
+		fprintf(stderr, "reg: %s not written\n", PARK_RECORD);
+}
+
 #define PARK_0688_RADIO		0x010Au
 #define PARK_0688_TIMER		0x08B0u
 #define PARK_CHECK_MS		1000u
@@ -3932,11 +3950,12 @@ static int park_check_done(struct stubd *s, uint64_t now)
 			park_read(s, PARK_0688_TIMER);
 		return 0;
 	}
-	if (s->park_radio == 0 && s->park_timer == 0)
+	if (s->park_radio == 0 && s->park_timer == 0) {
 		printf("reg: park verified on the chip: radio switch "
 		       "0x%04X = 00, beacon timer cancelled (0x%04X = 00)\n",
 		       PARK_0688_RADIO, PARK_0688_TIMER);
-	else if (s->park_radio < 0 || s->park_timer < 0)
+		park_record("verified");
+	} else if (s->park_radio < 0 || s->park_timer < 0)
 		printf("reg: PARK NOT VERIFIED -- no read-back from the chip "
 		       "within %u ms\n", PARK_CHECK_MS);
 	else
@@ -5853,8 +5872,6 @@ static void contacts_tick(struct stubd *s, uint64_t now)
  */
 #define CALLS_PATH	DECT_RUN_DIR "/calls"
 #define CALLS_TEXT_MAX	(3u * DECT_CALLS_MAX * 160u + 32u)
-
-static FILE *fopen_private(const char *path);
 
 static char calls_text[CALLS_TEXT_MAX];
 static uint64_t calls_at, calls_hash;
@@ -11534,8 +11551,10 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 				       "wire %llu ms after queueing\n",
 				       (unsigned long long)(drained_at -
 							    park_at));
-				if (!park_check_start(s, now))
+				if (!park_check_start(s, now)) {
+					park_record("sent");
 					break;
+				}
 			}
 			if (s->parked) {
 				if (park_check_done(s, now))
@@ -13172,6 +13191,7 @@ int main(int argc, char **argv)
 	/* its files' directory; the service makes it too (opendectcell.init) */
 	if (mkdir(DECT_RUN_DIR, 0700) && errno != EEXIST)
 		perror(DECT_RUN_DIR);
+	(void)unlink(PARK_RECORD);	/* this run's park, not the last one's */
 	s.fd = open(dev, O_RDWR);
 	if (s.fd < 0) {
 		perror(dev);

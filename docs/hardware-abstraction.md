@@ -85,6 +85,7 @@ for the model but **read by nothing yet**; some are in no profile file yet.
 | `pcm_words_per_frame`, `pcm_ctrl_slot`, `pcm_voice_slots` | Frame layout | 36 lanes (`pcm_slots`); control lane found by probing, every run elsewhere (no frame sync); speech of call *n* in control lane + *n*, same lane both ways [CR A-0015], set by the daemon (2026-10-29, `d1d2c8f`) |
 | `strap` | `0`: the uploader leaves the chip's boot strap alone (`dect-fwload --no-strap`) | `0` |
 | `led_path` | The DECT LED's brightness file, driven by `dect-stubd` | `/sys/class/leds/green:dect/brightness` |
+| `reset_chip`, `reset_line` | The chip's reset line: GPIO chip label and line, as the openDECTcell module claims it (low = reset). The service's stop holds it through `/sys/class/gpio` when `dect-stubd` left no park record; defaults `1000000.pinctrl`, `40` (7520) | `gpio-xway`, `33` |
 | `factory_mtd`, `factory_offset` | The factory DECT config block (RFPI and calibration) | `/dev/mtd0`, `0x1e800` |
 | `factory_cfg` | Where the factory DECT config block is stored; superseded by `factory_mtd`/`factory_offset`, empty | (empty) |
 | `rfpi_fallback` | Source for the RFPI if the factory block holds the placeholder | `maca` |

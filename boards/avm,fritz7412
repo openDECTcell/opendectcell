@@ -36,6 +36,12 @@ uart_is_console=1
 # used as a strap: the uploader must not touch it.
 strap=0
 
+# The chip's reset line, as the openDECTcell module claims it (GPIO33, low holds
+# the chip in reset; sysfs number 545 on OpenWrt 25.12). The service's stop
+# holds it when the park was not confirmed.
+reset_chip=gpio-xway
+reset_line=33
+
 # The DECT LED (OpenWrt 7412 device tree: green:dect on GPIO15).
 led_path=/sys/class/leds/green:dect/brightness
 
