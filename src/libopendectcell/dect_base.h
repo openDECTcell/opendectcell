@@ -22,6 +22,7 @@
 #include "dect_link.h"
 #include "dect_mail.h"
 #include "dect_mm.h"
+#include "dect_profile.h"
 #include "dect_proto.h"
 
 struct dect_hs_rec {
@@ -213,6 +214,11 @@ struct dect_base {
 	struct dect_base_call calls[DECT_BASE_CALLS];
 	struct dect_base_ring ring;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
+	/*
+	 * Each record's handset profile (docs/handset-profiles.md), resolved
+	 * by the host from the model it was given (S3h): defaults otherwise.
+	 */
+	struct dect_hs_profile prof[DECT_BASE_HS_MAX];
 	unsigned n_hs;			/* records in use, hs[0] first */
 	unsigned cur;			/* the current one */
 	struct dect_hs_rec rec;		/* hs[cur], being worked on */

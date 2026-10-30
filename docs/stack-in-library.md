@@ -254,3 +254,8 @@ host's options (ring timing, profiles, the line names): moving them means
 first giving `dect_base` the call configuration the host now keeps in its
 `audio_cfg`.
 
+**S3h.** Each record's handset profile is `dect_base.prof[]`: it steers
+the stack (call status, signal, the name's method, the release after a
+call), so it sits beside the record. The host still resolves it from the
+model and the profile files. Data only; traces unchanged.
+

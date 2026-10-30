@@ -359,8 +359,7 @@ struct handset {
 	 * Defaults when there is none.
 	 */
 	char     prof_id[DECT_PROFILE_ID_MAX];
-	char     prof_fw[24];
-	struct dect_hs_profile prof;
+	char     prof_fw[24];		/* resolved into base.prof[] */
 	/*
 	 * Voice messages waiting per line (TS 102 527-3 §7.4.1.2), as the
 	 * bridge reported its accounts' message summaries: the counts, the
@@ -3205,16 +3204,17 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
 		return;
 	h = &s->hs[i];
 	/* the profile says the handset's own report is wrong (§5.3) */
-	if (!h->prof.trust_terminal_capability && h->prof.cap_ngdect) {
+	if (!s->base.prof[i].trust_terminal_capability &&
+	    s->base.prof[i].cap_ngdect) {
 		if (!h->cap_known)
 			printf("cap: %s: the profile sets %s (the handset's "
 			       "report is not trusted)\n", h->path,
-			       h->prof.cap_ngdect == 3 ? "NG-DECT Part 3" :
-			       h->prof.cap_ngdect == 2 ? "NG-DECT Part 1" :
+			       s->base.prof[i].cap_ngdect == 3 ? "NG-DECT Part 3" :
+			       s->base.prof[i].cap_ngdect == 2 ? "NG-DECT Part 1" :
 			       "GAP only");
 		h->cap_known = 1;
-		h->cap_part3 = h->prof.cap_ngdect == 3;
-		h->cap_ng = h->prof.cap_ngdect >= 2;
+		h->cap_part3 = s->base.prof[i].cap_ngdect == 3;
+		h->cap_ng = s->base.prof[i].cap_ngdect >= 2;
 		return;
 	}
 	if (!tc->present)
@@ -3314,8 +3314,8 @@ static int call_status_for(void *ctx, const uint8_t *ipui, size_t len)
 	const struct stubd *s = ctx;
 	int i = hs_by_ipui(s, ipui, len);
 
-	if (i >= 0 && s->hs[i].prof.cc_call_status != DECT_PROF_AUTO)
-		return s->hs[i].prof.cc_call_status == DECT_PROF_ON;
+	if (i >= 0 && s->base.prof[i].cc_call_status != DECT_PROF_AUTO)
+		return s->base.prof[i].cc_call_status == DECT_PROF_ON;
 	if (i < 0 || !s->hs[i].cap_known || s->audio.all_call_status)
 		return -1;
 	return !s->audio.no_call_status && s->hs[i].cap_part3;
@@ -3366,7 +3366,7 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 		int i = l->mm.adopted >= 0 ? l->mm.adopted : (int)s->base.cur;
 
 		if (i >= 0 && (unsigned)i < s->base.n_hs &&
-		    !s->hs[i].prof.lce_release_after_call) {
+		    !s->base.prof[i].lce_release_after_call) {
 			s->reg.nlr_armed = 0;
 			printf("link: kept after the call (profile: "
 			       "lce.release_after_call = no)\n");
@@ -3398,7 +3398,7 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 static int name_display_info(struct stubd *s, struct dect_cc *cc, unsigned hs,
 			     const struct dect_clip *clip)
 {
-	const struct dect_hs_profile *hp = &s->hs[hs].prof;
+	const struct dect_hs_profile *hp = &s->base.prof[hs];
 	uint8_t ie[96];
 	size_t n;
 
@@ -4436,10 +4436,10 @@ static struct dect_clip ring_clip;	/* s->clip as the target's profile wants it *
  */
 static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
 {
-	if (i >= 0 && (unsigned)i < s->base.n_hs && s->hs[i].prof.cc_basic_service)
+	if (i >= 0 && (unsigned)i < s->base.n_hs && s->base.prof[i].cc_basic_service)
 		/* the profile: 1 wideband, 2 basic speech; the class stays */
 		return (uint8_t)((configured & 0xF0u) |
-				 (s->hs[i].prof.cc_basic_service == 1 ? 0x08u
+				 (s->base.prof[i].cc_basic_service == 1 ? 0x08u
 								      : 0x00u));
 	if (i >= 0 && (unsigned)i < s->base.n_hs && s->hs[i].cap_known &&
 	    !s->hs[i].cap_ng)
@@ -4600,7 +4600,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 		/* the ring target's profile: its alerting pattern, unless
 		 * -a signal= chose one, and whether the name goes as CNIP */
 		const struct dect_hs_profile *hp = s->base.n_hs ?
-			&s->hs[s->base.ring.hs].prof : NULL;
+			&s->base.prof[s->base.ring.hs] : NULL;
 
 		ring_clip = s->clip;
 		if (hp && !s->audio.signal_set &&
@@ -5873,7 +5873,7 @@ static int profile_load(const char *path, struct dect_profile *p);
 /*
  * Handset i's profile: <path>.profile names the model's id (and on a
  * second line its firmware version); the device file and its manufacturer
- * file come from the profile directory. Resolved into hs[i].prof and
+ * file come from the profile directory. Resolved into base.prof[i] and
  * logged once, with each key that differs from the standard and the keys
  * this build accepts but does not act on yet. Anything missing or broken:
  * the defaults, said so.
@@ -5885,7 +5885,7 @@ static void profile_resolve_choice(struct stubd *s, unsigned i)
 					       : PROFILE_DIR_DEFAULT;
 	char path[320], line[64], desc[1024];
 	const struct dect_profile *m = NULL, *d = NULL;
-	struct dect_hs_profile *hp = &s->hs[i].prof, def;
+	struct dect_hs_profile *hp = &s->base.prof[i], def;
 	FILE *f;
 
 	dect_profile_defaults(hp);
@@ -5987,12 +5987,12 @@ static void profile_resolve(struct stubd *s, unsigned i)
 		printf("profile: %s is too long -- not applied\n", path);
 		return;
 	}
-	if (dect_profile_override(text, n, &s->hs[i].prof, ovr_say, path)) {
+	if (dect_profile_override(text, n, &s->base.prof[i], ovr_say, path)) {
 		printf("profile: DECT %u's own settings (%s) not applied\n",
 		       hs_slot(s, i), path);
 		return;
 	}
-	if (dect_profile_describe(&s->hs[i].prof, desc, sizeof(desc)))
+	if (dect_profile_describe(&s->base.prof[i], desc, sizeof(desc)))
 		printf("profile: DECT %u with its own settings: %s\n",
 		       hs_slot(s, i), desc);
 }
@@ -6065,8 +6065,8 @@ static int notify_ok(const struct stubd *s, const struct dect_link *l)
 {
 	int i = hs_of_link(s, l);
 
-	if (i >= 0 && s->hs[i].prof.notify != DECT_PROF_AUTO)
-		return s->hs[i].prof.notify == DECT_PROF_ON;
+	if (i >= 0 && s->base.prof[i].notify != DECT_PROF_AUTO)
+		return s->base.prof[i].notify == DECT_PROF_ON;
 	if (l->mm.peer_cap.present)
 		return l->mm.peer_cap.ng_part3;
 	/* a link up for a page or a call: what the handset said before */
@@ -6238,8 +6238,8 @@ static struct dect_link *link_known_hs(struct stubd *s, int i);
 /* Could handset i hear notifications, from what it told us before? */
 static int notify_known(const struct stubd *s, unsigned i)
 {
-	if (s->hs[i].prof.notify != DECT_PROF_AUTO)
-		return s->hs[i].prof.notify == DECT_PROF_ON;
+	if (s->base.prof[i].notify != DECT_PROF_AUTO)
+		return s->base.prof[i].notify == DECT_PROF_ON;
 	return s->hs[i].cap_known && s->hs[i].cap_part3;
 }
 
@@ -8314,7 +8314,7 @@ static void sr_setup(struct stubd *s, struct dect_base_call *b, unsigned k,
 {
 	struct dect_link *l = &s->side[k].bl->link;
 	unsigned t = (unsigned)b->target;
-	const struct dect_hs_profile *hp = &s->hs[t].prof;
+	const struct dect_hs_profile *hp = &s->base.prof[t];
 	struct dect_callinfo prev = l->cc.callinfo, ci;
 	struct dect_clip clip = b->clip;
 	const uint8_t *port, *fixed;
@@ -10190,7 +10190,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		 s->base.main_link.link.mm.state == DECT_MM_FAILED) {
 		printf("reg: registration rejected%s\n",
 		       s->base.n_hs && s->base.cur < s->base.n_hs &&
-		       s->hs[s->base.cur].prof.reg_tries_0000_first &&
+		       s->base.prof[s->base.cur].reg_tries_0000_first &&
 		       s->base.main_link.link.mm.stats.auth_fail
 		       ? " (expected: this model tries PIN 0000 by itself "
 			 "first, profile reg.tries_0000_first)" : "");

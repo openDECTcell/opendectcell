@@ -772,3 +772,7 @@ dect_base_ring and struct dect_base's `ring`: the ring sequence's state
 
 **107.** dect_base.h, 2026-10-30: dect_base_tpui() (a record's TPUI by
 MM's rule) and dect_base_page() (0x0300) (S3g).
+
+**108.** dect_base.h, 2026-10-30: struct dect_base gains `prof[]`, each
+record's handset profile (was dect-stubd's per-handset copy) (S3h).
+dect_base.h now includes dect_profile.h.
