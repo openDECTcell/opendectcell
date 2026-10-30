@@ -157,8 +157,8 @@ static struct dect_link *t_link(unsigned h)
 {
 	unsigned k;
 
-	if (ts->reg.active && ts->reg.handle == h)
-		return &ts->reg.link;
+	if (ts->base.main_link.active && ts->base.main_link.handle == h)
+		return &ts->base.main_link.link;
 	for (k = 0; k < SIDE_MAX; k++)
 		if (ts->side[k].active && ts->side[k].handle == h)
 			return &ts->side[k].link;

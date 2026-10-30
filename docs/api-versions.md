@@ -711,3 +711,8 @@ dect_base_log() (S2.1). dect_base.h now includes dect_mail.h.
 the 0x020A config byte, no 0x017C) in struct dect_base, and
 dect_base_slot_clear(), _slot_install(), _slot_mask(): the chip's
 subscription slots (S2.2). dect_base.h now includes dect_proto.h.
+
+**94.** dect_base.h, 2026-10-30: struct dect_base_link (a connection's
+handle, its dect_link, and the registration's progress on it) and
+struct dect_base's `main_link` (S2.3a). dect_base.h now includes
+dect_link.h.

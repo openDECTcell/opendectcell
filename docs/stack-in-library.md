@@ -153,3 +153,15 @@ so mails the library sends are logged too. Left for S2.2b: the UAK
 read-back and the slot audit (chip memory reads at build-specific
 addresses, with their own timers). Traces unchanged.
 
+**S2.3a, 2026-10-30.** `struct dect_base_link` and `base.main_link`: the
+main link's handle, its `dect_link`, whether it is up, and the
+registration's progress on it (subscription installed, MM state logged,
+enrolment routed). dect-stubd's `reg` keeps the call and audio state
+until S3. Data only; the traces unchanged.
+
+S2.3, the rest, in order: (b) connection up and down as a library entry
+(`dect_base_mail()` for 0x0200 and 0x0201 on the main link, the host told
+through a callback); (c) `reg_segment()` (635 lines) split, the generic
+segment path into the library first, then the identity gate and
+adoption.
+

@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "dect_cc.h"
+#include "dect_link.h"
 #include "dect_mail.h"
 #include "dect_mm.h"
 #include "dect_proto.h"
@@ -78,10 +79,29 @@ struct dect_base_chip {
 	int     no_mask;	/* send no 0x017C at all */
 };
 
+/*
+ * Stage S2.3: a radio connection the stack runs, with the registration's
+ * progress on it. The chip names it by a handle.
+ */
+struct dect_base_link {
+	int      active;		/* the connection is up */
+	uint8_t  handle;
+	/*
+	 * The C-plane stack of this connection: segments, Lc, LAPC, NWK
+	 * routing, MM and CC (dect_link.h).
+	 */
+	struct dect_link link;
+	int      persisted;		/* the subscription went into the chip */
+	enum dect_mm_state reported_state;	/* MM's state last logged */
+	int      enrol_routed;		/* this enrolment's record is chosen */
+	int      enrol_switched;	/* ... and it moved off record 0 */
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
 	struct dect_base_chip chip;
+	struct dect_base_link main_link;	/* calls, enrolment */
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	unsigned n_hs;			/* records in use, hs[0] first */
 	unsigned cur;			/* the current one */
