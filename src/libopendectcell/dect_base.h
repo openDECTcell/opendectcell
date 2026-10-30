@@ -163,6 +163,11 @@ struct dect_base_link {
 	uint64_t connect_at;		/* ... not before this */
 	int      cs_connect_sent;	/* "CS call connect" after CONNECT (Part 3) */
 	int      info_sent;		/* the name or infoie= went out on ALERTING */
+	/* Stage S3u, nlr: the release after a call */
+	int      cc_was_busy;		/* the last tick had a call */
+	int      nlr_armed;		/* a call ended, release pending */
+	int      nlr_lia;		/* ... and it was list access: DISC first */
+	uint64_t nlr_disc_at;		/* ... DISC queued at, 0 = not yet */
 };
 
 /*
@@ -987,6 +992,16 @@ void dect_base_names_spread(struct dect_base *b, unsigned i);
 /* Is the handset in this slot in a voice call on any link? */
 int dect_base_slot_in_call(const struct dect_base *b, unsigned slot);
 void dect_base_lists_tick(struct dect_base *b, uint64_t now);
+
+/*
+ * cfg.nlr: once the main link's call or list session has ended and LAPC
+ * has nothing outstanding (the last {CC-RELEASE-COM} is acknowledged),
+ * release the link: a DISC first if it was list access, then `0x0202
+ * <link>` [CR A-0127]. The chip's 0x0201 then runs the usual release
+ * path. A new call before that disarms it; a profile with
+ * lce.release_after_call = no keeps the link (S3u).
+ */
+void dect_base_nlr_tick(struct dect_base *b, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

@@ -1136,10 +1136,6 @@ struct stubd {
 		int cipher_reject_seen;	/* CIPHER-REJECT already reported */
 		int cipher_timeout_seen;	/* <MM_cipher.1> already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
-		int cc_was_busy;	/* nlr: the last tick had a call */
-		int nlr_armed;		/* nlr: a call ended, release pending */
-		int nlr_lia;		/* ... and it was list access: DISC first */
-		uint64_t nlr_disc_at;	/* ... DISC queued at, 0 = not yet */
 	} reg;
 };
 
@@ -3279,59 +3275,13 @@ static void lapc_failed_note(struct dect_link *l, const char *which)
 	fflush(stdout);
 }
 
-/*
- * -a nlr: once the main link's call or list session has ended and LAPC has
- * nothing outstanding (the last {CC-RELEASE-COM} is acknowledged), release
- * the link: a DISC first if it was list access, then `0x0202 <link>`
- * [CR A-0127]. The chip's 0x0201 then runs the usual release path. A new
- * call before that disarms it.
- */
+/* -a nlr: the release after a call is the library's (dect_base.h, S3u). */
 static void nlr_tick(struct stubd *s, uint64_t now)
 {
-	struct dect_link *l = &s->base.main_link.link;
-	int busy = s->base.main_link.active && dect_cc_busy(&l->cc);
-
-	if (busy || !s->base.main_link.active) {
-		s->reg.nlr_armed = 0;
-		s->reg.nlr_disc_at = 0;
-	} else if (s->reg.cc_was_busy) {
-		s->reg.nlr_armed = 1;
-		s->reg.nlr_lia = (l->cc.peer_basic_service >> 4) == 0x2u;
-		s->reg.nlr_disc_at = 0;
-	}
-	s->reg.cc_was_busy = busy;
-	if (!s->base.cfg.nlr || !s->reg.nlr_armed ||
-	    l->lapc.outstanding || l->lapc.txq_count)
-		return;
-	{
-		/* lce.release_after_call = no in the handset's profile */
-		int i = l->mm.adopted >= 0 ? l->mm.adopted : (int)s->base.cur;
-
-		if (i >= 0 && (unsigned)i < s->base.n_hs &&
-		    !s->base.prof[i].lce_release_after_call) {
-			s->reg.nlr_armed = 0;
-			printf("link: kept after the call (profile: "
-			       "lce.release_after_call = no)\n");
-			return;
-		}
-	}
-	if (s->reg.nlr_lia && !s->reg.nlr_disc_at) {
-		dect_lapc_disconnect(&l->lapc);	/* a CO link: DISC on air */
-		pump_lapc(s);
-		s->reg.nlr_disc_at = now ? now : 1;
-		return;
-	}
-	if (s->reg.nlr_lia && now - s->reg.nlr_disc_at < 100u)
-		return;			/* let the DISC reach the air */
-	s->reg.nlr_armed = 0;
-	chip_mail(s, 0x0202u, &s->base.main_link.handle, 1);	/* release [CR A-0127] */
-	printf("link: released after the %s (0x0202 on handle %u, nlr)\n",
-	       s->reg.nlr_lia ? "list session, DISC first" : "call",
-	       (unsigned int)s->base.main_link.handle);
+	dect_base_nlr_tick(&s->base, now);
 	fflush(stdout);
 }
 
-/* -a infoie=: one {CC-INFO} once our call to the handset rings. */
 /* The main link's call rings: the name, or infoie= (dect_base.h, S3r). */
 static void info_tick(struct stubd *s, uint64_t now)
 {

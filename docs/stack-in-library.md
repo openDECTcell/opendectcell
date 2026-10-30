@@ -362,6 +362,11 @@ other ten unchanged.
 events ringing, answered and released, and the end of a call-in no
 handset took. Unit test; the eleven traces unchanged.
 
+**S3u.** The release after a call (nlr) is the library's
+(`dect_base_nlr_tick()`), with its state on the main link's
+`dect_base_link`. Seven trace runs take it (six after a call, one after a
+list session with the DISC first); the fourteen traces unchanged.
+
 ## S5, the control verbs (started 2026-10-30)
 
 **S5a.** The bridge's call verbs are the library's:

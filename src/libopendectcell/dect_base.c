@@ -3383,3 +3383,46 @@ void dect_base_lists_tick(struct dect_base *b, uint64_t now)
 			lists_link(b, &b->side[k].link, now);
 		}
 }
+
+void dect_base_nlr_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+	struct dect_link *l = &bl->link;
+	int busy = bl->active && dect_cc_busy(&l->cc);
+	int i;
+
+	if (busy || !bl->active) {
+		bl->nlr_armed = 0;
+		bl->nlr_disc_at = 0;
+	} else if (bl->cc_was_busy) {
+		bl->nlr_armed = 1;
+		bl->nlr_lia = (l->cc.peer_basic_service >> 4) == 0x2u;
+		bl->nlr_disc_at = 0;
+	}
+	bl->cc_was_busy = busy;
+	if (!b->cfg.nlr || !bl->nlr_armed ||
+	    l->lapc.outstanding || l->lapc.txq_count)
+		return;
+	/* lce.release_after_call = no in the handset's profile */
+	i = l->mm.adopted >= 0 ? l->mm.adopted : (int)b->cur;
+	if (i >= 0 && (unsigned)i < b->n_hs &&
+	    !b->prof[i].lce_release_after_call) {
+		bl->nlr_armed = 0;
+		dect_base_log(b, "link: kept after the call (profile: "
+			      "lce.release_after_call = no)");
+		return;
+	}
+	if (bl->nlr_lia && !bl->nlr_disc_at) {
+		dect_lapc_disconnect(&l->lapc);	/* a CO link: DISC on air */
+		pump(b, bl);
+		bl->nlr_disc_at = now ? now : 1;
+		return;
+	}
+	if (bl->nlr_lia && now - bl->nlr_disc_at < 100u)
+		return;			/* let the DISC reach the air */
+	bl->nlr_armed = 0;
+	chip_mail(b, 0x0202u, &bl->handle, 1);	/* release [CR A-0127] */
+	dect_base_log(b, "link: released after the %s (0x0202 on handle %u, "
+		      "nlr)", bl->nlr_lia ? "list session, DISC first" : "call",
+		      (unsigned)bl->handle);
+}

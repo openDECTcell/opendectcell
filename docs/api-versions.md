@@ -864,3 +864,6 @@ dect_base_names_spread(), _slot_in_call(), _lists_tick() (S4d).
 
 **126.** dect_base.h, 2026-10-30: dect_base_ops' `wall`;
 dect_base_ctl_call() also takes mwi and calllog (S5b).
+
+**127.** dect_base.h, 2026-10-30: dect_base_link's `cc_was_busy`,
+`nlr_armed`, `nlr_lia`, `nlr_disc_at`; dect_base_nlr_tick() (S3u).
