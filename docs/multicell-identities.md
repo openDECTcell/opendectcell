@@ -494,9 +494,23 @@ were read on the 7520 host driver and matched against the 06.88 build):
    in `{ACCESS-RIGHTS-ACCEPT}` (class A may send any type, GAP table 51) and
    check that the A540, C430A and AS690H accept, store and use it (locate,
    page by the derived TPUI, a call).
-3. The EIC. Before it arrives, nothing goes on the air with a class B RFPI:
-   any EIC we picked would belong to someone else.
-4. Bench B4b with the EIC: class B RFPI, PARK{19}, IPUI O; the same handsets.
+3. The EIC. *Revised 2026-10-30 (maintainer):* this is experimental, and
+   the controller's admin may make one up (opendectcell-controller d20a930:
+   "Make one up…" on the Cells page, saved only after the risks are
+   shown). There is no legal obligation to hold an EIC that we could find:
+   - the German general authorisation for DECT (BNetzA Vfg. Nr. 102/2024)
+     asks for 1880-1900 MHz, 250 mW ERP, the 1.728 MHz raster, modulation
+     per EN 301 406, conformity with the FuAG, no permanent channel
+     occupation and no drone control, and nothing about identities;
+   - the EIC is numbering in a voluntary standard plus a contract with
+     ETSI, which publishes no list of allocated codes.
+
+   The risk is practical: a made-up EIC may be a real system's, and within
+   radio range the two systems' handsets may try each other's bases. With
+   class B systems rare and a FRITZ!Box's range small, the maintainer
+   expects no harm.
+4. Bench B4b with the chosen EIC: class B RFPI, PARK{19}, IPUI O; the same
+   handsets.
 5. Controller: `system_identity` becomes {class, EIC, FPN+FPS, PLI, LAL}, and
    `cell.rpn` becomes 0-255. The cell is told its RFPI (§7.4); dect-stubd's
    MM sends the assigned IPUI and the class B PARK.
@@ -630,9 +644,9 @@ route as the conformant shape of an unsynchronised system.
 5. Bench, two cells (lab 7520 and the 7412), after the room's answers: B1-B3.
 6. Fetch EN 300 175-2 and -7 into `docs/specs/` before any sync design.
 7. ~~Decide later, with the maintainer: apply for an EIC or EMC (§7.6).~~
-   Since 2026-10-30, an EIC (§7.7) is the route for systems past 7 cells.
-   Applying for it is the maintainer's decision. Room Q10-Q11 and bench B4a
-   come first.
+   Since 2026-10-30, class B (§7.7) is the route for systems past 7 cells,
+   with a made-up EIC while this is experimental; no application for now
+   (maintainer). Bench B0 and B4a come first.
 
 ---
 
