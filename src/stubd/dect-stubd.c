@@ -1178,12 +1178,27 @@ static FILE *fopen_root_only(const char *path)
 
 enum { STUB_UNKNOWN, STUB_0825, STUB_OTHER };
 
+/*
+ * Where an init script from before 1c081ee records it. apk keeps an edited
+ * /etc/init.d/opendectcell over the packaged one (as .apk-new), so an upgraded
+ * box can run this daemon under that script: the lab 7520 did, and its
+ * audit read the 08.25 address on a 07.56 chip (T13, 2026-10-30). Only a
+ * file root owns counts, so one another user plants in /tmp is ignored.
+ */
+#ifndef STUBD_TEST
+#define DECT_STUB_RECORD_OLD	"/tmp/dect-stub.second"
+#endif
+
 static int stub_build_read(char *name, size_t cap)
 {
 	FILE *f = fopen_root_only(DECT_STUB_RECORD);
 	size_t n;
 
 	name[0] = '\0';
+#ifdef DECT_STUB_RECORD_OLD
+	if (!f)
+		f = fopen_root_only(DECT_STUB_RECORD_OLD);
+#endif
 	if (!f)
 		return STUB_UNKNOWN;
 	if (!fgets(name, (int)cap, f))

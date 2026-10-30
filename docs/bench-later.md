@@ -139,6 +139,36 @@ meet the moved stack when it restarts. Packages from the newest commit
 | V2. The handsets come back by themselves | within the ten minutes each handset that was registered relocates: `reg: connection up`, its `sub: now serving` if not record 0, no `LOCATE-REJECT`; `cap: record N reports ...` once proven | a handset that located on 0.3.0 now gets `LOCATE-REJECT` or keeps searching: the identity gate, `dect_base_main_segment()` or the restore; then put 0.3.0 back at once |
 | V3. Left running | dect-stubd up at the end, radio on, as the maintainer asked; not parked | -- |
 
+### T13 results, lab 7520, 2026-10-30 13:26-13:36 UTC (unattended)
+
+Packages from `d1cdd37` (`build/release/out-d1cdd37-ipq40xx`); the 0.3.0
+daemon is kept as `/root/dect-stubd.0.3.0`. apk kept two edited files:
+`/etc/config/opendectcell` and **`/etc/init.d/opendectcell`** (both beside their
+packaged versions as `.apk-new`). The kept init script predates
+`1c081ee` and records the loaded STUB in `/tmp/dect-stub.second`. Log on
+the box: `/root/t13-v-20261030-132618.log`.
+
+| test | result |
+|---|---|
+| V1 | **pass, with one false alarm explained**: the apk post-upgrade restarted the service, then the script did; control slot at once (the kept init found its STUB record and did not boot the chip again); `sub: restored subscription` for slots 1, 3, 2, the others cleared, mask `00 07`; the same pid after ten minutes; no respawn; baresip `200 OK [1 binding]`. Two trouble lines: `UAK READ-BACK MISMATCH slot 1` and `3 FOREIGN SLOT(S) STILL HELD`, both with `STUB second stage unknown (no /var/run/opendectcell/stub.second)`. Since `1c081ee` the daemon reads only the new path, so it guessed 08.25 and read that build's table address on a 07.56 chip, where 0.3.0 had logged `slot audit skipped -- STUB dectfw_secondlevel_441-07.56.hex`. The audit reads only, so nothing on the chip changed. Not a stack-move regression: an upgrade gap of `1c081ee` |
+| V2 | **not shown**: no handset located in the ten minutes, and none had to. The chip kept running across the restart, so the handsets stayed locked and never searched. No `LOCATE-REJECT`. A handset's own action (power-cycle, a call) still has to show it: V2 below |
+| V3 | **pass**: dect-stubd up at the end (pid 23227), radio on, not parked, as asked |
+
+Left for the bench (added to the attended list): **V2b**: switch a 7520
+handset off and on, or call out on it. Pass: `reg: connection up` and
+the call works. Fail: `LOCATE-REJECT` or no service; then put 0.3.0 back
+(`/root/dect-stubd.0.3.0` over `/usr/sbin/dect-stubd`, restart).
+
+**V1b** (written before the run): the daemon also reads the old record,
+read-only and root-owned only, so a kept old init script still tells it
+the build. Its binary goes over `/usr/sbin/dect-stubd` (the `d1cdd37`
+one is kept as `/root/dect-stubd.d1cdd37`), then a service restart.
+Pass: `chip: STUB second stage dectfw_secondlevel_441-07.56.hex` and
+`slot audit skipped`, with no MISMATCH or FOREIGN lines; the same
+restore lines as V1; still running five minutes later. Fail: `unknown`
+again means the fallback never reached the file (owner or mode); trouble
+lines with the build named mean an audit gap other than the record.
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |
