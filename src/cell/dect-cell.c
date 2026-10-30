@@ -2147,12 +2147,50 @@ static int run(void)
 	return 0;
 }
 
+/*
+ * The enrollment string: STRING itself, @FILE or @- (standard input). The
+ * last two keep its one-time token off the command line, where every local
+ * user reads it in /proc while the enrolment runs.
+ */
+static int enroll_text(const char *arg, char *out, size_t cap)
+{
+	FILE *f;
+	size_t n;
+
+	if (arg[0] != '@') {
+		if (strlen(arg) >= cap)
+			goto big;
+		memcpy(out, arg, strlen(arg) + 1u);
+		return 0;
+	}
+	f = !strcmp(arg + 1, "-") ? stdin : fopen(arg + 1, "r");
+	if (!f) {
+		perror(arg + 1);
+		return -1;
+	}
+	n = fread(out, 1, cap - 1u, f);
+	if (f != stdin)
+		fclose(f);
+	if (n >= cap - 1u)
+		goto big;
+	while (n && (out[n - 1u] == '\n' || out[n - 1u] == '\r' ||
+		     out[n - 1u] == ' '))
+		n--;
+	out[n] = '\0';
+	return 0;
+big:
+	fprintf(stderr, "the enrollment string is too long\n");
+	return -1;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
 		"usage: dect-cell [-d DIR] [-s SOCKET] [-a SOCKET] [-P] [-v] COMMAND\n"
 		"  enroll STRING  enrol with a controller: STRING is its\n"
-		"                 opendectcell-enroll:v1?... enrollment string\n"
+		"                 opendectcell-enroll:v1?... enrollment string,\n"
+		"                 or @FILE / @- (standard input) holding it:\n"
+		"                 on the command line, local users can read it\n"
 		"  run            keep the link to the controller and relay\n"
 		"                 frames to dect-stubd -K\n"
 		"  forget         erase this cell's key and certificate\n"
@@ -2190,8 +2228,13 @@ int main(int argc, char **argv)
 		fprintf(stderr, "no random numbers\n");
 		return 1;
 	}
-	if (!strcmp(argv[optind], "enroll") && optind + 1 < argc)
-		return enroll(argv[optind + 1]);
+	if (!strcmp(argv[optind], "enroll") && optind + 1 < argc) {
+		char text[1024];
+
+		if (enroll_text(argv[optind + 1], text, sizeof(text)))
+			return 2;
+		return enroll(text);
+	}
 	if (!strcmp(argv[optind], "run"))
 		return run();
 	usage();

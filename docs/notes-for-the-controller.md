@@ -977,3 +977,10 @@ MEDIA_OPEN no longer answers status 4. What the cell does (cell-protocol.md
   - The internal call's dial list is this list, so a handset can only call
     handsets in its account. Assumed to be what the maintainer wants; not
     confirmed.
+- **The enrolment string is no longer on a command line** when LuCI
+  enrols a cell: `dect-cell enroll @FILE` and `enroll @-` read it from a
+  root-only file or standard input, LuCI writes the file (mode 0600,
+  removed by the init script afterwards) and passes only its name. The
+  one-time token was readable in `/proc` for up to a minute before. An
+  older init or a CLI user passing the string itself still works. Nothing
+  changes on the wire.

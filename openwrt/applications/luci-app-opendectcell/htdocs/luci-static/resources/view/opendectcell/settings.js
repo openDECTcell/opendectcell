@@ -390,7 +390,18 @@ function enrollDialog() {
 					}
 					ui.showModal(_('Enrolling'), [ E('p', { 'class': 'spinning' },
 						_('Asking the controller; this can take up to a minute.')) ]);
-					return fs.exec(INIT, [ 'enroll', v ]).then(function(r) {
+					/*
+					 * the string carries the one-time token: a root-only
+					 * file, so it is not on a command line for every local
+					 * user to read; the init script removes the file
+					 */
+					var rnd = new Uint8Array(8), tmp = '/tmp/opendectcell-enroll.';
+
+					window.crypto.getRandomValues(rnd);
+					rnd.forEach(function(b) { tmp += ('0' + b.toString(16)).slice(-2); });
+					return fs.write(tmp, v + '\n', 384 /* 0600 */).then(function() {
+						return fs.exec(INIT, [ 'enroll', '@' + tmp ]);
+					}).then(function(r) {
 						ui.hideModal();
 						if (r.code != 0) {
 							ui.addNotification(null, E('p', {}, [ _('Not enrolled: %s').format(

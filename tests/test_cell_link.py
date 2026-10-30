@@ -475,6 +475,30 @@ def enrol_dated(exe, ctl, cell, env, start, end):
         ca.issue = plain
 
 
+def enrol_hidden(exe, ctl, d, env):
+    """The string by @FILE and @- keeps it off the command line."""
+    for how in ("file", "stdin", "missing"):
+        cell = os.path.join(d, "cell-" + how)
+        os.mkdir(cell, 0o700)
+        s = ctl.peer.enrollment_string()
+        if how == "file":
+            path = os.path.join(d, "enroll.txt")
+            with open(path, "w") as f:
+                f.write(s + "\n")
+            arg, inp = "@" + path, None
+        elif how == "stdin":
+            arg, inp = "@-", s + "\n"
+        else:
+            arg, inp = "@" + os.path.join(d, "no-such-file"), None
+        r = subprocess.run([exe, "-d", cell, "enroll", arg], input=inp,
+                           capture_output=True, text=True, timeout=30,
+                           env=env)
+        have = os.path.exists(os.path.join(cell, "enrollment"))
+        check((r.returncode == 0 and have) if how != "missing"
+              else (r.returncode != 0 and not have),
+              "enrolment with the string from %s" % how)
+
+
 def cell_uri(der):
     c = x509.load_der_x509_certificate(der)
     return c.extensions.get_extension_for_class(
@@ -550,6 +574,7 @@ def main():
     cell = os.path.join(d, "cell")
     os.mkdir(cell, 0o700)
     env = dict(os.environ, ASAN_OPTIONS="abort_on_error=0:exitcode=99")
+    enrol_hidden(exe, ctl, d, env)
     # 61 of 90 days gone: renewal is due at once (§5.4)
     r = enrol_dated(exe, ctl, cell, env, -61, 29)
     check(r.returncode == 0, "enrolment (%s)" % r.stdout.strip())
