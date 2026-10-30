@@ -1153,3 +1153,343 @@ void dect_base_cs_connect_tick(struct dect_base *b, uint64_t now)
 	dect_base_log(b, "call: CS call connect sent in CC-INFO (Part 3)");
 	dect_base_drain(b, -1, now);
 }
+
+void dect_base_hs_name(const struct dect_base *b, unsigned i, char *buf,
+		       size_t cap)
+{
+	if (b->name[i][0])
+		snprintf(buf, cap, "%s", b->name[i]);
+	else
+		snprintf(buf, cap, "DECT %u", dect_base_slot(b, i));
+}
+
+int dect_base_party_active(const struct dect_base *b, int p)
+{
+	return p == -1 ? b->main_link.active
+		       : p >= 0 && b->side[p].active;
+}
+
+static struct dect_cc *party_cc(struct dect_base *b, int p)
+{
+	return &dect_base_party_link(b, p)->link.cc;
+}
+
+static int lanes(struct dect_base *b, int p)
+{
+	return b->ops && b->ops->lanes ? b->ops->lanes(b->ctx, p) : 2;
+}
+
+void dect_base_cc_ids(const struct dect_base *b, unsigned i,
+		      const uint8_t **port, size_t *plen,
+		      const uint8_t **fixed, size_t *flen)
+{
+	const struct dect_hs_rec *r = i == b->cur ? &b->rec : &b->hs[i];
+
+	*port = r->cc_port_id;
+	*plen = r->cc_port_id_len;
+	*fixed = r->cc_fixed_id;
+	*flen = r->cc_fixed_id_len;
+}
+
+static void ic_page(struct dect_base *b)
+{
+	struct dect_base_ic *ic = &b->ic;
+
+	dect_base_page(b, DECT_BASE_PAGE_CC | DECT_BASE_PAGE_WIDEBAND, ic->tpui);
+	ic->pages++;
+	dect_base_log(b, "intern: paged DECT %u, attempt %u of %u",
+		      dect_base_slot(b, (unsigned)ic->target), ic->pages,
+		      DECT_BASE_IC_PAGES);
+}
+
+int dect_base_ic_start(struct dect_base *b, int p, uint64_t now)
+{
+	struct dect_base_ic *ic = &b->ic;
+	struct dect_cc *cc = party_cc(b, p);
+	const uint8_t *k;
+	size_t len, j;
+	unsigned slot = 0, i;
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
+	if ((cc->peer_basic_service >> 4) != 0x9u)
+		return 0;			/* not an internal call */
+	k = dect_cc_keypad(cc, &len);
+	for (j = 0; k && j < len; j++)
+		if (k[j] >= '0' && k[j] <= '9')
+			slot = slot * 10u + (unsigned)(k[j] - '0');
+	if (!b->cfg.two_calls || ic->st != DECT_BASE_IC_IDLE) {
+		/*
+		 * With a reason the handset can show (EN 300 175-5 §7.7.18):
+		 * another internal call in the way is the system busy (TS 102
+		 * 527-3 §7.4.8.3 for a Part 3 handset), the feature switched
+		 * off "service not implemented". It went without one.
+		 */
+		dect_base_log(b, "intern: internal call refused (%s)",
+			      b->cfg.two_calls ? "one at a time"
+					       : "needs -a twocalls");
+		if (b->cfg.two_calls)
+			(void)dect_cc_busy_system(cc);
+		else
+			(void)dect_cc_release_reason(cc,
+				DECT_CC_REASON_SERVICE_NOT_IMPLEMENTED);
+		return 1;
+	}
+	/* lanes: the target lands on a side link; a side caller needs its own */
+	if (lanes(b, p) < (p >= 0 ? 2 : 1)) {
+		dect_base_log(b, "intern: no free audio channel -- system busy");
+		(void)dect_cc_busy_system(cc);
+		return 1;
+	}
+	for (i = 0; i < b->n_hs; i++)
+		if (b->loaded[i] && dect_base_slot(b, i) == slot)
+			break;
+	if (i >= b->n_hs || (p < 0 && i == b->cur) ||
+	    (p >= 0 && (int)i == b->side[p].adopted)) {
+		dect_base_log(b, "intern: no other handset in slot %u -- "
+			      "releasing, \"user unknown\"", slot);
+		(void)dect_cc_release_reason(cc, DECT_CC_REASON_USER_UNKNOWN);
+		return 1;
+	}
+	(void)dect_cc_proceed(cc);
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.sub_slot = (uint8_t)dect_base_slot(b, i);
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tpui(&mm, ic->tpui);
+	ic->st = DECT_BASE_IC_PAGING;
+	ic->caller = p;
+	ic->target = (int)i;
+	ic->tside = DECT_BASE_IC_NONE;
+	ic->pages = 0;
+	ic->page_at = now;
+	dect_base_log(b, "intern: %s calls DECT %u",
+		      p < 0 ? "the main link's handset"
+			    : "a side link's handset", slot);
+	return 1;
+}
+
+void dect_base_ic_setup(struct dect_base *b, int p, uint64_t now,
+			const char *how)
+{
+	struct dect_base_ic *ic = &b->ic;
+	const uint8_t *port, *fixed;
+	size_t plen, flen;
+	struct dect_link *l = &dect_base_party_link(b, p)->link;
+	int ci_hs;
+	unsigned slot;
+	char num[12], name[DECT_IWU_NAME_MAX + 12];
+	struct dect_callinfo prev, ci;
+	struct dect_clip num_only;
+	int r;
+
+	dect_base_cc_ids(b, (unsigned)ic->target, &port, &plen, &fixed, &flen);
+	if (!plen || p == ic->caller || dect_cc_busy(&l->cc))
+		return;
+	dect_cc_set_next_ti(&l->cc, 0);
+	/* one call, one id on both handsets (TS 102 527-3 §7.4.6.1 note 2) */
+	dect_cc_set_call_status(&l->cc, l->cc.call_status,
+				party_cc(b, ic->caller)->status_call_id);
+	/*
+	 * EN 300 444 table 23: <<SIGNAL>> 40H for an internal call, 41H for
+	 * an external one, so the handset rings the internal pattern (stock
+	 * does the same, A-StockTrace-1). The SETUP is built here, so the
+	 * link's configured value is restored at once.
+	 */
+	dect_cc_set_signal(&l->cc, b->cfg.signal_on, DECT_SIGNAL_ALERT_PATTERN0);
+	/*
+	 * Who is calling (EN 300 444 §8.43/§8.44): the caller's terminal
+	 * number, network-specific type in the private plan (table 82), and
+	 * its handset name in the DECT alphabet (table 83), both "verified
+	 * and passed". Bench test 5 (2026-10-28): the C430A showed no caller.
+	 */
+	ci_hs = ic->caller < 0 ? (int)b->cur : b->side[ic->caller].adopted;
+	slot = ci_hs >= 0 ? dect_base_slot(b, (unsigned)ci_hs) : 0u;
+	prev = l->cc.callinfo;
+	dect_clip_init(&ic->clip);
+	if (slot) {
+		snprintf(num, sizeof(num), "%u", slot);
+		dect_base_hs_name(b, (unsigned)ci_hs, name, sizeof(name));
+		(void)dect_clip_set_number(&ic->clip, num,
+				DECT_CLIP_TON_NETWORK_SPECIFIC,
+				DECT_CLIP_NPI_PRIVATE, DECT_CLIP_PRES_ALLOWED,
+				DECT_CLIP_SCR_USER_PASSED);
+		(void)dect_clip_set_name(&ic->clip, name,
+				DECT_CLIP_ALPHABET_DECT, DECT_CLIP_PRES_ALLOWED,
+				DECT_CLIP_SCR_USER_PASSED);
+	}
+	/*
+	 * A Part 3 target: the call id and CS call setup, no line (an
+	 * internal call has none), as stock sends the A540: 7e 06 01 00 81 02
+	 * 01 81 [CR A-0125]; TS 102 527-3 §7.4.6.3.
+	 */
+	dect_callinfo_init(&ci);
+	if (b->cap[ic->target].known && b->cap[ic->target].part3 &&
+	    !b->cfg.no_call_status) {
+		ci.has_call_id = 1;
+		ci.call_id = l->cc.status_call_id;
+		ci.has_call_status = 1;
+		ci.call_status = DECT_CS_CALL_SETUP;
+	}
+	dect_cc_set_callinfo(&l->cc, &ci);
+	/*
+	 * A Part 3 target gets the number in the SETUP and the name in a
+	 * {CC-INFO} once it rings, as stock does [CR A-0130 §1]: the A540
+	 * took a name in the SETUP for "via Intern DECT" (bench test 11).
+	 */
+	ic->name_info = slot && ci.has_call_status && ic->clip.name[0];
+	num_only = ic->clip;
+	if (ic->name_info)
+		num_only.name[0] = '\0';
+	r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
+			     dect_base_basic_svc(b, ic->target,
+						 b->cfg.narrowband ? 0x90u
+							: DECT_BASE_IC_SVC),
+			     slot ? &num_only : NULL);
+	dect_cc_set_callinfo(&l->cc, &prev);
+	if (r) {
+		dect_cc_set_signal(&l->cc, b->cfg.signal_on,
+				   b->cfg.signal_value);
+		dect_base_log(b, "intern: could not queue the SETUP to the "
+			      "target");
+		return;
+	}
+	if (slot)
+		dect_base_log(b, "intern: caller shown as %s / \"%s\"%s", num,
+			      name, ci.has_call_status ?
+			      ", call id and CS call setup (Part 3)" : "");
+	dect_cc_set_signal(&l->cc, b->cfg.signal_on, b->cfg.signal_value);
+	ic->tside = p;
+	ic->st = DECT_BASE_IC_SETUP;
+	dect_base_log(b, "intern: the target %s on %s link %u -- SETUP sent",
+		      how, p == -1 ? "the main" : "side",
+		      dect_base_party_link(b, p)->handle);
+	dect_base_drain(b, p, now);
+}
+
+void dect_base_ic_end(struct dect_base *b, const char *why)
+{
+	dect_base_log(b, "intern: call ended (%s)", why);
+	b->ic.st = DECT_BASE_IC_IDLE;
+	b->ic.tside = DECT_BASE_IC_NONE;
+}
+
+/*
+ * The internal caller's identity for a Part 3 target, after the SETUP:
+ * {CC-INFO} with <<CALLING-PARTY-NUMBER>>, <<CALLING-PARTY-NAME>> in UTF-8
+ * (stock's octet 3 is 05H) and <<CALL-INFORMATION>> with the call id only,
+ * as stock sends the A540 [CR A-0130 §1].
+ */
+static void ic_name_info(struct dect_base *b, struct dect_cc *t, uint64_t now)
+{
+	struct dect_base_ic *ic = &b->ic;
+	struct dect_clip id = ic->clip;
+	struct dect_callinfo ci;
+	uint8_t ies[96];
+	size_t off = 0, next;
+
+	ic->name_info = 0;
+	if (dect_clip_set_name(&id, ic->clip.name, DECT_CLIP_ALPHABET_UTF8,
+			       DECT_CLIP_PRES_ALLOWED,
+			       DECT_CLIP_SCR_USER_PASSED))
+		id = ic->clip;			/* keep the DECT alphabet */
+	next = dect_clip_put_number(ies, sizeof(ies), off, &id);
+	if (next)
+		off = next;
+	next = dect_clip_put_name(ies, sizeof(ies), off, &id, 0);
+	if (next)
+		off = next;
+	dect_callinfo_init(&ci);
+	ci.has_call_id = 1;
+	ci.call_id = t->status_call_id;
+	next = dect_callinfo_put(ies, sizeof(ies), off, &ci);
+	if (next)
+		off = next;
+	if (!off || dect_cc_info(t, ies, off)) {
+		dect_base_log(b, "intern: could not queue the caller's name");
+		return;
+	}
+	dect_base_drain(b, ic->tside, now);
+	dect_base_log(b, "intern: caller's name \"%s\" sent in CC-INFO (Part "
+		      "3, A-0130)", ic->clip.name);
+}
+
+void dect_base_ic_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_ic *ic = &b->ic;
+	struct dect_cc *c, *t;
+	unsigned k;
+
+	if (ic->st == DECT_BASE_IC_IDLE)
+		return;
+	c = party_cc(b, ic->caller);
+	if (!dect_base_party_active(b, ic->caller) || !dect_cc_busy(c)) {
+		if (ic->tside != DECT_BASE_IC_NONE &&
+		    dect_base_party_active(b, ic->tside) &&
+		    dect_cc_busy(party_cc(b, ic->tside))) {
+			(void)dect_cc_release(party_cc(b, ic->tside));
+			dect_base_drain(b, ic->tside, now);
+		}
+		dect_base_ic_end(b, "the caller hung up");
+		return;
+	}
+	if (ic->st == DECT_BASE_IC_PAGING) {
+		for (k = 0; k < DECT_BASE_SIDES &&
+			    ic->st == DECT_BASE_IC_PAGING; k++)
+			if (b->side[k].active &&
+			    b->side[k].adopted == ic->target &&
+			    !dect_cc_busy(&b->side[k].link.cc))
+				dect_base_ic_setup(b, (int)k, now,
+					"came up (adopted, no page response)");
+		/*
+		 * or the main link, if the caller is not on it (finding 5) --
+		 * only once it has adopted the target. A main link that has
+		 * adopted no one is not presumed to serve the current record:
+		 * whichever handset connects next would get the SETUP (the
+		 * deregistration did exactly that on the bench, 2026-10-28).
+		 * The target's page response is matched by identity by the
+		 * host.
+		 */
+		if (ic->st == DECT_BASE_IC_PAGING && ic->caller != -1 &&
+		    b->main_link.active &&
+		    !dect_cc_busy(&b->main_link.link.cc) &&
+		    b->main_link.link.mm.adopted == ic->target)
+			dect_base_ic_setup(b, -1, now,
+				"came up (adopted, no page response)");
+		if (ic->st != DECT_BASE_IC_PAGING)
+			return;
+		if (now >= ic->page_at) {
+			if (ic->pages >= DECT_BASE_IC_PAGES) {
+				(void)dect_cc_release(c);
+				dect_base_ic_end(b, "the target did not answer "
+						 "the page");
+				return;
+			}
+			ic_page(b);
+			ic->page_at = now + DECT_BASE_IC_PAGE_MS;
+		}
+		return;
+	}
+	if (ic->tside == DECT_BASE_IC_NONE ||
+	    !dect_base_party_active(b, ic->tside) ||
+	    !dect_cc_busy(party_cc(b, ic->tside))) {
+		(void)dect_cc_release(c);
+		dect_base_ic_end(b, "the target hung up or refused");
+		return;
+	}
+	t = party_cc(b, ic->tside);
+	if (ic->st == DECT_BASE_IC_SETUP && t->state == DECT_CC_ST_RINGING) {
+		(void)dect_cc_alert(c);
+		ic->st = DECT_BASE_IC_RINGING;
+		dect_base_log(b, "intern: the target rings -- ringback to the "
+			      "caller");
+		if (ic->name_info)
+			ic_name_info(b, t, now);
+	}
+	if (ic->st != DECT_BASE_IC_UP && t->state == DECT_CC_ST_ACTIVE &&
+	    dect_base_call_auth_ok(b, &dect_base_party_link(b, ic->tside)->link)) {
+		(void)dect_cc_connect(c);
+		ic->st = DECT_BASE_IC_UP;
+		dect_base_log(b, "intern: the target answered -- connected, "
+			      "bridging");
+	}
+}

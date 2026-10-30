@@ -816,3 +816,10 @@ _call_new_id(), _party_line2(), _call_out() (S3o).
 `connect_staged`, `connect_at`, `cs_connect_sent`; dect_base_cfg's
 `no_cipher`; dect_base_call_auth_ok(), _number_complete(), _dial_tick(),
 _dial_connect(), _connect_tick(), _cs_connect_tick() (S3p).
+
+**117.** dect_base.h, 2026-10-30: the internal call: enum
+dect_base_ic_state, struct dect_base_ic and dect_base's `ic`,
+DECT_BASE_IC_NONE, _IC_PAGES, _IC_PAGE_MS, _IC_SVC; dect_base's
+`loaded[]` and `name[][]`; dect_base_ops' `lanes`; dect_base_hs_name(),
+_cc_ids(), _party_active(), _ic_start(), _ic_setup(), _ic_end(),
+_ic_tick() (S3q).

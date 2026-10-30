@@ -325,3 +325,15 @@ stays with the host for now: the internal call, then the bridge
 `dial-local.trace` (overlap digits, no bridge, alertms and bindfirst),
 recorded on S3p and replayed unchanged on the commit before it; the
 other eight unchanged.
+
+**S3q.** The internal call is the library's: `dect_base_ic_start()`
+(refusals, the target found by slot, the page), `dect_base_ic_setup()`
+(the SETUP with the caller's number and name, the internal signal, the
+shared call id) and `dect_base_ic_tick()` (pages, ringback, the Part 3
+name in {CC-INFO}, connect, the ends). Which records hold a subscription
+and their names are `dect_base`'s (`loaded[]`, `name[][]`); the host
+says how many audio channels a new call can count on (`lanes()`), and
+keeps the audio bridge between the two parties and its codec warning.
+The page response is still matched to the target by the host
+(`page_adopt()`, with the side links' adoption). Unit tests; the nine
+traces unchanged.

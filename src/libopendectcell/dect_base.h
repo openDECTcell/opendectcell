@@ -93,6 +93,11 @@ struct dect_base_ops {
 	 * take now (S3n).
 	 */
 	void (*pump)(void *ctx, struct dect_base_link *bl);
+	/*
+	 * Audio channels a new call on link p (-1 the main link) can still
+	 * count on (S3q): the host's lanes. NULL: as many as needed.
+	 */
+	int  (*lanes)(void *ctx, int p);
 };
 
 /*
@@ -259,6 +264,37 @@ struct dect_base_cap {
 	int ng;				/* NG-DECT Part 1 or 3: not pure GAP */
 };
 
+/*
+ * Stage S3q: an internal call (GAP N.31), a handset's SETUP with call
+ * class 9, the target's slot in its digits. The base pages the target,
+ * calls it on the link it answers on, and the host bridges the two
+ * channels (clean room A-0124: stock does the same). Needs cfg.two_calls.
+ */
+enum dect_base_ic_state {
+	DECT_BASE_IC_IDLE,
+	DECT_BASE_IC_PAGING,
+	DECT_BASE_IC_SETUP,
+	DECT_BASE_IC_RINGING,
+	DECT_BASE_IC_UP,
+};
+
+#define DECT_BASE_IC_NONE	(-2)	/* a party with no link yet */
+#define DECT_BASE_IC_PAGES	20u
+#define DECT_BASE_IC_PAGE_MS	3000u
+#define DECT_BASE_IC_SVC	0x98u	/* internal call, wideband speech */
+
+struct dect_base_ic {
+	enum dect_base_ic_state st;
+	int      caller;	/* -1 the main link, else a side index */
+	int      target;	/* the record called */
+	int      tside;		/* the target's link: as caller, or IC_NONE */
+	uint8_t  tpui[3];
+	unsigned pages;
+	uint64_t page_at;
+	int      name_info;	/* the caller's name follows in {CC-INFO} */
+	struct dect_clip clip;	/* the caller, kept for re-presentation */
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
@@ -286,7 +322,15 @@ struct dect_base {
 	struct dect_base_cfg cfg;
 	/* the caller's identity for the next FP-originated SETUP (S3m) */
 	struct dect_clip clip;
+	struct dect_base_ic ic;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
+	/* record i holds a subscription (the host's store had one) */
+	int      loaded[DECT_BASE_HS_MAX];
+	/*
+	 * The name a handset gave record i in the Internal Names List (TS 102
+	 * 527-3 §7.4.10.5.8); empty = the default "DECT n".
+	 */
+	char     name[DECT_BASE_HS_MAX][DECT_IWU_NAME_MAX];
 	/*
 	 * Each record's handset profile (docs/handset-profiles.md), resolved
 	 * by the host from the model it was given (S3h): defaults otherwise.
@@ -609,6 +653,32 @@ void dect_base_connect_tick(struct dect_base *b, uint64_t now);
  * answered, a {CC-INFO} with the call id and "CS call connect".
  */
 void dect_base_cs_connect_tick(struct dect_base *b, uint64_t now);
+
+/* Record i's name: its own, or "DECT n" (S3q). */
+void dect_base_hs_name(const struct dect_base *b, unsigned i, char *buf,
+		       size_t cap);
+/* The CC identities of record i, current or stashed. */
+void dect_base_cc_ids(const struct dect_base *b, unsigned i,
+		      const uint8_t **port, size_t *plen,
+		      const uint8_t **fixed, size_t *flen);
+/* Link p is up. */
+int dect_base_party_active(const struct dect_base *b, int p);
+/*
+ * The handset on link p finished dialling: an internal call if its basic
+ * service says so (0: not one). Refused busy, "service not implemented"
+ * or "user unknown" as the case is, else proceeding and the target paged.
+ */
+int dect_base_ic_start(struct dect_base *b, int p, uint64_t now);
+/*
+ * Our SETUP to the target on link p, once it answered the page or came
+ * up adopted: the caller's number and name, the internal signal, the
+ * call id both handsets share.
+ */
+void dect_base_ic_setup(struct dect_base *b, int p, uint64_t now,
+			const char *how);
+void dect_base_ic_end(struct dect_base *b, const char *why);
+/* The internal call's progress, once a tick. */
+void dect_base_ic_tick(struct dect_base *b, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

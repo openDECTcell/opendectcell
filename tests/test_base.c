@@ -534,5 +534,36 @@ int main(void)
 		CHECK_EQ(b.main_link.connect_staged, 0);
 		CHECK_EQ(dect_base_dial_tick(&b, -1, 0), 0);
 	}
+
+	/* the internal call (S3q) */
+	{
+		char nm[40];
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.hs[0].slot = 1;
+		b.hs[1].slot = 2;
+		b.rec = b.hs[0];
+		dect_base_hs_name(&b, 1, nm, sizeof(nm));
+		CHECK_EQ(strcmp(nm, "DECT 2"), 0);
+		snprintf(b.name[1], sizeof(b.name[1]), "Kitchen");
+		dect_base_hs_name(&b, 1, nm, sizeof(nm));
+		CHECK_EQ(strcmp(nm, "Kitchen"), 0);
+		CHECK_EQ(dect_base_party_active(&b, -1), 0);
+		b.side[1].active = 1;
+		CHECK_EQ(dect_base_party_active(&b, 1), 1);
+		CHECK_EQ(dect_base_party_active(&b, DECT_BASE_IC_NONE), 0);
+		b.main_link.link.cc.peer_basic_service = 0x80;
+		CHECK_EQ(dect_base_ic_start(&b, -1, 0), 0);	/* not internal */
+		b.main_link.link.cc.peer_basic_service = 0x90;
+		CHECK_EQ(dect_base_ic_start(&b, -1, 0), 1);	/* no twocalls */
+		CHECK_EQ(b.ic.st, DECT_BASE_IC_IDLE);
+		b.cfg.two_calls = 1;
+		CHECK_EQ(dect_base_ic_start(&b, -1, 0), 1);	/* slot 0: unknown */
+		CHECK_EQ(b.ic.st, DECT_BASE_IC_IDLE);
+		dect_base_ic_end(&b, "test");
+		CHECK_EQ(b.ic.tside, DECT_BASE_IC_NONE);
+	}
 	return CHECK_DONE();
 }
