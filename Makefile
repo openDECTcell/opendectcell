@@ -15,7 +15,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls $(BUILD)/test_stubd
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 
 # Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
@@ -115,6 +115,14 @@ $(BUILD)/test_mm: tests/test_mm.c src/libopendectcell/dect_mm.c src/libopendectc
 $(BUILD)/test_iwu: tests/test_iwu.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_iwu.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_iwu.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c
+
+# Daemon-level golden traces: dect-stubd.c compiled in with STUBD_TEST
+# (docs/stack-in-library.md, stage S0); its files go to build/stubd-test-run.
+$(BUILD)/test_stubd: tests/test_stubd.c $(STUBD_SRC) src/stubd/ssc_align.h tests/check.h $(wildcard tests/stubd-traces/*.trace)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(DEFS) $(SAN) $(STUBD_INC) -DSTUBD_TEST -DDECT_RUN_DIR='"$(BUILD)/stubd-test-run"' \
+		-DAB_PATH='"$(BUILD)/stubd-test-run/audio.sock"' \
+		-o $@ tests/test_stubd.c $(filter-out src/stubd/dect-stubd.c,$(STUBD_SRC)) -lm
 
 $(BUILD)/test_calls: tests/test_calls.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_calls.h src/libopendectcell/dect_iwu.h tests/check.h
 	@mkdir -p $(BUILD)

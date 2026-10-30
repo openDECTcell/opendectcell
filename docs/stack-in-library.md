@@ -53,3 +53,25 @@ and changes no byte on the air unless it says so.
 
 Bench time is needed from S2 on: each stage is one bench session on the
 7412, with the card's outcomes written before the run.
+
+## Record
+
+**S0, 2026-10-30.** `tests/test_stubd.c` compiles `dect-stubd.c` with
+`STUBD_TEST`: `main()` hands its set-up state to the harness where it would
+open the chip, `send_mail()` hands over each mail, the monotonic and wall
+clocks are the harness's, and the run directory and audio socket are
+under `build/`. Nothing else in the daemon changed for it, apart from the
+pure move of `loop_tick()` out of `run_loop()` (`8d2a09d`). The harness
+plays the chip (connection up and down, any mail) and the handsets
+(Lc/LAPC framing, acknowledgements) and is a real client on the control
+socket. Traces in `tests/stubd-traces/`:
+
+| Trace | Covers |
+|---|---|
+| `locate.trace` | start-up with one stored handset (bring-up mails, slot clears, subscription write), a location registration with authentication, the date and time |
+| `call-in.trace` | the bridge's `call-in`, page, page response, CC-SETUP with CLIP/CNIP, authentication and ciphering (0x0208, 0x0209), alerting, answer, the audio bind (0x0251, 0x0230, 0x022D), `remote-released` and the release (0x0233, 0x0202) |
+
+Still to add before S1: an outgoing call, a registration (access rights
+and key allocation), list access, a second handset on a side link.
+Authentication answers are computed once from the made-up UAK with the
+library's DSAA and written into the trace as plain data.

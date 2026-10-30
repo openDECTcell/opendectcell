@@ -1,0 +1,39 @@
+# A stored handset locates (EN 300 175-5 §13.4.1) on a running base, and
+# the connection goes. Identities and keys are made up.
+sub 1 80 a8 03 11 22 33 44
+start
+ev hello api=N lines=1 hs=1
+ev hs hs=1 state=registered name="DECT 1" wideband=1
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+mail 0247 02 00 00
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 01
+
+up 1
+# {LOCATE-REQUEST}: <<PORTABLE-IDENTITY>>, <<FIXED-IDENTITY>> (PARK)
+pp 05 54 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60
+fp 05 40 0a 03 01 18 08 0c 08 eb 10 35 5a 7f a4 c9 ee 0e 08 13 38 5d 82 a7 cc f1 16
+# {AUTHENTICATION-REPLY}: RES1 = A12(A11(UAK, RS), RAND_F) for the made-up
+# UAK b0..bf and the RAND_F and RS above
+pp 85 41 0d 04 99 cf 32 52
+fp 85 55 05 05 a0 94 00 11 01 07 01 64 7c 07 90 03 00 01 02 00 84
+fp 64 62 23 08 c0 26 10 30 09 00 00 00
+tick 3000
+down
+tick 1000

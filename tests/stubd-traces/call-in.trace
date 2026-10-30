@@ -1,0 +1,72 @@
+# An incoming call to a stored handset: the bridge offers it, the base
+# pages, the handset comes up, rings, answers, and the far end hangs up.
+# Identities, keys and numbers are made up.
+sub 1 80 a8 03 11 22 33 44
+start
+ev hello api=N lines=1 hs=1
+ev hs hs=1 state=registered name="DECT 1" wideband=1
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+mail 0247 02 00 00
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 01
+ctl bridge
+ev ok verb=bridge
+ctl call-in line=1 hs=1 number=0301234567 name="Test" sip=t1
+ev call-in-ok call=1 sip=t1
+mail 0300 2c 11 01
+tick 500
+# The handset answers the page: its link comes up, then
+# {LCE-PAGE-RESPONSE} (PD 0, TI 0) with <<PORTABLE-IDENTITY>>.
+up 1
+pp 00 71 05 07 80 a8 03 11 22 33 44
+fp 03 05 05 07 80 a8 03 11 22 33 44 06 05 00 01 23 45 60 e0 88 e4 41 6c 0c 00 80 30 33 30 31 32 33 34 35 36 37 6d 05 04 54 65 73 74
+fp 05 40 0a 03 01 18 18 0c 08 eb 10 35 5a 7f a4 c9 ee 0e 08 13 38 5d 82 a7 cc f1 16
+tick 200
+# {AUTHENTICATION-REPLY} to the base's request (the same made-up UAK and
+# fixed randomness as in locate.trace), then the chip reports the link
+# ciphered.
+pp 85 41 0d 04 99 cf 32 52
+fp 05 4c 19 02 81 98
+mail 0208 01 40 12 66 68 ac ad 2c a5 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00
+tick 200
+chip 0209 01
+tick 200
+# {CC-ALERTING}, then {CC-CONNECT}: the user answers.
+pp 83 01
+ev ringing call=1 hs=1
+tick 200
+pp 83 07
+ev answered call=1 hs=1
+ev audio call=1 path=build/stubd-test-run/audio.sock
+fp 03 0f
+mail 0251 01 01 2b
+mail 0230 01 01 00 00 00 00
+tick 500
+mail 022d 01 00
+# The far end hangs up; the handset completes the release.
+ctl remote-released call=1 reason=normal
+ev ok verb=remote-released call=1
+fp 03 4d
+mail 0233 01 01
+mail 0202 01
+tick 200
+pp 83 5a
+tick 500
+down
+tick 1000

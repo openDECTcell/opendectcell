@@ -150,6 +150,28 @@ static uint64_t fs_free_bytes(const char *path)
 #define TIMESYNC_FORCE	1u
 #define TIMESYNC_OFF	2u
 
+#ifdef STUBD_TEST
+/*
+ * tests/test_stubd.c: the daemon-level traces run on a clock of their own,
+ * take the mails the daemon sends, and stand in for the chip (main()).
+ */
+struct stubd;
+struct dect_mail;
+extern uint64_t stubd_test_ms;
+extern time_t stubd_test_wall;
+void stubd_test_sent(const struct dect_mail *m);
+int stubd_test_run(struct stubd *s);
+#endif
+
+static time_t wall_now(void)
+{
+#ifdef STUBD_TEST
+	return stubd_test_wall;
+#else
+	return time(NULL);
+#endif
+}
+
 static int clock_is_trustworthy(time_t now_s, uint8_t mode)
 {
 	struct timex tx;
@@ -214,7 +236,7 @@ static long tz_offset_seconds(time_t t)
  */
 static void clock_any(struct dect_time *dt)
 {
-	time_t now_s = time(NULL);
+	time_t now_s = wall_now();
 	struct tm tm;
 	long off_s = tz_offset_seconds(now_s);
 
@@ -233,7 +255,7 @@ static void clock_any(struct dect_time *dt)
 
 static int clock_now(uint8_t mode, struct dect_time *dt, long *off_s)
 {
-	time_t now_s = time(NULL);
+	time_t now_s = wall_now();
 	struct tm tm;
 
 	if (!clock_is_trustworthy(now_s, mode) || !localtime_r(&now_s, &tm))
@@ -293,10 +315,14 @@ static void on_usr2(int sig)
 
 static uint64_t mono_ms(void)
 {
+#ifdef STUBD_TEST
+	return stubd_test_ms;
+#else
 	struct timespec t;
 
 	clock_gettime(CLOCK_MONOTONIC, &t);
 	return (uint64_t)t.tv_sec * 1000u + (uint64_t)t.tv_nsec / 1000000u;
+#endif
 }
 
 /*
@@ -1302,8 +1328,16 @@ static uint32_t sub_uak_base = SUB_UAK_BASE_0825;
  * table's above, belong to one build: read against another they are
  * unrelated memory.
  */
+#ifndef DECT_RUN_DIR			/* tests/test_stubd.c sets its own */
 #define DECT_RUN_DIR		"/var/run/opendectcell"
+#endif
 #define DECT_STUB_RECORD	DECT_RUN_DIR "/stub.second"
+
+#ifdef STUBD_TEST
+#define ROOT_UID	getuid()	/* the traces run as their user */
+#else
+#define ROOT_UID	0u
+#endif
 
 /* fopen(path, "r"), if path is root's own and only root may write it. */
 static FILE *fopen_root_only(const char *path)
@@ -1311,7 +1345,7 @@ static FILE *fopen_root_only(const char *path)
 	struct stat st;
 	FILE *f = fopen(path, "r");
 
-	if (f && (fstat(fileno(f), &st) || st.st_uid != 0 ||
+	if (f && (fstat(fileno(f), &st) || st.st_uid != ROOT_UID ||
 		  (st.st_mode & (S_IWGRP | S_IWOTH)) || !S_ISREG(st.st_mode))) {
 		fprintf(stderr, "ignoring %s: not root's own file\n", path);
 		fclose(f);
@@ -1747,6 +1781,10 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 	if (el_len <= 0 || tx_slot >= s->slots)
 		return -1;
 	verify_count(s, (uint16_t)m->prim);
+#ifdef STUBD_TEST
+	stubd_test_sent(m);
+	return 0;
+#endif
 
 	/*
 	 * Once the ring is running every write goes through it, so the mail is
@@ -1859,7 +1897,9 @@ static int lane_word_live(uint32_t v)
  * one linear sample per frame each way (clean room A-0042, 7412 A-0015).
  * Silence when the FIFO runs dry.
  */
+#ifndef AB_PATH				/* tests/test_stubd.c sets its own */
 #define AB_PATH		"/var/run/opendectcell-audio.sock"
+#endif
 #define AB_FRAME	640u	/* octets: 20 ms of 16-bit PCM at 16 kHz, the most */
 #define AB_PRIME_MS	40u	/* buffered towards the handset before the first */
 #define AB_HELLO_MS	2000u	/* a new connection names its call within */
@@ -4087,9 +4127,9 @@ static void sub_audit_reply(struct stubd *s, uint32_t addr,
 		return;			/* wait for the rest */
 
 	{
-		uint8_t mine_bit = s->sub_audit_mine >= 1u &&
+		uint8_t mine_bit = (uint8_t)(s->sub_audit_mine >= 1u &&
 				   s->sub_audit_mine <= DECT_MM_MAX_SLOT
-			? (uint8_t)(1u << (s->sub_audit_mine - 1u)) : 0u;
+			? 1u << (s->sub_audit_mine - 1u) : 0u);
 		/* our other handsets' slots are kept, not foreign */
 		uint8_t kept = (uint8_t)(live_slot_mask(s) & ~mine_bit);
 		uint8_t foreign = (uint8_t)(s->sub_audit_occupied &
@@ -13202,6 +13242,9 @@ int main(int argc, char **argv)
 	if (mkdir(DECT_RUN_DIR, 0700) && errno != EEXIST)
 		perror(DECT_RUN_DIR);
 	(void)unlink(PARK_RECORD);	/* this run's park, not the last one's */
+#ifdef STUBD_TEST
+	return stubd_test_run(&s);	/* the chip is a script from here on */
+#endif
 	s.fd = open(dev, O_RDWR);
 	if (s.fd < 0) {
 		perror(dev);
