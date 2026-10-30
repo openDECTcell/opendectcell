@@ -124,6 +124,16 @@ static const struct dect_base_ops ops = { .save = save, .send = send,
 					  .switched = switched,
 					  .call_down = call_down };
 
+/* name_visible(): slots 1 and 2 are one account, 3 is another (API 138). */
+static int vis_calls;
+
+static int same_account(void *ctx, unsigned viewer, unsigned slot)
+{
+	(void)ctx;
+	vis_calls++;
+	return (viewer == 3u) == (slot == 3u);
+}
+
 int main(void)
 {
 	struct dect_base b;
@@ -1158,6 +1168,65 @@ int main(void)
 		CHECK_EQ(r.named, -1);
 		CHECK_EQ(dect_ctl_parse(l3, strlen(l3), &m), 0);
 		CHECK_EQ(dect_base_ctl_admin(&b, &m, 0, &r), 0);
+	}
+	/*
+	 * The Internal Names List per viewer, and read-only (API 138): a
+	 * handset sees its account's handsets, never another's; a base with no
+	 * name_visible() shows all.
+	 */
+	{
+		static struct dect_base_ops vops;
+		struct dect_iwu iwu;
+		unsigned t;
+
+		dect_base_init(&b);
+		vops.name_visible = same_account;
+		b.n_hs = 3;
+		b.hs[0].slot = 1;
+		b.hs[1].slot = 2;
+		b.hs[2].slot = 3;
+		dect_iwu_init(&iwu);
+		for (t = 1; t <= 3; t++)
+			CHECK_EQ(dect_iwu_add_handset(&iwu, (uint8_t)t, "x"), 0);
+		dect_iwu_set_own(&iwu, 1);
+
+		/* no host callback: everything, editable */
+		dect_base_iwu_lines(&b, &iwu, 1);
+		CHECK_EQ(iwu.n_handsets, 3u);
+		CHECK_EQ(iwu.names_readonly, 0u);
+
+		/* slot 1 sees 1 and 2 only */
+		b.ops = &vops;
+		dect_base_iwu_lines(&b, &iwu, 1);
+		CHECK_EQ(iwu.n_handsets, 2u);
+		CHECK_EQ(iwu.handsets[0].terminal_id, 1u);
+		CHECK_EQ(iwu.handsets[1].terminal_id, 2u);
+
+		/* slot 3 sees itself only, even from a full list */
+		for (t = 1; t <= 3; t++)
+			(void)dect_iwu_add_handset(&iwu, (uint8_t)t, "x");
+		dect_iwu_set_own(&iwu, 3);
+		dect_base_iwu_lines(&b, &iwu, 3);
+		CHECK_EQ(iwu.n_handsets, 1u);
+		CHECK_EQ(iwu.handsets[0].terminal_id, 3u);
+
+		/* the switch for read-only goes to the link's list */
+		b.cfg.names_readonly = 1;
+		dect_base_iwu_lines(&b, &iwu, 3);
+		CHECK_EQ(iwu.names_readonly, 1u);
+
+		/* a spread entry reaches only the links whose viewer may see it */
+		b.main_link.active = 1;
+		dect_iwu_init(&b.main_link.link.cc.iwu);
+		dect_iwu_set_own(&b.main_link.link.cc.iwu, 1);
+		dect_base_names_spread(&b, 1);		/* slot 2: same account */
+		CHECK_EQ(b.main_link.link.cc.iwu.n_handsets, 1u);
+		dect_base_names_spread(&b, 2);		/* slot 3: not visible */
+		CHECK_EQ(b.main_link.link.cc.iwu.n_handsets, 1u);
+		dect_iwu_set_own(&b.main_link.link.cc.iwu, 3);
+		dect_base_names_spread(&b, 2);
+		CHECK_EQ(b.main_link.link.cc.iwu.n_handsets, 2u);
+		CHECK(vis_calls > 0);
 	}
 	return CHECK_DONE();
 }

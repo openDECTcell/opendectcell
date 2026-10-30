@@ -535,6 +535,29 @@ static void test_search_internal_names(void)
 }
 
 /*
+ * A read-only Internal Names List (API 138): the Name field is not editable,
+ * an edit is 'procedure not allowed' and no name changes.
+ */
+static void test_rename_refused_when_names_readonly(void)
+{
+	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
+	static const uint8_t edit[] = { 0xC3, 0x08, 0x81, 0x82, 0x01, 0x02, 0x03 };
+	static const uint8_t save[] = { 0xC3, 0x0A, 0x81, 0x82 };
+	struct dect_iwu iwu;
+
+	base_with_two_handsets(&iwu);
+	iwu.names_readonly = 1;
+	handle(&iwu, s6, sizeof(s6));
+	handle(&iwu, edit, sizeof(edit));
+	CHECK_EQ(out.count, 1u);
+	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
+	handle(&iwu, save, sizeof(save));	/* no lock: refused as well */
+	CHECK_EQ(out.msg[0][1], DECT_LIA_NACK);
+	CHECK_EQ(iwu.names_changed, 0u);
+	CHECK(strcmp(iwu.handsets[1].name, "DECT 2") == 0);
+}
+
+/*
  * Renaming a handset (7.4.10.4.4-5): edit entry 2 with the fields the
  * A540 asks for (01 02 03, vRINGA540-20261028-072432-1), get them back with
  * the name editable, save a new name in two data packets, get the save
@@ -813,6 +836,7 @@ int main(void)
 	test_unsupported_commands_are_refused();
 	test_table_41_refusals();
 	test_rename_a_handset();
+	test_rename_refused_when_names_readonly();
 	test_remove_handset();
 	test_delete_a_handset_needs_the_pin();
 	test_pin_guesses_are_limited();

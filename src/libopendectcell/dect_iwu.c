@@ -516,7 +516,8 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 			break;
 		case 0x02:
 			/* 7.4.10.5.1.3 'Name', UTF-8, editable (bit 7, annex H.7) */
-			put_field(b, field, 0x40, h->name, strlen(h->name));
+			put_field(b, field, iwu->names_readonly ? 0x00 : 0x40,
+				  h->name, strlen(h->name));
 			break;
 		case 0x03: {
 			/* 7.4.10.5.1.13 'Call interception': 31H = allowed. */
@@ -1030,7 +1031,7 @@ static void query_fields(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	if (reply_begin(out, &b, DECT_LIA_QUERY_FIELDS_CFM))
 		return;
 	put_ext(&b, session);
-	if (list == DECT_LIA_LIST_INTERNAL_NAMES ||
+	if ((list == DECT_LIA_LIST_INTERNAL_NAMES && !iwu->names_readonly) ||
 	    list == DECT_LIA_LIST_SYSTEM_SETTINGS) {
 		/* the name (06H), or 'Current PIN code' (07H) */
 		uint8_t ed = list == DECT_LIA_LIST_INTERNAL_NAMES ? 0x02 : 0x01;
@@ -1330,6 +1331,11 @@ static void edit_entry(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	nwanted = wanted_fields(iwu, (uint8_t)list, p, n, 1, wanted,
 				sizeof(wanted));
 	if (!nwanted) {
+		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
+		return;
+	}
+	/* a read-only Internal Names List has nothing to edit (API 138) */
+	if (list == DECT_LIA_LIST_INTERNAL_NAMES && iwu->names_readonly) {
 		nack(iwu, out, session, DECT_LIA_NACK_NOT_ALLOWED);
 		return;
 	}
@@ -1706,7 +1712,7 @@ static void finish_save(struct dect_iwu *iwu, struct dect_iwu_out *out)
 					iwu->pin_ok = 1;
 				}
 			} else if (list == DECT_LIA_LIST_INTERNAL_NAMES &&
-				   fid == 0x02) {
+				   fid == 0x02 && !iwu->names_readonly) {
 				/* [properties][UTF-8 name]; length 1 = reset */
 				struct dect_iwu_handset *h =
 					&iwu->handsets[iwu->save_entry - 1u];

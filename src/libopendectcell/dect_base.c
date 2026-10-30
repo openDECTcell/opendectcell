@@ -3523,19 +3523,56 @@ void dect_base_time_tick(struct dect_base *b, uint64_t now)
 	time_next(b);
 }
 
+/* May the handset in slot `viewer` see slot `slot`'s entry (API 138)? */
+static int names_visible(const struct dect_base *b, unsigned viewer,
+			 unsigned slot)
+{
+	if (!viewer || viewer == slot || !b->ops || !b->ops->name_visible)
+		return 1;
+	return b->ops->name_visible(b->ctx, viewer, slot);
+}
+
+/* The viewer's list loses what it may not see; a read-only list (API 138). */
+static void names_filter(const struct dect_base *b, struct dect_iwu *iwu,
+			 unsigned viewer)
+{
+	unsigned i;
+
+	iwu->names_readonly = b->cfg.names_readonly ? 1u : 0u;
+	for (i = iwu->n_handsets; i-- > 0;)
+		if (!names_visible(b, viewer, iwu->handsets[i].terminal_id))
+			(void)dect_iwu_remove_handset(
+				iwu, iwu->handsets[i].terminal_id);
+}
+
 void dect_base_names_spread(struct dect_base *b, unsigned i)
 {
 	char name[DECT_IWU_NAME_MAX];
 	uint8_t tid = (uint8_t)dect_base_slot(b, i);
+	struct dect_iwu *iwu;
 	unsigned k;
 
 	dect_base_hs_name(b, i, name, sizeof(name));
-	if (b->main_link.active)
-		(void)dect_iwu_add_handset(&b->main_link.link.cc.iwu, tid, name);
-	for (k = 0; k < DECT_BASE_SIDES; k++)
-		if (b->side[k].active)
-			(void)dect_iwu_add_handset(&b->side[k].link.cc.iwu, tid,
-						   name);
+	for (k = 0; k < 1 + DECT_BASE_SIDES; k++) {
+		if (k ? !b->side[k - 1u].active : !b->main_link.active)
+			continue;
+		iwu = k ? &b->side[k - 1u].link.cc.iwu :
+			  &b->main_link.link.cc.iwu;
+		if (names_visible(b, iwu->own_terminal_id, tid))
+			(void)dect_iwu_add_handset(iwu, tid, name);
+		else
+			(void)dect_iwu_remove_handset(iwu, tid);
+	}
+}
+
+void dect_base_names_refresh(struct dect_base *b)
+{
+	unsigned i;
+
+	for (i = 0; i < b->n_hs; i++)
+		if (i == b->cur || b->loaded[i])
+			dect_base_names_spread(b, i);
+	dect_base_names_notify(b);
 }
 
 /*
@@ -4052,6 +4089,7 @@ void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
 
 	iwu->contacts = b->contacts;
 	iwu->calls = b->call_lists;
+	names_filter(b, iwu, slot);
 	for (i = 0; i < b->n_hs; i++)
 		if (dect_base_slot(b, i) == slot)
 			break;

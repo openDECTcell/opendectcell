@@ -946,3 +946,34 @@ MEDIA_OPEN no longer answers status 4. What the cell does (cell-protocol.md
   With a set clock past `not_after`, the cell stops before it dials
   (state `stopped: certificate expired, enrol again`).
 - `cell-link.json` has `cert_expires` (Unix seconds); LuCI shows it.
+
+## The protocol is complete; the handsets in the controller `[2026-10-31]`
+
+- **cell-protocol.md is v1, complete for C3** (controller `15af9a2`). Its
+  new §15 is the table of what the cell does today against the spec. The
+  rows that are *not built* here, so you know what not to depend on:
+  CONFIG_SET (answered status 1, nothing applied), TRUST_UPDATE (do not
+  rotate the cell CA; re-enrol instead), STATUS tags 6 and 7, silence
+  packets on an idle lane, and §9's P0 bound and `TCP_NOTSENT_LOWAT`. The
+  controller accepted P1-P4; log shipping, update and debug are not in v1.
+- **API 138: the Internal Names List per viewer** (list-access.md §1.1 in
+  the controller, the maintainer's rule of 2026-10-30: in the controller a
+  handset sees only the handsets in its user's account and cannot rename
+  any; a standalone box is unchanged).
+  - `struct dect_base_ops.name_visible(ctx, viewer, slot)`: 1 if the
+    handset in slot `viewer` may see the entry of slot `slot`. NULL = all
+    (today). A handset always sees itself. Set it from the user's account.
+  - `cfg.names_readonly = 1`: the Name field's editable bit is clear and an
+    edit or save is answered "procedure not allowed" (TS 102 527-3
+    7.4.10.4). Names are then the controller's.
+  - After an account change (a handset moves to another user) call
+    `dect_base_names_refresh()`: every link's list gains or loses the
+    entries and the handsets are told.
+  - Built and unit-tested (`tests/test_base.c`, `tests/test_iwu.c`). **Not
+    on air**: no Gigaset has shown a read-only Name field yet. If one
+    mishandles it, the fallback is `names_readonly` off and the controller
+    discarding a handset's rename (`named()` fires; ignore it and call
+    `dect_base_names_refresh()`).
+  - The internal call's dial list is this list, so a handset can only call
+    handsets in its account. Assumed to be what the maintainer wants; not
+    confirmed.

@@ -120,6 +120,14 @@ struct dect_base_ops {
 	 */
 	void (*named)(void *ctx, unsigned i);
 	/*
+	 * May the handset in slot `viewer` see the handset in `slot` in its
+	 * Internal Names List (API 138)? 1 yes, 0 no; NULL: always (a
+	 * standalone base). A handset always sees itself. The controller
+	 * answers by the user's account. After a change of the answer call
+	 * dect_base_names_refresh().
+	 */
+	int  (*name_visible)(void *ctx, unsigned viewer, unsigned slot);
+	/*
 	 * The stack made record b->cur the current one (S3w): the host serves
 	 * its store from now on; why says what made it so (log text).
 	 */
@@ -335,6 +343,7 @@ struct dect_base_ring {
 struct dect_base_cfg {
 	int      narrowband;	/* the speech is narrowband: G.726, no G.722 */
 	int      two_calls;	/* up to three calls (twocalls) */
+	int      names_readonly; /* no handset may rename an entry (API 138) */
 	int      auth_first;	/* a handset proves its key before its call goes anywhere */
 	int      no_cipher;	/* -C, a lab option: no ciphering, no proof */
 	int      no_chip_key;	/* -k off: the call key withheld from the chip */
@@ -1209,6 +1218,12 @@ void dect_base_main_located(struct dect_base *b);
  */
 void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
 			 unsigned slot);
+/*
+ * The Internal Names Lists after name_visible() changed its answers (API
+ * 138): every link's list gains the entries its handset may now see, loses
+ * the others, and the handsets are told.
+ */
+void dect_base_names_refresh(struct dect_base *b);
 /*
  * A page response on link p (-1 the main link) from record i, which we
  * paged without a call: if it carries that handset's identity, the link

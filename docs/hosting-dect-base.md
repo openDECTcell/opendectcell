@@ -92,6 +92,7 @@ All of them may be NULL; the library then does without. `ctx` is
 | `mask()` | The records in the chip changed | `dect_base_slot_mask(b, live_slot_mask())` | The same |
 | `forget(i, why)` | Record `i` is deregistered, before its slot is cleared | Moves the store aside, tells its clients | Delete or archive the record |
 | `named(i)` | A handset renamed record `i` | Keeps `b->name[i]`, tells its clients | Store the name |
+| `name_visible(viewer, slot)` | A link's Internal Names List is built or a handset's entry is spread (API 138) | NULL: every handset sees all | Answer by the user's account: 1 if the handset in slot `viewer` may see slot `slot`. Set `cfg.names_readonly` too (no handset renames). After an account change call `dect_base_names_refresh()` |
 | `cap_learned(i)` | Record `i`'s capability is proven | Keeps `b->cap[i]` | Store it |
 | `switched(why)` | The stack made `b->cur` the current record | Serves that store from now on | Your view of the current handset |
 | `registered(now)` | An enrolment completed and the key is in the chip | Applies the profile chosen for the window, closes the window | The same |

@@ -915,3 +915,15 @@ dect_base_name_ok(), _ctl_admin() (S5c).
 dect_base_sub_check and dect_base's `check`; dect_base_mem_read(),
 _uak_verify(), _slot_audit(), _sub_check_tick(), _mem_reply() (S2.2b).
 dect_base_tick() runs the held-back reads.
+
+**138.** dect_base.h, dect_iwu.h, 2026-10-31: dect_base_ops'
+`name_visible`; dect_base_cfg's `names_readonly`; dect_iwu's
+`names_readonly`; dect_base_names_refresh(). The Internal Names List per
+viewer: with `name_visible(ctx, viewer, slot)` set, a handset's list has
+only the entries it returns 1 for (a handset always sees itself); with
+`cfg.names_readonly`, the Name field's editable bit is clear and an edit
+or save is 'procedure not allowed'. Both default to today's behaviour (all
+visible, renaming allowed). The filter runs where a link's view is set up
+(`dect_base_iwu_lines()`, after every change of the link's own handset)
+and in `dect_base_names_spread()`; after a change of the answers call
+`dect_base_names_refresh()`. For the controller (list-access.md §1.1).

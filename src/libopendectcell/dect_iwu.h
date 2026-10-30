@@ -195,6 +195,12 @@ struct dect_iwu {
 	 */
 	uint32_t names_changed;
 	/*
+	 * The Internal Names List is read-only on this link: no handset may
+	 * rename an entry (edit and save answer 'procedure not allowed', the
+	 * Name field's editable bit is clear). The owner sets it (API 138).
+	 */
+	uint8_t  names_readonly;
+	/*
 	 * The base PIN as 'Current PIN code' compares it (7.4.11.3.1: BCD,
 	 * F-padded, 4 octets; dect_dsaa_pin_to_ac() gives exactly that), set
 	 * by the owner; pin_ok once a handset entered it on this link, until
