@@ -947,6 +947,13 @@ static int link_up(struct link *l)
 	l->heartbeat_ms = hb ? hb : 1000;
 	l->dead_ms = dead ? dead : 3000;
 	l->cell_state = st;
+	/*
+	 * §10 id 6, reconnects since boot: links re-established, not failed
+	 * attempts. Counting the failures, two lost and at once restored
+	 * links read 0 (bench N6, 7412, 2026-10-30).
+	 */
+	if (l->up_since)
+		l->reconnects++;
 	l->last_rx = l->last_tx = l->up_since = mono_ms();
 	stubd_cell_state(l, st, NULL);
 	set_state(l, "up");
@@ -959,7 +966,6 @@ static int link_up(struct link *l)
 	return 0;
 fail:
 	tls_close(&l->tls);
-	l->reconnects++;
 	if (l->next_try != UINT64_MAX)
 		backoff(l, mono_ms());
 	set_state(l, l->enrolled ? "connecting" : "not enrolled");
