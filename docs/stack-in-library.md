@@ -483,3 +483,17 @@ call lists with its missed-call notices. The host gives the wall time
 for an entry (`wall()`). Left with the host: `bridge` itself (which
 client carries the calls). `notices.trace` covers both; the fourteen
 traces unchanged.
+
+## S6, the mail dispatch (started 2026-10-30)
+
+**S6a.** The chip's mails about connections are the library's: 0x0209
+cipher-on (`dect_base_cipher_on()`), the contact answer's RFPI
+(`dect_base_contact()`), connection up (`dect_base_conn_up()`: a fresh
+main link, or a side link, a kept repeat or a refusal while the main
+link is busy) and connection down (`dect_base_conn_down()`). The side
+links' audio lane is `dect_base_link.lane`, kept by the host; the host
+hears of a link set up afresh (`link_up()`) and of a side link going
+(`side_down()`, its lane released first). Still the host's in the
+dispatch: the C-plane segments' own parts, 0x0242 (the audio connect),
+0xFFF1 (the key read-back) and 0xF625 (diagnostics). Unit tests; the
+fifteen traces unchanged.

@@ -893,3 +893,7 @@ _main_enrolment() (S3y).
 `fetched[]`, `reg_open`, `reg_open_until`; dect_base_hs_by_ipui(),
 _reg_policy(), _reg_window(), _main_cc_setup(), _main_open(),
 _side_start(), _side_promote() (S3z).
+
+**133.** dect_base.h, 2026-10-30: dect_base_link's `lane`; dect_base's
+`foreign_conn`; dect_base_ops' `link_up` and `side_down`;
+dect_base_cipher_on(), _contact(), _conn_up(), _conn_down() (S6a).

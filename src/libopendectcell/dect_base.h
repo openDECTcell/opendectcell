@@ -124,6 +124,13 @@ struct dect_base_ops {
 	 * its store from now on; why says what made it so (log text).
 	 */
 	void (*switched)(void *ctx, const char *why);
+	/*
+	 * Link p (-1 the main link) was set up afresh (S6a): the host's own
+	 * per-link state (its NWK log hook, its audio and diagnostics).
+	 */
+	void (*link_up)(void *ctx, int p);
+	/* Side link k goes: the host releases its audio lane first (S6a). */
+	void (*side_down)(void *ctx, unsigned k);
 };
 
 /*
@@ -167,6 +174,7 @@ struct dect_base_link {
 	uint32_t time_sent_for;		/* main link: mm.stats.located answered (S3w) */
 	uint32_t located_seen;		/* side link: mm.stats.located answered (S3z) */
 	uint32_t rejected_seen;		/* cc.stats.rejected_identity reported (S3z) */
+	int      lane;			/* side link: the host's audio lane, -1 none (S6a) */
 	/* Stage S3p, the main link's call: */
 	int      bound;			/* its audio channel bound */
 	int      path_on;		/* ... and connected (0x022D sent) */
@@ -464,6 +472,7 @@ struct dect_base {
 	/* record i is a roamer's the host must fetch: never free (S3y) */
 	int      remote[DECT_BASE_HS_MAX];
 	int      fetched[DECT_BASE_HS_MAX];	/* ... and it has, this run (S3z) */
+	uint32_t foreign_conn;	/* connection-ups not allowed to re-arm a busy link */
 	/* the registration window (S3z) */
 	int      reg_open;
 	uint64_t reg_open_until;	/* 0: until closed */
@@ -1173,6 +1182,31 @@ int dect_base_side_start(struct dect_base *b, uint8_t handle);
  */
 int dect_base_side_promote(struct dect_base *b, unsigned k,
 			   const struct dect_link_ind *ind, uint64_t now);
+
+/*
+ * The chip's mails about connections (S6a). 0x0209 {link}: the chip has
+ * switched the link to ciphered -- the cipher-on indication, absent from
+ * every unciphered call [CR A-0128] -- which ends <MM_cipher.1>.
+ */
+void dect_base_cipher_on(struct dect_base *b, uint8_t handle);
+/* 0xF601, the contact answer: it carries the base's RFPI. */
+void dect_base_contact(struct dect_base *b, const struct dect_mail *m);
+/*
+ * Connection up on `handle`: a fresh main link, unless the main link is
+ * busy (a call in any phase, an enrolment, the ring's page response
+ * awaited) -- then a repeat keeps its state, and another handle gets a
+ * side link, or is refused if none is free. A side link in a call keeps
+ * its handle. Paging is not busy: that is when the handset's connection
+ * should come up, and the ring then waits for its page response.
+ */
+void dect_base_conn_up(struct dect_base *b, uint8_t handle, uint64_t now);
+/*
+ * Connection down: a side link's, or the main link's own -- the chip also
+ * reports the release of an older connection just after a new one is up,
+ * and that must not end the live one (vF418; review finding 10). known:
+ * the mail named a handle.
+ */
+void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

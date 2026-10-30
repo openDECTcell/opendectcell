@@ -4353,6 +4353,7 @@ int dect_base_side_start(struct dect_base *b, uint8_t handle)
 	bl->dial_len = 0;
 	bl->dial_change_ms = 0;
 	bl->adopted = -1;
+	bl->lane = -1;
 	bl->cipher_done = 0;
 	bl->located_seen = 0;
 	bl->auth_refused = 0;
@@ -4431,4 +4432,147 @@ int dect_base_side_promote(struct dect_base *b, unsigned k,
 	pump(b, ml);
 	pump(b, sl);
 	return 1;
+}
+
+void dect_base_cipher_on(struct dect_base *b, uint8_t handle)
+{
+	unsigned k;
+
+	if (b->main_link.active && handle == b->main_link.handle &&
+	    !b->main_link.link.mm.cipher_on) {
+		dect_mm_cipher_on(&b->main_link.link.mm);
+		if (b->main_link.link.mm.cipher_on)
+			dect_base_log(b, "call: cipher: the chip reports link %u "
+				      "ciphered (0x0209)", (unsigned)handle);
+	}
+	for (k = 0; k < DECT_BASE_SIDES; k++) {
+		struct dect_base_link *sl = &b->side[k];
+
+		if (!sl->active || sl->handle != handle || sl->link.mm.cipher_on)
+			continue;
+		dect_mm_cipher_on(&sl->link.mm);
+		if (sl->link.mm.cipher_on)
+			dect_base_log(b, "side: cipher: the chip reports link %u "
+				      "ciphered (0x0209)", (unsigned)handle);
+	}
+}
+
+void dect_base_contact(struct dect_base *b, const struct dect_mail *m)
+{
+	if (!b->have_rfpi && m->param_len >= DECT_MM_RFPI_LEN) {
+		memcpy(b->rfpi, m->param, DECT_MM_RFPI_LEN);
+		b->have_rfpi = 1;
+	}
+}
+
+static int side_of(const struct dect_base *b, uint8_t handle)
+{
+	unsigned k;
+
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active && b->side[k].handle == handle)
+			return (int)k;
+	return -1;
+}
+
+static void link_up(struct dect_base *b, int p)
+{
+	if (b->ops && b->ops->link_up)
+		b->ops->link_up(b->ctx, p);
+}
+
+static void side_down(struct dect_base *b, unsigned k)
+{
+	if (b->ops && b->ops->side_down)
+		b->ops->side_down(b->ctx, k);
+	b->side[k].active = 0;
+}
+
+void dect_base_conn_up(struct dect_base *b, uint8_t handle, uint64_t now)
+{
+	struct dect_base_link *ml = &b->main_link;
+	/*
+	 * A connection-up re-arms the link. That is right for a genuinely new
+	 * link and destructive for one in the middle of something: the chip
+	 * repeats connection-up for a handle that is already up (v18; run A2,
+	 * 2026-10-20: 1.2 s after the handset's ALERTING, and its CONNECT then
+	 * met a state machine with no transaction), and with several handsets
+	 * in range every one that connects would re-arm ours (26-30
+	 * connection-ups in 170 s, 2026-10-24). So while this link has work in
+	 * progress, no connection-up re-arms it.
+	 */
+	int busy = ml->active &&
+		   (ml->bound || dect_cc_busy(&ml->link.cc) ||
+		    ml->link.mm.state == DECT_MM_WAIT_AUTH ||
+		    b->ring.state == DECT_BASE_RING_WAIT_PAGE_RESP);
+	int k = side_of(b, handle);
+
+	if (busy && handle == ml->handle) {
+		dect_base_log(b, "reg: connection up (handle %u) repeated while "
+			      "this link is busy -- keeping state", handle);
+		return;
+	}
+	/*
+	 * A repeat for a side link that carries a call (or holds a lane):
+	 * keep it there. Taking the handle over would drop the call with its
+	 * lane (review, 2026-10-25, finding 1).
+	 */
+	if (k >= 0 && (b->side[k].lane >= 0 ||
+		       dect_cc_busy(&b->side[k].link.cc))) {
+		dect_base_log(b, "side: connection up (handle %u) repeated "
+			      "during its call -- keeping its side link",
+			      handle);
+		return;
+	}
+	if (busy) {
+		int n = dect_base_side_start(b, handle);
+
+		if (n >= 0) {
+			if (n != k)
+				link_up(b, n);
+			return;
+		}
+		b->foreign_conn++;
+		dect_base_log(b, "reg: connection up (handle %u) IGNORED -- "
+			      "handle %u is busy. Another handset is competing "
+			      "for the link; re-arming now would drop what it "
+			      "is doing.", handle, ml->handle);
+		return;
+	}
+	/* a new connection is nobody's yet; default to the ring target */
+	(void)dect_base_serve(b, b->ring.state == DECT_BASE_RING_IDLE ||
+			      b->ring.state == DECT_BASE_RING_DONE
+			      ? 0u : b->ring.hs, " (new connection)");
+	if (k >= 0)
+		side_down(b, (unsigned)k);	/* the main link takes it */
+	dect_base_main_open(b, handle);
+	link_up(b, -1);
+	if (b->ring.state == DECT_BASE_RING_PAGING) {
+		b->ring.state = DECT_BASE_RING_WAIT_PAGE_RESP;
+		b->ring.resp_deadline = now + DECT_BASE_PAGE_RESP_MS;
+		dect_base_log(b, "ring: link up -- waiting for the handset's page "
+			      "response before the CC-SETUP");
+	}
+}
+
+void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known)
+{
+	struct dect_base_link *ml = &b->main_link;
+	int k = known ? side_of(b, handle) : -1;
+
+	if (k >= 0 && !(ml->active && handle == ml->handle)) {
+		side_down(b, (unsigned)k);
+		dect_base_log(b, "side: connection released (handle %u)", handle);
+		return;
+	}
+	if (ml->active && known && handle != ml->handle) {
+		dect_base_log(b, "reg: release of handle %u ignored -- our "
+			      "connection is handle %u", (unsigned)handle,
+			      (unsigned)ml->handle);
+		return;
+	}
+	if (ml->active)
+		dect_base_log(b, "reg: connection released");
+	ml->active = 0;
+	(void)dect_base_serve(b, 0, " (link released)");
 }

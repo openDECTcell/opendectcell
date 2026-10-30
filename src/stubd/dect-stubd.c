@@ -370,7 +370,7 @@ struct side_link {
 	/* dect_base's side[] entry: up, its handle, its C-plane stack, the
 	 * record it serves (adopted) */
 	struct dect_base_link *bl;
-	int      lane;		/* -a twocalls: its xlane, -1 = none */
+	/* its xlane (-a twocalls): bl->lane, -1 = none */
 	/* the chip's 0xF625 for this link's call, as the main link's */
 	struct dect_diag_status last_status;
 	struct dect_diag_frames frames;
@@ -1095,7 +1095,6 @@ struct stubd {
 	 * should say so instead of leaving it to be worked out from a log.
 	 */
 	uint32_t foreign_seg;		/* 0x0203 segments for another handle */
-	uint32_t foreign_conn;		/* connection-ups we refused to re-arm on */
 	uint8_t  foreign_seg_handle;	/* the last such handle seen */
 
 	/* Per-run tally of commands sent, by verification class. */
@@ -1419,7 +1418,7 @@ static void verify_report(const struct stubd *s)
 	 * we were serving, and the run should declare that itself rather than
 	 * leave it to be reconstructed from the log afterwards.
 	 */
-	if (s->foreign_seg || s->foreign_conn)
+	if (s->foreign_seg || s->base.foreign_conn)
 		printf("reg: *** OTHER HANDSETS WERE ON AIR *** %lu C-plane "
 		       "segment(s) for another handle (last: %u) and %lu "
 		       "connection-up(s) refused. This link serves one "
@@ -1427,7 +1426,7 @@ static void verify_report(const struct stubd *s)
 		       "measurement. Power the others off.\n",
 		       (unsigned long)s->foreign_seg,
 		       (unsigned)s->foreign_seg_handle,
-		       (unsigned long)s->foreign_conn);
+		       (unsigned long)s->base.foreign_conn);
 	printf("chip: %lu state-changing command%s sent, %lu verified by "
 	       "read-back. %lu query/read%s.\n",
 	       changes, changes == 1 ? "" : "s", verified,
@@ -1900,9 +1899,9 @@ static int ic_peer_word(const struct stubd *s, const struct xlane *x)
 
 	if (s->base.ic.st != IC_UP)
 		return -1;
-	if (t >= 0 && s->side[t].lane >= 0 && &s->xl[s->side[t].lane] == x)
+	if (t >= 0 && s->side[t].bl->lane >= 0 && &s->xl[s->side[t].bl->lane] == x)
 		return ic_word(s, c);
-	if (c >= 0 && s->side[c].lane >= 0 && &s->xl[s->side[c].lane] == x)
+	if (c >= 0 && s->side[c].bl->lane >= 0 && &s->xl[s->side[c].bl->lane] == x)
 		return ic_word(s, t);
 	return -1;
 }
@@ -2653,12 +2652,6 @@ static void base_switched(void *ctx, const char *why)
 	hs_switched(ctx, why);
 }
 
-/* Make handset i the current one; a no-op if it already is. */
-static void hs_switch(struct stubd *s, unsigned i, const char *why)
-{
-	(void)dect_base_serve(&s->base, i, why);
-}
-
 static void sub_save(struct stubd *s)
 {
 	struct sub_record r;
@@ -2820,6 +2813,8 @@ static void base_mask(void *ctx);
 static int base_clock(void *ctx, struct dect_time *dt, long *off_s);
 static void base_named(void *ctx, unsigned i);
 static void base_switched(void *ctx, const char *why);
+static void base_link_up(void *ctx, int p);
+static void base_side_down(void *ctx, unsigned k);
 static void base_wall(void *ctx, struct dect_time *dt);
 
 static const struct dect_base_ops base_ops = {
@@ -2827,7 +2822,8 @@ static const struct dect_base_ops base_ops = {
 	.log = base_log, .install = base_install, .event = base_event,
 	.pump = base_pump, .lanes = base_lanes, .forget = base_forget,
 	.mask = base_mask, .clock = base_clock, .named = base_named,
-	.wall = base_wall, .switched = base_switched,
+	.wall = base_wall, .switched = base_switched, .link_up = base_link_up,
+	.side_down = base_side_down,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -3910,7 +3906,7 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 	for (k = 0; s->audio.status_ms && k < SIDE_MAX; k++) {
 		struct side_link *sl = &s->side[k];
 
-		if (!sl->bl->active || sl->lane < 0 ||
+		if (!sl->bl->active || sl->bl->lane < 0 ||
 		    (sl->status_ms && now - sl->status_ms < s->audio.status_ms))
 			continue;
 		sl->status_ms = now;
@@ -4379,7 +4375,7 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 	for (i = 0; radio_on && i < SIDE_MAX; i++)
 		if (s->side[i].bl->active)
 			state_link(s, f, &s->side[i].bl->link,
-				   s->side[i].lane >= 0 &&
+				   s->side[i].bl->lane >= 0 &&
 				   s->side[i].last_status.valid
 				   ? &s->side[i].last_status : NULL,
 				   s->side[i].frames.total, &first);
@@ -4457,25 +4453,34 @@ static void reg_window_tick(struct stubd *s, uint64_t now)
 
 static void xlane_release(struct stubd *s, struct side_link *sl);
 
-static void reg_start(struct stubd *s, uint8_t handle)
-{
-	/* a new connection is nobody's yet; default to the ring target */
-	hs_switch(s, s->base.ring.state == RING_IDLE || s->base.ring.state == RING_DONE
-		  ? 0u : s->base.ring.hs, " (new connection)");
-	{
-		struct side_link *sl = side_find(s, handle);
+static void log_nwk_out_side(void *ctx, const uint8_t *msg, size_t len);
 
-		if (sl) {
-			xlane_release(s, sl);	/* never leak its lane */
-			sl->bl->active = 0;		/* the main link takes it */
-		}
+/* dect_base's link_up(): our own state for a link set up afresh. */
+static void base_link_up(void *ctx, int p)
+{
+	struct stubd *s = ctx;
+	struct side_link *sl;
+
+	if (p < 0) {
+		s->fetch_retrans_seen = 0;	/* MM's counter restarts */
+		s->reg.call_wideband = 0;
+		s->reg.nonspeech_noted = 0;
+		dect_link_set_tx_log(&s->base.main_link.link, log_nwk_out, s);
+		return;
 	}
-	s->fetch_retrans_seen = 0;	/* MM's counter restarts with the link */
-	s->reg.call_wideband = 0;
-	s->reg.nonspeech_noted = 0;
-	/* the main link's set-up is the library's (dect_base.h, S3z) */
-	dect_base_main_open(&s->base, handle);
-	dect_link_set_tx_log(&s->base.main_link.link, log_nwk_out, s);
+	sl = &s->side[p];
+	dect_link_set_tx_log(&sl->bl->link, log_nwk_out_side, s);
+	memset(&sl->last_status, 0, sizeof(sl->last_status));
+	memset(&sl->frames, 0, sizeof(sl->frames));
+	sl->status_ms = 0;
+}
+
+/* dect_base's side_down(): never leak a side link's lane. */
+static void base_side_down(void *ctx, unsigned k)
+{
+	struct stubd *s = ctx;
+
+	xlane_release(s, &s->side[k]);
 }
 
 /* Slot and identity of handset table entry i, current or stashed. */
@@ -5000,26 +5005,6 @@ static void log_nwk_out_side(void *ctx, const uint8_t *msg, size_t len)
 	fflush(stdout);
 }
 
-/* Give connection `handle` a side link. Returns 0, or -1 if none is free. */
-static int side_start(struct stubd *s, uint8_t handle)
-{
-	int repeated = side_find(s, handle) != NULL;
-	int k = dect_base_side_start(&s->base, handle);
-	struct side_link *sl;
-
-	if (k < 0)
-		return -1;
-	if (repeated)
-		return 0;
-	sl = &s->side[k];
-	dect_link_set_tx_log(&sl->bl->link, log_nwk_out_side, s);
-	sl->lane = -1;
-	memset(&sl->last_status, 0, sizeof(sl->last_status));
-	memset(&sl->frames, 0, sizeof(sl->frames));
-	sl->status_ms = 0;
-	return 0;
-}
-
 
 static int xlane_free(const struct stubd *s)
 {
@@ -5051,7 +5036,7 @@ static int lanes_available(const struct stubd *s, const struct side_link *me)
 	for (i = 0; i < SIDE_MAX; i++) {
 		const struct side_link *o = &s->side[i];
 
-		if (o != me && o->bl->active && o->lane < 0 &&
+		if (o != me && o->bl->active && o->bl->lane < 0 &&
 		    dect_cc_busy(&o->bl->link.cc))
 			n--;
 	}
@@ -5089,7 +5074,7 @@ static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
 	x->word = a->lane_word[i];
 	x->wideband = !a->narrowband &&
 		dect_cc_codec(&sl->bl->link.cc) == DECT_CC_CODEC_G722;
-	sl->lane = i;
+	sl->bl->lane = i;
 	mask = (uint16_t)(1u << x->channel);
 
 	dect_base_audio_param(&s->base, x->handle, x->channel /* selector */,
@@ -5116,12 +5101,12 @@ static void xlane_connect(struct stubd *s, struct xlane *x)
 
 static void xlane_release(struct stubd *s, struct side_link *sl)
 {
-	if (sl->lane < 0)
+	if (sl->bl->lane < 0)
 		return;
-	if (s->xl[sl->lane].connected || s->xl[sl->lane].used)
+	if (s->xl[sl->bl->lane].connected || s->xl[sl->bl->lane].used)
 		send_audio_disconnect(s, sl->bl->handle);
-	memset(&s->xl[sl->lane], 0, sizeof(s->xl[0]));
-	sl->lane = -1;
+	memset(&s->xl[sl->bl->lane], 0, sizeof(s->xl[0]));
+	sl->bl->lane = -1;
 	/* the Monitor's figures belong to the call that ended */
 	memset(&sl->last_status, 0, sizeof(sl->last_status));
 	memset(&sl->frames, 0, sizeof(sl->frames));
@@ -5153,7 +5138,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 	if (!s->base.cfg.two_calls)
 		return;
 	if (!dect_cc_busy(cc))	/* decided for the next SETUP only */
-		dect_cc_set_busy(cc, sl->lane < 0 &&
+		dect_cc_set_busy(cc, sl->bl->lane < 0 &&
 				 lanes_available(s, sl) <= 0);
 	switch (dect_base_dial_tick(&s->base, (int)(sl - s->side), now)) {
 	case 2:
@@ -5164,7 +5149,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 		side_route(s, sl, now);
 		break;
 	}
-	if (sl->lane < 0 && cc->state == DECT_CC_ST_ACTIVE &&
+	if (sl->bl->lane < 0 && cc->state == DECT_CC_ST_ACTIVE &&
 	    (cc->incoming || dect_cc_peer_is_speech(cc)) &&
 	    call_auth_ok(s, &sl->bl->link)) {
 		int i = xlane_free(s);
@@ -5172,7 +5157,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 		if (i >= 0)
 			xlane_bind(s, sl, i);
 	}
-	if (sl->lane >= 0 && !dect_cc_busy(cc))
+	if (sl->bl->lane >= 0 && !dect_cc_busy(cc))
 		xlane_release(s, sl);
 }
 
@@ -5193,7 +5178,7 @@ static int ic_active(const struct stubd *s, int p)
 /* the party has its audio channel bound */
 static int ic_has_lane(const struct stubd *s, int p)
 {
-	return p == -1 ? s->base.main_link.bound : p >= 0 && s->side[p].lane >= 0;
+	return p == -1 ? s->base.main_link.bound : p >= 0 && s->side[p].bl->lane >= 0;
 }
 
 /* The caller (main link: side = -1) finished dialling (dect_base.h, S3q). */
@@ -5661,7 +5646,7 @@ static const struct dect_base_call *ab_call_of(struct stubd *s, unsigned i, int 
 	if (!x->used || !x->connected)
 		return NULL;
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl->active && s->side[k].lane == (int)(i - 1u))
+		if (s->side[k].bl->active && s->side[k].bl->lane == (int)(i - 1u))
 			return bc_active(s, (int)k);
 	return NULL;
 }
@@ -6095,7 +6080,7 @@ static int ic_wideband(const struct stubd *s, int p)
 	if (p == IC_NONE)
 		return 0;
 	return p < 0 ? s->reg.call_wideband
-		     : s->side[p].lane >= 0 && s->xl[s->side[p].lane].wideband;
+		     : s->side[p].bl->lane >= 0 && s->xl[s->side[p].bl->lane].wideband;
 }
 
 /*
@@ -6114,11 +6099,11 @@ static int ic_word(const struct stubd *s, int side)
 		return -1;
 	if (side < 0)
 		w = s->base.main_link.bound ? (int)s->audio.lane0_word : -1;
-	else if (s->side[side].lane < 0 ||
-		 !s->xl[s->side[side].lane].connected)
+	else if (s->side[side].bl->lane < 0 ||
+		 !s->xl[s->side[side].bl->lane].connected)
 		w = -1;
 	else
-		w = (int)s->xl[s->side[side].lane].word;
+		w = (int)s->xl[s->side[side].bl->lane].word;
 	return w >= 0 && (unsigned)w < s->slots &&
 	       w != s->tx_slot ? w : -1;
 }
@@ -6532,176 +6517,21 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t now)
 {
 	switch (m->prim) {
+	/* the connection mails are the library's (dect_base.h, S6a) */
 	case 0x0209:
-		/*
-		 * {link}: the chip has switched the link to ciphered -- the
-		 * cipher-on indication, absent from every unciphered call
-		 * [CR A-0128] -- which ends <MM_cipher.1>.
-		 */
-		if (m->param_len >= 1 && s->base.main_link.active &&
-		    m->param[0] == s->base.main_link.handle &&
-		    !s->base.main_link.link.mm.cipher_on) {
-			dect_mm_cipher_on(&s->base.main_link.link.mm);
-			if (s->base.main_link.link.mm.cipher_on)
-				printf("call: cipher: the chip reports link %u "
-				       "ciphered (0x0209)\n",
-				       (unsigned)m->param[0]);
-		}
-		{
-			unsigned k;
-
-			for (k = 0; m->param_len >= 1 && k < SIDE_MAX; k++) {
-				struct side_link *sl = &s->side[k];
-
-				if (!sl->bl->active || sl->bl->handle != m->param[0] ||
-				    sl->bl->link.mm.cipher_on)
-					continue;
-				dect_mm_cipher_on(&sl->bl->link.mm);
-				if (sl->bl->link.mm.cipher_on)
-					printf("side: cipher: the chip reports "
-					       "link %u ciphered (0x0209)\n",
-					       (unsigned)m->param[0]);
-			}
-		}
+		if (m->param_len >= 1)
+			dect_base_cipher_on(&s->base, m->param[0]);
 		break;
 	case DECT_PRIM_CONTACT_ACK1:	/* 0xF601 carries the base RFPI */
-		if (!s->base.have_rfpi && m->param_len >= DECT_MM_RFPI_LEN) {
-			memcpy(s->base.rfpi, m->param, DECT_MM_RFPI_LEN);
-			s->base.have_rfpi = 1;
-		}
+		dect_base_contact(&s->base, m);
 		break;
-	case DECT_PRIM_CONN_UP: {
-		uint8_t h = m->param_len ? m->param[0] : 0;
-
-		/*
-		 * The chip can repeat connection-up for a handle that is
-		 * already up -- observed in v18, ~150 ms after a call had
-		 * bound, which re-armed the C-plane and dropped the call state
-		 * underneath a live call.
-		 *
-		 * Guarding on call_bound alone was not enough. An incoming call
-		 * binds audio only when it connects, so between our CC-SETUP
-		 * and the user pressing accept the flag is still clear, and a
-		 * repeat in that window re-initialised LAPC, MM and CC. Run A2
-		 * (2026-10-20) caught it: the chip re-established 1.2 s after
-		 * the handset's CC-ALERTING, so the CC-CONNECT two seconds
-		 * later arrived at a state machine with no transaction, no
-		 * CONNECT-ACK went out, and the handset released the call --
-		 * and wedged badly enough to need its battery pulled.
-		 *
-		 * The re-establishment is the same event that wires the chip's
-		 * audio route, so it is expected and must not be disruptive.
-		 * Keep the state whenever that handle has a call in any phase;
-		 * a different handle, or a genuinely idle one, still starts a
-		 * fresh link.
-		 */
-		/*
-		 * A connection-up re-arms the link: reg_start() re-initialises
-		 * LAPC, MM and CC. That is right for a genuinely new link and
-		 * destructive for one that is in the middle of something, and
-		 * until 2026-10-24 the only thing protected was a live call on
-		 * the SAME handle.
-		 *
-		 * With several handsets in range that is not enough. Every
-		 * handset that connects -- including one we hold no record for
-		 * -- re-armed our link. Measured with three handsets and a
-		 * FRITZ!Fon C4 on air: 26-30 connection-ups in 170 s, and an
-		 * FP-originated {CC-SETUP} sent onto a link that was re-armed
-		 * underneath it, retransmitted unacknowledged, then abandoned.
-		 * Nothing answered, and the run read as a refusal.
-		 *
-		 * So: while this link has work in progress, no connection-up
-		 * re-arms it -- least of all one for a different handle.
-		 *
-		 * Paging is deliberately NOT in the busy set. RING_PAGING is
-		 * exactly when we want the handset's connection to come up and
-		 * arm the link; it is only from the page response onwards that
-		 * a re-arm would lose the call we are placing.
-		 */
-		{
-			int ring_busy = s->base.ring.state == RING_WAIT_PAGE_RESP;
-			int busy = s->base.main_link.active &&
-				   (s->base.main_link.bound ||
-				    dect_cc_busy(&s->base.main_link.link.cc) ||
-				    s->base.main_link.link.mm.state == DECT_MM_WAIT_AUTH ||
-				    ring_busy);
-
-			if (busy && h == s->base.main_link.handle) {
-				printf("reg: connection up (handle %u) repeated "
-				       "while this link is busy -- keeping "
-				       "state\n", h);
-				break;
-			}
-			/*
-			 * A repeat for a side link that carries a call (or holds
-			 * a lane): keep it there. reg_start() would take the
-			 * handle over and drop the call with its lane (review,
-			 * 2026-10-25, finding 1).
-			 */
-			{
-				struct side_link *sl = side_find(s, h);
-
-				if (sl && (sl->lane >= 0 ||
-					   dect_cc_busy(&sl->bl->link.cc))) {
-					printf("side: connection up (handle %u) "
-					       "repeated during its call -- "
-					       "keeping its side link\n", h);
-					break;
-				}
-			}
-			if (busy && side_start(s, h) == 0)
-				break;
-			if (busy) {
-				s->foreign_conn++;
-				printf("reg: connection up (handle %u) IGNORED "
-				       "-- handle %u is busy. Another handset "
-				       "is competing for the link; re-arming "
-				       "now would drop what it is doing.\n",
-				       h, s->base.main_link.handle);
-				break;
-			}
-		}
-		reg_start(s, h);
-		if (s->base.ring.state == RING_PAGING) {
-			s->base.ring.state = RING_WAIT_PAGE_RESP;
-			s->base.ring.resp_deadline = now + RING_PAGE_RESP_MS;
-			printf("ring: link up -- waiting for the handset's "
-			       "page response before the CC-SETUP\n");
-		}
+	case DECT_PRIM_CONN_UP:
+		dect_base_conn_up(&s->base, m->param_len ? m->param[0] : 0, now);
 		break;
-	}
-	case DECT_PRIM_CONN_DOWN: {
-		/*
-		 * {handle}. Only the release of OUR connection ends our link.
-		 * The chip also reports the release of an older connection
-		 * just after the new one is up -- vF418: up on handle 0, then
-		 * down for handle 1 eight ms later -- and that used to clear
-		 * reg.active, so the live connection's next C-plane segment
-		 * was dropped. 102 such releases in the 2026-10-24 corpus.
-		 * Found by the external review (the clean-room record/
-		 * an external review-24102026.md, finding 10).
-		 */
-		uint8_t h = m->param_len ? m->param[0] : 0;
-		struct side_link *sl = m->param_len ? side_find(s, h) : NULL;
-
-		if (sl && !(s->base.main_link.active && h == s->base.main_link.handle)) {
-			xlane_release(s, sl);
-			sl->bl->active = 0;
-			printf("side: connection released (handle %u)\n", h);
-			break;
-		}
-		if (s->base.main_link.active && m->param_len && h != s->base.main_link.handle) {
-			printf("reg: release of handle %u ignored -- our "
-			       "connection is handle %u\n", (unsigned)h,
-			       (unsigned)s->base.main_link.handle);
-			break;
-		}
-		if (s->base.main_link.active)
-			printf("reg: connection released\n");
-		s->base.main_link.active = 0;
-		hs_switch(s, 0, " (link released)");
+	case DECT_PRIM_CONN_DOWN:
+		dect_base_conn_down(&s->base, m->param_len ? m->param[0] : 0,
+				    m->param_len != 0);
 		break;
-	}
 	case DECT_PRIM_SIGNALLING: {
 		struct side_link *sl = m->param_len ? side_find(s, m->param[0])
 						    : NULL;

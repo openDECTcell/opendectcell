@@ -925,5 +925,41 @@ int main(void)
 		CHECK_EQ(dect_base_side_start(&b, 4), 2);
 		CHECK_EQ(dect_base_side_start(&b, 5), -1);	/* none free */
 	}
+
+	/* connections up and down (S6a) */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.loaded[0] = 1;
+		dect_base_conn_up(&b, 1, 0);
+		CHECK_EQ(b.main_link.active, 1);
+		CHECK_EQ(b.main_link.handle, 1);
+		b.main_link.link.cc.state = DECT_CC_ST_ACTIVE;	/* busy */
+		dect_base_conn_up(&b, 1, 0);		/* a repeat: kept */
+		CHECK_EQ(b.main_link.link.cc.state, DECT_CC_ST_ACTIVE);
+		dect_base_conn_up(&b, 2, 0);		/* another: a side link */
+		CHECK_EQ(b.side[0].active, 1);
+		CHECK_EQ(b.side[0].lane, -1);
+		dect_base_conn_down(&b, 3, 1);		/* not ours: ignored */
+		CHECK_EQ(b.main_link.active, 1);
+		dect_base_conn_down(&b, 2, 1);
+		CHECK_EQ(b.side[0].active, 0);
+		CHECK_EQ(b.main_link.active, 1);
+		dect_base_conn_down(&b, 1, 1);
+		CHECK_EQ(b.main_link.active, 0);
+		b.have_rfpi = 0;
+		{
+			struct dect_mail m;
+
+			memset(&m, 0, sizeof(m));
+			m.param_len = DECT_MM_RFPI_LEN;
+			m.param[4] = 0x60;
+			dect_base_contact(&b, &m);
+			CHECK_EQ(b.have_rfpi, 1);
+			CHECK_EQ(b.rfpi[4], 0x60);
+		}
+	}
 	return CHECK_DONE();
 }
