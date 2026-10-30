@@ -6546,7 +6546,8 @@ static void cell_stats(struct stubd *s, uint16_t corr)
 		{ 18, s->rx.stats.seq_gaps },
 		{ 19, s->rx.stats.resyncs },
 	};
-	uint8_t b[sizeof(c) / sizeof(c[0]) * 12u];
+	/* per counter a TLV: 3 octets of header, 10 of value */
+	uint8_t b[sizeof(c) / sizeof(c[0]) * 13u];
 	struct dect_cell_tlv t;
 	unsigned k, j;
 
@@ -6560,6 +6561,8 @@ static void cell_stats(struct stubd *s, uint16_t corr)
 			v[2 + j] = (uint8_t)(c[k].v >> (56u - 8u * j));
 		dect_cell_tlv_put(&t, 1, v, sizeof(v));
 	}
+	if (t.err)
+		printf("cell: STATS did not fit its buffer -- sent short\n");
 	(void)cell_send(s, DECT_CELL_STATS, corr, b, t.len);
 }
 
