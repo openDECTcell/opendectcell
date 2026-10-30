@@ -626,5 +626,25 @@ int main(void)
 		CHECK_EQ(dect_base_hs_in_call(&b, 1), 1);
 		CHECK_EQ(dect_base_waiting_party(&b, 1), DECT_BASE_PARTY_NONE);
 	}
+
+	/* the bridged calls' progress (S3t) */
+	{
+		struct dect_base_call *c;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		c = dect_base_call_new(&b);
+		c->id = 7;
+		c->party = -1;
+		c->since = 1000;
+		b.ring.state = DECT_BASE_RING_DONE;	/* the ring gave up */
+		event_line[0] = '\0';
+		dect_base_bridge_tick(&b, 5000);
+		CHECK_EQ(c->id, 7u);			/* not yet */
+		dect_base_bridge_tick(&b, 6001);
+		CHECK_EQ(c->id, 0u);
+		CHECK_EQ(strcmp(event_line, "released call=7 hs=1 by=base\n"),
+			 0);
+	}
 	return CHECK_DONE();
 }

@@ -6122,11 +6122,6 @@ static int ic_active(const struct stubd *s, int p)
 	return dect_base_party_active(&s->base, p);
 }
 
-static struct dect_link *ic_link(struct stubd *s, int p)
-{
-	return p == -1 ? &s->base.main_link.link : &s->side[p].bl->link;
-}
-
 static void ic_drain(struct stubd *s, int p, uint64_t now)
 {
 	dect_base_drain(&s->base, p, now);
@@ -6883,12 +6878,6 @@ static unsigned bridge_new_id(struct stubd *s)
 	return dect_base_call_new_id(&s->base);
 }
 
-/* The handset a call's party serves, as its slot; 0 = nobody yet. */
-static unsigned party_hs_slot(struct stubd *s, int p)
-{
-	return dect_base_party_slot(&s->base, p);
-}
-
 static struct dect_base_call *bc_by_id(struct stubd *s, unsigned id)
 {
 	return dect_base_call_by_id(&s->base, id);
@@ -6983,11 +6972,6 @@ static int cw_start(struct stubd *s, struct dect_base_call *b, int p,
 	return dect_base_call_waiting(&s->base, b, p, clip, now);
 }
 
-static void par_tick(struct stubd *s, int p, uint64_t now)
-{
-	dect_base_par_tick(&s->base, p, now);
-}
-
 static int hs_in_call(const struct stubd *s, unsigned t)
 {
 	return dect_base_hs_in_call(&s->base, t);
@@ -7043,16 +7027,6 @@ static int sr_target_link(struct stubd *s, struct side_link *sl,
 		return 1;
 	}
 	return 0;
-}
-
-static void sr_tick(struct stubd *s, struct dect_base_call *b, uint64_t now)
-{
-	dect_base_side_ring_tick(&s->base, b, now);
-}
-
-static void sr_call_tick(struct stubd *s, struct dect_base_call *b, uint64_t now)
-{
-	dect_base_side_ring_call_tick(&s->base, b, now);
 }
 
 /* A bridge command about a call. Returns 1 when the verb was one of ours. */
@@ -7378,98 +7352,10 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 	return 1;
 }
 
-/* The bridged calls' progress, as events. */
+/* The bridged calls' progress, as events (dect_base.h, S3t). */
 static void bridge_tick(struct stubd *s, uint64_t now)
 {
-	unsigned i;
-	int p;
-
-	/*
-	 * Control codes and keypad, once per link with a call of ours. A
-	 * link without one is not in parallel mode: the library refuses its
-	 * codes (§7.4.3.4), and none is left over for a later call.
-	 */
-	for (p = -1; p < (int)SIDE_MAX; p++) {
-		int ours;
-
-		if (!ic_active(s, p))
-			continue;
-		ours = bc_live(s, p) != 0;
-		dect_cc_set_parallel(ic_cc(s, p), ours);
-		if (ours && dect_cc_busy(ic_cc(s, p)))
-			par_tick(s, p, now);
-	}
-	for (i = 0; i < BC_MAX; i++) {
-		struct dect_base_call *b = &s->base.calls[i];
-		struct dect_cc *cc;
-		int busy;
-
-		if (b->id && b->party == BC_PAGING)
-			sr_tick(s, b, now);
-		if (!b->id)
-			continue;
-		busy = b->party != BC_PAGING && ic_active(s, b->party) &&
-		       dect_cc_busy(ic_cc(s, b->party));
-		cc = busy ? ic_cc(s, b->party) : NULL;
-		/*
-		 * A main-link call-in exists once the handset alerts: a SETUP
-		 * lost to the handset's own call before that is rung again
-		 * (ring_watch_tick()), not ended.
-		 */
-		if (cc && (b->out || b->party != -1 ||
-			   (cc->incoming && (cc->state == DECT_CC_ST_RINGING ||
-					     cc->state == DECT_CC_ST_ACTIVE))))
-			b->busy_seen = 1;
-		/*
-		 * The link's own call connected: it is the active one, and
-		 * what the keypad brings from now on is its DTMF (the number
-		 * it was dialled with is dropped).
-		 */
-		if (cc && !b->par && !b->cs && cc->state == DECT_CC_ST_ACTIVE &&
-		    call_auth_ok(s, ic_link(s, b->party))) {
-			b->cs = DECT_CS_CALL_CONNECT;
-			b->dect_id = cc->status_call_id;
-			b->dtmf = 1;
-			dect_cc_clear_keypad(cc);
-		}
-		if (cc && !b->par && !b->out && cc->incoming) {
-			/*
-			 * The main link's ring_now stays set until bc_clear():
-			 * ring_tick() then runs ring_watch_tick(), which rings
-			 * again after a collision with the handset's own call.
-			 */
-			if (b->party >= 0)
-				sr_call_tick(s, b, now);
-			if (!b->rang && (cc->state == DECT_CC_ST_RINGING ||
-					 cc->state == DECT_CC_ST_ACTIVE)) {
-				b->rang = 1;
-				bridge_event(s, b, "ringing", NULL, NULL);
-			}
-			if (!b->answered && cc->state == DECT_CC_ST_ACTIVE &&
-			    call_auth_ok(s, ic_link(s, b->party))) {
-				b->answered = 1;
-				printf("bridge: call %u answered on DECT %u\n",
-				       b->id, party_hs_slot(s, b->party));
-				bridge_event(s, b, "answered", NULL, NULL);
-			}
-		}
-		if (b->busy_seen && !busy) {
-			printf("bridge: call %u ended on the handset\n", b->id);
-			bridge_event(s, b, "released", "by", "hs");
-			bc_clear(s, b);
-			continue;
-		}
-		/* a call-in that never got a handset: the ring gave up */
-		if (!b->out && !b->busy_seen &&
-		    (now - b->since > 75000u ||
-		     (b->party == -1 && s->base.ring.state == RING_DONE &&
-		      !s->base.ring.watch && now - b->since > 5000u))) {
-			printf("bridge: call %u in -- no handset answered the "
-			       "page\n", b->id);
-			bridge_event(s, b, "released", "by", "base");
-			bc_clear(s, b);
-		}
-	}
+	dect_base_bridge_tick(&s->base, now);
 }
 
 /*

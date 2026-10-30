@@ -749,6 +749,12 @@ void dect_base_par_tick(struct dect_base *b, int p, uint64_t now);
 /* Record t is in a call, or being rung for one. */
 int dect_base_hs_in_call(const struct dect_base *b, unsigned t);
 
+/*
+ * The bridged calls' progress, once a tick (S3t): parallel calls' control
+ * codes, side rings, and the events ringing, answered and released.
+ */
+void dect_base_bridge_tick(struct dect_base *b, uint64_t now);
+
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));

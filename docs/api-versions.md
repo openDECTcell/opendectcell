@@ -833,3 +833,5 @@ _side_ring_tick(), _side_ring_call_tick(), _name_info(), _info_tick()
 **119.** dect_base.h, 2026-10-30: parallel calls: dect_base_par_status(),
 _par_connect(), _party_index(), _waiting_party(), _call_waiting(),
 _par_tick(), _hs_in_call() (S3s).
+
+**120.** dect_base.h, 2026-10-30: dect_base_bridge_tick() (S3t).

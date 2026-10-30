@@ -356,3 +356,8 @@ the call states in {CC-INFO}, the DTMF of the active call. New trace
 `call-waiting.trace` (a second call to DECT 1 in a call: accept with
 hold, toggle, release), replayed unchanged on the commit before; the
 other ten unchanged.
+
+**S3t.** The bridged calls' progress is the library's
+(`dect_base_bridge_tick()`): parallel mode per link, side rings, the
+events ringing, answered and released, and the end of a call-in no
+handset took. Unit test; the eleven traces unchanged.
