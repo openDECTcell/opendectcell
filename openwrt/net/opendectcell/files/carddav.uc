@@ -70,6 +70,23 @@ function save_state() {
 
 // ---- HTTP ------------------------------------------------------------------
 
+// A stop ends this process at once (maintainer, 2026-10-29: "If the
+// service is stopped, we want things to stop immediately"). Under ucode's
+// uloop a SIGTERM is caught and, with no handler of ours, dropped: procd
+// waited 5 s and killed us (2026-10-30, 7412). So: our own handler, which
+// ucode runs between two instructions (hence the short sleeps below), and
+// after each request a look whether uloop's loop ended on one.
+function stop() {
+	exit(0);
+}
+
+function stop_check() {
+	if (uloop.cancelling())
+		exit(0);
+	signal('SIGTERM', stop);
+	signal('SIGINT', stop);
+}
+
 // One request on a fresh client: { status, headers, body } (status 0 on a
 // transport or TLS error). Redirects are followed, up to three. With
 // `challenge`, uclient answers the server's 401 itself (Basic or Digest,
@@ -117,6 +134,7 @@ function attempt(method, url, headers, body, challenge) {
 		if (!cl.connect() || !cl.request(method, args))
 			break;
 		uloop.run();
+		stop_check();
 		if (res.status != 401)
 			break;
 	}
@@ -689,6 +707,7 @@ if (!cfg.enabled || index(cfg.url, 'https://') != 0) {
 }
 fs.mkdir(DIR);
 uloop.init();
+stop_check();
 // the journal number the last run reached, from the file it left
 {
 	let head = fs.readfile(FILE, 128);
@@ -709,5 +728,6 @@ while (true) {
 		round();
 		next = time() + cfg.interval;
 	}
-	sleep(2000);
+	for (let i = 0; i < 10; i++)
+		sleep(200);
 }

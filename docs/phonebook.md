@@ -85,6 +85,13 @@ File formats: the comment at the top of `dect_contacts.h`.
     server as described above, with the photo, e-mail and fax kept;
   - the contacts file came back with seq=3 and the new entry's identifier
     hint.
+- **Integration on the 7412, the same day:** with the service started,
+  dect-stubd loaded the four contacts, and a journal line went to the
+  server and back into dect-stubd within seconds.
+- **Stopping:** the service stop first left the sync running until procd
+  killed it 5 s later. Under ucode's uloop a SIGTERM was caught and
+  dropped. The sync now exits from its own handler. Timed stop, with the
+  server unreachable and after real requests: under 1 s in both cases.
 - **Not tested yet:**
   - a handset reading or editing the list on the air;
   - a real server (Nextcloud, Baïkal);
