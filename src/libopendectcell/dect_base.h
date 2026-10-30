@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "dect_callinfo.h"
+#include "dect_calls.h"
 #include "dect_cc.h"
 #include "dect_clip.h"
 #include "dect_contacts.h"
@@ -300,6 +301,20 @@ struct dect_base_ic {
 	struct dect_clip clip;	/* the caller, kept for re-presentation */
 };
 
+/*
+ * Stage S4a: a record's notifications. Voice messages waiting per line
+ * (TS 102 527-3 §7.4.1.2), as the bridge reported its accounts' message
+ * summaries: the counts, the lines we have one for, and those the handset
+ * has not heard yet. Missed call notifications (§7.4.1.3) the handset has
+ * not heard yet, per line, and those for a call just missed (subtype 01H,
+ * "a new external missed call just arrived"). Bit n-1: line n.
+ */
+struct dect_base_notice {
+	unsigned mwi[2];
+	uint8_t  mwi_known, mwi_due;
+	uint8_t  mc_due, mc_new;
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
@@ -335,6 +350,12 @@ struct dect_base {
 	int      absent[DECT_BASE_HS_MAX];
 	/* the Contact List the host keeps, NULL: none (S5a) */
 	const struct dect_contacts *contacts;
+	/* the call lists the host keeps, NULL: none (S4a) */
+	struct dect_calls *call_lists;
+	/* what each record is due to hear, and what it heard (S4a) */
+	struct dect_base_notice note[DECT_BASE_HS_MAX];
+	/* records with a notice due and no link: to page (bit i) */
+	uint32_t page_want;
 	/*
 	 * The name a handset gave record i in the Internal Names List (TS 102
 	 * 527-3 §7.4.10.5.8); empty = the default "DECT n".
@@ -799,6 +820,40 @@ int dect_base_contact_name(const struct dect_base *b, const char *num,
 int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
 		       int from_bridge, uint64_t now,
 		       struct dect_base_reply *r);
+
+/*
+ * Notifications (S4a), TS 102 527-3 §7.4.10.2, §7.4.1.2, §7.4.1.3: a CISS
+ * {FACILITY} with <<EVENTS-NOTIFICATION>> on a link that is up, to Part 3
+ * handsets only (the profile may say otherwise). A handset with no link
+ * learns at its next location registration, or when the host pages it
+ * (page_want).
+ */
+int dect_base_hs_of_link(const struct dect_base *b, const struct dect_link *l);
+struct dect_link *dect_base_link_known(struct dect_base *b, int i);
+int dect_base_notify_ok(const struct dect_base *b, const struct dect_link *l);
+/* Could record i hear notifications, from what it told us before? */
+int dect_base_notify_known(const struct dect_base *b, unsigned i);
+/* After a location registration: the Line Settings and Supported Lists. */
+void dect_base_locate_notify(struct dect_base *b, struct dect_link *l);
+/* Messages waiting to record i on l, for its due lines; queued count. */
+unsigned dect_base_mwi_send(struct dect_base *b, struct dect_link *l,
+			    unsigned i);
+/* After a location registration: the waiting messages again. */
+void dect_base_mwi_locate(struct dect_base *b, struct dect_link *l);
+/* Missed calls to record i on l, for its due lines; queued count. */
+unsigned dect_base_missed_send(struct dect_base *b, struct dect_link *l,
+			       unsigned i);
+/* The lines record i has: 1, and 2 if it has a second (a mask). */
+uint8_t dect_base_hs_lines(const struct dect_base *b, unsigned i);
+/* After a location registration: the missed calls once per line. */
+void dect_base_missed_locate(struct dect_base *b, struct dect_link *l);
+/* Missed-call notices due to record i: now on its link, else paged. */
+void dect_base_missed_due(struct dect_base *b, unsigned i, uint8_t lines,
+			  int fresh);
+/* The Missed Calls List changed: every record hears the counts. */
+void dect_base_missed_changed_tick(struct dect_base *b);
+/* The Internal Names List changed: every handset that is up hears it. */
+void dect_base_names_notify(struct dect_base *b);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

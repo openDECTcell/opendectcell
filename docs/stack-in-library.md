@@ -373,3 +373,21 @@ the sockets and decides which client is the bridge. Which records are
 listed (`dect_base_listed()`, with `absent[]`) and the Contact List the
 host keeps (`contacts`) are `dect_base`'s. Unit tests; the eleven traces
 unchanged. Still the host's: `bridge`, `mwi` (S4) and `calllog` (S4).
+
+## S4, lists and notices (started 2026-10-30)
+
+**S4a.** The notifications are the library's: the list change notices
+after a location registration, voice messages waiting, missed calls, the
+Internal Names List's change, and who may hear them (Part 3 by what the
+handset reported once proven, or its profile). Each record's notice
+state (`note[]`), the host's call lists (`call_lists`) and the records to
+page for a notice (`page_want`, read by the host's paging round) are
+`dect_base`'s. New trace `notices.trace` (a Part 3 handset locates and
+authenticates; the bridge reports two messages and a missed call),
+replayed unchanged on the commit before; the other eleven unchanged.
+
+Seen while recording: the notices after a location registration go to a
+handset whose link reported Part 3 even before it authenticated, while
+those that wait for a link (`dect_base_missed_due()`) count only a
+capability learned after authentication (audit A3). Harmless (a notice
+carries counts, no data), but not one rule; left as it is.

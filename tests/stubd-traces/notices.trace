@@ -1,0 +1,60 @@
+# Notifications to a Part 3 handset (TS 102 527-3 §7.4.10.2, §7.4.1.2,
+# §7.4.1.3): DECT 1 locates declaring NG-DECT Part 3 and hears the list
+# change notices; the bridge then reports voice messages waiting and a
+# missed call, and both reach the handset on its link. Identities, keys
+# and numbers are made up.
+sub 1 80 a8 03 11 22 33 44
+args -C
+start
+ev hello api=N lines=1 hs=1
+ev hs hs=1 state=registered name="DECT 1" wideband=1
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+mail 0247 02 00 00
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 01
+ctl bridge
+ev ok verb=bridge
+
+up 1
+# {LOCATE-REQUEST}: <<PORTABLE-IDENTITY>>, <<FIXED-IDENTITY>> (PARK),
+# <<TERMINAL-CAPABILITY>>: profile indicator 7 with NG-DECT Part 3.
+pp 05 54 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 63 08 a2 00 00 00 00 00 00 84
+fp 05 40 0a 03 01 18 08 0c 08 db 00 25 4a 6f 94 b9 de 0e 08 03 28 4d 72 97 bc e1 06
+tick 200
+# {AUTHENTICATION-REPLY}: RES1 for the made-up UAK b0..bf and the RAND_F
+# and RS above.
+pp 85 41 0d 04 87 f4 da aa
+fp 85 55 05 05 a0 94 00 11 01 07 01 64 7c 07 90 03 00 01 02 00 84
+fp 64 62 23 08 c0 26 10 30 09 00 00 00
+fp 64 62 7d 03 03 88 81 7e 03 00 03 81
+fp 64 62 7d 03 03 80 81
+fp 64 62 7d 06 01 82 80 03 81 80 7e 03 00 00 81
+tick 500
+# Two voice messages on line 1.
+ctl mwi hs=1 line=1 count=2
+ev ok verb=mwi hs=1
+fp 64 62 7d 03 00 81 82 7e 03 00 00 81
+tick 200
+# A missed call on DECT 1's line 1.
+ctl calllog kind=missed number=0301234 legs=1:1
+ev ok verb=calllog
+fp 64 62 7d 06 01 81 81 03 81 81 7e 03 00 00 81
+tick 200
+down
+tick 1000

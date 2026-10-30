@@ -2447,3 +2447,299 @@ int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
 	reply(r, NULL, "call", id);
 	return 1;
 }
+
+/* The record link l serves, or -1 (S4a). */
+int dect_base_hs_of_link(const struct dect_base *b, const struct dect_link *l)
+{
+	int i = l->mm.adopted;
+
+	if (i < 0 && l == &b->main_link.link)
+		i = (int)b->cur;
+	return i >= 0 && (unsigned)i < b->n_hs ? i : -1;
+}
+
+/*
+ * A link that has adopted record i, or NULL: a main link that has adopted
+ * no one is not presumed to serve the current record -- a deregistration
+ * sent on that went to whichever handset connected next (bench,
+ * 2026-10-28: the C430A's location registration got the AS690H's
+ * TERMINATE-REQUEST).
+ */
+struct dect_link *dect_base_link_known(struct dect_base *b, int i)
+{
+	unsigned k;
+
+	if (b->main_link.active && b->main_link.link.mm.adopted == i)
+		return &b->main_link.link;
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active && b->side[k].link.mm.adopted == i)
+			return &b->side[k].link;
+	return NULL;
+}
+
+/*
+ * List change notifications (TS 102 527-3 §7.4.10.2), a CISS {FACILITY}
+ * with <<EVENTS-NOTIFICATION>> on a link that is up. Only to Part 3
+ * handsets: the notifications are a CAT-iq Part 3 procedure, and a Part 1
+ * or GAP handset was never sent one by us; what it would make of one is
+ * untested. A handset with no link up learns at its next location
+ * registration (the CLSS paging path is not built).
+ */
+int dect_base_notify_ok(const struct dect_base *b, const struct dect_link *l)
+{
+	int i = dect_base_hs_of_link(b, l);
+
+	if (i >= 0 && b->prof[i].notify != DECT_PROF_AUTO)
+		return b->prof[i].notify == DECT_PROF_ON;
+	if (l->mm.peer_cap.present)
+		return l->mm.peer_cap.ng_part3;
+	/* a link up for a page or a call: what the handset said before */
+	return i >= 0 && b->cap[i].known && b->cap[i].part3;
+}
+
+/*
+ * After a location registration: one indication for the Line Settings
+ * List per line the handset is attached to, to that handset only, with
+ * the line "relating to" and the entries for that line, 1 (§7.4.10.2.1,
+ * note 1; spec sweep M1.3).
+ */
+void dect_base_locate_notify(struct dect_base *b, struct dect_link *l)
+{
+	const struct dect_iwu *iwu = &l->cc.iwu;
+	unsigned i;
+
+	if (!dect_base_notify_ok(b, l))
+		return;
+	for (i = 0; i < iwu->n_lines; i++) {
+		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
+					 DECT_LIA_LIST_LINE_SETTINGS, 1 };
+		uint8_t msg[DECT_LAPC_MSG_MAX];
+		size_t n;
+
+		if (!dect_iwu_attached(iwu, iwu->lines[i].id,
+				       iwu->own_terminal_id))
+			continue;
+		n = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
+					       iwu->lines[i].id,
+					       DECT_EVENT_LINE_RELATING_TO);
+		if (n && dect_link_send_ciss(l, msg, n) == 0)
+			dect_base_log(b, "reg: list change notice sent for "
+				      "line %u (Line Settings List)",
+				      iwu->lines[i].id);
+	}
+	/*
+	 * One for the List of Supported Lists too (no line field, so no line;
+	 * one entry). A handset keeps the copy it read once: the A540
+	 * re-reads only 06 and 08 when it reconnects, so it never learned of
+	 * the Contact List or the call lists until told (2026-10-30).
+	 */
+	if (iwu->contacts || iwu->calls) {
+		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
+					 DECT_LIA_LIST_SUPPORTED, 1 };
+		uint8_t msg[DECT_LAPC_MSG_MAX];
+		size_t n = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
+						      DECT_EVENT_NO_LINE, 0);
+
+		if (n && dect_link_send_ciss(l, msg, n) == 0)
+			dect_base_log(b, "reg: list change notice sent (List "
+				      "of Supported Lists)");
+	}
+}
+
+/*
+ * Voice message waiting notifications (TS 102 527-3 §7.4.1.2, table 14)
+ * to handset i on link l, for the lines in its mwi_due: the count with
+ * the line, "external call" subtype. Part 3 handsets only, as the other
+ * notifications (dect_base_notify_ok()). Returns the number queued.
+ */
+unsigned dect_base_mwi_send(struct dect_base *b, struct dect_link *l,
+			    unsigned i)
+{
+	unsigned n, sent = 0;
+
+	if (!dect_base_notify_ok(b, l)) {
+		b->note[i].mwi_due = 0;
+		return 0;
+	}
+	for (n = 1; n <= 2u; n++) {
+		struct dect_event ev = { DECT_EVENT_MESSAGE_WAITING,
+					 DECT_EVENT_VOICE,
+					 b->note[i].mwi[n - 1u] };
+		uint8_t msg[DECT_LAPC_MSG_MAX], bit = (uint8_t)(1u << (n - 1u));
+		size_t len;
+
+		if (!(b->note[i].mwi_due & bit))
+			continue;
+		len = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
+						 (uint8_t)n,
+						 DECT_EVENT_LINE_EXTERNAL);
+		if (!len || dect_link_send_ciss(l, msg, len))
+			continue;	/* the queue is full: next time */
+		b->note[i].mwi_due &= (uint8_t)~bit;
+		sent++;
+		dect_base_log(b, "mwi: DECT %u, line %u: %u message(s) waiting",
+			      dect_base_slot(b, i), n, ev.multiplicity);
+	}
+	return sent;
+}
+
+/*
+ * After a location registration: the waiting messages again, once per
+ * line we know them for (§7.4.1.2, "notification update").
+ */
+void dect_base_mwi_locate(struct dect_base *b, struct dect_link *l)
+{
+	int i = dect_base_hs_of_link(b, l);
+
+	if (i < 0 || !b->note[i].mwi_known)
+		return;
+	b->note[i].mwi_due = b->note[i].mwi_known;
+	(void)dect_base_mwi_send(b, l, (unsigned)i);
+}
+
+/*
+ * Missed call notifications (TS 102 527-3 §7.4.1.3, table 15) to handset i
+ * on link l, for the lines in its mc_due: the unread missed calls on that
+ * line, and with it the list change indication for the Missed Calls List
+ * (its entries on the line), "line identifier for external call". Subtype
+ * 01H only for a call just missed. Part 3 handsets only
+ * (dect_base_notify_ok()). Nothing without the host's call lists.
+ */
+unsigned dect_base_missed_send(struct dect_base *b, struct dect_link *l,
+			       unsigned i)
+{
+	unsigned n, sent = 0, tid = dect_base_slot(b, i);
+
+	if (!b->call_lists || !dect_base_notify_ok(b, l)) {
+		b->note[i].mc_due = b->note[i].mc_new = 0;
+		return 0;
+	}
+	for (n = 1; n <= 2u; n++) {
+		uint8_t bit = (uint8_t)(1u << (n - 1u));
+		struct dect_event ev[2] = {
+			{ DECT_EVENT_MISSED_CALL,
+			  b->note[i].mc_new & bit ? 1u : 2u,
+			  dect_calls_missed_unread(b->call_lists, tid, n) },
+			{ DECT_EVENT_LIST_CHANGE, DECT_LIA_LIST_MISSED,
+			  dect_calls_missed_total(b->call_lists, tid, n) },
+		};
+		uint8_t msg[DECT_LAPC_MSG_MAX];
+		size_t len;
+
+		if (!(b->note[i].mc_due & bit))
+			continue;
+		len = dect_events_build_facility(msg, sizeof(msg), ev, 2,
+						 (uint8_t)n,
+						 DECT_EVENT_LINE_EXTERNAL);
+		if (!len || dect_link_send_ciss(l, msg, len))
+			continue;	/* the queue is full: next time */
+		b->note[i].mc_due &= (uint8_t)~bit;
+		b->note[i].mc_new &= (uint8_t)~bit;
+		sent++;
+		dect_base_log(b, "missed: DECT %u, line %u: %u unread of %u "
+			      "(%s)", tid, n, ev[0].multiplicity,
+			      ev[1].multiplicity,
+			      ev[0].subtype == 1u ? "a new one" : "update");
+	}
+	return sent;
+}
+
+/* The lines handset i has: 1, and 2 if it has a second. */
+uint8_t dect_base_hs_lines(const struct dect_base *b, unsigned i)
+{
+	return (uint8_t)(b->line2[i] ? 3u : 1u);
+}
+
+/*
+ * After a location registration: the missed calls once per line the
+ * handset has (§7.4.1.3, subtype 02H).
+ */
+void dect_base_missed_locate(struct dect_base *b, struct dect_link *l)
+{
+	int i = dect_base_hs_of_link(b, l);
+
+	if (i < 0)
+		return;
+	b->note[i].mc_due = dect_base_hs_lines(b, (unsigned)i);
+	(void)dect_base_missed_send(b, l, (unsigned)i);
+}
+
+/* Could handset i hear notifications, from what it told us before? */
+int dect_base_notify_known(const struct dect_base *b, unsigned i)
+{
+	if (b->prof[i].notify != DECT_PROF_AUTO)
+		return b->prof[i].notify == DECT_PROF_ON;
+	return b->cap[i].known && b->cap[i].part3;
+}
+
+/*
+ * Due notifications to handset i: now if it has a link, else at the next
+ * paging round (tu.want, the host's paging round).
+ */
+void dect_base_missed_due(struct dect_base *b, unsigned i, uint8_t lines,
+			  int fresh)
+{
+	struct dect_link *l;
+
+	lines &= dect_base_hs_lines(b, i);
+	if (!lines || !b->loaded[i] || !dect_base_notify_known(b, i))
+		return;
+	b->note[i].mc_due |= lines;
+	if (fresh)
+		b->note[i].mc_new |= lines;
+	l = dect_base_link_known(b, (int)i);
+	if (l)
+		(void)dect_base_missed_send(b, l, i);
+	else
+		b->page_want |= 1u << i;
+}
+
+/*
+ * The Missed Calls List changed on a handset (read, deleted): every handset
+ * hears the new counts (§7.4.1.3, "entry modified or deleted", subtype
+ * 02H) -- one in a link at once, the others at the next paging round.
+ */
+void dect_base_missed_changed_tick(struct dect_base *b)
+{
+	unsigned i;
+
+	if (!b->call_lists || !b->call_lists->missed_changed)
+		return;
+	b->call_lists->missed_changed = 0;
+	for (i = 0; i < b->n_hs; i++)
+		dect_base_missed_due(b, i, dect_base_hs_lines(b, i), 0);
+}
+
+/*
+ * The Internal Names List changed -- a name saved, a handset added: tell
+ * every handset that is up (§7.4.10.2.2: "at least ... that other PP", and
+ * to all on an addition), no line, the number of entries.
+ */
+void dect_base_names_notify(struct dect_base *b)
+{
+	struct dect_link *links[1 + DECT_BASE_SIDES];
+	unsigned k, n = 0;
+
+	if (b->main_link.active)
+		links[n++] = &b->main_link.link;
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active)
+			links[n++] = &b->side[k].link;
+	for (k = 0; k < n; k++) {
+		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
+					 DECT_LIA_LIST_INTERNAL_NAMES,
+					 links[k]->cc.iwu.n_handsets };
+		uint8_t msg[DECT_LAPC_MSG_MAX];
+		size_t len;
+
+		if (!dect_base_notify_ok(b, links[k]))
+			continue;
+		len = dect_events_build_facility(msg, sizeof(msg), &ev, 1,
+						 DECT_EVENT_NO_LINE, 0);
+		if (len && dect_link_send_ciss(links[k], msg, len) == 0)
+			dect_base_log(b, "names: list change notice sent to "
+				      "DECT %u",
+				      links[k]->cc.iwu.own_terminal_id);
+	}
+}
+

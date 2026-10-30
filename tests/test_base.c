@@ -683,5 +683,40 @@ int main(void)
 		CHECK_EQ(strcmp(event_line, "call-in-ok call=1 sip=x\n"), 0);
 		CHECK_EQ(b.ring.now, 1);		/* the main link rings */
 	}
+
+	/* notifications (S4a) */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.cur = 0;
+		b.line2[1] = 1;
+		CHECK_EQ(dect_base_hs_lines(&b, 0), 1);
+		CHECK_EQ(dect_base_hs_lines(&b, 1), 3);
+		b.main_link.link.mm.adopted = -1;
+		CHECK_EQ(dect_base_hs_of_link(&b, &b.main_link.link), 0);
+		b.side[0].link.mm.adopted = -1;
+		CHECK_EQ(dect_base_hs_of_link(&b, &b.side[0].link), -1);
+		CHECK(dect_base_link_known(&b, 0) == NULL);	/* not adopted */
+		b.side[1].active = 1;
+		b.side[1].link.mm.adopted = 1;
+		CHECK(dect_base_link_known(&b, 1) == &b.side[1].link);
+		CHECK_EQ(dect_base_notify_known(&b, 1), 0);
+		b.cap[1].known = 1;
+		b.cap[1].part3 = 1;
+		CHECK_EQ(dect_base_notify_known(&b, 1), 1);
+		/* not loaded: nothing due; loaded, no call lists: none sent */
+		dect_base_missed_due(&b, 1, 3, 1);
+		CHECK_EQ(b.note[1].mc_due, 0);
+		b.loaded[1] = 1;
+		b.side[1].active = 0;			/* no link: paged */
+		dect_base_missed_due(&b, 1, 3, 1);
+		CHECK_EQ(b.note[1].mc_due, 3);
+		CHECK_EQ(b.note[1].mc_new, 3);
+		CHECK_EQ(b.page_want, 2u);
+		b.side[1].active = 1;		/* a link, but no call lists */
+		dect_base_missed_due(&b, 1, 1, 0);
+		CHECK_EQ(b.note[1].mc_due, 0);
+	}
 	return CHECK_DONE();
 }

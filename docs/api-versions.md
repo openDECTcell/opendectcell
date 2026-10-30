@@ -839,3 +839,10 @@ _par_tick(), _hs_in_call() (S3s).
 **121.** dect_base.h, 2026-10-30: dect_base's `absent[]` and `contacts`
 (dect_base.h now includes dect_contacts.h); struct dect_base_reply;
 dect_base_listed(), _contact_name(), _ctl_call() (S5a).
+
+**122.** dect_base.h, 2026-10-30: struct dect_base_notice and
+dect_base's `note[]`, `call_lists` and `page_want` (dect_base.h now
+includes dect_calls.h); dect_base_hs_of_link(), _link_known(),
+_notify_ok(), _notify_known(), _locate_notify(), _mwi_send(),
+_mwi_locate(), _missed_send(), _hs_lines(), _missed_locate(),
+_missed_due(), _missed_changed_tick(), _names_notify() (S4a).
