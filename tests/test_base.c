@@ -8,6 +8,17 @@
 
 #include <string.h>
 
+static unsigned saved_i = 99, saved_slot;
+
+static void save(void *ctx, unsigned i, const struct dect_hs_rec *r)
+{
+	CHECK(ctx == &saved_i);
+	saved_i = i;
+	saved_slot = r->slot;
+}
+
+static const struct dect_base_ops ops = { .save = save };
+
 int main(void)
 {
 	struct dect_base b;
@@ -41,5 +52,14 @@ int main(void)
 	CHECK_EQ(b.hs[2].port_id_len, 7u);
 	dect_base_load(&b, DECT_BASE_HS_MAX);	/* out of range: unchanged */
 	CHECK_EQ(b.rec.slot, 3u);
+
+	/* a changed record goes to the host's save(), if it has one */
+	dect_base_changed(&b);
+	CHECK_EQ(saved_i, 99u);
+	b.ops = &ops;
+	b.ctx = &saved_i;
+	dect_base_changed(&b);
+	CHECK_EQ(saved_i, 2u);
+	CHECK_EQ(saved_slot, 3u);
 	return CHECK_DONE();
 }

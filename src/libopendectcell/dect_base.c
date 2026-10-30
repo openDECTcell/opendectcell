@@ -12,6 +12,12 @@ void dect_base_init(struct dect_base *b)
 	memset(b, 0, sizeof(*b));
 }
 
+void dect_base_changed(struct dect_base *b)
+{
+	if (b->ops && b->ops->save)
+		b->ops->save(b->ctx, b->cur, &b->rec);
+}
+
 void dect_base_stash(struct dect_base *b)
 {
 	if (b->cur < DECT_BASE_HS_MAX)

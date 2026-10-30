@@ -52,7 +52,15 @@ struct dect_hs_rec {
  */
 #define DECT_BASE_HS_MAX	DECT_MM_MAX_SLOT
 
+/* What the host does for the stack (S1c). */
+struct dect_base_ops {
+	/* Store record i, which changed (r is it, the working copy). */
+	void (*save)(void *ctx, unsigned i, const struct dect_hs_rec *r);
+};
+
 struct dect_base {
+	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
+	void *ctx;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	unsigned n_hs;			/* records in use, hs[0] first */
 	unsigned cur;			/* the current one */
@@ -73,5 +81,8 @@ void dect_base_load(struct dect_base *b, unsigned i);
  * of range.
  */
 int dect_base_switch(struct dect_base *b, unsigned i);
+
+/* The current record changed: the host's save(). */
+void dect_base_changed(struct dect_base *b);
 
 #endif

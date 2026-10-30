@@ -104,7 +104,8 @@ records, how many are in use, which is current and its working copy;
 store's path, names, profile, MWI, capabilities), at the same index.
 `tests/test_base.c` tests the swap; the six traces unchanged.
 
-Next (S1c): the save. dect-stubd decides in three places that the
-current record changed and writes its file (`sub_save()`); the stack
-should say "record changed" and the host store it.
-
+**S1c, 2026-10-30.** The save: `struct dect_base_ops` with `save()`,
+called by `dect_base_changed()`. dect-stubd's three places that decided
+the current record changed now say so through it, and its `sub_save()`
+is the callback. Who decides stays where it is until S2 moves
+registration. S1 is complete; the six traces unchanged throughout.

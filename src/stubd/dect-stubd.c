@@ -2911,6 +2911,16 @@ static void sub_save(struct stubd *s)
 	}
 }
 
+/* dect_base's save(): the current handset's file (dect_base.h). */
+static void base_save(void *ctx, unsigned i, const struct dect_hs_rec *r)
+{
+	(void)i;
+	(void)r;		/* the working copy, which sub_save() writes */
+	sub_save(ctx);
+}
+
+static const struct dect_base_ops base_ops = { .save = base_save };
+
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
 static int sub_load(struct stubd *s)
 {
@@ -10272,7 +10282,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		printf("call: learned the identities for calling the handset "
 		       "(%zu + %zu bytes), saving\n",
 		       s->base.rec.cc_port_id_len, s->base.rec.cc_fixed_id_len);
-		sub_save(s);
+		dect_base_changed(&s->base);
 	}
 
 	/*
@@ -10307,7 +10317,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       "handset (%zu + %zu bytes) from the "
 			       "subscription, saving\n",
 			       s->base.rec.cc_port_id_len, s->base.rec.cc_fixed_id_len);
-			sub_save(s);
+			dect_base_changed(&s->base);
 		}
 	}
 
@@ -10337,7 +10347,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			       s->base.rec.port_id_len);
 		}
 		send_subscription(s);
-		sub_save(s);
+		dect_base_changed(&s->base);
 		if (s->reg_profile[0])
 			reg_profile_apply(s);
 		/*
@@ -12776,6 +12786,8 @@ int main(int argc, char **argv)
 	int c, ret = 1, sub_off = 0, auto_bringup = 0, passes;
 
 	memset(&s, 0, sizeof(s));
+	s.base.ops = &base_ops;
+	s.base.ctx = &s;
 	s.tx_slot = s.rx_slot = -1;
 	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));

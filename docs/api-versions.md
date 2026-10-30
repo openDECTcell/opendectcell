@@ -697,3 +697,8 @@ dect-stubd keeps its records as it did, now in this type.
 table of handset records with its current index and the working copy,
 and dect_base_init(), _stash(), _load(), _switch() (S1b). Link
 dect_base.c.
+
+**91.** dect_base.h, 2026-10-30: struct dect_base_ops with save(), and
+dect_base_changed(): the stack says the current record changed, the host
+stores it (S1c). struct dect_base gains `ops` and `ctx` (NULL: nothing is
+stored).
