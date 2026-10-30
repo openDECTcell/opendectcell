@@ -8491,12 +8491,16 @@ int main(int argc, char **argv)
 		 * and the first search came back empty (2026-10-25, service
 		 * test; the same transient as run M1 that morning). Three
 		 * passes, ~4 s each, before giving up. The 7412's chip has
-		 * answered only 30 to 60 s after its upload (2026-10-29), so
-		 * the SSC transport makes ten, ~7 s each.
+		 * answered only 30 to 60 s after its upload (2026-10-29), and
+		 * as late as 66 s after a start without one, first after a
+		 * package install (T13 U6: ten passes, 68 s, were not enough;
+		 * U6b found it at pass 9). The lane offset stayed put
+		 * meanwhile, so the SSC transport makes twenty passes, ~7 s
+		 * each, at the offset it measured and the one 8 bits on.
 		 */
 		int pass;
 
-		passes = s.ssc ? 10 : 3;
+		passes = s.ssc ? 20 : 3;
 		for (pass = 1; find_control_slot(&s, fpb); pass++) {
 			if (pass >= passes || stop) {
 				fprintf(stderr, "control slot not found\n");
@@ -8505,22 +8509,8 @@ int main(int argc, char **argv)
 			fprintf(stderr, "control slot not found yet (pass %d of "
 				"%d) -- the chip may still be starting\n", pass,
 				passes);
-			/*
-			 * Both offsets tried twice: measure the lanes again.
-			 * T13 U6 (7412, 2026-10-30): a start measured 9,
-			 * tried 9 and 1 for ten passes and gave up; procd's
-			 * restart measured 3 and found the slot at once. The
-			 * new measurement says whether the offset had moved.
-			 */
-			if (s.ssc && pass % 4 == 0) {
-				printf("ssc: no slot at offsets %u and %u; "
-				       "measuring the lanes again\n",
-				       s.ssc_al.off, (s.ssc_al.off + 8u) % 16u);
-				if (ssc_measure(&s))
-					ssc_flip(&s);
-			} else if (s.ssc) {
+			if (s.ssc)
 				ssc_flip(&s);
-			}
 			sleep(1);
 		}
 	} else {
