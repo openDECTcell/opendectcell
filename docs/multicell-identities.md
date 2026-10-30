@@ -499,6 +499,11 @@ were read on the 7520 host driver and matched against the 06.88 build):
    verbatim. That the beacon carries the same bytes is the room's
    derivation (one stored RFPI), so the beacon itself still has to be
    checked on the air: step 4.
+   **Passed 2026-10-30** (7412, 06.88 STUB, observed on hardware; T13 U2
+   in `docs/bench-later.md`): with tag 1 = `10 f4 20 11 09` (made up:
+   class B, EIC 0F42, FPN 01, FPS 1, RPN 09) the STUB booted and the
+   contact answer `0xF601` carried all 5 octets unchanged. So the STUB
+   keeps an RPN above 7 as given; the beacon is still to be checked.
 2. Bench B4a, possible today with class A: give a handset an assigned IPUI O
    in `{ACCESS-RIGHTS-ACCEPT}` (class A may send any type, GAP table 51) and
    check that the A540, C430A and AS690H accept, store and use it (locate,
