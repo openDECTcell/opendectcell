@@ -159,9 +159,14 @@ registration's progress on it (subscription installed, MM state logged,
 enrolment routed). dect-stubd's `reg` keeps the call and audio state
 until S3. Data only; the traces unchanged.
 
-S2.3, the rest, in order: (b) connection up and down as a library entry
-(`dect_base_mail()` for 0x0200 and 0x0201 on the main link, the host told
-through a callback); (c) `reg_segment()` (635 lines) split, the generic
-segment path into the library first, then the identity gate and
-adoption.
+**S2.3b, 2026-10-30.** `dect_base_link_open()`: the link's part of
+`reg_start()` (the flags, `dect_link_init()`, the current identity, the
+other records held on the link; which ones the host says, as a mask).
+What stays in dect-stubd: the arbitration of a connection-up between the
+main link, side links and a call in progress (0x0200 and 0x0201 in
+`handle_reg_mail()`), which needs calls (S3) and side links (S2.4) in the
+library first, and the ring target's switch. Traces unchanged.
+
+Next, (c): `reg_segment()` (635 lines) split, the generic segment path
+into the library first, then the identity gate and adoption.
 

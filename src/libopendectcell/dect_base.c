@@ -151,3 +151,35 @@ void dect_base_slot_mask(struct dect_base *b, uint8_t mask)
 	dect_base_log(b, "sub: locked-in handset mask 0x017c 00 %02x "
 		      "[CR A-0129]", mask);
 }
+
+void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
+			 uint8_t handle, const struct dect_mm_cfg *cfg,
+			 unsigned hold_mask)
+{
+	struct dect_mm *mm = &bl->link.mm;
+	unsigned i;
+
+	bl->active = 1;
+	bl->persisted = 0;
+	bl->enrol_routed = 0;
+	bl->enrol_switched = 0;
+	bl->handle = handle;
+	dect_link_init(&bl->link, handle, cfg);
+	if (b->rec.port_id_len) {
+		memcpy(mm->port_id, b->rec.port_id, b->rec.port_id_len);
+		mm->port_id_len = b->rec.port_id_len;
+	}
+	for (i = 0; i < b->n_hs && i < DECT_BASE_HS_MAX; i++) {
+		const struct dect_hs_rec *r = &b->hs[i];
+
+		if (i == b->cur || !(hold_mask & (1u << i)) || !r->port_id_len)
+			continue;
+		if (dect_mm_hold(mm, r->port_id, r->port_id_len,
+				 (uint8_t)r->slot, NULL, (int)i) < 0)
+			dect_base_log(b, "sub: could not hold record %u on "
+				      "this link", i);
+	}
+	if (b->rec.port_id_len)
+		(void)dect_mm_hold(mm, b->rec.port_id, b->rec.port_id_len,
+				   (uint8_t)cfg->sub_slot, NULL, (int)b->cur);
+}

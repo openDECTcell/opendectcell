@@ -716,3 +716,8 @@ subscription slots (S2.2). dect_base.h now includes dect_proto.h.
 handle, its dect_link, and the registration's progress on it) and
 struct dect_base's `main_link` (S2.3a). dect_base.h now includes
 dect_link.h.
+
+**95.** dect_base.h, 2026-10-30: dect_base_link_open(), a connection's
+C-plane stack set up for the current record, with the records the host
+names held on it (S2.3b). dect_base.c now needs dect_link.c and what it
+links.

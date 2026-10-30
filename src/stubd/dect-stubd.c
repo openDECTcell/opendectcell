@@ -5577,7 +5577,7 @@ static void xlane_release(struct stubd *s, struct side_link *sl);
 static void reg_start(struct stubd *s, uint8_t handle)
 {
 	struct dect_mm_cfg mcfg;
-	unsigned i;
+	unsigned i, hold = 0;
 
 	/* a new connection is nobody's yet; default to the ring target */
 	hs_switch(s, s->ring_state == RING_IDLE || s->ring_state == RING_DONE
@@ -5613,69 +5613,24 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->fetch_retrans_seen = 0;	/* MM's counter restarts with the link */
 	mcfg.registration = reg_policy(s);
 
-	s->base.main_link.active = 1;
-	s->base.main_link.persisted = 0;
 	s->reg.call_bound = 0;
 	s->reg.call_wideband = 0;
 	s->reg.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
-	s->base.main_link.enrol_routed = 0;
-	s->base.main_link.enrol_switched = 0;
 	s->reg.cipher_started = 0;
 	s->reg.cipher_done = 0;
 	s->reg.cipher_reject_seen = 0;
 	s->reg.auth_refused = 0;
 	s->reg.cipher_timeout_seen = 0;
-	s->base.main_link.handle = handle;
-	dect_link_init(&s->base.main_link.link, handle, &mcfg);
+	/* the other handsets this link may turn out to be: loaded ones, and a
+	 * roamer once fetched */
+	for (i = 0; i < s->base.n_hs; i++)
+		if (s->hs[i].loaded && !(s->hs[i].remote && !s->hs[i].fetched))
+			hold |= 1u << i;
+	dect_base_link_open(&s->base, &s->base.main_link, handle, &mcfg, hold);
 	dect_mm_set_uak_lookup(&s->base.main_link.link.mm, uak_lookup, s);
-	/*
-	 * Re-arm after every init: dect_link_init() zeroes the whole struct,
-	 * so the hook has to be set per connection, not once at startup.
-	 */
 	dect_link_set_tx_log(&s->base.main_link.link, log_nwk_out, s);
-	/*
-	 * dect_link_init() also zeroed mm.stats.located. Without resetting
-	 * our own watermark the comparison below reads 0 != N and fires a
-	 * date-and-time send on every connection setup, with no location
-	 * registration behind it -- which is exactly what vF439 did: 14 sends
-	 * for 7 LOCATE-ACCEPTs, the extras landing right after
-	 * "connection up".
-	 *
-	 * Found by running it. A counter compared across a re-init is a trap
-	 * no unit test of either side would have caught.
-	 */
 	s->reg.time_sent_for = 0;
-	/*
-	 * Hand the MM state machine the identity we are subscribed to, so a
-	 * location registration from a handset we do not hold is rejected.
-	 * Must come AFTER dect_mm_init(), which clears it.
-	 */
-	if (s->base.rec.port_id_len) {
-		memcpy(s->base.main_link.link.mm.port_id, s->base.rec.port_id, s->base.rec.port_id_len);
-		s->base.main_link.link.mm.port_id_len = s->base.rec.port_id_len;
-	}
-	/*
-	 * ...and every other handset we hold, so its location registration
-	 * and its calls are served rather than turned away. MM adopts
-	 * whichever one this link turns out to carry; reg_segment() follows.
-	 */
-	for (i = 0; i < s->base.n_hs; i++) {
-		const struct handset *h = &s->hs[i];
-		const struct dect_hs_rec *r = &s->base.hs[i];
-
-		if (i == s->base.cur || !h->loaded || !r->port_id_len ||
-		    (h->remote && !h->fetched))
-			continue;
-		if (dect_mm_hold(&s->base.main_link.link.mm, r->port_id, r->port_id_len,
-				 (uint8_t)r->slot, NULL, (int)i) < 0)
-			printf("sub: could not hold %s on this link\n",
-			       h->path);
-	}
-	if (s->base.rec.port_id_len)
-		(void)dect_mm_hold(&s->base.main_link.link.mm, s->base.rec.port_id,
-				   s->base.rec.port_id_len, stubd_sub_slot(s), NULL,
-				   (int)s->base.cur);
 	main_cc_setup(s);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
 }

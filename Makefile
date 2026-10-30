@@ -124,9 +124,9 @@ $(BUILD)/test_stubd: tests/test_stubd.c $(STUBD_SRC) src/stubd/ssc_align.h tests
 		-DAB_PATH='"$(BUILD)/stubd-test-run/audio.sock"' \
 		-o $@ tests/test_stubd.c $(filter-out src/stubd/dect-stubd.c,$(STUBD_SRC)) -lm
 
-$(BUILD)/test_base: tests/test_base.c src/libopendectcell/dect_base.c src/libopendectcell/dect_base.h tests/check.h
+$(BUILD)/test_base: tests/test_base.c $(filter src/libopendectcell/%,$(STUBD_SRC)) src/libopendectcell/dect_base.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_base.c src/libopendectcell/dect_base.c
+	$(CC) $(CFLAGS) $(SAN) -Isrc/libopendectcell -o $@ tests/test_base.c $(filter src/libopendectcell/%,$(STUBD_SRC)) -lm
 
 $(BUILD)/test_calls: tests/test_calls.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c src/libopendectcell/dect_calls.h src/libopendectcell/dect_iwu.h tests/check.h
 	@mkdir -p $(BUILD)

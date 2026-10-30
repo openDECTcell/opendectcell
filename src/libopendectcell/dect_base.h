@@ -153,6 +153,17 @@ int dect_base_slot_install(struct dect_base *b, unsigned slot,
 /* 0x017C {00, mask}: the handsets locked in, bit n-1 for slot n [CR A-0129]. */
 void dect_base_slot_mask(struct dect_base *b, uint8_t mask);
 
+/*
+ * A connection came up on `handle` for link bl: its C-plane stack starts
+ * afresh with cfg (cfg->sub_slot is the current record's chip slot), the
+ * current record's identity is the one MM expects, and every record in
+ * hold_mask (bit i for hs[i]; the host's choice, the current one aside)
+ * is held on the link too, so MM adopts whichever handset this is.
+ */
+void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
+			 uint8_t handle, const struct dect_mm_cfg *cfg,
+			 unsigned hold_mask);
+
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));

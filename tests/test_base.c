@@ -149,5 +149,35 @@ int main(void)
 		dect_base_slot_mask(&b, 0x05);
 		CHECK_EQ(n_sent, 1u);
 	}
+
+	/* a connection comes up: the current identity and the held ones */
+	{
+		struct dect_base_link bl;
+		struct dect_mm_cfg cfg;
+
+		dect_base_init(&b);
+		b.n_hs = 3;
+		b.hs[0].slot = 1;
+		b.hs[1].slot = 2;
+		b.hs[2].slot = 3;
+		memcpy(b.hs[0].port_id, "\x80\xa8\x03\x11\x22\x33\x44", 7);
+		b.hs[0].port_id_len = 7;
+		memcpy(b.hs[1].port_id, "\x80\xa8\x03\x55\x66\x77\x88", 7);
+		b.hs[1].port_id_len = 7;
+		memcpy(b.hs[2].port_id, "\x80\xa8\x03\x99\xaa\xbb\xcc", 7);
+		b.hs[2].port_id_len = 7;
+		dect_base_load(&b, 0);
+		memset(&cfg, 0, sizeof(cfg));
+		cfg.sub_slot = 1;
+		memset(&bl, 0, sizeof(bl));
+		bl.persisted = 1;
+		dect_base_link_open(&b, &bl, 4, &cfg, 1u << 1);	/* not hs[2] */
+		CHECK_EQ(bl.active, 1);
+		CHECK_EQ(bl.handle, 4);
+		CHECK_EQ(bl.persisted, 0);
+		CHECK_EQ(bl.link.mm.port_id_len, 7u);
+		CHECK_EQ(bl.link.mm.port_id[6], 0x44);
+		CHECK_EQ(bl.link.mm.n_held, 2u);	/* hs[1], then hs[0] */
+	}
 	return CHECK_DONE();
 }
