@@ -18,6 +18,8 @@
  *   sub N HEX       before start: a handset record for chip slot N with
  *                   this <<PORTABLE-IDENTITY>> content and a made-up UAK,
  *                   in RUN/sub.N, passed as -s
+ *   store N         before start: an empty store RUN/sub.N, passed as -s,
+ *                   for a handset to enrol into
  *   args ...        before start: more daemon arguments
  *   start           the daemon starts: main() with -g and the above
  *   up H            the chip: connection up on handle H (0x0200)
@@ -377,6 +379,10 @@ int stubd_test_run(struct stubd *s)
 		client_len = 0;
 	}
 	memset(pps, 0, sizeof(pps));
+	/* the chip's contact answer carries its RFPI: made up, the PARK the
+	 * traces' handsets name (a0 a5 00 01 23 45 60) */
+	t_chip_mail(DECT_PRIM_CONTACT_ACK1,
+		    (const uint8_t *)"\x00\x01\x23\x45\x60", 5);
 	settle_now();
 
 	while (fgets(line, sizeof(line), trace)) {
@@ -557,6 +563,12 @@ static void run_trace(const char *file)
 			unsigned slot = (unsigned)strtoul(line + 4, &sp, 10);
 
 			write_sub(slot, sp, subs[n_sub], sizeof(subs[0]));
+			argv[argc++] = "-s";
+			argv[argc++] = subs[n_sub++];
+		} else if (!strncmp(line, "store ", 6) && n_sub < 6) {
+			snprintf(subs[n_sub], sizeof(subs[0]),
+				 DECT_RUN_DIR "/sub.%u",
+				 (unsigned)strtoul(line + 6, NULL, 10));
 			argv[argc++] = "-s";
 			argv[argc++] = subs[n_sub++];
 		} else if (!strncmp(line, "args ", 5)) {

@@ -69,9 +69,20 @@ socket. Traces in `tests/stubd-traces/`:
 | Trace | Covers |
 |---|---|
 | `locate.trace` | start-up with one stored handset (bring-up mails, slot clears, subscription write), a location registration with authentication, the date and time |
+| `call-out.trace` | an en-bloc CC-SETUP, call proceeding, ciphering, `call-out`, `remote-ringing` and `remote-answered` (ALERTING and CONNECT with the call status IE), the audio bind, the release from the handset |
+| `register.trace` | the registration window from the control socket, access rights with key allocation from the PIN, ACCESS-RIGHTS-ACCEPT, the first location registration with the new UAK, the subscription written to the chip, the window closed |
 | `call-in.trace` | the bridge's `call-in`, page, page response, CC-SETUP with CLIP/CNIP, authentication and ciphering (0x0208, 0x0209), alerting, answer, the audio bind (0x0251, 0x0230, 0x022D), `remote-released` and the release (0x0233, 0x0202) |
 
-Still to add before S1: an outgoing call, a registration (access rights
-and key allocation), list access, a second handset on a side link.
+Still to add before S1: list access, a second handset on a side link,
+an internal call.
+
+Seen while recording, kept as it is (S0 records, it does not fix): after a
+new handset's first location registration the subscription install
+(slot clears, `0x020A`, `0x017C`) goes to the chip twice in a row, once
+from the registration and once from the start-up restore, which now finds
+a UAK (`register.trace`).
+
+The harness sends the chip's contact answer `0xF601` at start with a
+made-up RFPI, `00 01 23 45 60`, the PARK the traces' handsets name.
 Authentication answers are computed once from the made-up UAK with the
 library's DSAA and written into the trace as plain data.
