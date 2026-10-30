@@ -148,6 +148,22 @@ MATCHES (16 bytes, flag 00)`, `chip slot audit: 1=OURS 2=ours 3=- 4=-
 `parked` says `verified`, the packaged binary back (md5 as before). Log:
 `/root/t13-u5-20261030-135437.log`.
 
+**U6, the 7412 on the current packages** (written 2026-10-30, before the
+run): U1 again, on packages from `37ec832`
+(`build/release/out-37ec832-lantiq-25126`; openDECTcell, opendectcell-baresip,
+opendectcell-carddav, luci-app-opendectcell; the kernel modules unchanged since
+`a30793a`, so not reinstalled). Install, start, five minutes, the stop.
+Pass: as U1 (control slot, `sub: restored subscription` for slots 1 and
+2, the others cleared, mask `00 03`, the same pid after five minutes, no
+trouble line, no respawn) and as U5 (`MATCHES` at `0x0067F`, the audit
+`1=OURS 2=ours`, `slot table is as we intend it`); `chip: STUB second
+stage dectfw_secondlevel_441-06.88-7412.hex` named (the box's init
+script is the packaged one, so no `.apk-new` for it); LuCI's two views
+installed (`/www/luci-static/resources/view/opendectcell/settings.js`,
+`monitor.js`); at the end `parked` says `verified`. Fail: anything U1 or
+U5 did not show; a `.apk-new` for the init script means the packaged one
+was edited on the box.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
