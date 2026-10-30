@@ -476,8 +476,13 @@ were read on the 7520 host driver and matched against the 06.88 build):
 - There is no runtime mail that sets the RFPI or the RPN. A change means
   re-patching tag 1 and uploading the STUB again; a park keeps the patched
   RFPI. [CR A-0131]
-- The STUB reports its RFPI back in an indication (RFPI_IND, 5 bytes plus an
-  "RFPI type" field whose values are not known). [CR A-0131]
+- The STUB reports the RFPI it holds in the contact answer `0xF601`: 5
+  bytes after the primitive, nothing else; a new `0xF600` asks again. Stock
+  learns its base RFPI from exactly these bytes, and dect-stubd already
+  does (`DECT_PRIM_CONTACT_ACK1`). RFPI_IND, which A-0131 named, is another
+  mail: a report of RFPIs heard on the air (own and neighbours, with a type
+  and flags), not usable with the radio parked. Its primitive is not
+  known. [CR A-0132]
 - **Open:** whether the STUB reads the ARC bits or treats the RPN as 3 bits
   (class A). Static analysis could not settle it. [CR A-0131]
 
@@ -485,11 +490,13 @@ were read on the 7520 host driver and matched against the 06.88 build):
 
 1. ~~The room (Q10, Q11).~~ Answered, A-0131. Left over: the RPN width.
    Bench B0 (no transmission, no EIC needed): patch tag 1 with a class B
-   RFPI whose RPN is 8, upload, keep the radio parked, and read RFPI_IND.
-   Pass: the 5 bytes come back unchanged and the chip runs as usual.
-   Falsified if the RPN comes back altered or the STUB does not come up.
-   Needs RFPI_IND's primitive first (our logs, or one more room question).
-   On-air confirmation waits for the EIC (step 4).
+   RFPI whose RPN is 8, upload, keep the radio parked, and read the RFPI
+   back from `0xF601` [CR A-0132]. Pass: the 5 bytes come back unchanged
+   and the chip runs as usual. Falsified if the RPN comes back altered or
+   the STUB does not come up. A pass shows that the STUB stores tag 1
+   verbatim. That the beacon carries the same bytes is the room's
+   derivation (one stored RFPI), so the beacon itself still has to be
+   checked on the air: step 4.
 2. Bench B4a, possible today with class A: give a handset an assigned IPUI O
    in `{ACCESS-RIGHTS-ACCEPT}` (class A may send any type, GAP table 51) and
    check that the A540, C430A and AS690H accept, store and use it (locate,
