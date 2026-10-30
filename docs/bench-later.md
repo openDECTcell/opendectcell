@@ -140,6 +140,14 @@ read-back or audit line (the delay timer never fired: the tick), a
 MISMATCH or a foreign slot that U1 did not show (the answer parsed
 wrong), or a different address (the table not handed over).
 
+**U5 result, 2026-10-30 13:54-13:55 UTC: pass.** Control slot at 14:54:44
+(box time), the slots cleared, mask `00 03`; at 14:54:45, one second
+later as the 06.88 delay wants: `UAK read-back slot 1 at 0x0067F:
+MATCHES (16 bytes, flag 00)`, `chip slot audit: 1=OURS 2=ours 3=- 4=-
+5=- 6=-`, `slot table is as we intend it`; no `***` line. Stopped,
+`parked` says `verified`, the packaged binary back (md5 as before). Log:
+`/root/t13-u5-20261030-135437.log`.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
