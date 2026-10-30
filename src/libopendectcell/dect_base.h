@@ -452,6 +452,8 @@ struct dect_base {
 	int      loaded[DECT_BASE_HS_MAX];
 	/* record i's store does not exist: free for enrolment (S5a) */
 	int      absent[DECT_BASE_HS_MAX];
+	/* record i is a roamer's the host must fetch: never free (S3y) */
+	int      remote[DECT_BASE_HS_MAX];
 	/* the Contact List the host keeps, NULL: none (S5a) */
 	struct dect_contacts *contacts;
 	/* the call lists the host keeps, NULL: none (S4a) */
@@ -1091,6 +1093,31 @@ void dect_base_ic_target_link(struct dect_base *b, int p,
 			      const struct dect_link_ind *ind, uint64_t now);
 int dect_base_side_ring_answer(struct dect_base *b, unsigned k,
 			       const struct dect_link_ind *ind, uint64_t now);
+
+/*
+ * The main link after a segment, continued (S3y). The ring target's
+ * portable identity for a SETUP, wherever its record is.
+ */
+const uint8_t *dect_base_ring_port_id(const struct dect_base *b,
+				      size_t *len);
+/* A record free for a new enrolment, or -1. */
+int dect_base_free_record(const struct dect_base *b);
+/*
+ * A page response on the main link (ind->page_response): a
+ * deregistration's or the date and time's target, an internal call's, or
+ * the ring's. TS 102 527-1 §7.3.8.2.1: only the IPUI we paged stops the
+ * paging; another handset's answer gets {LCE-PAGE-REJECT} with its IPUI
+ * and the link is released (§7.3.8.3.1). The ring target's answer brings
+ * the SETUP. ind->page_response is cleared once consumed.
+ */
+void dect_base_main_page_response(struct dect_base *b,
+				  struct dect_link_ind *ind, uint64_t now);
+/*
+ * The registration on the main link: an enrolment routed to the record
+ * whose IPUI it names, else to a free one (enrol_switched, undone if the
+ * PIN fails), and the outcome, said once.
+ */
+void dect_base_main_enrolment(struct dect_base *b);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

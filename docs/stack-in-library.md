@@ -394,6 +394,15 @@ with each record's line names in `line_name[]`; the host still reads
 them from `/etc/opendectcell/handsetN.lines`). Unit tests; the fourteen
 traces unchanged.
 
+**S3y.** The main link's page responses (`dect_base_main_page_response()`:
+the deregistration's, the date and time's, an internal call's target,
+another handset's answer rejected, the ring target's answer bringing the
+SETUP) and the enrolment (`dect_base_main_enrolment()`: routed to the
+record whose IPUI it names or a free one, the outcome said once, back to
+record 0 when the PIN fails) are the library's. A roamer's record
+(`remote[]`) is never free. The register, call-in and locate-second
+traces take these paths; the fourteen traces unchanged.
+
 ## S5, the control verbs (started 2026-10-30)
 
 **S5a.** The bridge's call verbs are the library's:

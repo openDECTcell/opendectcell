@@ -337,7 +337,7 @@ struct handset {
 	const char *path;
 	/* whether it holds a subscription: base.loaded[] (dect_base.h) */
 	uint64_t last_seen_ms;	/* runtime only: last segment from it */
-	int      remote;	/* remote=: a roamer the cell must fetch */
+	/* remote=, a roamer the cell must fetch: base.remote[] */
 	/* the file does not exist, free for enrolment: base.absent[] */
 	int      fetched;	/* ... and has, this run */
 	/* its <<TERMINAL-CAPABILITY>>: base.cap[] (dect_base.h, S3k) */
@@ -2670,12 +2670,7 @@ static void hs_switch(struct stubd *s, unsigned i, const char *why)
  */
 static const uint8_t *ring_target_port_id(const struct stubd *s, size_t *len)
 {
-	if (s->base.cur == s->base.ring.hs || !s->base.n_hs) {
-		*len = s->base.rec.cc_port_id_len;
-		return s->base.rec.cc_port_id;
-	}
-	*len = s->base.hs[s->base.ring.hs].cc_port_id_len;
-	return s->base.hs[s->base.ring.hs].cc_port_id;
+	return dect_base_ring_port_id(&s->base, len);
 }
 
 static void sub_save(struct stubd *s)
@@ -2960,7 +2955,7 @@ static int held_back(const struct stubd *s, unsigned i)
 {
 	if (s->audio.no_chip_keys)	/* every slot cleared, no key at all */
 		return 1;
-	if (i < s->base.n_hs && s->hs[i].remote && !s->hs[i].fetched)
+	if (i < s->base.n_hs && s->base.remote[i] && !s->hs[i].fetched)
 		return 1;		/* a roamer: not in this cell's chip */
 	return s->audio.holdback_ms && !s->holdback_done && i != 0;
 }
@@ -3037,7 +3032,7 @@ static void fetch_tick(struct stubd *s, uint64_t now)
 		s->fetch_req_ms = now;
 		s->fetch_idx = -1;
 		for (i = 0; i < s->base.n_hs; i++)
-			if (s->hs[i].remote && s->base.hs[i].port_id_len == len &&
+			if (s->base.remote[i] && s->base.hs[i].port_id_len == len &&
 			    !memcmp(s->base.hs[i].port_id, id, len))
 				s->fetch_idx = (int)i;
 		/*
@@ -4533,12 +4528,7 @@ static const uint8_t *hs_port_id(const struct stubd *s, unsigned i,
 /* A store that does not exist yet: somewhere a new handset can enrol. */
 static int hs_free(const struct stubd *s)
 {
-	unsigned i;
-
-	for (i = 0; i < s->base.n_hs; i++)
-		if (!s->base.loaded[i] && !s->hs[i].remote && s->base.absent[i])
-			return (int)i;
-	return -1;
+	return dect_base_free_record(&s->base);
 }
 
 /*
@@ -4600,44 +4590,6 @@ static void reg_window_tick(struct stubd *s, uint64_t now)
 	}
 	if (s->reg_open && s->reg_open_until && now >= s->reg_open_until)
 		reg_window(s, 0, 0, now, "window elapsed");
-}
-
-/*
- * A handset is enrolling (MM sent KEY-ALLOCATE and waits for its PIN
- * answer). Serve it from the right store before ACCESS-RIGHTS-ACCEPT goes
- * out: its own, if we hold it, else a free one -- so a new handset no
- * longer lands in the first store and overwrites the ring target.
- */
-static void enrol_route(struct stubd *s)
-{
-	const uint8_t *id = s->base.main_link.link.mm.pend_id;
-	size_t len = s->base.main_link.link.mm.pend_id_len, l;
-	unsigned i;
-	int target = -1;
-	char name[DECT_IWU_NAME_MAX];
-
-	for (i = 0; i < s->base.n_hs && target < 0; i++) {
-		const uint8_t *p = hs_port_id(s, i, &l);
-
-		if (len && l == len && !memcmp(p, id, len))
-			target = (int)i;
-	}
-	if (target < 0)
-		target = hs_free(s);
-	if (target < 0 || (unsigned)target == s->base.cur) {
-		printf("reg: enrolment into %s (slot %u)\n", s->sub_path,
-		       (unsigned)stubd_sub_slot(s));
-		return;
-	}
-	hs_switch(s, (unsigned)target, " (enrolment)");
-	s->base.main_link.enrol_switched = 1;	/* undone if the PIN fails */
-	s->base.main_link.link.mm.cfg.sub_slot = stubd_sub_slot(s);
-	snprintf(name, sizeof(name), "DECT %u", (unsigned)stubd_sub_slot(s));
-	dect_iwu_add_handset(&s->base.main_link.link.cc.iwu, stubd_sub_slot(s), name);
-	dect_iwu_set_own(&s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
-	iwu_lines(s, &s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
-	printf("reg: enrolment routed to %s (slot %u)\n", s->sub_path,
-	       (unsigned)stubd_sub_slot(s));
 }
 
 /*
@@ -4782,7 +4734,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	/* the other handsets this link may turn out to be: loaded ones, and a
 	 * roamer once fetched */
 	for (i = 0; i < s->base.n_hs; i++)
-		if (s->base.loaded[i] && !(s->hs[i].remote && !s->hs[i].fetched))
+		if (s->base.loaded[i] && !(s->base.remote[i] && !s->hs[i].fetched))
 			hold |= 1u << i;
 	dect_base_link_open(&s->base, &s->base.main_link, handle, &mcfg, hold);
 	dect_mm_set_uak_lookup(&s->base.main_link.link.mm, uak_lookup, s);
@@ -5365,7 +5317,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 	 */
 	for (i = 0; i < s->base.n_hs; i++)
 		if ((i == s->base.cur || s->base.loaded[i]) &&
-		    !(s->hs[i].remote && !s->hs[i].fetched))
+		    !(s->base.remote[i] && !s->hs[i].fetched))
 			hold |= 1u << i;
 	dect_base_side_open(&s->base, sl->bl, handle, &mcfg, hold);
 	dect_mm_set_uak_lookup(&sl->bl->link.mm, uak_lookup, s);
@@ -6687,13 +6639,6 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 	side_pump(s, sl);
 }
 
-/* Drain queued NWK responses (MM and CC) into LAPC, one per free window. */
-static void drain_nwk(struct stubd *s, uint64_t now)
-{
-	dect_link_drain(&s->base.main_link.link, now);
-	pump_lapc(s);
-}
-
 /*
  * One received C-plane segment.
  *
@@ -6800,22 +6745,6 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	}
 
 	/*
-	 * The handset's answer to our page. This is the point at which an
-	 * FP-originated {CC-SETUP} can be sent: see ring_queue_setup() for the
-	 * run that showed sending it on link-up loses the frame.
-	 */
-	/*
-	 * TS 102 527-1 §7.3.8.2.1: only a page response with the IPUI we
-	 * paged stops the paging. Another handset's answer is not ours to
-	 * ring: §7.3.8.3.1 answers it with {LCE-PAGE-REJECT} carrying its full
-	 * IPUI, and releases the unwanted link at once. We keep waiting for
-	 * the right one. The release goes out only once the reject is in LAPC
-	 * ahead of it; otherwise the link is left for its own timers.
-	 */
-	size_t tgt_len;
-	const uint8_t *tgt = ring_target_port_id(s, &tgt_len);
-
-	/*
 	 * A handset offering its clock (TS 102 527-3 §7.4.2.2). Our 'Clock
 	 * master' is the FP (the System Settings List says so), and the box
 	 * keeps time by NTP: logged, not used. An unidentified one is ignored,
@@ -6833,49 +6762,11 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		       : "ignored (7.4.2.2)");
 	}
 
-	if (dereg_page_response(s, NULL, &ind) ||
-	    time_page_response(s, NULL, &ind))
-		ind.page_response = 0;
-
-	/* an internal call's target answering on the main link (finding 5) */
-	if (ind.page_response && s->base.ic.st == IC_PAGING && s->base.ic.caller != -1) {
-		ic_target_link(s, NULL, &ind, now);
-		if (s->base.ic.st == IC_SETUP)
-			ind.page_response = 0;
-	}
-
-	if (ind.page_response && s->base.ring.state == RING_WAIT_PAGE_RESP &&
-	    tgt_len && (ind.page_id_len != tgt_len ||
-			memcmp(ind.page_id, tgt, tgt_len) != 0)) {
-		int rejected = dect_link_page_reject(&s->base.main_link.link, ind.page_id,
-						     ind.page_id_len,
-						     ind.page_ti) == 0;
-
-		if (rejected) {
-			dect_link_drain(&s->base.main_link.link, now);
-			rejected = !s->base.main_link.link.lce_len;
-		}
-		if (rejected)
-			dect_lapc_disconnect(&s->base.main_link.link.lapc);
-		pump_lapc(s);
-		printf("ring: page response from a handset we did not page "
-		       "(identity differs) -- %s, still waiting\n",
-		       rejected ? "LCE-PAGE-REJECT sent, link released"
-				: "could not send LCE-PAGE-REJECT, ignored");
-		ind.page_response = 0;
-	}
-	if (ind.page_response && s->base.ring.state == RING_WAIT_PAGE_RESP) {
-		if (s->base.cur != s->base.ring.hs)
-			hs_switch(s, s->base.ring.hs, " (the ring target answered)");
-		ring_queue_setup(s, now, "page response received");
-		/*
-		 * Push it out in the same breath. The main loop would now get
-		 * it within POLL_MS anyway, but the handset has just answered
-		 * the page and is listening: the whole point of waiting for
-		 * the page response is to hit that window.
-		 */
-		drain_nwk(s, now);
-	}
+	/*
+	 * The handset's answer to a page of ours: the point at which an
+	 * FP-originated {CC-SETUP} can be sent (dect_base.h, S3y).
+	 */
+	dect_base_main_page_response(&s->base, &ind, now);
 
 	/*
 	 * The handset dialled. GAP N.4 is mandatory for an FT and we did not
@@ -6959,53 +6850,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 */
 	dect_base_main_located(&s->base);
 
-	if (s->base.main_link.link.mm.state != DECT_MM_WAIT_AUTH)
-		s->base.main_link.enrol_routed = 0;
-	else if (!s->base.main_link.enrol_routed) {
-		s->base.main_link.enrol_routed = 1;
-		enrol_route(s);
-	}
-
-	/* once per outcome, not on every message that follows it */
-	if (s->base.main_link.link.mm.state != s->base.main_link.reported_state &&
-	    s->base.main_link.link.mm.peer_auth_len >= 2 &&
-	    (s->base.main_link.link.mm.state == DECT_MM_REGISTERED ||
-	     s->base.main_link.link.mm.state == DECT_MM_FAILED)) {
-		const uint8_t *at = s->base.main_link.link.mm.peer_auth;
-
-		printf("reg: it proposed %s with %s %u (we run DSAA from the "
-		       "PIN)\n",
-		       at[0] == 0x01 ? "DSAA" : at[0] == 0x02 ? "DSAA2" :
-		       "another algorithm",
-		       (at[1] >> 4) == 0x4 ? "the authentication code" :
-		       (at[1] >> 4) == 0x1 ? "user authentication key" :
-		       "key type", (unsigned)(at[1] & 0x0Fu));
-	}
-	if (s->base.main_link.link.mm.state != s->base.main_link.reported_state &&
-	    s->base.main_link.link.mm.state == DECT_MM_REGISTERED) {
-		printf("reg: handset registered\n");
-		if (s->base.n_hs && s->base.cur < s->base.n_hs)
-			names_spread(s, s->base.cur);  /* into every link's list */
-		names_notify(s);	/* §7.4.10.2.2: one added */
-	}
-	else if (s->base.main_link.link.mm.state != s->base.main_link.reported_state &&
-		 s->base.main_link.link.mm.state == DECT_MM_FAILED) {
-		printf("reg: registration rejected%s\n",
-		       s->base.n_hs && s->base.cur < s->base.n_hs &&
-		       s->base.prof[s->base.cur].reg_tries_0000_first &&
-		       s->base.main_link.link.mm.stats.auth_fail
-		       ? " (expected: this model tries PIN 0000 by itself "
-			 "first, profile reg.tries_0000_first)" : "");
-		/* back to the ring target's store (review, finding 13) */
-		if (s->base.main_link.enrol_switched) {
-			s->base.main_link.enrol_switched = 0;
-			hs_switch(s, 0, " (enrolment failed)");
-			s->base.main_link.link.mm.cfg.sub_slot = stubd_sub_slot(s);
-		}
-	}
-	if (s->base.main_link.link.mm.state == DECT_MM_REGISTERED)
-		s->base.main_link.enrol_switched = 0;
-	s->base.main_link.reported_state = s->base.main_link.link.mm.state;
+	/* the enrolment's route and outcome (dect_base.h, S3y) */
+	dect_base_main_enrolment(&s->base);
 
 	/*
 	 * Bind the voice path once we have answered the call (CONNECT sent). The
@@ -9698,7 +9544,7 @@ int main(int argc, char **argv)
 			hs_load(&s, i);
 			s.base.loaded[i] = sub_load(&s);
 			dect_base_stash(&s.base);
-			s.hs[i].remote = 1;
+			s.base.remote[i] = 1;
 			printf("sub: %s is a roamer: not held, not in the chip, "
 			       "fetched on demand after %u ms\n",
 			       s.audio.remote_path, s.audio.fetch_delay_ms);
@@ -9741,7 +9587,7 @@ int main(int argc, char **argv)
 		for (i = 1; i < s.base.n_hs; i++) {
 			unsigned used = 0, slot, k;
 
-			if (s.base.loaded[i] || s.hs[i].remote ||
+			if (s.base.loaded[i] || s.base.remote[i] ||
 			    !s.base.absent[i])
 				continue;
 			for (k = 0; k < s.base.n_hs; k++) {
@@ -9749,7 +9595,7 @@ int main(int argc, char **argv)
 					      s.audio.sub_slot : s.base.hs[k].slot;
 
 				if (k != i && (s.base.loaded[k] ||
-				    (k < i && !s.hs[k].remote)))
+				    (k < i && !s.base.remote[k])))
 					used |= 1u << ks;
 			}
 			for (slot = 1; slot <= DECT_MM_MAX_SLOT &&
@@ -9758,7 +9604,7 @@ int main(int argc, char **argv)
 			if (slot > DECT_MM_MAX_SLOT) {
 				printf("sub: no chip slot left for %s; it cannot "
 				       "take an enrolment\n", s.hs[i].path);
-				s.hs[i].remote = 1;	/* never a free store */
+				s.base.remote[i] = 1;	/* never a free store */
 				continue;
 			}
 			s.base.hs[i].slot = slot;

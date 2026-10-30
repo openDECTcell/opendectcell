@@ -882,3 +882,7 @@ _main_ids(), _main_located() (S3w).
 `contacts` no longer const; dect_base_cfg's `line_name`;
 dect_base_iwu_lines(), _page_adopt(), _dereg_page_response(),
 _time_page_response(), _ic_target_link(), _side_ring_answer() (S3x).
+
+**131.** dect_base.h, 2026-10-30: dect_base's `remote[]`;
+dect_base_ring_port_id(), _free_record(), _main_page_response(),
+_main_enrolment() (S3y).

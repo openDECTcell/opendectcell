@@ -3875,3 +3875,176 @@ int dect_base_side_ring_answer(struct dect_base *b, unsigned k,
 	}
 	return 0;
 }
+
+const uint8_t *dect_base_ring_port_id(const struct dect_base *b, size_t *len)
+{
+	if (b->cur == b->ring.hs || !b->n_hs) {
+		*len = b->rec.cc_port_id_len;
+		return b->rec.cc_port_id;
+	}
+	*len = b->hs[b->ring.hs].cc_port_id_len;
+	return b->hs[b->ring.hs].cc_port_id;
+}
+
+int dect_base_free_record(const struct dect_base *b)
+{
+	unsigned i;
+
+	for (i = 0; i < b->n_hs; i++)
+		if (!b->loaded[i] && !b->remote[i] && b->absent[i])
+			return (int)i;
+	return -1;
+}
+
+void dect_base_main_page_response(struct dect_base *b,
+				  struct dect_link_ind *ind, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+	size_t tgt_len;
+	const uint8_t *tgt = dect_base_ring_port_id(b, &tgt_len);
+
+	if (dect_base_dereg_page_response(b, -1, ind) ||
+	    dect_base_time_page_response(b, -1, ind))
+		ind->page_response = 0;
+
+	/* an internal call's target answering on the main link (finding 5) */
+	if (ind->page_response && b->ic.st == DECT_BASE_IC_PAGING &&
+	    b->ic.caller != -1) {
+		dect_base_ic_target_link(b, -1, ind, now);
+		if (b->ic.st == DECT_BASE_IC_SETUP)
+			ind->page_response = 0;
+	}
+
+	/*
+	 * The release goes out only once the reject is in LAPC ahead of it;
+	 * otherwise the link is left for its own timers.
+	 */
+	if (ind->page_response && b->ring.state == DECT_BASE_RING_WAIT_PAGE_RESP &&
+	    tgt_len && (ind->page_id_len != tgt_len ||
+			memcmp(ind->page_id, tgt, tgt_len) != 0)) {
+		int rejected = dect_link_page_reject(&bl->link, ind->page_id,
+						     ind->page_id_len,
+						     ind->page_ti) == 0;
+
+		if (rejected) {
+			dect_link_drain(&bl->link, now);
+			rejected = !bl->link.lce_len;
+		}
+		if (rejected)
+			dect_lapc_disconnect(&bl->link.lapc);
+		pump(b, bl);
+		dect_base_log(b, "ring: page response from a handset we did not "
+			      "page (identity differs) -- %s, still waiting",
+			      rejected ? "LCE-PAGE-REJECT sent, link released"
+				       : "could not send LCE-PAGE-REJECT, "
+					 "ignored");
+		ind->page_response = 0;
+	}
+	if (ind->page_response &&
+	    b->ring.state == DECT_BASE_RING_WAIT_PAGE_RESP) {
+		if (b->cur != b->ring.hs)
+			(void)dect_base_serve(b, b->ring.hs,
+					      " (the ring target answered)");
+		dect_base_ring_setup(b, now, "page response received");
+		/*
+		 * Push it out in the same breath: the handset has just
+		 * answered the page and is listening, and the whole point of
+		 * waiting for the page response is to hit that window.
+		 */
+		dect_base_drain(b, -1, now);
+	}
+}
+
+/*
+ * A handset is enrolling (MM sent KEY-ALLOCATE and waits for its PIN
+ * answer). Serve it from the right record before ACCESS-RIGHTS-ACCEPT goes
+ * out: its own, if we hold it, else a free one -- so a new handset no
+ * longer lands in the first record and overwrites the ring target.
+ */
+static void enrol_route(struct dect_base *b)
+{
+	struct dect_base_link *bl = &b->main_link;
+	const uint8_t *id = bl->link.mm.pend_id;
+	size_t len = bl->link.mm.pend_id_len;
+	unsigned i, slot;
+	int target = -1;
+	char name[DECT_IWU_NAME_MAX];
+
+	for (i = 0; i < b->n_hs && target < 0; i++) {
+		const struct dect_hs_rec *r = i == b->cur ? &b->rec : &b->hs[i];
+
+		if (len && r->port_id_len == len &&
+		    !memcmp(r->port_id, id, len))
+			target = (int)i;
+	}
+	if (target < 0)
+		target = dect_base_free_record(b);
+	if (target < 0 || (unsigned)target == b->cur) {
+		dect_base_log(b, "reg: enrolment into record %u (slot %u)",
+			      b->cur, dect_base_slot(b, b->cur));
+		return;
+	}
+	(void)dect_base_serve(b, (unsigned)target, " (enrolment)");
+	bl->enrol_switched = 1;		/* undone if the PIN fails */
+	slot = dect_base_slot(b, b->cur);
+	bl->link.mm.cfg.sub_slot = (uint8_t)slot;
+	snprintf(name, sizeof(name), "DECT %u", slot);
+	dect_iwu_add_handset(&bl->link.cc.iwu, (uint8_t)slot, name);
+	dect_iwu_set_own(&bl->link.cc.iwu, (uint8_t)slot);
+	dect_base_iwu_lines(b, &bl->link.cc.iwu, slot);
+	dect_base_log(b, "reg: enrolment routed to record %u (slot %u)", b->cur,
+		      slot);
+}
+
+void dect_base_main_enrolment(struct dect_base *b)
+{
+	struct dect_base_link *bl = &b->main_link;
+	const struct dect_mm *mm = &bl->link.mm;
+
+	if (mm->state != DECT_MM_WAIT_AUTH) {
+		bl->enrol_routed = 0;
+	} else if (!bl->enrol_routed) {
+		bl->enrol_routed = 1;
+		enrol_route(b);
+	}
+
+	/* once per outcome, not on every message that follows it */
+	if (mm->state != bl->reported_state && mm->peer_auth_len >= 2 &&
+	    (mm->state == DECT_MM_REGISTERED || mm->state == DECT_MM_FAILED)) {
+		const uint8_t *at = mm->peer_auth;
+
+		dect_base_log(b, "reg: it proposed %s with %s %u (we run DSAA "
+			      "from the PIN)",
+			      at[0] == 0x01 ? "DSAA" : at[0] == 0x02 ? "DSAA2" :
+			      "another algorithm",
+			      (at[1] >> 4) == 0x4 ? "the authentication code" :
+			      (at[1] >> 4) == 0x1 ? "user authentication key" :
+			      "key type", (unsigned)(at[1] & 0x0Fu));
+	}
+	if (mm->state != bl->reported_state &&
+	    mm->state == DECT_MM_REGISTERED) {
+		dect_base_log(b, "reg: handset registered");
+		if (b->n_hs && b->cur < b->n_hs)
+			dect_base_names_spread(b, b->cur);
+		dect_base_names_notify(b);	/* §7.4.10.2.2: one added */
+	} else if (mm->state != bl->reported_state &&
+		   mm->state == DECT_MM_FAILED) {
+		dect_base_log(b, "reg: registration rejected%s",
+			      b->n_hs && b->cur < b->n_hs &&
+			      b->prof[b->cur].reg_tries_0000_first &&
+			      mm->stats.auth_fail
+			      ? " (expected: this model tries PIN 0000 by "
+				"itself first, profile reg.tries_0000_first)"
+			      : "");
+		/* back to the ring target's store (review, finding 13) */
+		if (bl->enrol_switched) {
+			bl->enrol_switched = 0;
+			(void)dect_base_serve(b, 0, " (enrolment failed)");
+			bl->link.mm.cfg.sub_slot =
+				(uint8_t)dect_base_slot(b, b->cur);
+		}
+	}
+	if (mm->state == DECT_MM_REGISTERED)
+		bl->enrol_switched = 0;
+	bl->reported_state = mm->state;
+}
