@@ -17,6 +17,7 @@
 #include <stdint.h>
 
 #include "dect_cc.h"
+#include "dect_mail.h"
 #include "dect_mm.h"
 
 struct dect_hs_rec {
@@ -52,10 +53,16 @@ struct dect_hs_rec {
  */
 #define DECT_BASE_HS_MAX	DECT_MM_MAX_SLOT
 
-/* What the host does for the stack (S1c). */
+/* What the host does for the stack (S1c, S2.1). Any may be NULL. */
 struct dect_base_ops {
 	/* Store record i, which changed (r is it, the working copy). */
 	void (*save)(void *ctx, unsigned i, const struct dect_hs_rec *r);
+	/* Hand a mail to the chip: 0, or -1 if it cannot take it now. */
+	int  (*send)(void *ctx, const struct dect_mail *m);
+	/* n random bytes for keys and challenges: a source fit for that. */
+	void (*random)(void *ctx, uint8_t *out, size_t n);
+	/* One line for the log, without its newline. */
+	void (*log)(void *ctx, const char *line);
 };
 
 struct dect_base {
@@ -84,5 +91,18 @@ int dect_base_switch(struct dect_base *b, unsigned i);
 
 /* The current record changed: the host's save(). */
 void dect_base_changed(struct dect_base *b);
+
+/* The host's send(); -1 without one. */
+int dect_base_send(struct dect_base *b, const struct dect_mail *m);
+
+/*
+ * The host's random(). Without one the bytes are zero: a host that keys
+ * handsets must set it.
+ */
+void dect_base_random(struct dect_base *b, uint8_t *out, size_t n);
+
+/* A log line, printf-style, cut at 255 octets; nothing without log(). */
+void dect_base_log(struct dect_base *b, const char *fmt, ...)
+	__attribute__((format(printf, 2, 3)));
 
 #endif

@@ -6,6 +6,7 @@
 #include "check.h"
 #include "../src/libopendectcell/dect_base.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static unsigned saved_i = 99, saved_slot;
@@ -17,7 +18,30 @@ static void save(void *ctx, unsigned i, const struct dect_hs_rec *r)
 	saved_slot = r->slot;
 }
 
-static const struct dect_base_ops ops = { .save = save };
+static unsigned sent_prim;
+static char logged[300];
+
+static int send(void *ctx, const struct dect_mail *m)
+{
+	(void)ctx;
+	sent_prim = m->prim;
+	return 0;
+}
+
+static void rnd(void *ctx, uint8_t *out, size_t n)
+{
+	(void)ctx;
+	memset(out, 0x5C, n);
+}
+
+static void log_line(void *ctx, const char *line)
+{
+	(void)ctx;
+	snprintf(logged, sizeof(logged), "%s", line);
+}
+
+static const struct dect_base_ops ops = { .save = save, .send = send,
+					  .random = rnd, .log = log_line };
 
 int main(void)
 {
@@ -56,6 +80,27 @@ int main(void)
 	/* a changed record goes to the host's save(), if it has one */
 	dect_base_changed(&b);
 	CHECK_EQ(saved_i, 99u);
+	{
+		struct dect_mail m;
+		uint8_t r[4] = { 1, 2, 3, 4 };
+
+		/* without a host: no mail, zero bytes, no log */
+		memset(&m, 0, sizeof(m));
+		m.prim = 0x0247u;
+		CHECK_EQ(dect_base_send(&b, &m), -1);
+		dect_base_random(&b, r, sizeof(r));
+		CHECK_EQ(r[0] | r[3], 0);
+		dect_base_log(&b, "unseen %u", 1u);
+		CHECK_EQ(logged[0], '\0');
+		b.ops = &ops;
+		CHECK_EQ(dect_base_send(&b, &m), 0);
+		CHECK_EQ(sent_prim, 0x0247u);
+		dect_base_random(&b, r, sizeof(r));
+		CHECK_EQ(r[3], 0x5C);
+		dect_base_log(&b, "sub: slot %u", 3u);
+		CHECK_EQ(strcmp(logged, "sub: slot 3"), 0);
+		b.ops = NULL;
+	}
 	b.ops = &ops;
 	b.ctx = &saved_i;
 	dect_base_changed(&b);

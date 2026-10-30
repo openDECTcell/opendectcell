@@ -138,3 +138,8 @@ unchanged:
 Bench after step 3: register a handset and relocate it on the 7412
 (card written before the run).
 
+**S2.1, 2026-10-30.** The host callbacks `send()`, `random()` and `log()`
+in `dect_base_ops`, with `dect_base_send()`, `dect_base_random()` and
+`dect_base_log()`. dect-stubd's `chip_mail_to()` and its eight random draws
+go through them already; the traces unchanged.
+

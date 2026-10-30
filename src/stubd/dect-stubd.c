@@ -1815,7 +1815,7 @@ static void chip_mail_to(struct stubd *s, uint8_t dst, uint16_t prim,
 		n = sizeof(m.param);
 	memcpy(m.param, p, n);
 	m.param_len = n;
-	send_mail(s, (unsigned int)s->tx_slot, &m);
+	(void)dect_base_send(&s->base, &m);
 	if (s->verbose)
 		log_mail(&m, "tx M", s->show_params);
 }
@@ -2919,7 +2919,31 @@ static void base_save(void *ctx, unsigned i, const struct dect_hs_rec *r)
 	sub_save(ctx);
 }
 
-static const struct dect_base_ops base_ops = { .save = base_save };
+/* dect_base's send(): the control-slot queue (send_mail()). */
+static int base_send(void *ctx, const struct dect_mail *m)
+{
+	struct stubd *s = ctx;
+
+	return send_mail(s, (unsigned int)s->tx_slot, m);
+}
+
+/* dect_base's random(): /dev/urandom (gen_rand()). */
+static void base_random(void *ctx, uint8_t *out, size_t n)
+{
+	gen_rand(ctx, out, n);
+}
+
+/* dect_base's log(): standard output, which procd puts in the syslog. */
+static void base_log(void *ctx, const char *line)
+{
+	(void)ctx;
+	printf("%s\n", line);
+}
+
+static const struct dect_base_ops base_ops = {
+	.save = base_save, .send = base_send, .random = base_random,
+	.log = base_log,
+};
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
 static int sub_load(struct stubd *s)
@@ -9864,8 +9888,8 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 			}
 			return;
 		}
-		gen_rand(s, crand, sizeof(crand));
-		gen_rand(s, crs, sizeof(crs));
+		dect_base_random(&s->base, crand, sizeof(crand));
+		dect_base_random(&s->base, crs, sizeof(crs));
 		dect_mm_start_cipher(&l->mm, uak, crand, crs);
 		sl->cipher_done = 0;
 		printf("side: cipher: authenticating the handset on handle %u\n",
@@ -9907,8 +9931,8 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 	uint8_t rand_f[8], rs[16];
 	int a;
 
-	gen_rand(s, rand_f, sizeof(rand_f));
-	gen_rand(s, rs, sizeof(rs));
+	dect_base_random(&s->base, rand_f, sizeof(rand_f));
+	dect_base_random(&s->base, rs, sizeof(rs));
 	side_call_tick(s, sl, now);	/* busy or not, before a SETUP lands */
 	if (dect_link_rx_segment(&sl->link, m, now, rand_f, rs, &ind) < 0) {
 		side_pump(s, sl);
@@ -9997,8 +10021,8 @@ static void start_call_cipher(struct stubd *s, uint64_t now)
 	} else if (s->base.rec.uak_valid) {
 		uint8_t crand[8], crs[16];
 
-		gen_rand(s, crand, sizeof(crand));
-		gen_rand(s, crs, sizeof(crs));
+		dect_base_random(&s->base, crand, sizeof(crand));
+		dect_base_random(&s->base, crs, sizeof(crs));
 		dect_mm_start_cipher(&s->reg.link.mm, s->base.rec.uak, crand, crs);
 		s->reg.cipher_started = 1;
 		printf("call: cipher: authenticating handset\n");
@@ -10014,8 +10038,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	uint32_t collisions = s->reg.link.cc.stats.collisions;
 	uint32_t represented = s->reg.link.cc.stats.represented;
 
-	gen_rand(s, rand_f, sizeof(rand_f));
-	gen_rand(s, rs, sizeof(rs));
+	dect_base_random(&s->base, rand_f, sizeof(rand_f));
+	dect_base_random(&s->base, rs, sizeof(rs));
 
 	if (dect_link_rx_segment(&s->reg.link, m, now, rand_f, rs, &ind) < 0) {
 		if (ind.foreign) {

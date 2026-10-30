@@ -702,3 +702,7 @@ dect_base.c.
 dect_base_changed(): the stack says the current record changed, the host
 stores it (S1c). struct dect_base gains `ops` and `ctx` (NULL: nothing is
 stored).
+
+**92.** dect_base.h, 2026-10-30: struct dect_base_ops gains send(),
+random() and log(), with dect_base_send(), dect_base_random() and
+dect_base_log() (S2.1). dect_base.h now includes dect_mail.h.
