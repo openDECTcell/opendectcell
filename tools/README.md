@@ -55,3 +55,10 @@ with the SDK's compiler if you need them:
 |---|---|
 | [gpio-activity.c](gpio-activity.c) | Checks through sysfs GPIO whether a fast signal (such as the PCM clock) is toggling |
 | [src/tools/dect-sla.c](../src/tools/dect-sla.c) | One-shot capture of the PCM pins through the kernel module (`DECT_IOC_CAPTURE`) |
+
+## For the bench
+
+| Tool | What it does |
+|---|---|
+| [syslog-sink.py](syslog-sink.py) | Collects a box's remote syslog (UDP) into a file named by the start time, flushed per line, so the log outlives a hang |
+| [bench-stop-race.sh](bench-stop-race.sh) | Starts the service on a box, stops it after N seconds and checks the box still answers (bench-later U8f) |

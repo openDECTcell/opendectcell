@@ -263,6 +263,27 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
     - **No record survives:** no pstore on the 7412, the log only in RAM. The boot log starts at 20:08:55, the mtime of the newest file in `/etc` (OpenWrt's `sysfixtime`, no clock battery): `cell_leave`'s config write, so nothing in `/etc` was written after it.
   - **To investigate later (U8f, attended or not):** first point the box's log at the PC (`uci set system.@system[0].log_ip=<PC>; uci set system.@system[0].log_proto=udp; uci commit system; /etc/init.d/log restart`, a listener on the PC writing to a file with the run's time in its name), so the log outlives a hang. Then, outcomes written before each: (1) `cell_leave` and a stop 4 s later, as U8e; (2) a plain base start and a stop at 2, 4 and 8 s, without cell mode; (3) the same with the radio already on. Hang in (1) only: the cell-to-base path; in (2): a stop during the slot search; the last lines before the silence name the step. Restore `log_ip` afterwards.
 
+  - **U8f prepared (2026-10-31, nothing run yet).** The 7412's log goes to
+    the PC since 2026-10-31 00:07 CET (`log_ip` 192.168.1.146, `log_port`
+    5514, udp), collected by `tools/syslog-sink.py` into
+    `u8f/7412-syslog-<start time>.log` in the session's scratch folder
+    (a new file per start, never reopened). The script is
+    `tools/bench-stop-race.sh HOST KNOWN_HOSTS DELAY...`. It needs the
+    maintainer at the box (a hang needs a power cycle) and stops at the
+    first silence. **Outcomes, written before the run:**
+
+    | run | pass (the box answers after every stop) | hang, and what it names |
+    |---|---|---|
+    | U8f-1: `bench-stop-race.sh ... 2 4 8` (base start, stop after 2, 4, 8 s; the chip was parked by the stop before) | answers after each; `parked` present at each | silence at 2 or 4 s: a stop during the slot search (`park_guard` holding the chip in reset while the search is running, or the daemon's stop path in that phase); the sink's last lines show which step; silence at 8 s only: the radio-on or the first mails |
+    | U8f-2: `RADIO_ON=1 ... 2 5` (radio already up, then stop) | answers (this is U1's stop, passed on 2026-10-30) | silence: the stop under traffic is the trigger; the lines before it say what the daemon was doing |
+    | U8f-3: `cell_leave` then a stop 4 s later, as U8e (needs the peer, `tools/cell-testpeer.py`) | answers | silence only here: the cell-to-base path without a chip reset |
+
+    Falsifying first: if U8f-1 and U8f-2 both pass ten times (five each),
+    "a stop during the slot search" is out and U8f-3 is the only open case.
+    The park guard's reset line (`gpio-xway` 33) has held the chip in reset
+    on this box before (A14, 2026-10-28), so that path alone does not
+    explain a hang.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
@@ -338,6 +359,24 @@ stays `d1cdd37`. The kept script is copied to
 | V1c-2. The same options as before | the command line still has `-P`, the five `-s` stores, `dialwait=3000,regwindow=120` and the LED; the new script may add more options and the daemon accepts all | an option missing: the uci keys are read differently now; compare with the kept script before accepting |
 | V1c-3. The handsets come back | each handset that was registered relocates by itself within ten minutes (`reg: connection up`, no `LOCATE-REJECT`) | `LOCATE-REJECT`: the record store path or the STUB record; roll back |
 | V1c-4. Left running | dect-stubd up at the end, radio on | -- |
+
+**V1c results, 2026-10-30 23:58-00:08 CET (box time), by hand, lab 7520.**
+The old init is kept as `/root/opendectcell.init.2026-10-28.kept` and the
+packaged one as `/root/opendectcell.init.apk-new.2026-10-30`.
+- **V1c-1 pass:** new pid 1915 at 23:58:44; the chip's first pass missed
+  the control slot, the second found it (23:58:47); three
+  `sub: restored subscription`, the other slots cleared, the mask
+  `00 07`; `state.json` says `"radio":"up"`.
+- **V1c-2 pass, with changes:** `-P @/var/run/opendectcell/pin` (the PIN no
+  longer on the command line), `-a mask=0x0002,codec=3,status=8000,dialwait=3000,regwindow=120,timeupdate=1440,led=...`.
+  Five `-s` stores as before. Baresip registered (`200 OK`) and
+  connected to the bridge.
+- **V1c-3 not shown:** no handset connected in the eight minutes watched
+  (`link:false` for all three), and none had connected since 2026-10-29
+  16:09 (the oldest line in the log), so none had to. Needs a handset's own
+  action: V2b.
+- **V1c-4 pass:** dect-stubd running, radio up, left on.
+- The daemon is still `d1cdd37` (API 136); only the init changed.
 
 ## 1b. M1: the cell's media on air (written 2026-10-30, needs C3)
 
