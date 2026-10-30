@@ -361,3 +361,15 @@ other ten unchanged.
 (`dect_base_bridge_tick()`): parallel mode per link, side rings, the
 events ringing, answered and released, and the end of a call-in no
 handset took. Unit test; the eleven traces unchanged.
+
+## S5, the control verbs (started 2026-10-30)
+
+**S5a.** The bridge's call verbs are the library's:
+`dect_base_ctl_call()` takes call-in (busy, call waiting, the main
+link's ring or a side ring, the caller's name from the Contact List) and
+remote-ringing, remote-answered and remote-released, and says what the
+host answers its client (`struct dect_base_reply`). The host still owns
+the sockets and decides which client is the bridge. Which records are
+listed (`dect_base_listed()`, with `absent[]`) and the Contact List the
+host keeps (`contacts`) are `dect_base`'s. Unit tests; the eleven traces
+unchanged. Still the host's: `bridge`, `mwi` (S4) and `calllog` (S4).

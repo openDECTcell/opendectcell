@@ -2188,3 +2188,262 @@ void dect_base_bridge_tick(struct dect_base *b, uint64_t now)
 		}
 	}
 }
+
+int dect_base_listed(const struct dect_base *b, unsigned i)
+{
+	return i < b->n_hs && (i == b->cur || b->loaded[i]) && !b->absent[i];
+}
+
+int dect_base_contact_name(const struct dect_base *b, const char *num,
+			   char *buf, size_t cap)
+{
+	const struct dect_contact *e;
+
+	if (!b->contacts || !num || !*num)
+		return 0;
+	e = dect_contacts_find_number(b->contacts, num);
+	if (!e)
+		return 0;
+	snprintf(buf, cap, "%s%s%s", e->first,
+		 e->first[0] && e->name[0] ? " " : "", e->name);
+	return 1;
+}
+
+/* remote-released's reason, as a CC release reason (§2.2 of the page) */
+static uint8_t bridge_reason(const char *r)
+{
+	if (!r || !strcmp(r, "normal"))
+		return DECT_CC_REASON_NONE;
+	if (!strcmp(r, "busy"))
+		return DECT_CC_REASON_USER_BUSY;
+	if (!strcmp(r, "unreachable"))
+		return DECT_CC_REASON_USER_UNKNOWN;
+	if (!strcmp(r, "rejected"))
+		return 0x15u;			/* user rejection */
+	return DECT_CC_REASON_NONE;
+}
+
+static void reply(struct dect_base_reply *r, const char *err, const char *key,
+		  unsigned val)
+{
+	r->err = err;
+	r->key = key;
+	r->val = val;
+}
+
+static void bridge_send(struct dect_base *b, struct dect_ctl_out *o)
+{
+	if (b->ops && b->ops->event)
+		b->ops->event(b->ctx, o);
+}
+
+/* call-in "busy" to the bridge, why it is */
+static void call_in_busy(struct dect_base *b, const char *sip, const char *why)
+{
+	struct dect_ctl_out o;
+
+	dect_ctl_begin(&o, "busy");
+	if (sip)
+		dect_ctl_add(&o, "sip", sip);
+	dect_ctl_add(&o, "why", why);
+	bridge_send(b, &o);
+}
+
+static void call_in(struct dect_base *b, const struct dect_ctl_msg *m,
+		    int from_bridge, uint64_t now, struct dect_base_reply *r)
+{
+	const char *num = dect_ctl_get(m, "number");
+	const char *name = dect_ctl_get(m, "name");
+	char book_name[2u * DECT_CONTACT_NAME_MAX];
+	int book = 0;
+	const char *sip = dect_ctl_get(m, "sip");
+	const char *why = NULL, *codec;
+	struct dect_ctl_out o;
+	struct dect_base_call *c;
+	struct dect_clip clip;
+	int wp;
+	unsigned want = 0, t = 0, line = DECT_BASE_LINE_ID;
+
+	/* hs=N: the handset whose line was called (its own account) */
+	if (dect_ctl_get(m, "hs")) {
+		if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, &want)) {
+			reply(r, "bad-hs", NULL, 0);
+			return;
+		}
+		for (t = 0; t < b->n_hs; t++)
+			if (dect_base_listed(b, t) &&
+			    dect_base_slot(b, t) == want)
+				break;
+		if (t == b->n_hs) {
+			reply(r, "no-handset", "hs", want);
+			return;
+		}
+	}
+	if (!from_bridge) {
+		reply(r, "not-bridge", NULL, 0);
+		return;
+	}
+	/* line=N: which of the handset's lines was called */
+	if (dect_ctl_get(m, "line") &&
+	    dect_ctl_get_uint(m, "line", 1, 2, &line))
+		line = DECT_BASE_LINE_ID;
+	/* codec=nb: the caller offered no G.722 */
+	codec = dect_ctl_get(m, "codec");
+	c = dect_base_call_new(b);
+	r->sent = 1;
+	/* a Part 3 handset in a bridged call: call waiting */
+	wp = DECT_BASE_PARTY_NONE;
+	if (b->n_hs && dect_base_hs_in_call(b, t)) {
+		wp = c ? dect_base_waiting_party(b, t) : DECT_BASE_PARTY_NONE;
+		if (wp == DECT_BASE_PARTY_NONE)
+			why = "in-call";
+	} else if (!c || (!dect_base_main_free(b) &&
+			  (!b->cfg.two_calls || lanes(b, -1) <= 0))) {
+		why = "channels";
+	}
+	if (why) {
+		call_in_busy(b, sip, why);
+		return;
+	}
+	/*
+	 * A SIP From is whatever the caller wrote: user provided, not
+	 * screened -- "network provided" told the handset the network
+	 * vouched for it (security audit 2026-10-29, S1).
+	 */
+	dect_clip_init(&clip);
+	if (num && *num)
+		(void)dect_clip_set_number(&clip, num, DECT_CLIP_TON_UNKNOWN,
+					   DECT_CLIP_NPI_UNKNOWN,
+					   DECT_CLIP_PRES_ALLOWED,
+					   DECT_CLIP_SCR_USER_UNSCREENED);
+	/*
+	 * No name from SIP: the Contact List's, as TS 102 527-3 7.4.10.5.1.3
+	 * note 1 recommends ("First Name"), screened "user-provided,
+	 * verified and passed" as EN 300 175-5 7.7.53 note 1 asks for a name
+	 * from the FP's contact list.
+	 */
+	if ((!name || !*name) &&
+	    dect_base_contact_name(b, num, book_name, sizeof(book_name))) {
+		name = book_name;
+		book = 1;
+	}
+	if (name && *name)
+		(void)dect_clip_set_name(&clip, name, DECT_CLIP_ALPHABET_UTF8,
+					 DECT_CLIP_PRES_ALLOWED,
+					 book ? DECT_CLIP_SCR_USER_PASSED
+					      : DECT_CLIP_SCR_USER_UNSCREENED);
+	c->id = dect_base_call_new_id(b);
+	c->line = line;
+	c->narrow = codec && !strcmp(codec, "nb");
+	c->since = now;
+	c->target = (int)t;
+	c->clip = clip;
+	if (wp != DECT_BASE_PARTY_NONE) {
+		if (dect_base_call_waiting(b, c, wp, &clip, now)) {
+			c->id = 0;
+			call_in_busy(b, sip, "in-call");
+			return;
+		}
+	} else if (dect_base_main_free(b)) {
+		b->clip = clip;
+		dect_base_ring_main(b, c, t);
+	} else {
+		dect_base_side_ring_start(b, c, t, now);
+	}
+	dect_base_log(b, "bridge: call %u in from \"%s\" -- %s DECT %u%s",
+		      c->id, num ? num : "", c->par ? "waiting on" : "ringing",
+		      dect_base_slot(b, t), c->party == DECT_BASE_PARTY_PAGING
+		      ? " on a side link (the main link is in a call)" : "");
+	dect_ctl_begin(&o, "call-in-ok");
+	dect_ctl_add_uint(&o, "call", c->id);
+	if (sip)
+		dect_ctl_add(&o, "sip", sip);
+	bridge_send(b, &o);
+}
+
+int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
+		       int from_bridge, uint64_t now,
+		       struct dect_base_reply *r)
+{
+	struct dect_base_call *c;
+	unsigned id;
+	int p;
+
+	memset(r, 0, sizeof(*r));
+	if (!strcmp(m->verb, "call-in")) {
+		call_in(b, m, from_bridge, now, r);
+		return 1;
+	}
+	if (strcmp(m->verb, "remote-ringing") &&
+	    strcmp(m->verb, "remote-answered") &&
+	    strcmp(m->verb, "remote-released"))
+		return 0;
+	if (!from_bridge) {
+		reply(r, "not-bridge", NULL, 0);
+		return 1;
+	}
+	if (dect_ctl_get_uint(m, "call", 1, 127, &id) ||
+	    !(c = dect_base_call_by_id(b, id))) {
+		reply(r, "no-call", NULL, 0);
+		return 1;
+	}
+	p = c->party;
+	if (!strcmp(m->verb, "remote-released")) {
+		const char *rs = dect_ctl_get(m, "reason");
+
+		dect_base_log(b, "bridge: call %u released by the far end (%s)",
+			      id, rs ? rs : "normal");
+		if (p != DECT_BASE_PARTY_PAGING && dect_base_calls_on(b, p) > 1u) {
+			/* the link carries another call: this one goes alone */
+			dect_base_par_status(b, c, DECT_CS_IDLE, now);
+			dect_base_call_clear(b, c);
+			reply(r, NULL, "call", id);
+			return 1;
+		}
+		dect_base_call_clear(b, c);	/* no "released" back */
+		if (p == DECT_BASE_PARTY_PAGING) {
+			reply(r, NULL, "call", id);
+			return 1;		/* paging stops */
+		}
+		if (dect_base_party_active(b, p) && dect_cc_busy(party_cc(b, p)))
+			(void)dect_cc_release_reason(party_cc(b, p),
+						     bridge_reason(rs));
+	} else if (!c->out || !dect_base_party_active(b, p)) {
+		reply(r, "no-call", NULL, 0);
+		return 1;
+	} else if (c->par) {
+		/* a parallel call out: its progress as call status */
+		if (!strcmp(m->verb, "remote-ringing")) {
+			if (c->cs == DECT_CS_CALL_PROC)
+				dect_base_par_status(b, c, DECT_CS_CALL_ALERTING,
+						     now);
+		} else if (!dect_base_call_active(b, p)) {
+			dect_base_par_connect(b, c, NULL, now);
+		} else {
+			dect_base_par_status(b, c, DECT_CS_CALL_HOLD, now);
+			dect_base_call_event(b, c, "hold", NULL, NULL);
+		}
+	} else if (!strcmp(m->verb, "remote-ringing")) {
+		if (party_cc(b, p)->state == DECT_CC_ST_PROCEEDING)
+			(void)dect_cc_alert(party_cc(b, p));
+	} else {
+		const char *codec = dect_ctl_get(m, "codec");
+
+		/*
+		 * codec=nb: the far end speaks narrowband, so the handset does
+		 * too (G.726, if it offered it) rather than the box converting
+		 * its G.722.
+		 */
+		if (codec && !strcmp(codec, "nb") &&
+		    dect_cc_prefer_narrowband(party_cc(b, p)))
+			c->narrow = 1;
+		dect_base_log(b, "bridge: call %u answered by the far end%s", id,
+			      c->narrow ? " -- narrowband, G.726 to the handset"
+					: "");
+		(void)dect_cc_connect(party_cc(b, p));
+	}
+	if (dect_base_party_active(b, p))
+		dect_base_drain(b, p, now);
+	reply(r, NULL, "call", id);
+	return 1;
+}

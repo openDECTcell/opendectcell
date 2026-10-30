@@ -835,3 +835,7 @@ _par_connect(), _party_index(), _waiting_party(), _call_waiting(),
 _par_tick(), _hs_in_call() (S3s).
 
 **120.** dect_base.h, 2026-10-30: dect_base_bridge_tick() (S3t).
+
+**121.** dect_base.h, 2026-10-30: dect_base's `absent[]` and `contacts`
+(dect_base.h now includes dect_contacts.h); struct dect_base_reply;
+dect_base_listed(), _contact_name(), _ctl_call() (S5a).

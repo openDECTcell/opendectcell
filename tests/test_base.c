@@ -78,6 +78,7 @@ static const struct dect_base_ops ops = { .save = save, .send = send,
 int main(void)
 {
 	struct dect_base b;
+	char nm_buf[64];
 
 	dect_base_init(&b);
 	b.n_hs = 3;
@@ -645,6 +646,42 @@ int main(void)
 		CHECK_EQ(c->id, 0u);
 		CHECK_EQ(strcmp(event_line, "released call=7 hs=1 by=base\n"),
 			 0);
+	}
+
+	/* the call verbs (S5a) */
+	{
+		struct dect_ctl_msg m;
+		struct dect_base_reply r;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.loaded[0] = 1;
+		CHECK_EQ(dect_base_listed(&b, 0), 1);
+		b.absent[0] = 1;
+		CHECK_EQ(dect_base_listed(&b, 0), 0);
+		b.absent[0] = 0;
+		CHECK_EQ(dect_base_contact_name(&b, "123", nm_buf, sizeof(nm_buf)),
+			 0);			/* no Contact List */
+		CHECK_EQ(dect_ctl_parse("status", strlen("status"), &m), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 0);
+		CHECK_EQ(dect_ctl_parse("remote-ringing call=3", strlen("remote-ringing call=3"), &m), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 0, 0, &r), 1);
+		CHECK_EQ(strcmp(r.err, "not-bridge"), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 1);
+		CHECK_EQ(strcmp(r.err, "no-call"), 0);
+		CHECK_EQ(dect_ctl_parse("call-in hs=4", strlen("call-in hs=4"), &m), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 1);
+		CHECK_EQ(strcmp(r.err, "no-handset"), 0);
+		CHECK_EQ(r.val, 4u);
+		CHECK_EQ(dect_ctl_parse("call-in hs=1 number=0301234 sip=x", strlen("call-in hs=1 number=0301234 sip=x"), &m),
+			 0);
+		event_line[0] = '\0';
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 1);
+		CHECK_EQ(r.sent, 1);
+		CHECK_EQ(strcmp(event_line, "call-in-ok call=1 sip=x\n"), 0);
+		CHECK_EQ(b.ring.now, 1);		/* the main link rings */
 	}
 	return CHECK_DONE();
 }

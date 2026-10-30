@@ -338,7 +338,7 @@ struct handset {
 	/* whether it holds a subscription: base.loaded[] (dect_base.h) */
 	uint64_t last_seen_ms;	/* runtime only: last segment from it */
 	int      remote;	/* remote=: a roamer the cell must fetch */
-	int      absent;	/* the file does not exist: free for enrolment */
+	/* the file does not exist, free for enrolment: base.absent[] */
 	int      fetched;	/* ... and has, this run */
 	/* its <<TERMINAL-CAPABILITY>>: base.cap[] (dect_base.h, S3k) */
 	/* its name, kept in <path>.name: base.name[] (dect_base.h) */
@@ -2811,7 +2811,7 @@ static void sub_save(struct stubd *s)
 		printf("sub: subscription saved to %s\n", s->sub_path);
 		if (s->base.cur < s->base.n_hs) {
 			s->base.loaded[s->base.cur] = 1;	/* it exists now */
-			s->hs[s->base.cur].absent = 0;	/* and is no longer free */
+			s->base.absent[s->base.cur] = 0;	/* and is no longer free */
 		}
 	}
 }
@@ -4543,7 +4543,7 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		uint64_t seen = s->hs[i].last_seen_ms;
 
 		/* the handsets the base holds: not a store just deregistered */
-		if ((i != s->base.cur && !s->base.loaded[i]) || s->hs[i].absent)
+		if ((i != s->base.cur && !s->base.loaded[i]) || s->base.absent[i])
 			continue;
 		/*
 		 * parked: no handset has a link, whatever was up at exit.
@@ -4653,7 +4653,7 @@ static int hs_free(const struct stubd *s)
 	unsigned i;
 
 	for (i = 0; i < s->base.n_hs; i++)
-		if (!s->base.loaded[i] && !s->hs[i].remote && s->hs[i].absent)
+		if (!s->base.loaded[i] && !s->hs[i].remote && s->base.absent[i])
 			return (int)i;
 	return -1;
 }
@@ -6122,11 +6122,6 @@ static int ic_active(const struct stubd *s, int p)
 	return dect_base_party_active(&s->base, p);
 }
 
-static void ic_drain(struct stubd *s, int p, uint64_t now)
-{
-	dect_base_drain(&s->base, p, now);
-}
-
 /* the party has its audio channel bound */
 static int ic_has_lane(const struct stubd *s, int p)
 {
@@ -6219,7 +6214,7 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	(void)rename(from, to);
 	s->base.loaded[i] = 0;
 	s->base.hs[i].uak_valid = 0;
-	s->hs[i].absent = 1;		/* free for a new enrolment */
+	s->base.absent[i] = 1;		/* free for a new enrolment */
 	s->base.name[i][0] = '\0';
 	s->base.cap[i].known = 0;
 	memset(s->hs[i].mwi, 0, sizeof(s->hs[i].mwi));
@@ -6787,8 +6782,7 @@ static void ctl_send_bridge(struct stubd *s, struct dect_ctl_out *o)
 /* The handsets the base holds: the ones `hs` lines name. */
 static int ctl_listed(const struct stubd *s, unsigned i)
 {
-	return i < s->base.n_hs && (i == s->base.cur || s->base.loaded[i]) &&
-	       !s->hs[i].absent;
+	return dect_base_listed(&s->base, i);
 }
 
 /* One `hs` line to client c, or to every client with c < 0. */
@@ -6863,33 +6857,6 @@ static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
 }
 
 /*
- * The bridge (docs/bridge-interface.md §2, step 2 of §5): a client that
- * sent "bridge" carries the external calls, up to BC_MAX at once, on the
- * main link or on side links (struct dect_base_call). Out: a handset's number goes
- * out as call-out, and remote-ringing, remote-answered and remote-released
- * drive ALERTING, CONNECT and the release. In: call-in rings the handset
- * hs= names (the first without it), on the main link or, while that is
- * busy, on a side link of its own; ringing, answered and released come
- * back. Without a bridge nothing changes: a dialled call is connected
- * locally (the lab's test sound or loop-back).
- */
-static unsigned bridge_new_id(struct stubd *s)
-{
-	return dect_base_call_new_id(&s->base);
-}
-
-static struct dect_base_call *bc_by_id(struct stubd *s, unsigned id)
-{
-	return dect_base_call_by_id(&s->base, id);
-}
-
-/* A free entry, zeroed; it is taken once its id is set. NULL: all taken. */
-static struct dect_base_call *bc_new(struct stubd *s)
-{
-	return dect_base_call_new(&s->base);
-}
-
-/*
  * The call is over for the bridge. On the main link its ring stops too,
  * whatever state it was in: with ring_ms=0 ring_tick() runs only while
  * ring_now is set, so a ring left in PAGING would hold the main link
@@ -6900,30 +6867,10 @@ static void bc_clear(struct stubd *s, struct dect_base_call *b)
 	dect_base_call_clear(&s->base, b);
 }
 
-static void bridge_event(struct stubd *s, const struct dect_base_call *b,
-			 const char *verb, const char *k2, const char *v2)
-{
-	dect_base_call_event(&s->base, b, verb, k2, v2);
-}
-
 /* The handset on link p dialled a number: hand it to the bridge. */
 static int bridge_call_out(struct stubd *s, int p, uint64_t now)
 {
 	return dect_base_call_out(&s->base, p, now);
-}
-
-/* remote-released's reason, as a CC release reason (§2.2 of the page) */
-static uint8_t bridge_reason(const char *r)
-{
-	if (!r || !strcmp(r, "normal"))
-		return DECT_CC_REASON_NONE;
-	if (!strcmp(r, "busy"))
-		return DECT_CC_REASON_USER_BUSY;
-	if (!strcmp(r, "unreachable"))
-		return DECT_CC_REASON_USER_UNKNOWN;
-	if (!strcmp(r, "rejected"))
-		return 0x15u;			/* user rejection */
-	return DECT_CC_REASON_NONE;
 }
 
 /* -------------------------------------------------------------------------
@@ -6936,71 +6883,10 @@ static uint8_t bridge_reason(const char *r)
  * are its DTMF.
  */
 
-/* The calls the bridge carries on link p. */
-static unsigned bc_live(const struct stubd *s, int p)
-{
-	return dect_base_calls_on(&s->base, p);
-}
-
 /* The call link p's lane carries -- in CS call connect -- or NULL. */
 static struct dect_base_call *bc_active(struct stubd *s, int p)
 {
 	return dect_base_call_active(&s->base, p);
-}
-
-/* Parallel calls on one link are the library's (dect_base.h, S3s). */
-static void par_status(struct stubd *s, struct dect_base_call *b, uint8_t cs,
-		       uint64_t now)
-{
-	dect_base_par_status(&s->base, b, cs, now);
-}
-
-static void par_connect(struct stubd *s, struct dect_base_call *b, const char *verb,
-			uint64_t now)
-{
-	dect_base_par_connect(&s->base, b, verb, now);
-}
-
-static int waiting_party(struct stubd *s, unsigned t)
-{
-	return dect_base_waiting_party(&s->base, t);
-}
-
-static int cw_start(struct stubd *s, struct dect_base_call *b, int p,
-		    const struct dect_clip *clip, uint64_t now)
-{
-	return dect_base_call_waiting(&s->base, b, p, clip, now);
-}
-
-static int hs_in_call(const struct stubd *s, unsigned t)
-{
-	return dect_base_hs_in_call(&s->base, t);
-}
-
-/* The main link can ring: no call, no ring of its own. */
-static int main_free(struct stubd *s)
-{
-	return dect_base_main_free(&s->base);
-}
-
-/* Ring handset t on the main link for b; ring_tick() pages it. */
-static void ring_main(struct stubd *s, struct dect_base_call *b, unsigned t)
-{
-	dect_base_ring_main(&s->base, b, t);
-}
-
-/* -------------------------------------------------------------------------
- * A side ring: a call-in for a handset while the main link is in another
- * call or ringing. The handset is paged as an internal call's target is
- * (ic_page()) and rung on the side link it comes up on, with what
- * ring_queue_setup() gives the main link's: its profile's alerting pattern
- * and name method, and to a Part 3 handset the line, call id and CS call
- * setup [CR A-0125]. Each call pages its own handset.
- */
-static void sr_start(struct stubd *s, struct dect_base_call *b, unsigned t,
-		     uint64_t now)
-{
-	dect_base_side_ring_start(&s->base, b, t, now);
 }
 
 /* Side ring b's SETUP to its handset, on side link k. */
@@ -7033,11 +6919,6 @@ static int sr_target_link(struct stubd *s, struct side_link *sl,
 static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			  uint64_t now)
 {
-	struct dect_ctl_out o;
-	struct dect_base_call *b;
-	unsigned id;
-	int p;
-
 	if (!strcmp(m->verb, "bridge")) {
 		if (s->ctl.bridge >= 0 && s->ctl.bridge != s->ctl.cur) {
 			ctl_reply(s, m->verb, "busy", NULL, 0);
@@ -7130,17 +7011,9 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		 * The Contact List's name before the network's, as
 		 * TS 102 527-3 7.4.10.5.1.3 note 1 recommends.
 		 */
-		if (num && *num && s->contacts_path) {
-			const struct dect_contact *e =
-				dect_contacts_find_number(&stubd_contacts, num);
-
-			if (e) {
-				snprintf(book_name, sizeof(book_name), "%s%s%s",
-					 e->first, e->first[0] && e->name[0]
-					 ? " " : "", e->name);
-				name = book_name;
-			}
-		}
+		if (dect_base_contact_name(&s->base, num, book_name,
+					   sizeof(book_name)))
+			name = book_name;
 		clock_any(&when);
 		(void)dect_calls_add(&stubd_calls, list, num, name, &when, line);
 		printf("calls: %s call %s%s\n", kind,
@@ -7157,199 +7030,17 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		ctl_reply(s, m->verb, NULL, NULL, 0);
 		return 1;
 	}
-	if (!strcmp(m->verb, "call-in")) {
-		const char *num = dect_ctl_get(m, "number");
-		const char *name = dect_ctl_get(m, "name");
-		char book_name[2u * DECT_CONTACT_NAME_MAX];
-		int book = 0;
-		const char *sip = dect_ctl_get(m, "sip");
-		const char *why = NULL, *codec;
-		struct dect_clip clip;
-		int wp;
-		unsigned want = 0, t = 0, line = STUBD_LINE_ID;
+	{
+		struct dect_base_reply r;
 
-		/* hs=N: the handset whose line was called (its own account) */
-		if (dect_ctl_get(m, "hs")) {
-			if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, &want)) {
-				ctl_reply(s, m->verb, "bad-hs", NULL, 0);
-				return 1;
-			}
-			for (t = 0; t < s->base.n_hs; t++)
-				if (ctl_listed(s, t) && hs_slot(s, t) == want)
-					break;
-			if (t == s->base.n_hs) {
-				ctl_reply(s, m->verb, "no-handset", "hs", want);
-				return 1;
-			}
-		}
-		if (s->ctl.cur != s->ctl.bridge) {
-			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
-			return 1;
-		}
-		/* line=N: which of the handset's lines was called */
-		if (dect_ctl_get(m, "line") &&
-		    dect_ctl_get_uint(m, "line", 1, 2, &line))
-			line = STUBD_LINE_ID;
-		/* codec=nb: the caller offered no G.722 */
-		codec = dect_ctl_get(m, "codec");
-		b = bc_new(s);
-		/* a Part 3 handset in a bridged call: call waiting */
-		wp = BC_NONE;
-		if (s->base.n_hs && hs_in_call(s, t)) {
-			wp = b ? waiting_party(s, t) : BC_NONE;
-			if (wp == BC_NONE)
-				why = "in-call";
-		} else if (!b || (!main_free(s) && (!s->base.cfg.two_calls ||
-			   lanes_available(s, NULL) <= 0))) {
-			why = "channels";
-		}
-		if (why) {
-			dect_ctl_begin(&o, "busy");
-			if (sip)
-				dect_ctl_add(&o, "sip", sip);
-			dect_ctl_add(&o, "why", why);
-			ctl_send_bridge(s, &o);
-			return 1;
-		}
-		/*
-		 * A SIP From is whatever the caller wrote: user provided, not
-		 * screened -- "network provided" told the handset the
-		 * network vouched for it (security audit 2026-10-29, S1).
-		 */
-		dect_clip_init(&clip);
-		if (num && *num)
-			(void)dect_clip_set_number(&clip, num,
-					DECT_CLIP_TON_UNKNOWN,
-					DECT_CLIP_NPI_UNKNOWN,
-					DECT_CLIP_PRES_ALLOWED,
-					DECT_CLIP_SCR_USER_UNSCREENED);
-		/*
-		 * No name from SIP: the Contact List's, as TS 102 527-3
-		 * 7.4.10.5.1.3 note 1 recommends ("First Name"), screened
-		 * "user-provided, verified and passed" as EN 300 175-5
-		 * 7.7.53 note 1 asks for a name from the FP's contact list.
-		 */
-		if ((!name || !*name) && num && *num && s->contacts_path) {
-			const struct dect_contact *e =
-				dect_contacts_find_number(&stubd_contacts, num);
-
-			if (e) {
-				snprintf(book_name, sizeof(book_name), "%s%s%s",
-					 e->first, e->first[0] && e->name[0]
-					 ? " " : "", e->name);
-				name = book_name;
-				book = 1;
-			}
-		}
-		if (name && *name)
-			(void)dect_clip_set_name(&clip, name,
-					DECT_CLIP_ALPHABET_UTF8,
-					DECT_CLIP_PRES_ALLOWED,
-					book ? DECT_CLIP_SCR_USER_PASSED
-					     : DECT_CLIP_SCR_USER_UNSCREENED);
-		b->id = bridge_new_id(s);
-		b->line = line;
-		b->narrow = codec && !strcmp(codec, "nb");
-		b->since = now;
-		b->target = (int)t;
-		b->clip = clip;
-		if (wp != BC_NONE) {
-			if (cw_start(s, b, wp, &clip, now)) {
-				b->id = 0;
-				dect_ctl_begin(&o, "busy");
-				if (sip)
-					dect_ctl_add(&o, "sip", sip);
-				dect_ctl_add(&o, "why", "in-call");
-				ctl_send_bridge(s, &o);
-				return 1;
-			}
-		} else if (main_free(s)) {
-			s->base.clip = clip;
-			ring_main(s, b, t);
-		} else {
-			sr_start(s, b, t, now);
-		}
-		printf("bridge: call %u in from \"%s\" -- %s DECT %u%s\n",
-		       b->id, num ? num : "", b->par ? "waiting on" : "ringing",
-		       hs_slot(s, t), b->party == BC_PAGING ? " on a side link "
-		       "(the main link is in a call)" : "");
-		dect_ctl_begin(&o, "call-in-ok");
-		dect_ctl_add_uint(&o, "call", b->id);
-		if (sip)
-			dect_ctl_add(&o, "sip", sip);
-		ctl_send_bridge(s, &o);
+		/* the call verbs are the library's (dect_base.h, S5a) */
+		if (!dect_base_ctl_call(&s->base, m, s->ctl.cur == s->ctl.bridge,
+					now, &r))
+			return 0;
+		if (!r.sent)
+			ctl_reply(s, m->verb, r.err, r.key, r.val);
 		return 1;
 	}
-	if (strcmp(m->verb, "remote-ringing") &&
-	    strcmp(m->verb, "remote-answered") &&
-	    strcmp(m->verb, "remote-released"))
-		return 0;
-	if (s->ctl.cur != s->ctl.bridge) {
-		ctl_reply(s, m->verb, "not-bridge", NULL, 0);
-		return 1;
-	}
-	if (dect_ctl_get_uint(m, "call", 1, 127, &id) ||
-	    !(b = bc_by_id(s, id))) {
-		ctl_reply(s, m->verb, "no-call", NULL, 0);
-		return 1;
-	}
-	p = b->party;
-	if (!strcmp(m->verb, "remote-released")) {
-		const char *r = dect_ctl_get(m, "reason");
-
-		printf("bridge: call %u released by the far end (%s)\n", id,
-		       r ? r : "normal");
-		if (p != BC_PAGING && bc_live(s, p) > 1u) {
-			/* the link carries another call: this one goes alone */
-			par_status(s, b, DECT_CS_IDLE, now);
-			bc_clear(s, b);
-			ctl_reply(s, m->verb, NULL, "call", id);
-			return 1;
-		}
-		bc_clear(s, b);			/* no "released" back */
-		if (p == BC_PAGING) {
-			ctl_reply(s, m->verb, NULL, "call", id);
-			return 1;		/* paging stops */
-		}
-		if (ic_active(s, p) && dect_cc_busy(ic_cc(s, p)))
-			(void)dect_cc_release_reason(ic_cc(s, p),
-						     bridge_reason(r));
-	} else if (!b->out || !ic_active(s, p)) {
-		ctl_reply(s, m->verb, "no-call", NULL, 0);
-		return 1;
-	} else if (b->par) {
-		/* a parallel call out: its progress as call status */
-		if (!strcmp(m->verb, "remote-ringing")) {
-			if (b->cs == DECT_CS_CALL_PROC)
-				par_status(s, b, DECT_CS_CALL_ALERTING, now);
-		} else if (!bc_active(s, p)) {
-			par_connect(s, b, NULL, now);
-		} else {
-			par_status(s, b, DECT_CS_CALL_HOLD, now);
-			bridge_event(s, b, "hold", NULL, NULL);
-		}
-	} else if (!strcmp(m->verb, "remote-ringing")) {
-		if (ic_cc(s, p)->state == DECT_CC_ST_PROCEEDING)
-			(void)dect_cc_alert(ic_cc(s, p));
-	} else {
-		const char *codec = dect_ctl_get(m, "codec");
-
-		/*
-		 * codec=nb: the far end speaks narrowband, so the handset
-		 * does too (G.726, if it offered it) rather than the box
-		 * converting its G.722.
-		 */
-		if (codec && !strcmp(codec, "nb") &&
-		    dect_cc_prefer_narrowband(ic_cc(s, p)))
-			b->narrow = 1;
-		printf("bridge: call %u answered by the far end%s\n", id,
-		       b->narrow ? " -- narrowband, G.726 to the handset" : "");
-		(void)dect_cc_connect(ic_cc(s, p));
-	}
-	if (ic_active(s, p))
-		ic_drain(s, p, now);
-	ctl_reply(s, m->verb, NULL, "call", id);
-	return 1;
 }
 
 /* The bridged calls' progress, as events (dect_base.h, S3t). */
@@ -11307,6 +10998,7 @@ int main(int argc, char **argv)
 	s.base.cfg.ring_attach_ms = s.audio.ring_attach_ms;
 	s.base.cfg.time_every_min = s.audio.time_every_min;
 	s.base.cfg.callinfo = s.audio.callinfo;
+	s.base.contacts = s.contacts_path ? &stubd_contacts : NULL;
 	memcpy(s.base.cfg.info_ie, s.audio.info_ie, s.audio.info_ie_len);
 	s.base.cfg.info_ie_len = s.audio.info_ie_len;
 
@@ -11357,7 +11049,7 @@ int main(int argc, char **argv)
 			 * routing a new handset there would overwrite it
 			 * (review, finding 9).
 			 */
-			s.hs[i].absent = s.hs[i].path &&
+			s.base.absent[i] = s.hs[i].path &&
 				stat(s.hs[i].path, &sst) != 0 && errno == ENOENT;
 			for (j = 0; s.base.loaded[i] && j < i; j++) {
 				if (!s.base.loaded[j] ||
@@ -11421,7 +11113,7 @@ int main(int argc, char **argv)
 			unsigned used = 0, slot, k;
 
 			if (s.base.loaded[i] || s.hs[i].remote ||
-			    !s.hs[i].absent)
+			    !s.base.absent[i])
 				continue;
 			for (k = 0; k < s.base.n_hs; k++) {
 				unsigned ks = k == 0 && s.audio.sub_slot ?

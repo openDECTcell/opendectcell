@@ -19,6 +19,7 @@
 #include "dect_callinfo.h"
 #include "dect_cc.h"
 #include "dect_clip.h"
+#include "dect_contacts.h"
 #include "dect_ctl.h"
 #include "dect_link.h"
 #include "dect_mail.h"
@@ -330,6 +331,10 @@ struct dect_base {
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	/* record i holds a subscription (the host's store had one) */
 	int      loaded[DECT_BASE_HS_MAX];
+	/* record i's store does not exist: free for enrolment (S5a) */
+	int      absent[DECT_BASE_HS_MAX];
+	/* the Contact List the host keeps, NULL: none (S5a) */
+	const struct dect_contacts *contacts;
 	/*
 	 * The name a handset gave record i in the Internal Names List (TS 102
 	 * 527-3 §7.4.10.5.8); empty = the default "DECT n".
@@ -754,6 +759,46 @@ int dect_base_hs_in_call(const struct dect_base *b, unsigned t);
  * codes, side rings, and the events ringing, answered and released.
  */
 void dect_base_bridge_tick(struct dect_base *b, uint64_t now);
+
+/*
+ * The bridge (docs/bridge-interface.md §2, step 2 of §5): a client that
+ * sent "bridge" carries the external calls, up to DECT_BASE_CALLS at
+ * once, on the main link or on side links (struct dect_base_call). Out:
+ * a handset's number goes out as call-out, and remote-ringing,
+ * remote-answered and remote-released drive ALERTING, CONNECT and the
+ * release. In: call-in rings the handset hs= names (the first without
+ * it), on the main link or, while that is busy, on a side link of its
+ * own; ringing, answered and released come back. Without a bridge nothing
+ * changes: a dialled call is connected locally (the lab's test sound or
+ * loop-back).
+ *
+ * Its verbs (§2.2), S5a. What the host answers the client: an error (err
+ * set), or ok with key=val (key NULL: none); nothing at all when `sent`,
+ * as an event went to the bridge.
+ */
+struct dect_base_reply {
+	const char *err;
+	const char *key;
+	unsigned    val;
+	int         sent;
+};
+
+/* The records the base lists to its clients (`hs` lines). */
+int dect_base_listed(const struct dect_base *b, unsigned i);
+/*
+ * The Contact List's name for a number, "First Last" (TS 102 527-3
+ * 7.4.10.5.1.3 note 1): 1 found, 0 not.
+ */
+int dect_base_contact_name(const struct dect_base *b, const char *num,
+			   char *buf, size_t cap);
+/*
+ * call-in, remote-ringing, remote-answered, remote-released, from a client
+ * that is (from_bridge) or is not the bridge: 0 not one of these verbs, 1
+ * handled, with what to answer in r.
+ */
+int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
+		       int from_bridge, uint64_t now,
+		       struct dect_base_reply *r);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
