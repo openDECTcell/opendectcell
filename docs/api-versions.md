@@ -897,3 +897,8 @@ _side_start(), _side_promote() (S3z).
 **133.** dect_base.h, 2026-10-30: dect_base_link's `lane`; dect_base's
 `foreign_conn`; dect_base_ops' `link_up` and `side_down`;
 dect_base_cipher_on(), _contact(), _conn_up(), _conn_down() (S6a).
+
+**134.** dect_base.h, 2026-10-30: dect_base_ops' `registered`,
+`call_up`, `side_call`, `swapped`; dect_base_cfg's `verbose`;
+dect_base's `foreign_seg`, `foreign_seg_handle`, `last_seen_ms[]`;
+dect_base_segment() (S6b).

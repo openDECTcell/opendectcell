@@ -497,3 +497,14 @@ hears of a link set up afresh (`link_up()`) and of a side link going
 dispatch: the C-plane segments' own parts, 0x0242 (the audio connect),
 0xFFF1 (the key read-back) and 0xF625 (diagnostics). Unit tests; the
 fifteen traces unchanged.
+
+**S6b.** The C-plane segments are the library's (`dect_base_segment()`):
+the main link's (the stack's work, the record it turned out to serve,
+the collision and page responses, the dialled number shown, the
+identities, the enrolment and its outcome, the notices after a location
+registration, the call's cipher) and a side link's (adoption, notices,
+page responses, the promotion). The host's parts are callbacks: what
+follows a completed enrolment (`registered()`), the main call's audio
+path (`call_up()`), a side link's lane and dialling (`side_call()`),
+and its per-link state after a swap (`swapped()`). Unit test; the
+fifteen traces unchanged.

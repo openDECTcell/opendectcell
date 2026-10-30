@@ -131,6 +131,24 @@ struct dect_base_ops {
 	void (*link_up)(void *ctx, int p);
 	/* Side link k goes: the host releases its audio lane first (S6a). */
 	void (*side_down)(void *ctx, unsigned k);
+	/*
+	 * The main link's enrolment completed and the subscription went into
+	 * the chip (S6b): the host's follow-up (a profile chosen for the
+	 * window, the window closed).
+	 */
+	void (*registered)(void *ctx, uint64_t now);
+	/*
+	 * After each main-link segment, before the call's cipher steps (S6b):
+	 * the host binds the call's audio path when it is due.
+	 */
+	void (*call_up)(void *ctx, uint64_t now);
+	/*
+	 * Side link k's call, before and after each of its segments (S6b):
+	 * the host's audio lane and the routing of a dialled number.
+	 */
+	void (*side_call)(void *ctx, unsigned k, uint64_t now);
+	/* Side link k and the main link swapped (S6b): the host's per-link state. */
+	void (*swapped)(void *ctx, unsigned k);
 };
 
 /*
@@ -283,6 +301,7 @@ struct dect_base_cfg {
 	int      auth_first;	/* a handset proves its key before its call goes anywhere */
 	int      no_cipher;	/* -C, a lab option: no ciphering, no proof */
 	int      no_chip_key;	/* -k off: the call key withheld from the chip */
+	int      verbose;	/* -v: each segment and NWK message in the log */
 	int      locauth;	/* authenticate on location registration */
 	int      no_overlap;	/* no overlap sending: the number en bloc */
 	unsigned dial_wait_ms;	/* the dial pause that ends a number */
@@ -473,6 +492,9 @@ struct dect_base {
 	int      remote[DECT_BASE_HS_MAX];
 	int      fetched[DECT_BASE_HS_MAX];	/* ... and it has, this run (S3z) */
 	uint32_t foreign_conn;	/* connection-ups not allowed to re-arm a busy link */
+	uint32_t foreign_seg;	/* segments for another handle than the main link's */
+	uint8_t  foreign_seg_handle;	/* ... the last one */
+	uint64_t last_seen_ms[DECT_BASE_HS_MAX];	/* record i's last segment */
 	/* the registration window (S3z) */
 	int      reg_open;
 	uint64_t reg_open_until;	/* 0: until closed */
@@ -1207,6 +1229,16 @@ void dect_base_conn_up(struct dect_base *b, uint8_t handle, uint64_t now);
  * the mail named a handle.
  */
 void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known);
+
+/*
+ * A C-plane segment from the chip (S6b), for the main link or a side
+ * link: the stack's work on it, the page responses, identities, the
+ * enrolment, notices, the call's cipher; the host's parts through
+ * registered(), call_up() and side_call(). Returns 0, or -1 when no link
+ * took it.
+ */
+int dect_base_segment(struct dect_base *b, const struct dect_mail *m,
+		      uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

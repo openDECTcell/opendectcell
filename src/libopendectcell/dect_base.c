@@ -4391,6 +4391,8 @@ int dect_base_side_promote(struct dect_base *b, unsigned k,
 	ml->handle = sl->handle;
 	sl->handle = h;
 	sl->adopted = old_main;
+	if (b->ops && b->ops->swapped)
+		b->ops->swapped(b->ctx, k);
 
 	/* the old main is a side link now: no enrolment, no speech */
 	sl->link.mm.cfg.registration = DECT_MM_REG_CLOSED;
@@ -4575,4 +4577,260 @@ void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known)
 		dect_base_log(b, "reg: connection released");
 	ml->active = 0;
 	(void)dect_base_serve(b, 0, " (link released)");
+}
+
+/* Show a dialled number: GAP's 0-9, * and #, anything else as an escape. */
+static void log_keypad(struct dect_base *b)
+{
+	size_t n, i, o = 0;
+	const uint8_t *kp = dect_cc_keypad(&b->main_link.link.cc, &n);
+	char show[DECT_CC_KEYPAD_MAX * 4 + 1];
+
+	for (i = 0; i < n && o + 5 < sizeof(show); i++) {
+		uint8_t c = kp[i];
+
+		if ((c >= '0' && c <= '9') || c == '*' || c == '#')
+			show[o++] = (char)c;
+		else
+			o += (size_t)snprintf(show + o, sizeof(show) - o,
+					      "\\x%02x", c);
+	}
+	show[o] = '\0';
+	dect_base_log(b, "call: handset dialled: %s (%zu character%s)%s", show,
+		      n, n == 1 ? "" : "s",
+		      b->main_link.link.cc.keypad_overflow ? " [TRUNCATED]"
+							   : "");
+}
+
+/* -v: the segment's framing and its NWK message (local only: it carries IPUIs). */
+static void log_segment(struct dect_base *b, const struct dect_link_ind *ind)
+{
+	char hex[3 * 64 + 1];
+	size_t i, o = 0;
+
+	dect_base_log(b, "reg: cs in %02x %02x %02x (addr/ctrl/li), lc_rc=%d",
+		      ind->seg_head[0], ind->seg_head[1], ind->seg_head[2],
+		      ind->lc_rc);
+	if (ind->lapc_parse_failed)
+		dect_base_log(b, "reg: lapc parse failed");
+	else if (ind->lc_rc > 0)
+		dect_base_log(b, "reg: lapc type=%d ns=%u nr=%u more=%u "
+			      "infolen=%zu", ind->frame.type, ind->frame.ns,
+			      ind->frame.nr, ind->frame.more,
+			      ind->frame.info_len);
+	if (!ind->nwk_len)
+		return;
+	for (i = 0; i < ind->nwk_len && o + 4 < sizeof(hex); i++)
+		o += (size_t)snprintf(hex + o, sizeof(hex) - o, "%02x ",
+				      ind->nwk[i]);
+	dect_base_log(b, "reg: nwk in  <-- %s", hex);
+}
+
+static void main_mail(struct dect_base *b, const struct dect_mail *m,
+		      uint64_t now)
+{
+	struct dect_base_link *ml = &b->main_link;
+	struct dect_link_ind ind;
+	uint32_t collisions = ml->link.cc.stats.collisions;
+	uint32_t represented = ml->link.cc.stats.represented;
+	int switched, a;
+
+	if (dect_base_main_segment(b, m, now, &ind, &switched) < 0) {
+		if (ind.foreign) {
+			/*
+			 * Another handset's connection. The library refused to
+			 * let it touch this link's Lc/LAPC/NWK state; it is
+			 * counted, and said the first time so a confounded run
+			 * is visible while it is running.
+			 */
+			if (!b->foreign_seg)
+				dect_base_log(b, "reg: ignoring C-plane traffic "
+					      "for handle %u -- this link serves "
+					      "handle %u. Another handset is on "
+					      "air.", ind.seg_handle, ml->handle);
+			b->foreign_seg++;
+			b->foreign_seg_handle = ind.seg_handle;
+		}
+		return;
+	}
+	pump(b, ml);			/* at least the LAPC ack */
+	a = ml->link.mm.adopted;
+	if (a >= 0 && (unsigned)a < b->n_hs)
+		b->last_seen_ms[a] = now;
+
+	/*
+	 * MM took on one of the other handsets we hold (its LOCATE-REQUEST,
+	 * or a call it placed). Serve it as itself: its record, its call
+	 * identities, and its own entry in the Internal Names List, set before
+	 * the list-access session that follows its {CC-SETUP} asks for it.
+	 */
+	if (switched) {
+		unsigned slot = dect_base_slot(b, b->cur);
+
+		b->cc_id_foreign_warned = 0;
+		b->cc_id_unarmed_warned = 0;
+		if (b->ops && b->ops->switched)
+			b->ops->switched(b->ctx, "");
+		dect_iwu_set_own(&ml->link.cc.iwu, (uint8_t)slot);
+		dect_base_iwu_lines(b, &ml->link.cc.iwu, slot);
+	}
+
+	if (!b->first_contact_ms) {
+		b->first_contact_ms = now;
+		dect_base_log(b, "reg: first C-plane contact from the handset at "
+			      "t=%llu ms", (unsigned long long)(now - b->start_ms));
+	}
+
+	/*
+	 * EN 300 175-5 §9.5.2.3, in the log while it happens. Every refusal
+	 * of an FP-originated call in this project's corpus (60 of 60, from
+	 * 93 logs tabulated on 2026-10-24) coincided with the handset's own
+	 * list-access {CC-SETUP} being on the wire, active, or pending; the
+	 * library resolves the collision, and these two lines are how a log
+	 * shows which half of it ran.
+	 */
+	if (ml->link.cc.stats.collisions != collisions)
+		dect_base_log(b, "ring: {CC-SETUP} COLLISION -- the handset "
+			      "opened a call of its own while ours was pending; "
+			      "releasing its call with \"insufficient "
+			      "resources\" (EN 300 175-5 9.5.2.3)");
+	if (ml->link.cc.stats.represented != represented)
+		dect_base_log(b, "ring: the handset released our call for the "
+			      "collision; RE-PRESENTING the {CC-SETUP} now "
+			      "(9.5.2.3), %u left", ml->link.cc.represent_left);
+	if (b->cfg.verbose)
+		log_segment(b, &ind);
+
+	/*
+	 * A handset offering its clock (TS 102 527-3 §7.4.2.2). Our 'Clock
+	 * master' is the FP (the System Settings List says so), and the host
+	 * keeps time: logged, not used. An unidentified one is ignored, as the
+	 * clause requires.
+	 */
+	if (ind.pp_time || ind.pp_time_unknown) {
+		const struct dect_time *t = &ind.pp_time_value;
+
+		dect_base_log(b, "time: %s handset sent its clock "
+			      "(20%02u-%02u-%02u %02u:%02u:%02u) -- %s",
+			      ind.pp_time ? "the" : "an UNIDENTIFIED",
+			      t->year, t->month, t->day, t->hour, t->minute,
+			      t->second, ind.pp_time
+			      ? "not used: the base is the clock master"
+			      : "ignored (7.4.2.2)");
+	}
+
+	dect_base_main_page_response(b, &ind, now);
+
+	/*
+	 * The handset dialled (GAP N.4, mandatory for an FT). Routing the
+	 * number is the dial tick's; here it is only shown.
+	 */
+	if (ind.keypad)
+		log_keypad(b);
+	if (ml->link.cc.stats.rejected_identity != ml->rejected_seen) {
+		ml->rejected_seen = ml->link.cc.stats.rejected_identity;
+		dect_base_log(b, "call: turned away a call from a handset we are "
+			      "not subscribed to (release reason 0x0a, %u on "
+			      "this link)", (unsigned)ml->rejected_seen);
+	}
+
+	dect_base_main_ids(b, ind.cc_message);
+	/*
+	 * Once the handset is authenticated (UAK valid) and its LOCATE-REQUEST
+	 * answered, the subscription goes into the chip, once per connection.
+	 */
+	if (dect_base_main_registered(b) && b->ops && b->ops->registered)
+		b->ops->registered(b->ctx, now);
+	dect_base_main_located(b);
+	dect_base_main_enrolment(b);
+	if (b->ops && b->ops->call_up)
+		b->ops->call_up(b->ctx, now);
+	dect_base_main_cipher_tick(b, now);
+	pump(b, ml);
+}
+
+static void side_call(struct dect_base *b, unsigned k, uint64_t now)
+{
+	if (b->ops && b->ops->side_call)
+		b->ops->side_call(b->ctx, k, now);
+}
+
+static void side_mail(struct dect_base *b, unsigned k,
+		      const struct dect_mail *m, uint64_t now)
+{
+	struct dect_base_link *sl = &b->side[k];
+	struct dect_link_ind ind;
+	int a;
+
+	side_call(b, k, now);	/* busy or not, before a SETUP lands */
+	if (dect_base_link_segment(b, sl, m, now, &ind) < 0) {
+		pump(b, sl);
+		return;
+	}
+	side_call(b, k, now);
+	a = sl->link.mm.adopted;
+	if (a >= 0 && (unsigned)a < b->n_hs)
+		b->last_seen_ms[a] = now;
+	if (a >= 0 && a != sl->adopted && (unsigned)a < b->n_hs) {
+		unsigned slot = dect_base_slot(b, (unsigned)a);
+
+		sl->adopted = a;
+		dect_iwu_set_own(&sl->link.cc.iwu, (uint8_t)slot);
+		dect_base_iwu_lines(b, &sl->link.cc.iwu, slot);
+		dect_base_log(b, "side: handle %u serves record %d (slot %u)",
+			      sl->handle, a, slot);
+	}
+	/* a location registration here: the waiting messages again */
+	if (sl->link.mm.stats.located != sl->located_seen) {
+		sl->located_seen = sl->link.mm.stats.located;
+		dect_base_mwi_locate(b, &sl->link);
+		dect_base_missed_locate(b, &sl->link);
+	}
+	if (sl->link.cc.stats.rejected_identity != sl->rejected_seen) {
+		sl->rejected_seen = sl->link.cc.stats.rejected_identity;
+		dect_base_log(b, "side: turned away a call from a handset we are "
+			      "not subscribed to (handle %u, release reason "
+			      "0x0a)", sl->handle);
+	}
+	/*
+	 * Ringing has started and a locating handset took the main link
+	 * first, so the target's page response lands here (12d, 2026-10-25:
+	 * the ring timed out). Promote this link to the main one and ring on
+	 * it; anything else that answers here is not ours to ring.
+	 */
+	if (dect_base_dereg_page_response(b, (int)k, &ind) ||
+	    dect_base_time_page_response(b, (int)k, &ind)) {
+		pump(b, sl);
+		return;
+	}
+	if (ind.page_response && b->ic.st == DECT_BASE_IC_PAGING) {
+		dect_base_ic_target_link(b, (int)k, &ind, now);
+		if (b->ic.st == DECT_BASE_IC_SETUP)
+			return;
+	}
+	if (ind.page_response && dect_base_side_ring_answer(b, k, &ind, now))
+		return;
+	if (ind.page_response && dect_base_side_promote(b, k, &ind, now))
+		return;
+	if (ind.page_response)
+		dect_base_log(b, "side: page response on handle %u while the main "
+			      "link is busy -- not ours to ring here, ignored",
+			      sl->handle);
+	pump(b, sl);
+}
+
+int dect_base_segment(struct dect_base *b, const struct dect_mail *m,
+		      uint64_t now)
+{
+	int k = m->param_len ? side_of(b, m->param[0]) : -1;
+
+	if (k >= 0 && !(b->main_link.active &&
+			m->param[0] == b->main_link.handle)) {
+		side_mail(b, (unsigned)k, m, now);
+		return 0;
+	}
+	if (!b->main_link.active)
+		return -1;
+	main_mail(b, m, now);
+	return 0;
 }

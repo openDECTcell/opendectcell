@@ -961,5 +961,17 @@ int main(void)
 			CHECK_EQ(b.rfpi[4], 0x60);
 		}
 	}
+
+	/* a segment with no link to take it (S6b) */
+	{
+		struct dect_mail m;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		memset(&m, 0, sizeof(m));
+		m.param_len = 1;
+		m.param[0] = 4;
+		CHECK_EQ(dect_base_segment(&b, &m, 0), -1);
+	}
 	return CHECK_DONE();
 }

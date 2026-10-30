@@ -336,7 +336,7 @@ static uint64_t mono_ms(void)
 struct handset {
 	const char *path;
 	/* whether it holds a subscription: base.loaded[] (dect_base.h) */
-	uint64_t last_seen_ms;	/* runtime only: last segment from it */
+	/* its last segment: base.last_seen_ms[] */
 	/* remote=, a roamer the cell must fetch: base.remote[] */
 	/* the file does not exist, free for enrolment: base.absent[] */
 	/* its <<TERMINAL-CAPABILITY>>: base.cap[] (dect_base.h, S3k) */
@@ -1094,8 +1094,6 @@ struct stubd {
 	 * difference between a result and a confounded one, and the run
 	 * should say so instead of leaving it to be worked out from a log.
 	 */
-	uint32_t foreign_seg;		/* 0x0203 segments for another handle */
-	uint8_t  foreign_seg_handle;	/* the last such handle seen */
 
 	/* Per-run tally of commands sent, by verification class. */
 	uint32_t verify_n[17];
@@ -1418,14 +1416,14 @@ static void verify_report(const struct stubd *s)
 	 * we were serving, and the run should declare that itself rather than
 	 * leave it to be reconstructed from the log afterwards.
 	 */
-	if (s->foreign_seg || s->base.foreign_conn)
+	if (s->base.foreign_seg || s->base.foreign_conn)
 		printf("reg: *** OTHER HANDSETS WERE ON AIR *** %lu C-plane "
 		       "segment(s) for another handle (last: %u) and %lu "
 		       "connection-up(s) refused. This link serves one "
 		       "handset; a run with competing traffic is NOT a clean "
 		       "measurement. Power the others off.\n",
-		       (unsigned long)s->foreign_seg,
-		       (unsigned)s->foreign_seg_handle,
+		       (unsigned long)s->base.foreign_seg,
+		       (unsigned)s->base.foreign_seg_handle,
 		       (unsigned long)s->base.foreign_conn);
 	printf("chip: %lu state-changing command%s sent, %lu verified by "
 	       "read-back. %lu query/read%s.\n",
@@ -2636,8 +2634,6 @@ static void hs_load(struct stubd *s, unsigned i)
 	hs_took(s, i);
 }
 
-static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot);
-
 /* The library made another handset current: its file, and say so. */
 static void hs_switched(struct stubd *s, const char *why)
 {
@@ -2815,6 +2811,10 @@ static void base_named(void *ctx, unsigned i);
 static void base_switched(void *ctx, const char *why);
 static void base_link_up(void *ctx, int p);
 static void base_side_down(void *ctx, unsigned k);
+static void base_registered(void *ctx, uint64_t now);
+static void base_call_up(void *ctx, uint64_t now);
+static void base_side_call(void *ctx, unsigned k, uint64_t now);
+static void base_swapped(void *ctx, unsigned k);
 static void base_wall(void *ctx, struct dect_time *dt);
 
 static const struct dect_base_ops base_ops = {
@@ -2823,7 +2823,9 @@ static const struct dect_base_ops base_ops = {
 	.pump = base_pump, .lanes = base_lanes, .forget = base_forget,
 	.mask = base_mask, .clock = base_clock, .named = base_named,
 	.wall = base_wall, .switched = base_switched, .link_up = base_link_up,
-	.side_down = base_side_down,
+	.side_down = base_side_down, .registered = base_registered,
+	.call_up = base_call_up, .side_call = base_side_call,
+	.swapped = base_swapped,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -4312,7 +4314,7 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 	first = 1;
 	for (i = 0; i < s->base.n_hs; i++) {
 		unsigned k, linked = 0;
-		uint64_t seen = s->hs[i].last_seen_ms;
+		uint64_t seen = s->base.last_seen_ms[i];
 
 		/* the handsets the base holds: not a store just deregistered */
 		if ((i != s->base.cur && !s->base.loaded[i]) || s->base.absent[i])
@@ -4540,11 +4542,6 @@ static void lines_load(struct stubd *s, unsigned i)
 /* The lines a link's Line Settings List offers: those of its handset. */
 static struct dect_contacts stubd_contacts;	/* every link's Contact List */
 static struct dect_calls stubd_calls;		/* ... and call lists */
-
-static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
-{
-	dect_base_iwu_lines(&s->base, iwu, slot);
-}
 
 /*
  * The Contact List's file, once a second: read whole when its size or time
@@ -4937,16 +4934,6 @@ static void profiles_resolve_all(struct stubd *s, const char *why)
 	fflush(stdout);
 }
 
-static void mwi_locate(struct stubd *s, struct dect_link *l)
-{
-	dect_base_mwi_locate(&s->base, l);
-}
-
-static void missed_locate(struct stubd *s, struct dect_link *l)
-{
-	dect_base_missed_locate(&s->base, l);
-}
-
 static void missed_changed_tick(struct stubd *s)
 {
 	dect_base_missed_changed_tick(&s->base);
@@ -5232,34 +5219,6 @@ static void base_mask(void *ctx)
 	send_subscription_tail(ctx);
 }
 
-/* The internal call's target answered our page on sl (NULL: the main link). */
-static void ic_target_link(struct stubd *s, struct side_link *sl,
-			   const struct dect_link_ind *ind, uint64_t now)
-{
-	dect_base_ic_target_link(&s->base, sl ? (int)(sl - s->side) : -1, ind,
-				 now);
-}
-
-/*
- * A page response while we page a handset to deregister it: if it carries
- * that handset's identity, the link adopts it and dereg_tick() sends the
- * request there. Returns 1 when it was the target's (consumed).
- */
-static int dereg_page_response(struct stubd *s, struct side_link *sl,
-			       const struct dect_link_ind *ind)
-{
-	return dect_base_dereg_page_response(&s->base,
-					     sl ? (int)(sl - s->side) : -1, ind);
-}
-
-/* The same for a handset paged for the date and time (time_tick). */
-static int time_page_response(struct stubd *s, struct side_link *sl,
-			      const struct dect_link_ind *ind)
-{
-	return dect_base_time_page_response(&s->base,
-					    sl ? (int)(sl - s->side) : -1, ind);
-}
-
 static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
 			const char *who);
 
@@ -5514,14 +5473,6 @@ static int bridge_call_out(struct stubd *s, int p, uint64_t now)
 static struct dect_base_call *bc_active(struct stubd *s, int p)
 {
 	return dect_base_call_active(&s->base, p);
-}
-
-/* A page response on side link sl: the handset a side ring pages? */
-static int sr_target_link(struct stubd *s, struct side_link *sl,
-			  const struct dect_link_ind *ind, uint64_t now)
-{
-	return dect_base_side_ring_answer(&s->base, (unsigned)(sl - s->side),
-					  ind, now);
 }
 
 /* A bridge command about a call. Returns 1 when the verb was one of ours. */
@@ -6122,90 +6073,11 @@ static void side_pump(struct stubd *s, struct side_link *sl)
 	}
 }
 
-/*
- * Swap side link sl with the main link (dect_base.h, S3z); our own parts
- * after it: the NWK logs and the main link's audio state.
- */
-static int side_promote(struct stubd *s, struct side_link *sl,
-			const struct dect_link_ind *ind, uint64_t now)
-{
-	if (!dect_base_side_promote(&s->base, (unsigned)(sl - s->side), ind,
-				    now))
-		return 0;
-	dect_link_set_tx_log(&s->base.main_link.link, log_nwk_out, s);
-	dect_link_set_tx_log(&sl->bl->link, log_nwk_out_side, s);
-	s->reg.call_wideband = 0;
-	s->reg.nonspeech_noted = 0;
-	return 1;
-}
-
 /* A side link's call ciphered as the main link's (dect_base.h, S3v). */
 static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 			     uint64_t now)
 {
 	dect_base_side_cipher_tick(&s->base, (unsigned)(sl - s->side), now);
-}
-
-static void side_segment(struct stubd *s, struct side_link *sl,
-			 const struct dect_mail *m, uint64_t now)
-{
-	struct dect_link_ind ind;
-	int a;
-
-	side_call_tick(s, sl, now);	/* busy or not, before a SETUP lands */
-	if (dect_base_link_segment(&s->base, sl->bl, m, now, &ind) < 0) {
-		side_pump(s, sl);
-		return;
-	}
-	side_call_tick(s, sl, now);
-	a = sl->bl->link.mm.adopted;
-	if (a >= 0 && (unsigned)a < s->base.n_hs)
-		s->hs[a].last_seen_ms = now;
-	if (a >= 0 && a != sl->bl->adopted && (unsigned)a < s->base.n_hs) {
-		sl->bl->adopted = a;
-		dect_iwu_set_own(&sl->bl->link.cc.iwu,
-				 (uint8_t)hs_slot(s, (unsigned)a));
-		iwu_lines(s, &sl->bl->link.cc.iwu, (uint8_t)hs_slot(s, (unsigned)a));
-		printf("side: handle %u serves %s (slot %u)\n", sl->bl->handle,
-		       s->hs[a].path, hs_slot(s, (unsigned)a));
-	}
-	/* a location registration here: the waiting messages again */
-	if (sl->bl->link.mm.stats.located != sl->bl->located_seen) {
-		sl->bl->located_seen = sl->bl->link.mm.stats.located;
-		mwi_locate(s, &sl->bl->link);
-		missed_locate(s, &sl->bl->link);
-	}
-	if (sl->bl->link.cc.stats.rejected_identity != sl->bl->rejected_seen) {
-		sl->bl->rejected_seen = sl->bl->link.cc.stats.rejected_identity;
-		printf("side: turned away a call from a handset we are not "
-		       "subscribed to (handle %u, release reason 0x0a)\n",
-		       sl->bl->handle);
-	}
-	/*
-	 * Ringing has started and a locating handset took the main link
-	 * first, so the target's page response lands here (12d, 2026-10-25:
-	 * the ring timed out). Promote this link to the main one and ring on
-	 * it; anything else that answers here is not ours to ring.
-	 */
-	if (dereg_page_response(s, sl, &ind) ||
-	    time_page_response(s, sl, &ind)) {
-		side_pump(s, sl);
-		return;
-	}
-	if (ind.page_response && s->base.ic.st == IC_PAGING) {
-		ic_target_link(s, sl, &ind, now);
-		if (s->base.ic.st == IC_SETUP)
-			return;
-	}
-	if (ind.page_response && sr_target_link(s, sl, &ind, now))
-		return;
-	if (ind.page_response && side_promote(s, sl, &ind, now))
-		return;
-	if (ind.page_response)
-		printf("side: page response on handle %u while the main link "
-		       "is busy -- not ours to ring here, ignored\n",
-		       sl->bl->handle);
-	side_pump(s, sl);
 }
 
 /*
@@ -6227,200 +6099,38 @@ static void start_call_cipher(struct stubd *s, uint64_t now)
 {
 	dect_base_main_cipher_start(&s->base, now);
 }
-static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now)
+/*
+ * dect_base's registered(): the enrolment completed and the chip holds the
+ * subscription.
+ */
+static void base_registered(void *ctx, uint64_t now)
 {
-	struct dect_link_ind ind;
-	uint32_t collisions = s->base.main_link.link.cc.stats.collisions;
-	uint32_t represented = s->base.main_link.link.cc.stats.represented;
-	int switched;
-
-	if (dect_base_main_segment(&s->base, m, now, &ind, &switched) < 0) {
-		if (ind.foreign) {
-			/*
-			 * Another handset's connection. The library refused to
-			 * let it touch this link's Lc/LAPC/NWK state; we only
-			 * count it, and say so the first time so a confounded
-			 * run is visible while it is running.
-			 */
-			if (!s->foreign_seg)
-				printf("reg: ignoring C-plane traffic for "
-				       "handle %u -- this link serves handle "
-				       "%u. Another handset is on air.\n",
-				       ind.seg_handle, s->base.main_link.handle);
-			s->foreign_seg++;
-			s->foreign_seg_handle = ind.seg_handle;
-		}
-		return;
-	}
-	pump_lapc(s);			/* at least the LAPC ack */
-	if (s->base.main_link.link.mm.adopted >= 0 &&
-	    (unsigned)s->base.main_link.link.mm.adopted < s->base.n_hs)
-		s->hs[s->base.main_link.link.mm.adopted].last_seen_ms = now;
+	struct stubd *s = ctx;
 
 	/*
-	 * MM took on one of the other handsets we hold (its LOCATE-REQUEST,
-	 * or a call it placed). Serve it as itself: its store, its call
-	 * identities, and its own entry in the Internal Names List, set before
-	 * the list-access session that follows its {CC-SETUP} asks for it.
+	 * The chip now holds what the start-up restore would write: without
+	 * this the restore in loop_tick() saw the new UAK and sent the whole
+	 * install a second time (register.trace, 2026-10-30).
 	 */
-	if (switched) {
-		hs_switched(s, "");
-		dect_iwu_set_own(&s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
-		iwu_lines(s, &s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
-	}
-
-	if (!s->base.first_contact_ms) {
-		s->base.first_contact_ms = now;
-		printf("reg: first C-plane contact from the handset at t=%llu ms\n",
-		       (unsigned long long)(now - g_start));
-	}
-
+	s->sub_restored = 1;
+	if (s->reg_profile[0])
+		reg_profile_apply(s);
 	/*
-	 * EN 300 175-5 §9.5.2.3, in the log while it happens. Every refusal
-	 * of an FP-originated call in this project's corpus (60 of 60, from
-	 * 93 logs tabulated on 2026-10-24) coincided with the handset's own
-	 * list-access {CC-SETUP} being on the wire, active, or pending; the
-	 * library now resolves the collision, and these two lines are how a
-	 * log shows which half of it ran.
+	 * Close registration once the handset is enrolled. AVM's documented
+	 * sequence opens registration (0x022B 'A') and closes it afterwards
+	 * with 0x022C 01, which clears the a44 "registration open" capability
+	 * [CR COMMAND_SET §6.2/§9.7]. Leaving it open keeps the base
+	 * advertising open enrolment and the handset re-attaching.
 	 */
-	if (s->base.main_link.link.cc.stats.collisions != collisions)
-		printf("ring: {CC-SETUP} COLLISION -- the handset opened a call "
-		       "of its own while ours was pending; releasing its call "
-		       "with \"insufficient resources\" (EN 300 175-5 9.5.2.3)\n");
-	if (s->base.main_link.link.cc.stats.represented != represented)
-		printf("ring: the handset released our call for the collision; "
-		       "RE-PRESENTING the {CC-SETUP} now (9.5.2.3), %u left\n",
-		       s->base.main_link.link.cc.represent_left);
+	reg_window(s, 0, 0, now, "handset enrolled");
+	printf("reg: subscription persisted + registration closed (slot %u)\n",
+	       (unsigned)stubd_sub_slot(s));
+}
 
-	if (s->verbose) {
-		printf("reg: cs in %02x %02x %02x (addr/ctrl/li), lc_rc=%d\n",
-		       ind.seg_head[0], ind.seg_head[1], ind.seg_head[2],
-		       ind.lc_rc);
-		if (ind.lapc_parse_failed)
-			printf("reg: lapc parse failed\n");
-		else if (ind.lc_rc > 0)
-			printf("reg: lapc type=%d ns=%u nr=%u more=%u infolen=%zu\n",
-			       ind.frame.type, ind.frame.ns, ind.frame.nr,
-			       ind.frame.more, ind.frame.info_len);
-		if (ind.nwk_len) {
-			size_t i;
-
-			/* local only: carries IPUI, never commit */
-			printf("reg: nwk in  <-- ");
-			for (i = 0; i < ind.nwk_len; i++)
-				printf("%02x ", ind.nwk[i]);
-			printf("\n");
-		}
-	}
-
-	/*
-	 * A handset offering its clock (TS 102 527-3 §7.4.2.2). Our 'Clock
-	 * master' is the FP (the System Settings List says so), and the box
-	 * keeps time by NTP: logged, not used. An unidentified one is ignored,
-	 * as the clause requires.
-	 */
-	if (ind.pp_time || ind.pp_time_unknown) {
-		const struct dect_time *t = &ind.pp_time_value;
-
-		printf("time: %s handset sent its clock (20%02u-%02u-%02u "
-		       "%02u:%02u:%02u) -- %s\n",
-		       ind.pp_time ? "the" : "an UNIDENTIFIED",
-		       t->year, t->month, t->day, t->hour, t->minute,
-		       t->second, ind.pp_time
-		       ? "not used: the base is the clock master"
-		       : "ignored (7.4.2.2)");
-	}
-
-	/*
-	 * The handset's answer to a page of ours: the point at which an
-	 * FP-originated {CC-SETUP} can be sent (dect_base.h, S3y).
-	 */
-	dect_base_main_page_response(&s->base, &ind, now);
-
-	/*
-	 * The handset dialled. GAP N.4 is mandatory for an FT and we did not
-	 * implement it until 2026-10-23 -- seven runs in the capture corpus
-	 * hold a handset sending "12345" past a base that dropped it.
-	 *
-	 * Printing is all the daemon does with it: routing a dialled number
-	 * is the controller's job, and this build has no line to dial out on.
-	 * The digits stay on the CC entity until someone takes them.
-	 *
-	 * GAP's basic set is 0-9, * and #. Anything else is shown as a hex
-	 * escape rather than written raw to a terminal -- a handset may send
-	 * control codes (pause, register recall, go-to-pulse), and those are
-	 * data, not formatting.
-	 */
-	if (ind.keypad) {
-		size_t n, i;
-		const uint8_t *kp = dect_cc_keypad(&s->base.main_link.link.cc, &n);
-		char show[DECT_CC_KEYPAD_MAX * 4 + 1];
-		size_t o = 0;
-
-		for (i = 0; i < n && o + 5 < sizeof(show); i++) {
-			uint8_t c = kp[i];
-
-			if ((c >= '0' && c <= '9') || c == '*' || c == '#')
-				show[o++] = (char)c;
-			else
-				o += (size_t)snprintf(show + o,
-						      sizeof(show) - o,
-						      "\\x%02x", c);
-		}
-		show[o] = '\0';
-		printf("call: handset dialled: %s (%zu character%s)%s\n",
-		       show, n, n == 1 ? "" : "s",
-		       s->base.main_link.link.cc.keypad_overflow ? " [TRUNCATED]" : "");
-		fflush(stdout);
-	}
-
-	if (s->base.main_link.link.cc.stats.rejected_identity != s->base.main_link.rejected_seen) {
-		s->base.main_link.rejected_seen = s->base.main_link.link.cc.stats.rejected_identity;
-		printf("call: turned away a call from a handset we are not "
-		       "subscribed to (release reason 0x0a, %u on this "
-		       "link)\n", (unsigned)s->base.main_link.rejected_seen);
-		fflush(stdout);
-	}
-
-	/* the identities for calling it (dect_base.h, S3w) */
-	dect_base_main_ids(&s->base, ind.cc_message);
-
-	/*
-	 * Once the handset is authenticated (UAK valid) and we have answered its
-	 * LOCATE-REQUEST, install the subscription in the chip, once per connection.
-	 */
-	if (dect_base_main_registered(&s->base)) {
-		/*
-		 * The chip now holds what the start-up restore would write:
-		 * without this the restore in loop_tick() saw the new UAK and
-		 * sent the whole install a second time (register.trace,
-		 * 2026-10-30).
-		 */
-		s->sub_restored = 1;
-		if (s->reg_profile[0])
-			reg_profile_apply(s);
-		/*
-		 * Close registration once the handset is enrolled. AVM's documented
-		 * sequence opens registration (0x022B 'A') and closes it afterwards
-		 * with 0x022C 01, which clears the a44 "registration open" capability
-		 * [CR COMMAND_SET §6.2/§9.7]. Leaving it open keeps the base
-		 * advertising open enrolment and the handset re-attaching.
-		 */
-		reg_window(s, 0, 0, now, "handset enrolled");
-		printf("reg: subscription persisted + registration closed (slot %u)\n",
-		       (unsigned)stubd_sub_slot(s));
-	}
-
-	/*
-	 * A base is where a handset gets its clock, and we never sent one --
-	 * so every timestamp a handset showed, call lists above all, was
-	 * whatever it had invented. After each location registration: the
-	 * date and time, and the notices (dect_base.h, S3w).
-	 */
-	dect_base_main_located(&s->base);
-
-	/* the enrolment's route and outcome (dect_base.h, S3y) */
-	dect_base_main_enrolment(&s->base);
+/* dect_base's call_up(): the main link's call gets its audio path. */
+static void base_call_up(void *ctx, uint64_t now)
+{
+	struct stubd *s = ctx;
 
 	/*
 	 * Bind the voice path once we have answered the call (CONNECT sent). The
@@ -6507,10 +6217,25 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		start_call_cipher(s, now);
 	}
 
-	/* the call's cipher steps are the library's (dect_base.h, S3v) */
-	dect_base_main_cipher_tick(&s->base, now);
+}
 
-	pump_lapc(s);
+/* dect_base's side_call(): side link k's lane and dialling. */
+static void base_side_call(void *ctx, unsigned k, uint64_t now)
+{
+	struct stubd *s = ctx;
+
+	side_call_tick(s, &s->side[k], now);
+}
+
+/* dect_base's swapped(): side link k and the main link changed places. */
+static void base_swapped(void *ctx, unsigned k)
+{
+	struct stubd *s = ctx;
+
+	dect_link_set_tx_log(&s->base.main_link.link, log_nwk_out, s);
+	dect_link_set_tx_log(&s->side[k].bl->link, log_nwk_out_side, s);
+	s->reg.call_wideband = 0;
+	s->reg.nonspeech_noted = 0;
 }
 
 /* Route a received mail into the registration stack (when -g). */
@@ -6533,16 +6258,9 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 				    m->param_len != 0);
 		break;
 	case DECT_PRIM_SIGNALLING: {
-		struct side_link *sl = m->param_len ? side_find(s, m->param[0])
-						    : NULL;
-
 		s->led_traffic++;
-		if (sl && !(s->base.main_link.active && m->param[0] == s->base.main_link.handle)) {
-			side_segment(s, sl, m, now);
-			break;
-		}
-		if (s->base.main_link.active)
-			reg_segment(s, m, now);
+		/* the segments are the library's (dect_base.h, S6b) */
+		(void)dect_base_segment(&s->base, m, now);
 		break;
 	}
 	case 0x0242:
@@ -8866,6 +8584,7 @@ int main(int argc, char **argv)
 	s.base.cfg.auth_first = s.audio.auth_first;
 	s.base.cfg.no_cipher = s.no_cipher;
 	s.base.cfg.no_chip_key = s.chip_cipher.disabled;
+	s.base.cfg.verbose = s.verbose;
 	s.base.cfg.locauth = s.audio.locauth;
 	s.base.cfg.no_overlap = s.audio.no_overlap;
 	s.base.cfg.dial_wait_ms = s.audio.dial_wait_ms;
