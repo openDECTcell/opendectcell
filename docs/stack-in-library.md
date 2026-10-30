@@ -109,3 +109,31 @@ called by `dect_base_changed()`. dect-stubd's three places that decided
 the current record changed now say so through it, and its `sub_save()`
 is the callback. Who decides stays where it is until S2 moves
 registration. S1 is complete; the six traces unchanged throughout.
+
+## S2, the order (written 2026-10-30, before starting)
+
+S2 is the first stage that moves behaviour. Registration and locate are
+spread over the main link's state (`struct stubd`'s `reg`), the mail
+dispatch (`handle_reg_mail()` for 0x0200, 0x0201, 0x0203), `reg_start()`,
+the identity gate and adoption in the segment path, the chip's slot table
+(`install_subscription()`, `send_subscription()`, the slot audit and the
+UAK read-back), the enrolment routing (`enrol_route()`) and the
+randomness (`gen_rand()`). In this order, each step with the six traces
+unchanged:
+
+1. **Host callbacks** in `struct dect_base_ops`: send a mail, draw random
+   bytes, write a log line (the library does no I/O). dect-stubd's
+   `send_mail()`, `gen_rand()` and `printf` become them.
+2. **The chip's slot table**: the writers of 0x0247, 0x020A and 0x017C
+   and the audit build their mails from `dect_base`'s records, so they
+   move without the links. The build-specific RAM addresses (06.88,
+   08.25) come with them as data the host sets.
+3. **The main link**: `reg` (its `dect_link`, handle, flags) into
+   `dect_base`, and `dect_base_mail()` for connection up, down and the
+   C-plane segments on it; `reg_start()`, the identity gate and adoption
+   move with it.
+4. **Side links** the same way.
+
+Bench after step 3: register a handset and relocate it on the 7412
+(card written before the run).
+
