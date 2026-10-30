@@ -112,6 +112,8 @@ struct dect_base_ops {
 	 * host's clock is known to be right (S4c): 1, else 0.
 	 */
 	int  (*clock)(void *ctx, struct dect_time *dt, long *off_s);
+	/* The date and time now, right or not, for a call list entry (S5b). */
+	void (*wall)(void *ctx, struct dect_time *dt);
 	/*
 	 * A handset renamed record i in the Internal Names List (S4d): the
 	 * host keeps the name (b->name[i]) and tells its clients.
@@ -892,9 +894,9 @@ int dect_base_listed(const struct dect_base *b, unsigned i);
 int dect_base_contact_name(const struct dect_base *b, const char *num,
 			   char *buf, size_t cap);
 /*
- * call-in, remote-ringing, remote-answered, remote-released, from a client
- * that is (from_bridge) or is not the bridge: 0 not one of these verbs, 1
- * handled, with what to answer in r.
+ * call-in, remote-ringing, remote-answered, remote-released, mwi and
+ * calllog (S5b), from a client that is (from_bridge) or is not the
+ * bridge: 0 not one of these verbs, 1 handled, with what to answer in r.
  */
 int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
 		       int from_bridge, uint64_t now,

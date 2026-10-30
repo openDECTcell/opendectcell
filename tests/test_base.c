@@ -818,5 +818,29 @@ int main(void)
 		CHECK(b.dereg.st != DECT_BASE_DEREG_IDLE);
 		CHECK_EQ(b.dereg.target, 1);
 	}
+
+	/* mwi and calllog (S5b) */
+	{
+		struct dect_ctl_msg m;
+		struct dect_base_reply r;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.loaded[0] = 1;
+		CHECK_EQ(dect_ctl_parse("mwi hs=1 line=1 count=3",
+				       strlen("mwi hs=1 line=1 count=3"), &m), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 0, 0, &r), 1);
+		CHECK_EQ(strcmp(r.err, "not-bridge"), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 1);
+		CHECK(r.err == NULL);
+		CHECK_EQ(b.note[0].mwi[0], 3u);
+		CHECK_EQ(b.page_want, 1u);		/* no link: paged */
+		CHECK_EQ(dect_ctl_parse("calllog kind=lost",
+				       strlen("calllog kind=lost"), &m), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 1);
+		CHECK_EQ(strcmp(r.err, "malformed"), 0);
+	}
 	return CHECK_DONE();
 }

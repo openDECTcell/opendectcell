@@ -420,3 +420,11 @@ handset's authentication of the base, the base PIN and the hour's lock
 after ten wrong ones, the cipher state, who is in a call, and a deletion
 from a handset's list as a deregistration. Unit tests (no trace edits a
 list yet); the fourteen traces unchanged.
+
+**S5b.** The bridge's `mwi` and `calllog` are the library's too
+(`dect_base_ctl_call()`): the messages waiting per line, to the handset
+on its link or at the next paging round, and a finished call into the
+call lists with its missed-call notices. The host gives the wall time
+for an entry (`wall()`). Left with the host: `bridge` itself (which
+client carries the calls). `notices.trace` covers both; the fourteen
+traces unchanged.

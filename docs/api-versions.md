@@ -861,3 +861,6 @@ dect_base_time_busy(), _link_flush(), _time_tick() (S4c).
 `pin`, dect_base's `pin_wrong`, `pin_wrong_since`, `pin_locked_until`;
 DECT_BASE_PIN_WRONG_MAX, _PIN_WRONG_WINDOW_MS, _PIN_LOCK_MS;
 dect_base_names_spread(), _slot_in_call(), _lists_tick() (S4d).
+
+**126.** dect_base.h, 2026-10-30: dect_base_ops' `wall`;
+dect_base_ctl_call() also takes mwi and calllog (S5b).

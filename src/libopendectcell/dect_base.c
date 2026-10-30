@@ -2363,6 +2363,108 @@ static void call_in(struct dect_base *b, const struct dect_ctl_msg *m,
 	bridge_send(b, &o);
 }
 
+/*
+ * mwi hs= line= count=: an account's voice messages waiting (TS 102 527-3
+ * §7.4.1.2), to the handset now on its link, else at the next paging round.
+ */
+static void mwi_verb(struct dect_base *b, const struct dect_ctl_msg *m,
+		     uint64_t now, struct dect_base_reply *r)
+{
+	unsigned want, line, count, t;
+	uint8_t bit;
+
+	if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, &want) ||
+	    dect_ctl_get_uint(m, "line", 1, 2, &line) ||
+	    dect_ctl_get_uint(m, "count", 0, 16383, &count)) {
+		reply(r, "malformed", NULL, 0);
+		return;
+	}
+	for (t = 0; t < b->n_hs; t++)
+		if (dect_base_listed(b, t) && dect_base_slot(b, t) == want)
+			break;
+	if (t == b->n_hs) {
+		reply(r, "no-handset", "hs", want);
+		return;
+	}
+	bit = (uint8_t)(1u << (line - 1u));
+	if (!(b->note[t].mwi_known & bit) || b->note[t].mwi[line - 1u] != count) {
+		struct dect_link *l = dect_base_link_known(b, (int)t);
+
+		b->note[t].mwi[line - 1u] = count;
+		b->note[t].mwi_known |= bit;
+		b->note[t].mwi_due |= bit;
+		if (l) {
+			(void)dect_base_mwi_send(b, l, t);
+			dect_base_link_flush(b, l, now);
+		} else {
+			b->page_want |= 1u << t;	/* the paging round */
+		}
+	}
+	reply(r, NULL, "hs", want);
+}
+
+/*
+ * calllog: a finished call for the call lists (the bridge knows a call's
+ * outcome over all the handsets it rang): kind=missed | accepted |
+ * outgoing, number, name, legs=HS:LINE,... the handsets whose line it was
+ * and which of their lines.
+ */
+static void calllog_verb(struct dect_base *b, const struct dect_ctl_msg *m,
+			 struct dect_base_reply *r)
+{
+	const char *kind = dect_ctl_get(m, "kind");
+	const char *num = dect_ctl_get(m, "number");
+	const char *name = dect_ctl_get(m, "name");
+	const char *legs = dect_ctl_get(m, "legs");
+	uint8_t line[DECT_CALLS_TERMINALS];
+	char book_name[2u * DECT_CONTACT_NAME_MAX];
+	struct dect_time when;
+	unsigned list, i;
+
+	list = !kind ? 0u : !strcmp(kind, "missed") ? DECT_CALLS_MISSED :
+	       !strcmp(kind, "outgoing") ? DECT_CALLS_OUTGOING :
+	       !strcmp(kind, "accepted") ? DECT_CALLS_ACCEPTED : 0u;
+	memset(line, 0, sizeof(line));
+	while (legs && *legs) {
+		unsigned hs = 0, ln = 0;
+
+		if (sscanf(legs, "%u:%u", &hs, &ln) == 2 &&
+		    hs >= 1u && hs < DECT_CALLS_TERMINALS &&
+		    ln >= 1u && ln <= 2u)
+			line[hs] = (uint8_t)ln;
+		legs = strchr(legs, ',');
+		legs = legs ? legs + 1 : NULL;
+	}
+	if (!list) {
+		reply(r, "malformed", NULL, 0);
+		return;
+	}
+	/*
+	 * The Contact List's name before the network's, as TS 102 527-3
+	 * 7.4.10.5.1.3 note 1 recommends.
+	 */
+	if (dect_base_contact_name(b, num, book_name, sizeof(book_name)))
+		name = book_name;
+	memset(&when, 0, sizeof(when));
+	if (b->ops && b->ops->wall)
+		b->ops->wall(b->ctx, &when);
+	if (b->call_lists)
+		(void)dect_calls_add(b->call_lists, list, num, name, &when,
+				     line);
+	dect_base_log(b, "calls: %s call %s%s", kind,
+		      list == DECT_CALLS_OUTGOING ? "to " : "from ",
+		      num && *num ? num : "(no number)");
+	if (list == DECT_CALLS_MISSED)
+		for (i = 0; i < b->n_hs; i++) {
+			unsigned tid = dect_base_slot(b, i);
+
+			if (tid < DECT_CALLS_TERMINALS && line[tid])
+				dect_base_missed_due(b, i, (uint8_t)
+					(1u << (line[tid] - 1u)), 1);
+		}
+	reply(r, NULL, NULL, 0);
+}
+
 int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
 		       int from_bridge, uint64_t now,
 		       struct dect_base_reply *r)
@@ -2374,6 +2476,15 @@ int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
 	memset(r, 0, sizeof(*r));
 	if (!strcmp(m->verb, "call-in")) {
 		call_in(b, m, from_bridge, now, r);
+		return 1;
+	}
+	if (!strcmp(m->verb, "mwi") || !strcmp(m->verb, "calllog")) {
+		if (!from_bridge)
+			reply(r, "not-bridge", NULL, 0);
+		else if (m->verb[0] == 'm')
+			mwi_verb(b, m, now, r);
+		else
+			calllog_verb(b, m, r);
 		return 1;
 	}
 	if (strcmp(m->verb, "remote-ringing") &&

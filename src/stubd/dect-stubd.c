@@ -2851,12 +2851,14 @@ static void base_forget(void *ctx, unsigned i, const char *why);
 static void base_mask(void *ctx);
 static int base_clock(void *ctx, struct dect_time *dt, long *off_s);
 static void base_named(void *ctx, unsigned i);
+static void base_wall(void *ctx, struct dect_time *dt);
 
 static const struct dect_base_ops base_ops = {
 	.save = base_save, .send = base_send, .random = base_random,
 	.log = base_log, .install = base_install, .event = base_event,
 	.pump = base_pump, .lanes = base_lanes, .forget = base_forget,
 	.mask = base_mask, .clock = base_clock, .named = base_named,
+	.wall = base_wall,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -5347,11 +5349,6 @@ static void locate_notify(struct stubd *s, struct dect_link *l)
 	dect_base_locate_notify(&s->base, l);
 }
 
-static unsigned mwi_send(struct stubd *s, struct dect_link *l, unsigned i)
-{
-	return dect_base_mwi_send(&s->base, l, i);
-}
-
 static void mwi_locate(struct stubd *s, struct dect_link *l)
 {
 	dect_base_mwi_locate(&s->base, l);
@@ -5360,11 +5357,6 @@ static void mwi_locate(struct stubd *s, struct dect_link *l)
 static void missed_locate(struct stubd *s, struct dect_link *l)
 {
 	dect_base_missed_locate(&s->base, l);
-}
-
-static void missed_due(struct stubd *s, unsigned i, uint8_t lines, int fresh)
-{
-	dect_base_missed_due(&s->base, i, lines, fresh);
 }
 
 static void missed_changed_tick(struct stubd *s)
@@ -5787,20 +5779,6 @@ static void base_mask(void *ctx)
 }
 
 /*
- * The link that carries handset i by its own word: MM adopted it (its
- * LOCATE-REQUEST, a call it placed, or its page response below). Not the
- * presumption that a main link which has adopted no one serves s->base.cur (as
- * ic_tick still makes) -- a deregistration sent on that went to whichever
- * handset connected next
- * (bench, 2026-10-28: the C430A's location registration got the AS690H's
- * TERMINATE-REQUEST).
- */
-static struct dect_link *link_known_hs(struct stubd *s, int i)
-{
-	return dect_base_link_known(&s->base, i);
-}
-
-/*
  * A page response from handset i, which we paged without a call: if it
  * carries that handset's identity, the link adopts it, so link_known_hs()
  * finds it. Returns 1 when it was handset i's.
@@ -5909,10 +5887,11 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 	dect_base_dereg_tick(&s->base, now);
 }
 
-/* Push what a link has queued towards the chip. */
-static void time_pump(struct stubd *s, struct dect_link *l, uint64_t now)
+/* dect_base's wall(): the wall clock, right or not. */
+static void base_wall(void *ctx, struct dect_time *dt)
 {
-	dect_base_link_flush(&s->base, l, now);
+	(void)ctx;
+	clock_any(dt);
 }
 
 /* dect_base's clock(): the wall clock, when it is known to be right. */
@@ -6157,109 +6136,10 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 		ctl_reply(s, m->verb, NULL, NULL, 0);
 		return 1;
 	}
-	if (!strcmp(m->verb, "mwi")) {
-		unsigned want, line, count, t;
-		uint8_t bit;
-
-		if (s->ctl.cur != s->ctl.bridge) {
-			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
-			return 1;
-		}
-		if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, &want) ||
-		    dect_ctl_get_uint(m, "line", 1, 2, &line) ||
-		    dect_ctl_get_uint(m, "count", 0, 16383, &count)) {
-			ctl_reply(s, m->verb, "malformed", NULL, 0);
-			return 1;
-		}
-		for (t = 0; t < s->base.n_hs; t++)
-			if (ctl_listed(s, t) && hs_slot(s, t) == want)
-				break;
-		if (t == s->base.n_hs) {
-			ctl_reply(s, m->verb, "no-handset", "hs", want);
-			return 1;
-		}
-		bit = (uint8_t)(1u << (line - 1u));
-		if (!(s->base.note[t].mwi_known & bit) || s->base.note[t].mwi[line - 1u] != count) {
-			struct dect_link *l = link_known_hs(s, (int)t);
-
-			s->base.note[t].mwi[line - 1u] = count;
-			s->base.note[t].mwi_known |= bit;
-			s->base.note[t].mwi_due |= bit;
-			if (l) {
-				(void)mwi_send(s, l, t);
-				time_pump(s, l, now);
-			} else {
-				s->base.page_want |= 1u << t;	/* time_tick() pages it */
-			}
-		}
-		ctl_reply(s, m->verb, NULL, "hs", want);
-		return 1;
-	}
-	/*
-	 * calllog: a finished call for the call lists (the bridge knows a
-	 * call's outcome over all the handsets it rang): kind=missed |
-	 * accepted | outgoing, number, name, legs=HS:LINE,... the handsets
-	 * whose line it was and which of their lines.
-	 */
-	if (!strcmp(m->verb, "calllog")) {
-		const char *kind = dect_ctl_get(m, "kind");
-		const char *num = dect_ctl_get(m, "number");
-		const char *name = dect_ctl_get(m, "name");
-		const char *legs = dect_ctl_get(m, "legs");
-		uint8_t line[DECT_CALLS_TERMINALS];
-		char book_name[2u * DECT_CONTACT_NAME_MAX];
-		struct dect_time when;
-		unsigned list, i;
-
-		if (s->ctl.cur != s->ctl.bridge) {
-			ctl_reply(s, m->verb, "not-bridge", NULL, 0);
-			return 1;
-		}
-		list = !kind ? 0u : !strcmp(kind, "missed") ? DECT_CALLS_MISSED :
-		       !strcmp(kind, "outgoing") ? DECT_CALLS_OUTGOING :
-		       !strcmp(kind, "accepted") ? DECT_CALLS_ACCEPTED : 0u;
-		memset(line, 0, sizeof(line));
-		while (legs && *legs) {
-			unsigned hs = 0, ln = 0;
-
-			if (sscanf(legs, "%u:%u", &hs, &ln) == 2 &&
-			    hs >= 1u && hs < DECT_CALLS_TERMINALS &&
-			    ln >= 1u && ln <= 2u)
-				line[hs] = (uint8_t)ln;
-			legs = strchr(legs, ',');
-			legs = legs ? legs + 1 : NULL;
-		}
-		if (!list) {
-			ctl_reply(s, m->verb, "malformed", NULL, 0);
-			return 1;
-		}
-		/*
-		 * The Contact List's name before the network's, as
-		 * TS 102 527-3 7.4.10.5.1.3 note 1 recommends.
-		 */
-		if (dect_base_contact_name(&s->base, num, book_name,
-					   sizeof(book_name)))
-			name = book_name;
-		clock_any(&when);
-		(void)dect_calls_add(&stubd_calls, list, num, name, &when, line);
-		printf("calls: %s call %s%s\n", kind,
-		       list == DECT_CALLS_OUTGOING ? "to " : "from ",
-		       num && *num ? num : "(no number)");
-		if (list == DECT_CALLS_MISSED)
-			for (i = 0; i < s->base.n_hs; i++) {
-				unsigned tid = hs_slot(s, i);
-
-				if (tid < DECT_CALLS_TERMINALS && line[tid])
-					missed_due(s, i, (uint8_t)(1u << (line[tid] - 1u)),
-						   1);
-			}
-		ctl_reply(s, m->verb, NULL, NULL, 0);
-		return 1;
-	}
 	{
 		struct dect_base_reply r;
 
-		/* the call verbs are the library's (dect_base.h, S5a) */
+		/* the call verbs are the library's (dect_base.h, S5a, S5b) */
 		if (!dect_base_ctl_call(&s->base, m, s->ctl.cur == s->ctl.bridge,
 					now, &r))
 			return 0;
