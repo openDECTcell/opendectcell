@@ -22,7 +22,9 @@
  *                   for a handset to enrol into
  *   args ...        before start: more daemon arguments
  *   start           the daemon starts: main() with -g and the above
- *   up H            the chip: connection up on handle H (0x0200)
+ *   up H            the chip: connection up on handle H (0x0200); H is
+ *                   now the current handle
+ *   on H            the following actions are on handle H
  *   pp HEX          the handset on the current handle sends this NWK message
  *   down            the chip: the current handle's connection is gone (0x0201)
  *   chip PRIM HEX   any other mail from the chip, PRIM in hex
@@ -430,6 +432,9 @@ int stubd_test_run(struct stubd *s)
 			n = hex_parse(sp, b, sizeof(b));
 			t_chip_mail((uint16_t)prim, b, n);
 			settle_now();
+		} else if (!strncmp(line, "on ", 3)) {
+			cur_handle = (unsigned)atoi(arg);
+			acted = 0;
 		} else if (!strcmp(line, "down")) {
 			uint8_t h = (uint8_t)cur_handle;
 

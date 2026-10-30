@@ -1,0 +1,91 @@
+# DECT 1 calls DECT 2 (an internal call, GAP N.31): DECT 2 is paged and
+# answers on a side link while DECT 1 holds the main link. Identities,
+# keys and numbers are made up.
+sub 1 80 a8 03 11 22 33 44
+sub 2 80 a8 03 55 66 77 88
+args -a twocalls
+start
+ev hello api=N lines=1 hs=2
+ev hs hs=1 state=registered name="DECT 1" wideband=1
+ev hs hs=2 state=registered name="DECT 2" wideband=1
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 02 01 00
+mail 020a 02 c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 ca cb cc cd ce cf 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 03
+
+up 1
+# {CC-SETUP} from DECT 1: <<BASIC-SERVICE>> internal call (class 9),
+# <<MULTI-KEYPAD>> "2", <<SENDING-COMPLETE>>
+pp 03 05 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 e0 90 2c 01 32 a1
+fp 83 02 7e 0c 00 00 81 00 05 81 01 00 81 02 01 83
+fp 05 40 0a 03 01 18 18 0c 08 53 78 9d c2 e7 0c 31 56 0e 08 7b a0 c5 ea 0f 34 59 7e
+tick 200
+# DECT 1 authenticates (UAK b0..bf): RES1 for the RAND_F and RS above;
+# the chip reports its link ciphered.
+pp 85 41 0d 04 24 41 aa 1a
+fp 05 4c 19 02 81 98
+mail 0208 01 2b 29 40 5d fa b6 ff 68 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00
+mail 0300 2c 11 02
+tick 200
+chip 0209 01
+tick 500
+# DECT 2 answers the page: link on handle 2, {LCE-PAGE-RESPONSE}.
+up 2
+pp 00 71 05 07 80 a8 03 55 66 77 88
+fp 03 05 05 07 80 a8 03 55 66 77 88 06 05 00 01 23 45 60 e0 98 e4 40 6c 03 39 81 31 6d 07 01 44 45 43 54 20 31
+fp 05 40 0a 03 01 18 18 0c 08 7b a0 c5 ea 0f 34 59 7e 0e 08 a3 c8 ed 12 37 5c 81 a6
+tick 200
+# DECT 2 authenticates (UAK c0..cf), its link is ciphered, it rings and
+# its user answers.
+pp 85 41 0d 04 14 03 ef e7
+fp 05 4c 19 02 81 98
+mail 0208 02 53 76 26 97 06 f1 87 ad 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00
+tick 200
+chip 0209 02
+tick 200
+pp 83 01
+fp 83 01 7e 0c 00 00 81 00 05 81 01 00 81 02 01 84
+tick 200
+pp 83 07
+mail 0251 02 02 2b
+mail 0230 02 02 04 00 00 00
+fp 03 0f
+fp 83 07 7e 0c 00 00 81 00 05 81 01 00 81 02 01 85
+mail 0251 01 01 2b
+mail 0230 01 01 00 00 00 00
+tick 500
+mail 022d 01 00
+# DECT 1 hangs up: {CC-RELEASE}, normal.
+on 1
+pp 03 4d e2 00
+fp 83 5a
+fp 03 4d
+mail 0233 01 01
+mail 0233 02 01
+mail 0202 01
+tick 500
+# DECT 2 completes the release the base sends it.
+on 2
+pp 83 5a
+tick 500
+down
+on 1
+down
+tick 1000
