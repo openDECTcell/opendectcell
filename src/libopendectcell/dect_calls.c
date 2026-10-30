@@ -3,6 +3,8 @@
  * The base's call lists. See dect_calls.h.
  */
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "dect_calls.h"
@@ -214,4 +216,130 @@ unsigned dect_calls_missed_total(const struct dect_calls *c, unsigned tid,
 	for (i = 0; tid < DECT_CALLS_TERMINALS && i < c->n[0]; i++)
 		n += c->e[0][i].line[tid] == line;
 	return n;
+}
+
+size_t dect_calls_save(const struct dect_calls *c, char *out, size_t cap)
+{
+	size_t at;
+	unsigned l, i, k;
+	int n;
+
+	n = snprintf(out, cap, "#opendectcell-calls 1\n");
+	if (n < 0 || (size_t)n >= cap)
+		return 0;
+	at = (size_t)n;
+	for (l = 0; l < 3u; l++)
+		for (i = 0; i < c->n[l]; i++) {
+			const struct dect_call *e = &c->e[l][i];
+			char lines[2u * DECT_CALLS_TERMINALS + 1u], tz[8];
+
+			for (k = 0; k < DECT_CALLS_TERMINALS; k++)
+				snprintf(lines + 2u * k, 3, "%02x", e->line[k]);
+			if (e->when.tz_valid)
+				snprintf(tz, sizeof(tz), "%d", e->when.tz_quarters);
+			else
+				snprintf(tz, sizeof(tz), "-");
+			n = snprintf(out + at, cap - at,
+				     "%u\t%u\t%u\t%u\t%02u%02u%02u%02u%02u%02u\t%s\t%s\t%s\t%s\n",
+				     l + 1u, e->id, e->unread, e->count,
+				     e->when.year, e->when.month, e->when.day,
+				     e->when.hour, e->when.minute, e->when.second,
+				     tz, lines, e->number, e->name);
+			if (n < 0 || (size_t)n >= cap - at)
+				return 0;
+			at += (size_t)n;
+		}
+	return at;
+}
+
+/* The next tab-separated field of [*p, end) into out; -1 if none. */
+static int field_next(const char **p, const char *end, char *out, size_t cap)
+{
+	const char *t = *p;
+	size_t n;
+
+	if (!t || t > end)
+		return -1;
+	while (t < end && *t != '\t')
+		t++;
+	n = (size_t)(t - *p);
+	if (n >= cap)
+		return -1;
+	memcpy(out, *p, n);
+	out[n] = '\0';
+	*p = t < end ? t + 1 : end + 1;
+	return 0;
+}
+
+int dect_calls_load(struct dect_calls *c, const char *text, size_t len)
+{
+	const char *p = text, *end = text + len, *nl;
+	unsigned max_id = 0;
+
+	if (len < 17u || memcmp(text, "#opendectcell-calls 1\n", 17))
+		return -1;
+	dect_calls_init(c);
+	for (p = text + 17; p < end; p = nl + 1) {
+		char f[8][DECT_CALL_NAME_MAX + 4];
+		struct dect_call e;
+		unsigned v[4], k, dt[6];
+		int ok = 1;
+
+		nl = memchr(p, '\n', (size_t)(end - p));
+		if (!nl)
+			nl = end;
+		for (k = 0; k < 8u && ok; k++)
+			ok = !field_next(&p, nl, f[k], sizeof(f[k]));
+		if (!ok || sscanf(f[0], "%u", &v[0]) != 1 ||
+		    sscanf(f[1], "%u", &v[1]) != 1 ||
+		    sscanf(f[2], "%u", &v[2]) != 1 ||
+		    sscanf(f[3], "%u", &v[3]) != 1 ||
+		    sscanf(f[4], "%2u%2u%2u%2u%2u%2u", &dt[0], &dt[1], &dt[2],
+			   &dt[3], &dt[4], &dt[5]) != 6 ||
+		    v[0] < DECT_CALLS_MISSED || v[0] > DECT_CALLS_ACCEPTED ||
+		    !v[1] || v[1] > 16383u || strlen(f[6]) != 2u * DECT_CALLS_TERMINALS ||
+		    c->n[v[0] - 1u] >= DECT_CALLS_MAX)
+			continue;
+		memset(&e, 0, sizeof(e));
+		e.id = (uint16_t)v[1];
+		e.unread = v[2] != 0u && v[0] == DECT_CALLS_MISSED;
+		e.count = (uint8_t)(v[3] > 255u ? 255u : v[3] ? v[3] : 1u);
+		e.when.year = (uint8_t)dt[0];
+		e.when.month = (uint8_t)dt[1];
+		e.when.day = (uint8_t)dt[2];
+		e.when.hour = (uint8_t)dt[3];
+		e.when.minute = (uint8_t)dt[4];
+		e.when.second = (uint8_t)dt[5];
+		if (strcmp(f[5], "-")) {
+			e.when.tz_quarters = (int16_t)atoi(f[5]);
+			e.when.tz_valid = 1;
+		}
+		for (k = 0; k < DECT_CALLS_TERMINALS; k++) {
+			unsigned b;
+
+			if (sscanf(f[6] + 2u * k, "%2x", &b) != 1)
+				ok = 0;
+			e.line[k] = (uint8_t)b;
+		}
+		if (!ok)
+			continue;
+		digits_of(f[7], e.number, sizeof(e.number));
+		/* the name is the rest of the line (it holds no tab anyway),
+		 * taken into a terminated copy so text_of() stops at its end */
+		{
+			char nm[2u * DECT_CALL_NAME_MAX];
+			size_t nn = p <= nl ? (size_t)(nl - p) : 0u;
+
+			if (nn > sizeof(nm) - 1u)
+				nn = sizeof(nm) - 1u;
+			memcpy(nm, p <= nl ? p : "", nn);
+			nm[nn] = '\0';
+			text_of(nm, e.name, sizeof(e.name));
+		}
+		c->e[v[0] - 1u][c->n[v[0] - 1u]++] = e;
+		if (e.id > max_id)
+			max_id = e.id;
+	}
+	c->next_id = (uint16_t)(max_id >= 16383u ? 1u : max_id + 1u);
+	return 0;
 }

@@ -5846,6 +5846,75 @@ static void contacts_tick(struct stubd *s, uint64_t now)
 }
 
 /*
+ * The call lists over a restart of the daemon, in a file in RAM (a reboot
+ * empties them): read at the start, written once a second when the text
+ * differs from the last one written, and when the daemon ends. Format in
+ * dect_calls.h; numbers and names, so only root reads it.
+ */
+#define CALLS_PATH	DECT_RUN_DIR "/calls"
+#define CALLS_TEXT_MAX	(3u * DECT_CALLS_MAX * 160u + 32u)
+
+static FILE *fopen_private(const char *path);
+
+static char calls_text[CALLS_TEXT_MAX];
+static uint64_t calls_at, calls_hash;
+
+static uint64_t calls_fnv(const char *t, size_t n)
+{
+	uint64_t h = 0xcbf29ce484222325ull;
+
+	while (n--)
+		h = (h ^ (unsigned char)*t++) * 0x100000001b3ull;
+	return h;
+}
+
+static void calls_tick(uint64_t now, int force)
+{
+	size_t n;
+	uint64_t h;
+	FILE *f;
+	int ok;
+
+	if (!force && now - calls_at < 1000u)
+		return;
+	calls_at = now;
+	n = dect_calls_save(&stubd_calls, calls_text, sizeof(calls_text));
+	h = calls_fnv(calls_text, n);
+	if (!n || h == calls_hash)
+		return;
+	f = fopen_private(CALLS_PATH ".tmp");
+	if (!f)
+		return;
+	ok = fwrite(calls_text, 1, n, f) == n;
+	if (fclose(f) == 0 && ok && rename(CALLS_PATH ".tmp", CALLS_PATH) == 0) {
+		calls_hash = h;
+		return;
+	}
+	fprintf(stderr, "calls: %s: %s\n", CALLS_PATH, strerror(errno));
+	(void)unlink(CALLS_PATH ".tmp");
+}
+
+static void calls_load(void)
+{
+	FILE *f = fopen(CALLS_PATH, "r");
+	size_t n;
+
+	dect_calls_init(&stubd_calls);
+	if (!f)
+		return;
+	n = fread(calls_text, 1, sizeof(calls_text), f);
+	fclose(f);
+	if (dect_calls_load(&stubd_calls, calls_text, n)) {
+		fprintf(stderr, "calls: %s is not a calls file\n", CALLS_PATH);
+		return;
+	}
+	printf("calls: %u missed, %u outgoing, %u accepted from %s\n",
+	       stubd_calls.n[0], stubd_calls.n[1], stubd_calls.n[2], CALLS_PATH);
+	n = dect_calls_save(&stubd_calls, calls_text, sizeof(calls_text));
+	calls_hash = calls_fnv(calls_text, n);
+}
+
+/*
  * Journal numbers go on from the last one written before a restart, the
  * contacts file's seq=N and every FILE.changes* line, so a change after
  * the restart is never taken for one the sync has already applied.
@@ -5858,7 +5927,7 @@ static void contacts_init(struct stubd *s)
 	unsigned i;
 	FILE *f;
 
-	dect_calls_init(&stubd_calls);
+	calls_load();
 	/* untouched without -b: the store's pages are never mapped in */
 	if (!s->contacts_path)
 		return;
@@ -11553,6 +11622,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 		connect_tick(s, now);
 		reg_window_tick(s, now);
 		contacts_tick(s, now);
+		calls_tick(now, 0);
 		missed_changed_tick(s);
 		{
 			unsigned k;
@@ -13284,6 +13354,7 @@ int main(int argc, char **argv)
 	led_open(&s);
 	led_write(&s, 0);	/* a park or probe run leaves it dark */
 	ret = run_loop(&s, fpb, run_seconds);
+	calls_tick(mono_ms(), 1);
 	state_write(&s, mono_ms(), 0, 1);	/* says "parked" */
 	led_write(&s, 0);
 	if (s.led_fd >= 0) {

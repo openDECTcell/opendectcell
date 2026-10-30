@@ -232,8 +232,53 @@ static void test_not_offered_without_store(void)
 	CHECK_EQ(out.msg[0][8], DECT_LIA_REJ_LIST_UNSUPPORTED);
 }
 
+static void test_save_and_load(void)
+{
+	static struct dect_calls back;
+	char text[8192], again[8192];
+	size_t n, m;
+	struct dect_time t3 = t1;
+
+	t3.tz_valid = 0;
+	dect_calls_init(&store);
+	(void)dect_calls_add(&store, DECT_CALLS_MISSED, "0301234", "Anna Ärger", &t1, both);
+	(void)dect_calls_add(&store, DECT_CALLS_MISSED, "0301234", "", &t2, both);
+	(void)dect_calls_add(&store, DECT_CALLS_OUTGOING, "0555", "", &t3, only1);
+	(void)dect_calls_add(&store, DECT_CALLS_ACCEPTED, "", "", &t2, only1);
+	n = dect_calls_save(&store, text, sizeof(text));
+	CHECK(n > 17u);
+	CHECK_EQ(dect_calls_save(&store, again, 20), 0u);	/* does not fit */
+	CHECK_EQ(dect_calls_load(&back, "#other\n", 7), -1);
+	CHECK_EQ(dect_calls_load(&back, text, n), 0);
+	CHECK_EQ(dect_calls_count(&back, 1, 1), 1u);
+	CHECK_EQ(dect_calls_at(&back, 1, 2, 1)->count, 2u);
+	CHECK_EQ(dect_calls_at(&back, 1, 2, 1)->unread, 1u);
+	CHECK_EQ(strcmp(dect_calls_at(&back, 1, 2, 1)->name, "Anna Ärger"), 0);
+	CHECK_EQ(dect_calls_at(&back, 1, 2, 1)->when.minute, 20u);
+	CHECK_EQ(dect_calls_at(&back, 1, 2, 1)->when.tz_quarters, 4);
+	CHECK_EQ(dect_calls_at(&back, 2, 1, 1)->when.tz_valid, 0u);
+	CHECK_EQ(dect_calls_count(&back, 2, 2), 0u);		/* only1 kept */
+	CHECK_EQ(dect_calls_at(&back, 3, 1, 1)->number[0], '\0');
+	/* the same text again, and new ids do not collide */
+	m = dect_calls_save(&back, again, sizeof(again));
+	CHECK_EQ(m, n);
+	CHECK_EQ(memcmp(text, again, n), 0);
+	CHECK(dect_calls_add(&back, DECT_CALLS_MISSED, "999", "", &t1, both) >
+	      dect_calls_at(&back, 3, 1, 1)->id);
+	/* a broken line is skipped, the rest is kept */
+	{
+		static const char bad[] = "#opendectcell-calls 1\nx\ty\n"
+			"2\t7\t0\t1\t261030091500\t4\t0001000000000000\t0555\tBob\n";
+
+		CHECK_EQ(dect_calls_load(&back, bad, sizeof(bad) - 1u), 0);
+		CHECK_EQ(dect_calls_count(&back, 2, 1), 1u);
+		CHECK_EQ(strcmp(dect_calls_at(&back, 2, 1, 1)->name, "Bob"), 0);
+	}
+}
+
 int main(void)
 {
+	test_save_and_load();
 	test_store();
 	test_lists_and_fields();
 	test_read_and_mark();

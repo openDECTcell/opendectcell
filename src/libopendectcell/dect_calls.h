@@ -18,6 +18,7 @@
 #ifndef OPENDECTCELL_DECT_CALLS_H
 #define OPENDECTCELL_DECT_CALLS_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "dect_time.h"
@@ -86,5 +87,21 @@ unsigned dect_calls_missed_unread(const struct dect_calls *c, unsigned tid,
 				  unsigned line);
 unsigned dect_calls_missed_total(const struct dect_calls *c, unsigned tid,
 				 unsigned line);
+
+/*
+ * The lists as text, to keep them over a restart of the daemon (the owner
+ * writes them to a file in RAM, /var/run): one line per entry, list order
+ *
+ *   #opendectcell-calls 1
+ *   LIST<TAB>ID<TAB>UNREAD<TAB>COUNT<TAB>YYMMDDhhmmss<TAB>TZ<TAB>LINES<TAB>NUMBER<TAB>NAME
+ *
+ * TZ the quarter-hours from GMT, or '-' when unknown; LINES 16 hex digits,
+ * the line per terminal id 0..7. dect_calls_save() returns the length, 0
+ * if it does not fit; dect_calls_load() replaces the store, 0 or -1 if the
+ * header is not ours (nothing changed then); lines that do not parse are
+ * skipped.
+ */
+size_t dect_calls_save(const struct dect_calls *c, char *out, size_t cap);
+int dect_calls_load(struct dect_calls *c, const char *text, size_t len);
 
 #endif

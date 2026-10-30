@@ -676,3 +676,8 @@ Calls List (03H) are served, read status marks and edits included.
 dect_iwu.c now uses dect_time_put(): link dect_time.c (and dect_nwk.c)
 with it.
 
+
+**87.** dect_calls.h, 2026-10-30: dect_calls_save() and dect_calls_load(),
+the call lists as text (one tab-separated line per entry under a
+`#opendectcell-calls 1` header). dect-stubd keeps them in /var/run/opendectcell/calls,
+so a restart of the service keeps the lists; a reboot empties them.

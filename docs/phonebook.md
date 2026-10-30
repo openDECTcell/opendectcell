@@ -24,8 +24,10 @@ List (03H), TS 102 527-3 7.4.10.5.3-5 (`src/libopendectcell/dect_calls.[ch]`).
   outcome over every handset it rang. When an incoming call ends, it sends
   dect-stubd one `calllog` (missed or accepted); an outgoing call is sent
   when it is placed (`docs/bridge-interface.md`).
-- **Storage:** 40 entries per list, in RAM, newest first. A restart of the
-  service or the box empties them.
+- **Storage:** 40 entries per list, newest first. dect-stubd keeps them in
+  /var/run/opendectcell/calls (RAM, mode 0600), written within a second of a
+  change and when it ends, and reads them at the start. A restart of the
+  service keeps them; a reboot empties them.
 - **Merging:** a call from or to the party of the newest entry merges into
   it (strategy 3). A missed one counts up 'Number of calls' and becomes
   unread again.
@@ -50,9 +52,8 @@ List (03H), TS 102 527-3 7.4.10.5.3-5 (`src/libopendectcell/dect_calls.[ch]`).
   - the A540 read the Missed Calls List (number, time, unread, line
     "Fritzbox") and marked the entry read, and the update (0 unread)
     followed.
-- **Not yet:** the All Calls and All Incoming Calls lists (optional), a
-  search on the call lists (it answers "no match"), and keeping the lists
-  across a restart.
+- **Not yet:** the All Calls and All Incoming Calls lists (optional), and a
+  search on the call lists (it answers "no match").
 
 ## Parts
 
