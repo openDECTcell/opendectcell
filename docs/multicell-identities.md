@@ -461,10 +461,35 @@ them.
 240 per system (Gigaset's N870 manual and datasheet), far past class A's 7.
 Which ARI class it uses was not found.
 
+**What the room answered** (Q-0070, A-0131, both builds; the host facts
+were read on the 7520 host driver and matched against the 06.88 build):
+
+- The chip owns only the air side. It broadcasts the 40-bit tag 1 RFPI,
+  takes its FMID from the RFPI's 12 low bits (class-agnostic), and matches
+  handsets by FMID and assigned TPUI. [CR A-0131]
+- The host owns all the rest: the identity table (6 x 5 bytes, indexed by
+  link; the chip never reads it), TPUI assignment (not derived from the
+  IPUI), and every NWK identity match (access rights, locate, page
+  response). A page (0x0300) carries the assigned TPUI, not the IPUI.
+  [CR A-0131] An IPUI O, and its TPUI, are therefore dect-stubd's (or the
+  controller's) business alone.
+- There is no runtime mail that sets the RFPI or the RPN. A change means
+  re-patching tag 1 and uploading the STUB again; a park keeps the patched
+  RFPI. [CR A-0131]
+- The STUB reports its RFPI back in an indication (RFPI_IND, 5 bytes plus an
+  "RFPI type" field whose values are not known). [CR A-0131]
+- **Open:** whether the STUB reads the ARC bits or treats the RPN as 3 bits
+  (class A). Static analysis could not settle it. [CR A-0131]
+
 **What stands between us and a class B system**, in order:
 
-1. The room: does the chip accept a class B RFPI (8-bit RPN, FMID), and an
-   IPUI O in its subscription table (Q10, Q11)?
+1. ~~The room (Q10, Q11).~~ Answered, A-0131. Left over: the RPN width.
+   Bench B0 (no transmission, no EIC needed): patch tag 1 with a class B
+   RFPI whose RPN is 8, upload, keep the radio parked, and read RFPI_IND.
+   Pass: the 5 bytes come back unchanged and the chip runs as usual.
+   Falsified if the RPN comes back altered or the STUB does not come up.
+   Needs RFPI_IND's primitive first (our logs, or one more room question).
+   On-air confirmation waits for the EIC (step 4).
 2. Bench B4a, possible today with class A: give a handset an assigned IPUI O
    in `{ACCESS-RIGHTS-ACCEPT}` (class A may send any type, GAP table 51) and
    check that the A540, C430A and AS690H accept, store and use it (locate,
@@ -615,7 +640,9 @@ route as the conformant shape of an unsynchronised system.
 
 ### 10.1 For the clean room (chip interface facts)
 
-Q1, Q9, Q10 and Q11 were posted as Q-0070 on 2026-10-30.
+Q1, Q9, Q10 and Q11 were posted as Q-0070 on 2026-10-30 and answered in
+A-0131 the same day (§7.7). Q1: no runtime RFPI mail; Q9: a park keeps the
+RFPI, the reload time is a bench number.
 
 - **Q1 RFPI.** Is the RFPI only the STUB patch TLV tag 1 at upload, or can a
   mail set it (and the RPN) at runtime? Does the chip broadcast tag 1
