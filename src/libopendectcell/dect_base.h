@@ -720,6 +720,35 @@ int dect_base_name_info(struct dect_base *b, struct dect_cc *cc, unsigned hs,
 /* The main link's call rings: the name, or infoie=, once. */
 void dect_base_info_tick(struct dect_base *b, uint64_t now);
 
+/*
+ * Parallel calls on one link, for a Part 3 handset (TS 102 527-3 §7.4.3),
+ * S3s. Call c's new status (§7.4.6.4) to its handset in {CC-INFO}.
+ */
+void dect_base_par_status(struct dect_base *b, struct dect_base_call *c,
+			  uint8_t cs, uint64_t now);
+/* Call c becomes the active one; verb, if any, tells the bridge. */
+void dect_base_par_connect(struct dect_base *b, struct dect_base_call *c,
+			   const char *verb, uint64_t now);
+/* The record link p serves, or -1. */
+int dect_base_party_index(const struct dect_base *b, int p);
+/*
+ * The link a call to record t can wait on: its one call bridged and
+ * connected, to a handset that takes call status (Part 3).
+ * DECT_BASE_PARTY_NONE if there is none.
+ */
+int dect_base_waiting_party(struct dect_base *b, unsigned t);
+/* Call waiting (§7.4.3.5.2) for call-in c on link p. 0, or -1. */
+int dect_base_call_waiting(struct dect_base *b, struct dect_base_call *c,
+			   int p, const struct dect_clip *clip, uint64_t now);
+/*
+ * Link p's control codes (table 17) and keypad: the number of a parallel
+ * call being dialled (complete after the dial pause), else DTMF for the
+ * active call.
+ */
+void dect_base_par_tick(struct dect_base *b, int p, uint64_t now);
+/* Record t is in a call, or being rung for one. */
+int dect_base_hs_in_call(const struct dect_base *b, unsigned t);
+
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));

@@ -6959,340 +6959,38 @@ static struct dect_base_call *bc_active(struct stubd *s, int p)
 	return dect_base_call_active(&s->base, p);
 }
 
-/* Link p's call the handset knows by call id id, or NULL. */
-static struct dect_base_call *bc_by_dect(struct stubd *s, int p, uint8_t id)
-{
-	return dect_base_call_by_dect(&s->base, p, id);
-}
-
-static const char *cs_name(uint8_t cs)
-{
-	switch (cs) {
-	case DECT_CS_CALL_SETUP:	return "waiting";
-	case DECT_CS_CALL_SETUP_ACK:	return "being dialled";
-	case DECT_CS_CALL_PROC:		return "dialled";
-	case DECT_CS_CALL_ALERTING:	return "ringing at the far end";
-	case DECT_CS_CALL_CONNECT:	return "connected";
-	case DECT_CS_CALL_HOLD:		return "on hold";
-	default:			return "released";
-	}
-}
-
-/* Tell the handset call b's new status (§7.4.6.4) in {CC-INFO}. */
+/* Parallel calls on one link are the library's (dect_base.h, S3s). */
 static void par_status(struct stubd *s, struct dect_base_call *b, uint8_t cs,
 		       uint64_t now)
 {
-	struct dect_cc *cc = ic_cc(s, b->party);
-
-	b->cs = cs;
-	if (!b->dect_id)
-		b->dect_id = cc->status_call_id;
-	if (dect_cc_call_status(cc, b->dect_id, cs, DECT_CC_NO_REASON,
-				DECT_CC_NO_SIGNAL) == 0)
-		ic_drain(s, b->party, now);
-	printf("bridge: call %u %s on DECT %u (call id %u)\n", b->id,
-	       cs_name(cs), party_hs_slot(s, b->party), b->dect_id);
+	dect_base_par_status(&s->base, b, cs, now);
 }
 
-/* §7.4.3.4: a request on call id id failed -- its status again, a reason. */
-static void par_nack(struct stubd *s, int p, uint8_t id, uint8_t reason,
-		     uint64_t now)
-{
-	const struct dect_base_call *b = bc_by_dect(s, p, id);
-
-	if (dect_cc_call_status(ic_cc(s, p), id, b ? b->cs : DECT_CS_IDLE,
-				reason, DECT_SIGNAL_NEGATIVE_ACK_TONE) == 0)
-		ic_drain(s, p, now);
-	printf("bridge: DECT %u's request on call id %u refused\n",
-	       party_hs_slot(s, p), id);
-}
-
-/* The active call on link p goes on hold, at the far end too. */
-static void par_hold(struct stubd *s, int p, uint64_t now)
-{
-	struct dect_base_call *a = bc_active(s, p);
-
-	if (!a)
-		return;
-	par_status(s, a, DECT_CS_CALL_HOLD, now);
-	bridge_event(s, a, "hold", NULL, NULL);
-}
-
-/* Call b becomes the active one; verb, if any, tells the bridge. */
 static void par_connect(struct stubd *s, struct dect_base_call *b, const char *verb,
 			uint64_t now)
 {
-	par_status(s, b, DECT_CS_CALL_CONNECT, now);
-	b->dtmf = 1;
-	if (verb)
-		bridge_event(s, b, verb, NULL, NULL);
+	dect_base_par_connect(&s->base, b, verb, now);
 }
 
-/* The handset table index link p serves, or -1. */
-static int party_hs_index(const struct stubd *s, int p)
-{
-	int a;
-
-	if (p == -1) {
-		a = s->base.main_link.link.mm.adopted;
-		return a >= 0 ? a : (int)s->base.cur;
-	}
-	return p >= 0 ? s->side[p].bl->adopted : -1;
-}
-
-/*
- * The link a call to handset t can wait on: its one call bridged and
- * connected, to a handset that takes call status (Part 3). BC_NONE if
- * there is none.
- */
 static int waiting_party(struct stubd *s, unsigned t)
 {
-	int p;
-
-	for (p = -1; p < (int)SIDE_MAX; p++) {
-		const struct dect_cc *cc;
-
-		if (!ic_active(s, p) || party_hs_index(s, p) != (int)t)
-			continue;
-		cc = ic_cc(s, p);
-		if (cc->state == DECT_CC_ST_ACTIVE && cc->call_status &&
-		    bc_active(s, p) && bc_live(s, p) == 1)
-			return p;
-	}
-	return BC_NONE;
+	return dect_base_waiting_party(&s->base, t);
 }
 
-/* Call waiting (§7.4.3.5.2) for call-in b on link p. 0, or -1. */
 static int cw_start(struct stubd *s, struct dect_base_call *b, int p,
 		    const struct dect_clip *clip, uint64_t now)
 {
-	struct dect_callinfo ci;
-	uint8_t id = alloc_call_id(s, NULL);
-
-	if (!id)
-		return -1;
-	dect_callinfo_init(&ci);
-	ci.has_line = 1;
-	ci.line_id = (uint8_t)b->line;
-	ci.has_line_type = 1;
-	ci.line_type = DECT_CALLINFO_NDT_DELAY;
-	ci.has_call_id = 1;
-	ci.call_id = id;
-	if (dect_cc_call_waiting(ic_cc(s, p), &ci, clip))
-		return -1;
-	b->party = p;
-	b->par = 1;
-	b->dect_id = id;
-	b->cs = DECT_CS_CALL_SETUP;
-	b->busy_seen = 1;
-	b->rang = 1;
-	ic_drain(s, p, now);
-	bridge_event(s, b, "ringing", NULL, NULL);
-	return 0;
+	return dect_base_call_waiting(&s->base, b, p, clip, now);
 }
 
-/* A parallel call's number is complete: to the bridge. */
-static void par_dial_out(struct stubd *s, struct dect_base_call *d, uint64_t now)
-{
-	struct dect_ctl_out o;
-
-	d->dialing = 0;
-	if (s->ctl.bridge < 0) {
-		par_status(s, d, DECT_CS_IDLE, now);
-		bc_clear(s, d);
-		return;
-	}
-	dect_ctl_begin(&o, "call-out");
-	dect_ctl_add_uint(&o, "call", d->id);
-	dect_ctl_add_uint(&o, "hs", party_hs_slot(s, d->party));
-	dect_ctl_add_uint(&o, "line", d->line);
-	/* the link's codec: a parallel call cannot change it */
-	dect_ctl_add(&o, "codec", dect_cc_codec(ic_cc(s, d->party)) ==
-		     DECT_CC_CODEC_G722 ? "wb" : "nb");
-	dect_ctl_add(&o, "number", d->num);
-	ctl_send_bridge(s, &o);
-	printf("bridge: call %u out from DECT %u to \"%s\" (a parallel "
-	       "call)\n", d->id, party_hs_slot(s, d->party), d->num);
-	par_status(s, d, DECT_CS_CALL_PROC, now);
-}
-
-/* A control code from the handset on link p (table 17). */
-static void par_control(struct stubd *s, int p, uint8_t code, uint8_t id,
-			uint64_t now)
-{
-	struct dect_base_call *b = bc_by_dect(s, p, id), *a = bc_active(s, p);
-
-	switch (code) {
-	case 0x35u:			/* accept the waiting call ... */
-	case 0x38u:			/* ... releasing the active one */
-		if (!b || !b->par || b->cs != DECT_CS_CALL_SETUP || b->out)
-			break;
-		if (a && code == 0x38u) {
-			bridge_event(s, a, "released", "by", "hs");
-			par_status(s, a, DECT_CS_IDLE, now);
-			bc_clear(s, a);
-		} else {
-			par_hold(s, p, now);
-		}
-		b->answered = 1;
-		par_connect(s, b, "answered", now);
-		return;
-	case 0x36u:			/* reject the waiting call */
-		if (!b || !b->par || b->cs != DECT_CS_CALL_SETUP || b->out)
-			break;
-		bridge_event(s, b, "released", "by", "hs");
-		par_status(s, b, DECT_CS_IDLE, now);
-		bc_clear(s, b);
-		return;
-	case 0x31u:			/* toggle to b */
-	case 0x42u:			/* resume b */
-		if (!b || b->cs != DECT_CS_CALL_HOLD)
-			break;
-		par_hold(s, p, now);
-		par_connect(s, b, "resume", now);
-		return;
-	case 0x41u:			/* hold b, the active call */
-		if (!b || b != a)
-			break;
-		par_hold(s, p, now);
-		return;
-	case 0x33u:			/* release b */
-		if (!b || b->cs == DECT_CS_CALL_SETUP)
-			break;		/* a waiting call is rejected */
-		bridge_event(s, b, "released", "by", "hs");
-		par_status(s, b, DECT_CS_IDLE, now);
-		bc_clear(s, b);
-		return;
-	case 0x15u:			/* a parallel call out, its number next */
-		/* a call id of its own, none while -a callid= pins one */
-		b = bc_live(s, p) < 2u && alloc_call_id(s, NULL) ?
-		    bc_new(s) : NULL;
-		if (!b) {
-			uint8_t nid = alloc_call_id(s, NULL);
-			struct dect_cc *cc = ic_cc(s, p);
-
-			if (nid) {
-				/* §7.4.8.3: busy, then the call id freed */
-				(void)dect_cc_call_status(cc, nid,
-					DECT_CS_CALL_DISCONNECTING,
-					DECT_CSR_SYSTEM_BUSY,
-					DECT_SIGNAL_BUSY_TONE);
-				(void)dect_cc_call_status(cc, nid,
-					DECT_CS_IDLE, DECT_CC_NO_REASON,
-					DECT_CC_NO_SIGNAL);
-				ic_drain(s, p, now);
-			} else {
-				par_nack(s, p, a ? a->dect_id :
-					 cc->status_call_id,
-					 DECT_CSR_SYSTEM_BUSY, now);
-			}
-			dect_cc_clear_keypad(cc);	/* its number */
-			return;
-		}
-		par_hold(s, p, now);
-		b->id = bridge_new_id(s);
-		b->party = p;
-		b->par = 1;
-		b->out = 1;
-		b->busy_seen = 1;
-		b->since = now;
-		b->line = STUBD_LINE_ID;
-		b->dect_id = alloc_call_id(s, NULL);
-		b->dialing = 1;
-		b->dial_ms = now;
-		par_status(s, b, DECT_CS_CALL_SETUP_ACK, now);
-		return;
-	default:			/* internal, conference, transfer */
-		par_nack(s, p, id ? id : a ? a->dect_id :
-			 ic_cc(s, p)->status_call_id,
-			 DECT_CSR_CODE_NOT_SUPPORTED, now);
-		if (code == 0x17u)		/* the internal number */
-			dect_cc_clear_keypad(ic_cc(s, p));
-		return;
-	}
-	par_nack(s, p, id, DECT_CSR_CODE_FAILED, now);
-}
-
-/*
- * Link p's control codes and keypad: the number of a parallel call being
- * dialled (complete after the dial pause), else DTMF for the active call.
- * The keypad of a call still being set up is its number: left alone.
- */
 static void par_tick(struct stubd *s, int p, uint64_t now)
 {
-	struct dect_cc *cc = ic_cc(s, p);
-	struct dect_base_call *d = NULL, *a;
-	const uint8_t *k;
-	uint8_t code, id;
-	size_t len, i, n;
-
-	if (dect_cc_take_control(cc, &code, &id))
-		par_control(s, p, code, id, now);
-	for (i = 0; i < BC_MAX; i++)
-		if (s->base.calls[i].id && s->base.calls[i].party == p && s->base.calls[i].dialing)
-			d = &s->base.calls[i];
-	k = dect_cc_keypad(cc, &len);
-	if (d) {
-		n = strlen(d->num);
-		for (i = 0; i < len && n + 1u < sizeof(d->num); i++)
-			if ((k[i] >= '0' && k[i] <= '9') || k[i] == '*' ||
-			    k[i] == '#')
-				d->num[n++] = (char)k[i];
-		d->num[n] = '\0';
-		if (len) {
-			d->dial_ms = now;
-			dect_cc_clear_keypad(cc);
-		} else if (n && now - d->dial_ms >= s->base.cfg.dial_wait_ms) {
-			par_dial_out(s, d, now);
-		}
-		return;
-	}
-	a = bc_active(s, p);
-	if (!len)
-		return;
-	if (!a) {
-		/*
-		 * A call with a status here is past its own setup: every call
-		 * is held or waiting, and the digits are for none of them.
-		 */
-		for (i = 0; i < BC_MAX; i++)
-			if (s->base.calls[i].id && s->base.calls[i].party == p && s->base.calls[i].cs) {
-				dect_cc_clear_keypad(cc);
-				break;
-			}
-		return;
-	}
-	if (!a->dtmf)
-		return;
-	for (i = 0; i < len; i++) {
-		char dig[2] = { (char)k[i], '\0' };
-
-		if ((k[i] >= '0' && k[i] <= '9') || k[i] == '*' ||
-		    k[i] == '#')
-			bridge_event(s, a, "digit", "d", dig);
-	}
-	dect_cc_clear_keypad(cc);
+	dect_base_par_tick(&s->base, p, now);
 }
 
-/* Handset t is in a call, or being rung for one. */
 static int hs_in_call(const struct stubd *s, unsigned t)
 {
-	unsigned k;
-	int a = s->base.main_link.link.mm.adopted;
-
-	if (s->base.main_link.active && dect_cc_busy(&s->base.main_link.link.cc) &&
-	    (a >= 0 ? (unsigned)a : s->base.cur) == t)
-		return 1;
-	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl->active && s->side[k].bl->adopted == (int)t &&
-		    dect_cc_busy(&s->side[k].bl->link.cc))
-			return 1;
-	for (k = 0; k < BC_MAX; k++)
-		if (s->base.calls[k].id && !s->base.calls[k].out &&
-		    ((s->base.calls[k].party == -1 && s->base.ring.hs == t) ||
-		     (s->base.calls[k].party == BC_PAGING && s->base.calls[k].target == (int)t)))
-			return 1;
-	return 0;
+	return dect_base_hs_in_call(&s->base, t);
 }
 
 /* The main link can ring: no call, no ring of its own. */

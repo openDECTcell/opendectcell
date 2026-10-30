@@ -607,5 +607,24 @@ int main(void)
 		CHECK_EQ(dect_base_name_info(&b, &b.main_link.link.cc, 1, &b.clip),
 			 0);
 	}
+
+	/* parallel calls (S3s) */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.cur = 1;
+		b.main_link.link.mm.adopted = -1;
+		b.side[0].adopted = 0;
+		CHECK_EQ(dect_base_party_index(&b, -1), 1);
+		CHECK_EQ(dect_base_party_index(&b, 0), 0);
+		CHECK_EQ(dect_base_party_index(&b, DECT_BASE_PARTY_NONE), -1);
+		CHECK_EQ(dect_base_hs_in_call(&b, 1), 0);
+		CHECK_EQ(dect_base_waiting_party(&b, 1), DECT_BASE_PARTY_NONE);
+		b.main_link.active = 1;
+		b.main_link.link.cc.state = DECT_CC_ST_ACTIVE;
+		CHECK_EQ(dect_base_hs_in_call(&b, 1), 1);
+		CHECK_EQ(dect_base_waiting_party(&b, 1), DECT_BASE_PARTY_NONE);
+	}
 	return CHECK_DONE();
 }

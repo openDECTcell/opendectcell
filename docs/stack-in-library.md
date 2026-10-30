@@ -348,3 +348,11 @@ ALERTING and the infoie= lab option are `dect_base_name_info()` and
 `dect_base_info_tick()`. New trace `side-ring.trace` (DECT 1 in a call
 out, a call-in for DECT 2 rung on a side link), replayed unchanged on
 the commit before; the other nine unchanged.
+
+**S3s.** Parallel calls on one link (TS 102 527-3 §7.4.3) are the
+library's, moved whole: call waiting, the handset's control codes
+(accept, reject, hold, resume, toggle, release, a second call out),
+the call states in {CC-INFO}, the DTMF of the active call. New trace
+`call-waiting.trace` (a second call to DECT 1 in a call: accept with
+hold, toggle, release), replayed unchanged on the commit before; the
+other ten unchanged.

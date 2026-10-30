@@ -829,3 +829,7 @@ _ic_tick() (S3q).
 _main_free(), _ring_main(), _side_ring_start(), _side_ring_setup(),
 _side_ring_tick(), _side_ring_call_tick(), _name_info(), _info_tick()
 (S3r).
+
+**119.** dect_base.h, 2026-10-30: parallel calls: dect_base_par_status(),
+_par_connect(), _party_index(), _waiting_party(), _call_waiting(),
+_par_tick(), _hs_in_call() (S3s).
