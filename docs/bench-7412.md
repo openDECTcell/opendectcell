@@ -261,6 +261,7 @@ Outcomes written before the run:
 | A10. Phonebook: a new contact, then delete it, on the A540 | it appears in the default book, then is gone | as A9 |
 | A11. Call lists: open the A540's call list menu after A1/A2 | accepted and outgoing calls listed with time and line | an empty list: the lists the A540 asks for (`c3 00 0x` with `-v`); it may want the All Calls List (04), not served |
 | A12. Delete the missed call on the A540 | gone on the A540; `missed: DECT 1, line 1: 0 unread of 0 (update)` | a refusal (`c3 12`) or no update line |
+| A13. Box at `0d9ffb2` or later: with entries in the lists, `/etc/init.d/opendectcell restart`, then open the call lists on the A540 | the same entries; `calls: N missed, N outgoing, N accepted from /var/run/opendectcell/calls` at the start | empty lists and no `calls:` line: the file was not written (`ls -l /var/run/opendectcell/calls`, mode 0600) |
 
 After the run: the radio parked and read back, the hand edit of the init
 script undone (verbose off).
