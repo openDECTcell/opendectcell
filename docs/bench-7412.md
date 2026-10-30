@@ -222,3 +222,19 @@ Outcomes written before the run:
 | 11. Call a voicemail or any IVR, press keys | the menu reacts | nothing: `digit` events in the log? if yes, the profile's DTMF mode |
 | 12. Voicemail notification on in the profile, leave a message | the A540 shows the message indicator (count); after listening it goes | nothing: `mwi:` lines in the log? the provider must send message-summary NOTIFYs |
 | 13. Switch the A540 and the C430A off and on | the A540 shows the date and time; the C430A does not (a Part 1 handset: date and time is Part 3, TS 102 527-3 §7.4.20; the base sends it anyway, log `sent the date and time` for both) | `the clock is not known to be right`: /var/run/opendectcell/time-valid missing or stale |
+
+## Results, 2026-10-30 (A540, C430A; the maintainer at the bench)
+
+The box on the packages of `db173c8` (dect-stubd with verbose logging for the
+day, by a hand edit of the init script), the Nextcloud address book of the
+maintainer's (388 contacts) as the phonebook.
+
+| test | result |
+|---|---|
+| 13, date and time | **pass as expected**: the A540 shows the date and time after a reboot, the C430A does not (Part 1; it has no setting for it either). The box ran on UTC until the maintainer set the time zone |
+| 1, a call to the shared line (partly) | both handsets rang (the C430A on a side link while the A540's link was busy); hung up before answering, so answering on one and the other stopping is still open |
+| Phonebook | **pass on the A540 after a fix.** The A540 kept the List of Supported Lists it had read before the base had a Contact List and re-read only 06 and 08 on reconnect, so it offered no base phonebook. Since `490cf02` a location registration brings a list change indication for list 00; after a power cycle it re-read 00, opened the Contact List (388 entries), and reading worked, a few entries a read, one number per contact requested. Editing on the handset not tried yet |
+| Call lists | **pass on the A540** (`db173c8`): a missed call from a mobile rang both handsets; "1 unread of 1 (a new one)"; the message key opened the Missed Calls List (number, time, line "Fritzbox"), read it with "mark read", the update "0 unread" followed. The message key lists only new messages: pressing it again shows "Keine Einträge" while the entry stays. Accepted and outgoing lists not checked on the air |
+| C430A and the lists | as expected for a Part 1 handset: no base phonebook, its message key shows its own internal list |
+| Save & Apply after a hand-made stop | **defect, fixed** (`cc89757`): with the service stopped by `/etc/init.d/opendectcell stop`, saving in LuCI did nothing, procd had no trigger left; LuCI now starts the service after an apply if procd does not know it |
+

@@ -7,7 +7,7 @@ Basic auth, discovery as RFC 6764 and RFC 6352 describe it, and the methods
 the sync uses (PROPFIND Depth 0/1, REPORT addressbook-multiget, GET, PUT,
 DELETE) with ETags, If-Match and If-None-Match. Not a server for real use.
 
-  tools/carddav-testserver.py --host 192.168.1.146 --port 8843 --dir /tmp/cdav
+  tools/carddav-testserver.py --host 192.0.2.10 --port 8843 --dir /tmp/cdav
 
 --dir gets ca.pem (give the box this as opendectcell.carddav.ca_file) and the
 server's key and certificate, made with openssl on the first run. User

@@ -8,7 +8,7 @@ TLS 1.3 (§4), HELLO / HELLO_ACK (§6.1), heartbeats (§6.3), and it logs
 MAIL_UP, FLOW and STATUS. It is not the controller: no DECT stack, no
 database. Needs Python 3 and the `cryptography` package.
 
-    python3 cell-testpeer.py --host 192.168.1.146 [--port 7300] [--dir D]
+    python3 cell-testpeer.py --host 192.0.2.10 [--port 7300] [--dir D]
         prints an enrollment string, then serves
     python3 cell-testpeer.py ... --mail-test
         also sends harmless MAIL_DOWNs once a cell is active: a chip memory
