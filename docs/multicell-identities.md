@@ -500,7 +500,10 @@ were read on the 7520 host driver and matched against the 06.88 build):
 2. Bench B4a, possible today with class A: give a handset an assigned IPUI O
    in `{ACCESS-RIGHTS-ACCEPT}` (class A may send any type, GAP table 51) and
    check that the A540, C430A and AS690H accept, store and use it (locate,
-   page by the derived TPUI, a call).
+   page by the derived TPUI, a call). *Built 2026-10-30:* `dect-stubd -a
+   ipuio=N` assigns IPUI O number N (`dect_mm_cfg.assign_id`), shown at the
+   desk by `tests/stubd-traces/register-ipuio.trace`; the card is N3 in
+   `docs/bench-later.md`.
 3. The EIC. *Revised 2026-10-30 (maintainer):* this is experimental, and
    the controller's admin may make one up (opendectcell-controller d20a930:
    "Make one up…" on the Cells page, saved only after the risks are

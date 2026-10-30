@@ -1813,6 +1813,45 @@ static void test_ipei_text(void)
 	CHECK(dect_ipei_text(example, sizeof(example), t, 8) == -1);
 }
 
+/*
+ * B4a: with an identity to assign, {ACCESS-RIGHTS-ACCEPT} carries it (an
+ * IPUI O here) and MM holds the handset by it from then on.
+ */
+static void test_register_assigns_an_identity(void)
+{
+	static const uint8_t ipuio[7] = { 0x80, 0xa8, 0x10, 0x00, 0x00, 0x00,
+					  0x01 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1,
+				   .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 0xde, 0xad, 0xbe, 0xef, 0x12, 0x34, 0x56, 0x78 };
+	uint8_t rand_p[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rs[8] = { 0 }, rs16[16] = { 0 };
+	uint8_t buf[256], out[256];
+	struct dect_nwk_hdr h;
+	const uint8_t *ies, *pid;
+	size_t n, ies_len, pid_len;
+
+	memcpy(cfg.assign_id, ipuio, sizeof(ipuio));
+	cfg.assign_id_len = sizeof(ipuio);
+	dect_mm_init(&mm, &cfg);
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	(void)dect_mm_poll(&mm, out, sizeof(out));	/* KEY-ALLOCATE */
+	n = pp_auth_request(buf, sizeof(buf), 0, "1234", rand_f, rs, rand_p, 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	(void)dect_mm_poll(&mm, out, sizeof(out));	/* AUTHENTICATION-REPLY */
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_ACCESS_RIGHTS_ACCEPT);
+	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
+	CHECK(pid != NULL && pid_len == sizeof(ipuio));
+	CHECK(pid && memcmp(pid, ipuio, sizeof(ipuio)) == 0);
+	CHECK_EQ(mm.port_id_len, sizeof(ipuio));
+	CHECK_EQ(memcmp(mm.port_id, ipuio, sizeof(ipuio)), 0);
+	CHECK_EQ(memcmp(mm.uak_id, ipuio, sizeof(ipuio)), 0);
+}
+
 int main(void)
 {
 	test_ipei_text();
@@ -1840,6 +1879,7 @@ int main(void)
 	test_failed_registration_keeps_the_held_identity();
 	test_sub_slot_drives_the_tpui();
 	test_register_ok();
+	test_register_assigns_an_identity();
 	test_register_bad_pin();
 	test_register_8_digit_pin();
 	test_register_without_a_usable_pin();

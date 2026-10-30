@@ -162,6 +162,15 @@ struct dect_mm_cfg {
 	 * a handset to locate on demand (multi-cell M4).
 	 */
 	uint8_t locate_validity;
+	/*
+	 * An identity to assign in {ACCESS-RIGHTS-ACCEPT}, as
+	 * <<PORTABLE-IDENTITY>> contents: an IPUI O for a class B system
+	 * (EN 300 175-6 §6.2.3; GAP table 51 forbids type N there). From
+	 * then on the handset is held by it. Length 0: it keeps the identity
+	 * it asked with.
+	 */
+	uint8_t assign_id[DECT_MM_PORTID_MAX];
+	uint8_t assign_id_len;
 };
 
 struct dect_mm_stats {

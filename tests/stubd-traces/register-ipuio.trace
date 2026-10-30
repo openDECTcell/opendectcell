@@ -1,0 +1,54 @@
+# B4a at the desk: a new handset registers and the base assigns it IPUI O
+# number 1 (EN 300 175-6 §6.2.3) in {ACCESS-RIGHTS-ACCEPT}; the handset
+# locates with the assigned identity. PIN 12345678; identities and
+# randomness are made up.
+store 1
+args -a ipuio=1
+start
+ev hello api=N lines=1 hs=0
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+ctl register-window seconds=120
+ev ok verb=register-window seconds=120
+mail 022b 41
+
+up 1
+# {ACCESS-RIGHTS-REQUEST}: <<PORTABLE-IDENTITY>> (IPUI N)
+pp 05 44 05 07 80 a8 03 11 22 33 44
+fp 05 42 0b 02 01 88 0c 08 73 98 bd e2 07 2c 51 76 0e 08 9b c0 e5 0a 2f 54 79 9e
+tick 200
+# {AUTHENTICATION-REQUEST} answering the KEY-ALLOCATE, as in register.trace
+pp 85 40 0d 04 4e 6c 9e 6b 0c 08 01 02 03 04 05 06 07 08
+fp 05 41 0d 04 df 5b 63 db
+fp 85 45 05 07 80 a8 10 00 00 00 01 06 07 a0 a5 00 01 23 45 60 7c 07 90 03 00 01 02 00 84
+tick 500
+# Its first {LOCATE-REQUEST}, with the assigned IPUI O (PUT 1, number 1)
+pp 05 54 05 07 80 a8 10 00 00 00 01 06 07 a0 a5 00 01 23 45 60
+fp 05 40 0a 03 01 18 08 0c 08 8b b0 d5 fa 1f 44 69 8e 0e 08 b3 d8 fd 22 47 6c 91 b6
+tick 200
+# {AUTHENTICATION-REPLY} with the new UAK, as in register.trace
+pp 85 41 0d 04 0d 1d f1 8a
+fp 85 55 05 05 a0 94 00 11 01 07 01 64 7c 07 90 03 00 01 02 00 84
+mail 0247 02 00 00
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 01 01 00
+mail 020a 01 83 0a e7 73 13 fe 3d 25 ec e0 34 92 7f b7 7b b2 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 01
+mail 022c 01
+fp 64 62 23 08 c0 26 10 30 09 00 00 00
+tick 500
+down
+tick 1000

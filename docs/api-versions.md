@@ -734,3 +734,7 @@ save) (S2.3d).
 **98.** dect_base.h, 2026-10-30: `slot0` (subslot=) and dect_base_slot(),
 dect_base_side_open() and dect_base_link_segment() (S2.4: side links);
 dect_base_main_segment() now uses dect_base_link_segment().
+
+**99.** dect_mm.h, 2026-10-30: struct dect_mm_cfg gains `assign_id` and
+`assign_id_len`, an identity to assign in {ACCESS-RIGHTS-ACCEPT} (an IPUI
+O for bench B4a and class B); empty keeps the old behaviour.

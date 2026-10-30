@@ -1076,11 +1076,20 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 	 */
 	memcpy(mm->uak, uak, DECT_MM_UAK_LEN);
 	mm->subscribed = 1;
-	/* Authenticated: the requested identity is now the one we hold. */
-	memcpy(mm->port_id, mm->pend_id, mm->pend_id_len);
-	mm->port_id_len = mm->pend_id_len;
-	memcpy(mm->uak_id, mm->pend_id, mm->pend_id_len);
-	mm->uak_id_len = mm->pend_id_len;
+	/*
+	 * Authenticated: the requested identity is now the one we hold, or
+	 * the one we assign, which {ACCESS-RIGHTS-ACCEPT} then carries.
+	 */
+	if (mm->cfg.assign_id_len &&
+	    mm->cfg.assign_id_len <= DECT_MM_PORTID_MAX) {
+		memcpy(mm->port_id, mm->cfg.assign_id, mm->cfg.assign_id_len);
+		mm->port_id_len = mm->cfg.assign_id_len;
+	} else {
+		memcpy(mm->port_id, mm->pend_id, mm->pend_id_len);
+		mm->port_id_len = mm->pend_id_len;
+	}
+	memcpy(mm->uak_id, mm->port_id, mm->port_id_len);
+	mm->uak_id_len = mm->port_id_len;
 	mm->authenticated = 1;
 
 	send_auth_reply(mm, res2);

@@ -881,6 +881,14 @@ struct stubd {
 		uint8_t  att_cfg;
 		uint8_t  att_flag;
 		/*
+		 * ipuio=N: a handset registering is assigned IPUI O number N
+		 * in {ACCESS-RIGHTS-ACCEPT} instead of keeping its IPUI N
+		 * (bench B4a, docs/multicell-identities.md). One handset per
+		 * value.
+		 */
+		uint32_t ipuio;
+		int      ipuio_set;
+		/*
 		 * 0x017c 00 <mask>: the handsets locked in, bit n = chip slot
 		 * n+1 holding a live 0x020A record. [CR A-0129], from AVM's
 		 * symboled driver: stock builds it from its active-handset
@@ -5620,6 +5628,19 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	mcfg.locate_validity = (uint8_t)s->audio.locate_validity;
 	s->fetch_retrans_seen = 0;	/* MM's counter restarts with the link */
 	mcfg.registration = reg_policy(s);
+	if (s->audio.ipuio_set) {
+		/* <<PORTABLE-IDENTITY>>: IPUI, 40 bits: PUT 1 (O), the number */
+		const uint32_t n = s->audio.ipuio;
+
+		mcfg.assign_id[0] = 0x80u;
+		mcfg.assign_id[1] = 0x80u | 40u;
+		mcfg.assign_id[2] = 0x10u;
+		mcfg.assign_id[3] = (uint8_t)(n >> 24);
+		mcfg.assign_id[4] = (uint8_t)(n >> 16);
+		mcfg.assign_id[5] = (uint8_t)(n >> 8);
+		mcfg.assign_id[6] = (uint8_t)n;
+		mcfg.assign_id_len = 7;
+	}
 
 	s->reg.call_bound = 0;
 	s->reg.call_wideband = 0;
@@ -11833,6 +11854,8 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->att_cfg = (uint8_t)v;
 		else if (eq && klen == 7 && !memcmp(key, "attflag", 7))
 			a->att_flag = (uint8_t)v;
+		else if (eq && klen == 5 && !memcmp(key, "ipuio", 5))
+			a->ipuio = (uint32_t)v, a->ipuio_set = 1;
 		else if (klen == 7 && !memcmp(key, "regopen", 7))
 			a->reg_open = 1, a->reg_window_s = eq ? (unsigned)v : 0u;
 		else if (klen == 9 && !memcmp(key, "regwindow", 9))
@@ -12235,6 +12258,8 @@ static void usage(void)
 		"                     per Gigaset, 0x02 C4; default 0x00) [CR A-0113]\n"
 		"           attflag=N 0x0247 install flag byte (stock bit0=1,\n"
 		"                     A540 0x03; default 0x00) [CR A-0113]\n"
+		"           ipuio=N   assign a registering handset IPUI O number N\n"
+		"                     (up to 32 bits) instead of its IPUI N (B4a)\n"
 		"           ring=MS calls the handset MS ms after start-up: page\n"
 		"           (0x0300) then an FP-originated CC-SETUP\n"
 		"           ringattach=MS the same, but MS ms after the handset's\n"

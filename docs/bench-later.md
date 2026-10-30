@@ -40,6 +40,20 @@ move into the library); run it before anything else on that build.
 | N2c. Register a handset afresh (the AS690H or the C430A after a deregistration), PIN from LuCI | access rights, key allocation, the first locate, `sub: identity gate armed for the newly registered handset`, one install, `reg: subscription persisted + registration closed`, the store file written | the handset says "PIN wrong" or registers and then searches: the completion (`dect_base_main_registered`, the install callback) |
 | N2d. A call each way on the newly registered handset, then restart the service and call again | both calls ciphered and with audio; after the restart the same | the second call fails: the saved record (`dect_base_changed`) |
 
+N3 is bench B4a (`docs/multicell-identities.md` §10.1 step 2): a handset
+gets an assigned IPUI O instead of keeping its IPUI N. Class A may send
+any type (GAP table 51), so it runs today. One handset at a time (the
+C430A or the AS690H first; the A540 last, it carries card A); each needs
+its own number. Afterwards it stays registered with that identity: to go
+back, deregister it and register again without the option.
+
+| test | pass | fail and what it means |
+|---|---|---|
+| N3a. Deregister the handset, set `ipuio=1` in Network > DECT, Extra options (with `-v` for the log), open registration, register with the PIN | `nwk out` shows the ACCESS-RIGHTS-ACCEPT with `05 07 80 a8 10 00 00 00 01`; the handset says registered; its first LOCATE-REQUEST names `80 a8 10 00 00 00 01`; LOCATE-ACCEPT; `reg: subscription persisted` | the handset rejects the accept or keeps searching: it does not take an assigned IPUI; it locates with its IPEI (`80 a8 0x ...`) and gets LOCATE-REJECT: it stored the identity but does not use it |
+| N3b. Restart the service; the handset relocates | LOCATE-REQUEST with the IPUI O, accepted | "IPUI unknown": the record or the gate lost the assigned identity |
+| N3c. Call it (call-in from SIP), then call out from it | it rings on the page (TPUI from LOCATE-ACCEPT, `00 11 0n`), the call connects ciphered both ways | it does not ring: the page; the call fails at CC-SETUP: the CC identities derived from the record |
+| N3d. The same on the other Gigasets (`ipuio=2`, `ipuio=3`) | as above | a model that refuses: note which, B4b must avoid it |
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |
