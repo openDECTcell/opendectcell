@@ -242,6 +242,26 @@ maintainer's (388 contacts) as the phonebook.
 | Save & Apply after a hand-made stop | **defect, fixed** (`cc89757`): with the service stopped by `/etc/init.d/opendectcell stop`, saving in LuCI did nothing, procd had no trigger left; LuCI now starts the service after an apply if procd does not know it |
 
 
+## Results, 2026-10-30 afternoon (no one at the handsets; A13, A14)
+
+Box at `f3a2f4f` (lantiq packages, `apk add --force-reinstall`). apk kept
+the hand-edited `/etc/init.d/opendectcell` (a modified config file) and put the
+new one beside it as `opendectcell.apk-new`; the first script ran against the
+old init and was stopped before A14, then the new init was moved over (the
+verbose edit is gone with it). Logs: `/root/a13-run-20261030.log`,
+`/root/a14-run-20261030.log` on the box.
+
+| test | result |
+|---|---|
+| A13, load | **pass**: a calls file with one outgoing and one accepted entry, written by hand, then a restart: `calls: 0 missed, 1 outgoing, 1 accepted from /var/run/opendectcell/calls`, the file unchanged. Again after A14's kill -9 and start. The save after a real call and the A540's view stay for card A |
+| A14, hold | **pass**: `kill -9` and `stop` at once: "the park was not confirmed: the DECT chip is held in reset (GPIO 545)", `gpio545` reads 0, `stub.second` gone. The A540 losing the base was not watched |
+| A14, start after a hold | **pass**: GPIO 545 unexported, the firmware uploaded again, control slot found 58 s after the start |
+| A14, normal stop | **pass**: park verified on the chip (`0x010A = 00`, `0x08B0 = 00`), record `verified`, no hold. End state: service stopped, radio parked |
+
+The script's "NOT UP" lines were wrong: it marked the log by `logread | wc
+-l`, and logread is a ring buffer (full at about 1,200 lines here), so the
+marker drifted. The log read by time shows the slot found at 10:33:19.
+
 ## Card A: the features of 2026-10-29/30 (written 2026-10-30, not run yet)
 
 Box at `db173c8` or later, A540 (DECT 1) and C430A (DECT 2) with `voip1` as
