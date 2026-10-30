@@ -1,0 +1,90 @@
+# A call-in while the main link is in another call (a side ring): DECT 1
+# calls out on the main link; the bridge then offers a call to DECT 2,
+# which is paged, answers on a side link and is rung there, with its own
+# call id and audio channel. -C: no ciphering, so no authentication in the
+# way. Identities, keys and numbers are made up.
+sub 1 80 a8 03 11 22 33 44
+sub 2 80 a8 03 55 66 77 88
+args -C -a twocalls
+start
+ev hello api=N lines=1 hs=2
+ev hs hs=1 state=registered name="DECT 1" wideband=1
+ev hs hs=2 state=registered name="DECT 2" wideband=1
+mail 0153 00
+mail 0169 07
+mail 0157 00
+mail 015b 01
+mail 022c 01
+mail 0247 03 00 00
+mail 0247 04 00 00
+mail 0247 05 00 00
+mail 0247 06 00 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail 0247 02 01 00
+mail 020a 02 c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 ca cb cc cd ce cf 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail fff1 07 18 95 00 00 11 00
+mail 017c 00 03
+ctl bridge
+ev ok verb=bridge
+
+up 1
+# {CC-SETUP} from DECT 1, en bloc: "0301234", <<SENDING-COMPLETE>>.
+pp 03 05 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 e0 80 2c 07 30 33 30 31 32 33 34 a1
+ev call-out call=1 hs=1 line=1 codec=nb number=0301234
+fp 83 02 7e 06 01 00 81 02 01 83
+tick 200
+ctl remote-answered call=1
+ev ok verb=remote-answered call=1
+fp 83 07 7e 06 01 00 81 02 01 85
+ev audio call=1 path=build/stubd-test-run/audio.sock
+mail 0251 01 01 2b
+mail 0230 01 01 00 00 00 00
+tick 500
+mail 022d 01 00
+# The bridge offers DECT 2 a call: the main link is busy, so DECT 2 is
+# paged for a side link.
+ctl call-in line=1 hs=2 number=0307654321 name="Side" sip=t2
+ev call-in-ok call=2 sip=t2
+mail 0300 2c 11 02
+tick 500
+# DECT 2 answers the page on handle 2: {LCE-PAGE-RESPONSE}.
+up 2
+pp 00 71 05 07 80 a8 03 55 66 77 88
+fp 03 05 05 07 80 a8 03 55 66 77 88 06 05 00 01 23 45 60 e0 88 e4 41 6c 0c 00 80 30 33 30 37 36 35 34 33 32 31 6d 05 04 53 69 64 65
+tick 200
+# It rings, then its user answers.
+pp 83 01
+ev ringing call=2 hs=2
+tick 200
+pp 83 07
+ev answered call=2 hs=2
+mail 0251 02 02 2b
+mail 0230 02 02 04 00 00 00
+fp 03 0f
+tick 500
+# The far end of DECT 2's call hangs up; DECT 2 completes the release.
+ctl remote-released call=2 reason=normal
+ev ok verb=remote-released call=2
+fp 03 4d
+mail 0233 02 01
+tick 200
+pp 83 5a
+tick 500
+down
+# DECT 1 hangs up.
+on 1
+pp 03 4d e2 00
+ev released call=1 hs=1 by=hs
+fp 83 5a
+mail 0233 01 01
+mail 0202 01
+tick 500
+down
+tick 1000

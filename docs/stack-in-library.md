@@ -337,3 +337,14 @@ keeps the audio bridge between the two parties and its codec warning.
 The page response is still matched to the target by the host
 (`page_adopt()`, with the side links' adoption). Unit tests; the nine
 traces unchanged.
+
+**S3r.** Calls in are the library's up to the bridge verbs: a call's end
+(`dect_base_call_clear()`, which stops the main link's ring), the main
+link's ring for a call (`dect_base_ring_main()`), and the side ring, a
+call-in for a handset while the main link is busy: its page, its SETUP on
+the side link the handset comes up on, its display text and CS call
+connect (`dect_base_side_ring_*()`). The profile's display text on
+ALERTING and the infoie= lab option are `dect_base_name_info()` and
+`dect_base_info_tick()`. New trace `side-ring.trace` (DECT 1 in a call
+out, a call-in for DECT 2 rung on a side link), replayed unchanged on
+the commit before; the other nine unchanged.

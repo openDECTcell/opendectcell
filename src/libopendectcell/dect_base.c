@@ -1493,3 +1493,244 @@ void dect_base_ic_tick(struct dect_base *b, uint64_t now)
 			      "bridging");
 	}
 }
+
+void dect_base_call_clear(struct dect_base *b, struct dect_base_call *c)
+{
+	/*
+	 * With ring_ms=0 the ring runs only while ring.now is set, so a ring
+	 * left in PAGING would hold the main link "busy" for good (code
+	 * review, 2026-10-29).
+	 */
+	if (c->party == -1) {
+		b->ring.now = 0;
+		b->ring.watch = 0;
+		if (b->ring.state != DECT_BASE_RING_IDLE)
+			b->ring.state = DECT_BASE_RING_DONE;
+	}
+	c->id = 0;
+}
+
+int dect_base_main_free(struct dect_base *b)
+{
+	return !dect_base_call_on(b, -1) &&
+	       !(b->main_link.active && dect_cc_busy(&b->main_link.link.cc)) &&
+	       (b->ring.state == DECT_BASE_RING_IDLE ||
+		b->ring.state == DECT_BASE_RING_DONE);
+}
+
+void dect_base_ring_main(struct dect_base *b, struct dect_base_call *c,
+			 unsigned t)
+{
+	c->party = -1;
+	b->ring.hs = t;
+	b->ring.state = DECT_BASE_RING_IDLE;
+	b->ring.now = 1;
+	b->ring.requeues = 0;
+	b->ring.setup_tries = 0;
+	b->ring.pages = 0;
+	b->ring.wait_since = 0;
+}
+
+static void side_ring_page(struct dect_base *b, struct dect_base_call *c)
+{
+	dect_base_page(b, dect_base_page_info(b, c->narrow), c->tpui);
+	c->pages++;
+	dect_base_log(b, "bridge: paged DECT %u for call %u, attempt %u of %u",
+		      dect_base_slot(b, (unsigned)c->target), c->id, c->pages,
+		      DECT_BASE_IC_PAGES);
+}
+
+void dect_base_side_ring_start(struct dect_base *b, struct dect_base_call *c,
+			       unsigned t, uint64_t now)
+{
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.sub_slot = (uint8_t)dect_base_slot(b, t);
+	dect_mm_init(&mm, &cfg);
+	dect_mm_tpui(&mm, c->tpui);
+	c->party = DECT_BASE_PARTY_PAGING;
+	c->target = (int)t;
+	c->pages = 0;
+	c->page_at = now;
+}
+
+static int side_ring_part3(const struct dect_base *b, unsigned t)
+{
+	const struct dect_callinfo *o = &b->cfg.callinfo;
+
+	return !o->has_line && !o->has_call_id && !o->has_call_status &&
+	       !b->cfg.no_call_status && b->cap[t].known && b->cap[t].part3;
+}
+
+void dect_base_side_ring_setup(struct dect_base *b, struct dect_base_call *c,
+			       unsigned k, uint64_t now, const char *how)
+{
+	struct dect_link *l = &b->side[k].link;
+	unsigned t = (unsigned)c->target;
+	const struct dect_hs_profile *hp = &b->prof[t];
+	struct dect_callinfo prev = l->cc.callinfo, ci;
+	struct dect_clip clip = c->clip;
+	const uint8_t *port, *fixed;
+	size_t plen, flen;
+	uint8_t id;
+	int r;
+
+	dect_base_cc_ids(b, t, &port, &plen, &fixed, &flen);
+	if (!plen || dect_cc_busy(&l->cc))
+		return;
+	dect_cc_set_next_ti(&l->cc, 0);
+	id = dect_base_call_id(b, l);
+	if (id)
+		dect_cc_set_call_status(&l->cc, l->cc.call_status, id);
+	dect_callinfo_init(&ci);
+	if (side_ring_part3(b, t)) {
+		ci.has_line = 1;
+		ci.line_id = (uint8_t)c->line;
+		ci.has_line_type = 1;
+		ci.line_type = DECT_CALLINFO_NDT_DELAY;
+		ci.has_call_id = 1;
+		ci.call_id = l->cc.status_call_id;
+		ci.has_call_status = 1;
+		ci.call_status = DECT_CS_CALL_SETUP;
+	}
+	dect_cc_set_callinfo(&l->cc, &ci);
+	if (!b->cfg.signal_set &&
+	    hp->cc_signal_external != DECT_SIGNAL_ALERT_PATTERN1)
+		dect_cc_set_signal(&l->cc, 1, hp->cc_signal_external);
+	if (hp->cc_name_method == 1 || hp->cc_name_method == 3)
+		clip.name[0] = '\0';		/* display text or none */
+	r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
+			     dect_base_ring_svc(b, t, c->narrow), &clip);
+	dect_cc_set_callinfo(&l->cc, &prev);
+	dect_cc_set_signal(&l->cc, b->cfg.signal_on, b->cfg.signal_value);
+	if (r) {
+		dect_base_log(b, "bridge: could not queue the SETUP to DECT %u "
+			      "-- trying again", dect_base_slot(b, t));
+		return;
+	}
+	c->party = (int)k;
+	dect_base_log(b, "bridge: call %u: DECT %u %s on side link %u -- SETUP "
+		      "sent%s", c->id, dect_base_slot(b, t), how,
+		      b->side[k].handle, ci.has_call_status
+		      ? " (full call information, Part 3)" : "");
+	dect_base_drain(b, (int)k, now);
+}
+
+void dect_base_side_ring_tick(struct dect_base *b, struct dect_base_call *c,
+			      uint64_t now)
+{
+	unsigned k;
+
+	/* the main link's call ended meanwhile: ring there, as usual */
+	if (dect_base_main_free(b)) {
+		dect_base_log(b, "bridge: call %u: the main link is free -- "
+			      "ringing DECT %u there", c->id,
+			      dect_base_slot(b, (unsigned)c->target));
+		b->clip = c->clip;
+		dect_base_ring_main(b, c, (unsigned)c->target);
+		return;
+	}
+	for (k = 0; k < DECT_BASE_SIDES && c->party == DECT_BASE_PARTY_PAGING;
+	     k++)
+		if (b->side[k].active && b->side[k].adopted == c->target &&
+		    !dect_cc_busy(&b->side[k].link.cc))
+			dect_base_side_ring_setup(b, c, k, now, "came up "
+				"(adopted, no page response)");
+	if (c->party != DECT_BASE_PARTY_PAGING || now < c->page_at)
+		return;
+	if (c->pages >= DECT_BASE_IC_PAGES) {
+		dect_base_log(b, "bridge: call %u in -- DECT %u did not answer "
+			      "the page", c->id,
+			      dect_base_slot(b, (unsigned)c->target));
+		dect_base_call_event(b, c, "released", "by", "base");
+		dect_base_call_clear(b, c);
+		return;
+	}
+	side_ring_page(b, c);
+	c->page_at = now + DECT_BASE_IC_PAGE_MS;
+}
+
+void dect_base_side_ring_call_tick(struct dect_base *b,
+				   struct dect_base_call *c, uint64_t now)
+{
+	struct dect_cc *cc = party_cc(b, c->party);
+	unsigned t = (unsigned)c->target;
+
+	if (!c->info_sent && cc->state == DECT_CC_ST_RINGING) {
+		c->info_sent = 1;
+		if (dect_base_name_info(b, cc, t, &c->clip) > 0)
+			dect_base_drain(b, c->party, now);
+	}
+	if (!c->cs_sent && cc->state == DECT_CC_ST_ACTIVE &&
+	    side_ring_part3(b, t)) {
+		struct dect_callinfo ci;
+		uint8_t ie[16];
+		size_t n;
+
+		c->cs_sent = 1;
+		dect_callinfo_init(&ci);
+		ci.has_call_id = 1;
+		ci.call_id = cc->status_call_id;
+		ci.has_call_status = 1;
+		ci.call_status = DECT_CS_CALL_CONNECT;
+		n = dect_callinfo_put(ie, sizeof(ie), 0, &ci);
+		if (n && !dect_cc_info(cc, ie, n))
+			dect_base_drain(b, c->party, now);
+	}
+}
+
+int dect_base_name_info(struct dect_base *b, struct dect_cc *cc, unsigned hs,
+			const struct dect_clip *clip)
+{
+	const struct dect_hs_profile *hp = &b->prof[hs];
+	uint8_t ie[96];
+	size_t n;
+
+	if (b->cfg.info_ie_len ||
+	    (hp->cc_name_method != 1 && hp->cc_name_method != 2) ||
+	    (!clip->name[0] && !clip->number[0]))
+		return 0;
+	n = dect_profile_display(hp, clip->name[0] ? clip->name : clip->number,
+				 ie, sizeof(ie));
+	if (!n || dect_cc_info(cc, ie, n)) {
+		dect_base_log(b, "call: profile display text: could not queue "
+			      "it");
+		return -1;
+	}
+	dect_base_log(b, "call: profile display text sent in CC-INFO (%zu "
+		      "octets) on ALERTING", n);
+	return 1;
+}
+
+void dect_base_info_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+	struct dect_cc *cc = &bl->link.cc;
+	int r;
+
+	if (!bl->active || !dect_cc_busy(cc)) {
+		bl->info_sent = 0;
+		return;
+	}
+	if (bl->info_sent || !cc->incoming || cc->state != DECT_CC_ST_RINGING)
+		return;
+	r = b->n_hs ? dect_base_name_info(b, cc, b->ring.hs, &b->clip) : 0;
+	if (r) {
+		bl->info_sent = 1;
+		if (r > 0)
+			dect_base_drain(b, -1, now);
+		return;
+	}
+	if (!b->cfg.info_ie_len)
+		return;
+	bl->info_sent = 1;
+	if (dect_cc_info(cc, b->cfg.info_ie, b->cfg.info_ie_len)) {
+		dect_base_log(b, "call: infoie: could not queue the CC-INFO");
+		return;
+	}
+	dect_base_log(b, "call: infoie: CC-INFO with %zu bytes of IEs sent on "
+		      "ALERTING", b->cfg.info_ie_len);
+	dect_base_drain(b, -1, now);
+}

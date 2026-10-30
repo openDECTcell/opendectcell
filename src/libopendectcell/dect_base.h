@@ -141,6 +141,7 @@ struct dect_base_link {
 	int      connect_staged;	/* alertms/bindfirst: CONNECT due */
 	uint64_t connect_at;		/* ... not before this */
 	int      cs_connect_sent;	/* "CS call connect" after CONNECT (Part 3) */
+	int      info_sent;		/* the name or infoie= went out on ALERTING */
 };
 
 /*
@@ -255,6 +256,9 @@ struct dect_base_cfg {
 	unsigned time_every_min;	/* the periodic date and time */
 	/* callinfo keys: a fixed <<CALL-INFORMATION>> for every SETUP (S3k) */
 	struct dect_callinfo callinfo;
+	/* infoie=: IEs in a {CC-INFO} on ALERTING, a lab option (S3r) */
+	uint8_t  info_ie[64];
+	size_t   info_ie_len;
 };
 
 /* What a handset said of itself in <<TERMINAL-CAPABILITY>> (S3k). */
@@ -679,6 +683,42 @@ void dect_base_ic_setup(struct dect_base *b, int p, uint64_t now,
 void dect_base_ic_end(struct dect_base *b, const char *why);
 /* The internal call's progress, once a tick. */
 void dect_base_ic_tick(struct dect_base *b, uint64_t now);
+
+/*
+ * Calls in (S3r). A call is over for the bridge: on the main link its ring
+ * stops too, whatever state it was in.
+ */
+void dect_base_call_clear(struct dect_base *b, struct dect_base_call *c);
+/* The main link can ring: no call, no ring of its own. */
+int dect_base_main_free(struct dect_base *b);
+/* Ring record t on the main link for call c; dect_base_ring_tick() pages. */
+void dect_base_ring_main(struct dect_base *b, struct dect_base_call *c,
+			 unsigned t);
+/*
+ * A side ring: a call-in for a handset while the main link is in another
+ * call or ringing. The handset is paged as an internal call's target is
+ * and rung on the side link it comes up on, with what the main link's
+ * ring gives it: its profile's alerting pattern and name method, and to a
+ * Part 3 handset the line, call id and CS call setup [CR A-0125].
+ */
+void dect_base_side_ring_start(struct dect_base *b, struct dect_base_call *c,
+			       unsigned t, uint64_t now);
+void dect_base_side_ring_setup(struct dect_base *b, struct dect_base_call *c,
+			       unsigned k, uint64_t now, const char *how);
+void dect_base_side_ring_tick(struct dect_base *b, struct dect_base_call *c,
+			      uint64_t now);
+/* The side ring's call on its link: display text, CS call connect. */
+void dect_base_side_ring_call_tick(struct dect_base *b,
+				   struct dect_base_call *c, uint64_t now);
+/*
+ * The caller's name as the profile's display text in {CC-INFO}, for a
+ * profile whose name method is 1 or 2: 1 queued, 0 not this profile's way
+ * (or infoie= set), -1 it could not be queued.
+ */
+int dect_base_name_info(struct dect_base *b, struct dect_cc *cc, unsigned hs,
+			const struct dect_clip *clip);
+/* The main link's call rings: the name, or infoie=, once. */
+void dect_base_info_tick(struct dect_base *b, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

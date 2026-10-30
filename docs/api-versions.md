@@ -823,3 +823,9 @@ DECT_BASE_IC_NONE, _IC_PAGES, _IC_PAGE_MS, _IC_SVC; dect_base's
 `loaded[]` and `name[][]`; dect_base_ops' `lanes`; dect_base_hs_name(),
 _cc_ids(), _party_active(), _ic_start(), _ic_setup(), _ic_end(),
 _ic_tick() (S3q).
+
+**118.** dect_base.h, 2026-10-30: dect_base_cfg's `info_ie` and
+`info_ie_len`, dect_base_link's `info_sent`; dect_base_call_clear(),
+_main_free(), _ring_main(), _side_ring_start(), _side_ring_setup(),
+_side_ring_tick(), _side_ring_call_tick(), _name_info(), _info_tick()
+(S3r).

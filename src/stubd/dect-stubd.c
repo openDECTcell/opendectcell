@@ -1181,7 +1181,6 @@ struct stubd {
 		int cipher_reject_seen;	/* CIPHER-REJECT already reported */
 		int cipher_timeout_seen;	/* <MM_cipher.1> already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
-		int info_sent;		/* infoie= went out on this call */
 		int cc_was_busy;	/* nlr: the last tick had a call */
 		int nlr_armed;		/* nlr: a call ended, release pending */
 		int nlr_lia;		/* ... and it was list access: DISC first */
@@ -3370,65 +3369,10 @@ static void nlr_tick(struct stubd *s, uint64_t now)
 }
 
 /* -a infoie=: one {CC-INFO} once our call to the handset rings. */
-/*
- * The caller's name, else number, as the handset's profile's display text
- * (name method 1 or 2) in {CC-INFO}, for handset hs ringing on cc. 1 sent,
- * -1 could not queue it, 0 nothing to send.
- */
-static int name_display_info(struct stubd *s, struct dect_cc *cc, unsigned hs,
-			     const struct dect_clip *clip)
-{
-	const struct dect_hs_profile *hp = &s->base.prof[hs];
-	uint8_t ie[96];
-	size_t n;
-
-	if (s->audio.info_ie_len ||
-	    (hp->cc_name_method != 1 && hp->cc_name_method != 2) ||
-	    (!clip->name[0] && !clip->number[0]))
-		return 0;
-	n = dect_profile_display(hp, clip->name[0] ? clip->name : clip->number,
-				 ie, sizeof(ie));
-	if (!n || dect_cc_info(cc, ie, n)) {
-		printf("call: profile display text: could not queue it\n");
-		return -1;
-	}
-	printf("call: profile display text sent in CC-INFO (%zu octets) on "
-	       "ALERTING\n", n);
-	return 1;
-}
-
+/* The main link's call rings: the name, or infoie= (dect_base.h, S3r). */
 static void info_tick(struct stubd *s, uint64_t now)
 {
-	struct dect_cc *cc = &s->base.main_link.link.cc;
-	int r;
-
-	if (!s->base.main_link.active || !dect_cc_busy(cc)) {
-		s->reg.info_sent = 0;
-		return;
-	}
-	if (s->reg.info_sent || !cc->incoming ||
-	    cc->state != DECT_CC_ST_RINGING)
-		return;
-	r = s->base.n_hs ? name_display_info(s, cc, s->base.ring.hs, &s->base.clip) : 0;
-	if (r) {
-		s->reg.info_sent = 1;
-		if (r > 0) {
-			dect_link_drain(&s->base.main_link.link, now);
-			pump_lapc(s);
-		}
-		return;
-	}
-	if (!s->audio.info_ie_len)
-		return;
-	s->reg.info_sent = 1;
-	if (dect_cc_info(cc, s->audio.info_ie, s->audio.info_ie_len)) {
-		printf("call: infoie: could not queue the CC-INFO\n");
-		return;
-	}
-	printf("call: infoie: CC-INFO with %zu bytes of IEs sent on ALERTING\n",
-	       s->audio.info_ie_len);
-	dect_link_drain(&s->base.main_link.link, now);
-	pump_lapc(s);
+	dect_base_info_tick(&s->base, now);
 }
 
 static int bridge_call_out(struct stubd *s, int p, uint64_t now);
@@ -4204,12 +4148,6 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 #define RING_PAGE_CC	DECT_BASE_PAGE_CC		/* CC page */
 #define RING_PAGE_WIDEBAND DECT_BASE_PAGE_WIDEBAND	/* ... wideband SETUP to follow */
 
-/* The page for an external call: wideband to follow, unless narrow. */
-static uint8_t ring_page_info(const struct stubd *s, int narrow)
-{
-	return dect_base_page_info(&s->base, narrow);
-}
-
 /* The ring's timing (dect_base.h, S3n). */
 #define RING_PAGE_RESP_MS	DECT_BASE_PAGE_RESP_MS
 #define RING_SETUP_TRIES	DECT_BASE_SETUP_TRIES
@@ -4249,16 +4187,6 @@ static void log_nwk_out(void *ctx, const uint8_t *msg, size_t len)
 static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
 {
 	return dect_base_basic_svc(&s->base, i, configured);
-}
-
-/*
- * The basic service of our SETUP to handset t for an external call:
- * basic speech (G.726) when the SIP side is narrowband, so the handset
- * codes what the far end hears, else what target_svc() gives it.
- */
-static uint8_t ring_svc(const struct stubd *s, unsigned t, int narrow)
-{
-	return dect_base_ring_svc(&s->base, t, narrow);
 }
 
 /* Stock's next step for a Part 3 handset (dect_base.h, S3p). */
@@ -6189,13 +6117,6 @@ static struct dect_cc *ic_cc(struct stubd *s, int side)
 	return side < 0 ? &s->base.main_link.link.cc : &s->side[side].bl->link.cc;
 }
 
-/* The CC identities of handset i, current or stashed. */
-static void hs_cc_ids(const struct stubd *s, unsigned i, const uint8_t **port,
-		      size_t *plen, const uint8_t **fixed, size_t *flen)
-{
-	dect_base_cc_ids(&s->base, i, port, plen, fixed, flen);
-}
-
 static int ic_active(const struct stubd *s, int p)
 {
 	return dect_base_party_active(&s->base, p);
@@ -6973,12 +6894,6 @@ static struct dect_base_call *bc_by_id(struct stubd *s, unsigned id)
 	return dect_base_call_by_id(&s->base, id);
 }
 
-/* The bridged call on link p (-1 the main link), or NULL. */
-static struct dect_base_call *bc_on(struct stubd *s, int p)
-{
-	return dect_base_call_on(&s->base, p);
-}
-
 /* A free entry, zeroed; it is taken once its id is set. NULL: all taken. */
 static struct dect_base_call *bc_new(struct stubd *s)
 {
@@ -6993,13 +6908,7 @@ static struct dect_base_call *bc_new(struct stubd *s)
  */
 static void bc_clear(struct stubd *s, struct dect_base_call *b)
 {
-	if (b->party == -1) {
-		s->base.ring.now = 0;
-		s->base.ring.watch = 0;
-		if (s->base.ring.state != RING_IDLE)
-			s->base.ring.state = RING_DONE;
-	}
-	b->id = 0;
+	dect_base_call_clear(&s->base, b);
 }
 
 static void bridge_event(struct stubd *s, const struct dect_base_call *b,
@@ -7389,22 +7298,13 @@ static int hs_in_call(const struct stubd *s, unsigned t)
 /* The main link can ring: no call, no ring of its own. */
 static int main_free(struct stubd *s)
 {
-	return !bc_on(s, -1) &&
-	       !(s->base.main_link.active && dect_cc_busy(&s->base.main_link.link.cc)) &&
-	       (s->base.ring.state == RING_IDLE || s->base.ring.state == RING_DONE);
+	return dect_base_main_free(&s->base);
 }
 
 /* Ring handset t on the main link for b; ring_tick() pages it. */
 static void ring_main(struct stubd *s, struct dect_base_call *b, unsigned t)
 {
-	b->party = -1;
-	s->base.ring.hs = t;
-	s->base.ring.state = RING_IDLE;
-	s->base.ring.now = 1;
-	s->base.ring.requeues = 0;
-	s->base.ring.setup_tries = 0;
-	s->base.ring.pages = 0;
-	s->base.ring.wait_since = 0;
+	dect_base_ring_main(&s->base, b, t);
 }
 
 /* -------------------------------------------------------------------------
@@ -7415,91 +7315,17 @@ static void ring_main(struct stubd *s, struct dect_base_call *b, unsigned t)
  * and name method, and to a Part 3 handset the line, call id and CS call
  * setup [CR A-0125]. Each call pages its own handset.
  */
-static void sr_page(struct stubd *s, struct dect_base_call *b)
-{
-	dect_base_page(&s->base, ring_page_info(s, b->narrow), b->tpui);
-	b->pages++;
-	printf("bridge: paged DECT %u for call %u, attempt %u of %u\n",
-	       hs_slot(s, (unsigned)b->target), b->id, b->pages, IC_PAGES);
-}
-
 static void sr_start(struct stubd *s, struct dect_base_call *b, unsigned t,
 		     uint64_t now)
 {
-	struct dect_mm_cfg cfg;
-	struct dect_mm mm;
-
-	memset(&cfg, 0, sizeof(cfg));
-	cfg.sub_slot = (uint8_t)hs_slot(s, t);
-	dect_mm_init(&mm, &cfg);
-	dect_mm_tpui(&mm, b->tpui);
-	b->party = BC_PAGING;
-	b->target = (int)t;
-	b->pages = 0;
-	b->page_at = now;
-}
-
-static int sr_part3(const struct stubd *s, unsigned t)
-{
-	const struct dect_callinfo *o = &s->base.cfg.callinfo;
-
-	return !o->has_line && !o->has_call_id && !o->has_call_status &&
-	       !s->base.cfg.no_call_status && s->base.cap[t].known &&
-	       s->base.cap[t].part3;
+	dect_base_side_ring_start(&s->base, b, t, now);
 }
 
 /* Side ring b's SETUP to its handset, on side link k. */
 static void sr_setup(struct stubd *s, struct dect_base_call *b, unsigned k,
 		     uint64_t now, const char *how)
 {
-	struct dect_link *l = &s->side[k].bl->link;
-	unsigned t = (unsigned)b->target;
-	const struct dect_hs_profile *hp = &s->base.prof[t];
-	struct dect_callinfo prev = l->cc.callinfo, ci;
-	struct dect_clip clip = b->clip;
-	const uint8_t *port, *fixed;
-	size_t plen, flen;
-	uint8_t id;
-	int r;
-
-	hs_cc_ids(s, t, &port, &plen, &fixed, &flen);
-	if (!plen || dect_cc_busy(&l->cc))
-		return;
-	dect_cc_set_next_ti(&l->cc, 0);
-	id = alloc_call_id(s, l);
-	if (id)
-		dect_cc_set_call_status(&l->cc, l->cc.call_status, id);
-	dect_callinfo_init(&ci);
-	if (sr_part3(s, t)) {
-		ci.has_line = 1;
-		ci.line_id = (uint8_t)b->line;
-		ci.has_line_type = 1;
-		ci.line_type = DECT_CALLINFO_NDT_DELAY;
-		ci.has_call_id = 1;
-		ci.call_id = l->cc.status_call_id;
-		ci.has_call_status = 1;
-		ci.call_status = DECT_CS_CALL_SETUP;
-	}
-	dect_cc_set_callinfo(&l->cc, &ci);
-	if (!s->base.cfg.signal_set &&
-	    hp->cc_signal_external != DECT_SIGNAL_ALERT_PATTERN1)
-		dect_cc_set_signal(&l->cc, 1, hp->cc_signal_external);
-	if (hp->cc_name_method == 1 || hp->cc_name_method == 3)
-		clip.name[0] = '\0';		/* display text or none */
-	r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
-			     ring_svc(s, t, b->narrow), &clip);
-	dect_cc_set_callinfo(&l->cc, &prev);
-	dect_cc_set_signal(&l->cc, s->base.cfg.signal_on, s->base.cfg.signal_value);
-	if (r) {
-		printf("bridge: could not queue the SETUP to DECT %u -- "
-		       "trying again\n", hs_slot(s, t));
-		return;
-	}
-	b->party = (int)k;
-	printf("bridge: call %u: DECT %u %s on side link %u -- SETUP sent%s\n",
-	       b->id, hs_slot(s, t), how, s->side[k].bl->handle,
-	       ci.has_call_status ? " (full call information, Part 3)" : "");
-	ic_drain(s, (int)k, now);
+	dect_base_side_ring_setup(&s->base, b, k, now, how);
 }
 
 /* A page response on side link sl: the handset a side ring pages? */
@@ -7523,64 +7349,12 @@ static int sr_target_link(struct stubd *s, struct side_link *sl,
 
 static void sr_tick(struct stubd *s, struct dect_base_call *b, uint64_t now)
 {
-	unsigned k;
-
-	/* the main link's call ended meanwhile: ring there, as usual */
-	if (main_free(s)) {
-		printf("bridge: call %u: the main link is free -- ringing DECT "
-		       "%u there\n", b->id, hs_slot(s, (unsigned)b->target));
-		s->base.clip = b->clip;
-		ring_main(s, b, (unsigned)b->target);
-		return;
-	}
-	for (k = 0; k < SIDE_MAX && b->party == BC_PAGING; k++)
-		if (s->side[k].bl->active && s->side[k].bl->adopted == b->target &&
-		    !dect_cc_busy(&s->side[k].bl->link.cc))
-			sr_setup(s, b, k, now, "came up (adopted, no page "
-				 "response)");
-	if (b->party != BC_PAGING || now < b->page_at)
-		return;
-	if (b->pages >= IC_PAGES) {
-		printf("bridge: call %u in -- DECT %u did not answer the "
-		       "page\n", b->id, hs_slot(s, (unsigned)b->target));
-		bridge_event(s, b, "released", "by", "base");
-		bc_clear(s, b);
-		return;
-	}
-	sr_page(s, b);
-	b->page_at = now + IC_PAGE_MS;
+	dect_base_side_ring_tick(&s->base, b, now);
 }
 
-/*
- * A side ring's call on its link: the profile's display text once it rings
- * (info_tick() for the main link), CS call connect to a Part 3 handset
- * once it answered (cs_connect_tick()).
- */
 static void sr_call_tick(struct stubd *s, struct dect_base_call *b, uint64_t now)
 {
-	struct dect_cc *cc = ic_cc(s, b->party);
-	unsigned t = (unsigned)b->target;
-
-	if (!b->info_sent && cc->state == DECT_CC_ST_RINGING) {
-		b->info_sent = 1;
-		if (name_display_info(s, cc, t, &b->clip) > 0)
-			ic_drain(s, b->party, now);
-	}
-	if (!b->cs_sent && cc->state == DECT_CC_ST_ACTIVE && sr_part3(s, t)) {
-		struct dect_callinfo ci;
-		uint8_t ie[16];
-		size_t n;
-
-		b->cs_sent = 1;
-		dect_callinfo_init(&ci);
-		ci.has_call_id = 1;
-		ci.call_id = cc->status_call_id;
-		ci.has_call_status = 1;
-		ci.call_status = DECT_CS_CALL_CONNECT;
-		n = dect_callinfo_put(ie, sizeof(ie), 0, &ci);
-		if (n && !dect_cc_info(cc, ie, n))
-			ic_drain(s, b->party, now);
-	}
+	dect_base_side_ring_call_tick(&s->base, b, now);
 }
 
 /* A bridge command about a call. Returns 1 when the verb was one of ours. */
@@ -11949,6 +11723,8 @@ int main(int argc, char **argv)
 	s.base.cfg.ring_attach_ms = s.audio.ring_attach_ms;
 	s.base.cfg.time_every_min = s.audio.time_every_min;
 	s.base.cfg.callinfo = s.audio.callinfo;
+	memcpy(s.base.cfg.info_ie, s.audio.info_ie, s.audio.info_ie_len);
+	s.base.cfg.info_ie_len = s.audio.info_ie_len;
 
 	s.stub_build = stub_build_read(s.stub_name, sizeof(s.stub_name));
 	printf("chip: STUB second stage %s\n",

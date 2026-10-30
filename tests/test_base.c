@@ -565,5 +565,47 @@ int main(void)
 		dect_base_ic_end(&b, "test");
 		CHECK_EQ(b.ic.tside, DECT_BASE_IC_NONE);
 	}
+
+	/* calls in: the main link's ring, a side ring (S3r) */
+	{
+		struct dect_base_call *c;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.hs[1].slot = 2;
+		CHECK_EQ(dect_base_main_free(&b), 1);
+		c = dect_base_call_new(&b);
+		c->id = 5;
+		dect_base_ring_main(&b, c, 1);
+		CHECK_EQ(c->party, -1);
+		CHECK_EQ(b.ring.now, 1);
+		CHECK_EQ(dect_base_main_free(&b), 0);	/* its call */
+		b.ring.state = DECT_BASE_RING_PAGING;
+		dect_base_call_clear(&b, c);
+		CHECK_EQ(c->id, 0u);
+		CHECK_EQ(b.ring.now, 0);
+		CHECK_EQ(b.ring.state, DECT_BASE_RING_DONE);
+		CHECK_EQ(dect_base_main_free(&b), 1);
+		c = dect_base_call_new(&b);
+		c->id = 6;
+		dect_base_side_ring_start(&b, c, 1, 100);
+		CHECK_EQ(c->party, DECT_BASE_PARTY_PAGING);
+		CHECK_EQ(c->tpui[2], 0x02);
+		b.main_link.active = 1;			/* the main link busy */
+		b.main_link.link.cc.state = DECT_CC_ST_ACTIVE;
+		n_sent = 0;
+		dect_base_side_ring_tick(&b, c, 100);
+		CHECK_EQ(n_sent, 1u);
+		CHECK_EQ(sent[0].prim, 0x0300);
+		CHECK_EQ(c->pages, 1u);
+		c->pages = DECT_BASE_IC_PAGES;		/* unanswered */
+		dect_base_side_ring_tick(&b, c, 100 + DECT_BASE_IC_PAGE_MS);
+		CHECK_EQ(c->id, 0u);
+		/* infoie= wins over the profile's display text */
+		b.cfg.info_ie_len = 2;
+		CHECK_EQ(dect_base_name_info(&b, &b.main_link.link.cc, 1, &b.clip),
+			 0);
+	}
 	return CHECK_DONE();
 }
