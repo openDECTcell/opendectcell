@@ -100,6 +100,12 @@ struct dect_base_link {
 	enum dect_mm_state reported_state;	/* MM's state last logged */
 	int      enrol_routed;		/* this enrolment's record is chosen */
 	int      enrol_switched;	/* ... and it moved off record 0 */
+	/* Stage S3b, the call on this link: */
+	size_t   dial_len;		/* digits seen so far, overlap sending */
+	uint64_t dial_change_ms;	/* when the last ones arrived */
+	int      ic_tried;		/* checked for an internal call */
+	int      cipher_done;		/* the cipher's outcome handled */
+	int      auth_refused;		/* authfirst: ended, the key unproven */
 };
 
 struct dect_base {

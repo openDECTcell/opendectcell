@@ -394,12 +394,7 @@ struct side_link {
 	int      adopted;	/* handset table index, -1 = nobody yet */
 	uint32_t rejected_seen;
 	int      lane;		/* -a twocalls: its xlane, -1 = none */
-	int      ic_tried;	/* this call was checked for internal */
-	size_t   dial_len;	/* overlap receiving, as on the main link */
-	uint64_t dial_change_ms;
-	int      cipher_done;	/* DCK to the chip, or the failure logged */
 	uint32_t located_seen;	/* mm.stats.located already answered */
-	int      auth_refused;	/* authfirst: call ended, no key to prove */
 	/* the chip's 0xF625 for this link's call, as the main link's */
 	struct dect_diag_status last_status;
 	struct dect_diag_frames frames;
@@ -1262,20 +1257,15 @@ struct stubd {
 		int have_counters;
 		struct dect_diag_status last_status;	/* for the state file */
 		int cipher_started;	/* call-time authentication kicked off */
-		int auth_refused;	/* authfirst: call ended, no proof */
-		int cipher_done;	/* cipher outcome already reported */
 		int cipher_reject_seen;	/* CIPHER-REJECT already reported */
 		int cipher_timeout_seen;	/* <MM_cipher.1> already reported */
 		int call_wideband;	/* this call's bind is the G.722 one */
-		int ic_tried;		/* this call was checked for internal */
 		int info_sent;		/* infoie= went out on this call */
 		int cs_connect_sent;	/* "CS call connect" after CONNECT (Part 3) */
 		int cc_was_busy;	/* nlr: the last tick had a call */
 		int nlr_armed;		/* nlr: a call ended, release pending */
 		int nlr_lia;		/* ... and it was list access: DISC first */
 		uint64_t nlr_disc_at;	/* ... DISC queued at, 0 = not yet */
-		size_t   dial_len;	/* digits seen so far in OVERLAP */
-		uint64_t dial_change_ms;	/* when the last ones arrived */
 		int      connect_staged;	/* alertms/bindfirst: CONNECT due */
 		uint64_t connect_at;		/* ... not before this */
 	} reg;
@@ -3526,7 +3516,7 @@ static int bridge_call_out(struct stubd *s, int p, uint64_t now);
  */
 static void dial_route(struct stubd *s, uint64_t now)
 {
-	s->reg.ic_tried = 1;
+	s->base.main_link.ic_tried = 1;
 	if (ic_start(s, -1, now)) {
 		dect_link_drain(&s->base.main_link.link, now);
 		pump_lapc(s);
@@ -3594,7 +3584,7 @@ static void dial_tick(struct stubd *s, uint64_t now)
 	const uint8_t *k;
 	size_t len;
 
-	if (s->base.main_link.active && !s->reg.ic_tried &&
+	if (s->base.main_link.active && !s->base.main_link.ic_tried &&
 	    number_complete(&s->base.main_link.link.cc) && call_auth_ok(s, &s->base.main_link.link)) {
 		k = dect_cc_keypad(&s->base.main_link.link.cc, &len);
 		printf("call: dialled \"%.*s\", complete -- connecting\n",
@@ -3603,19 +3593,19 @@ static void dial_tick(struct stubd *s, uint64_t now)
 		dial_route(s, now);
 	}
 	if (!s->base.main_link.active || !dect_cc_busy(&s->base.main_link.link.cc))
-		s->reg.ic_tried = 0;
+		s->base.main_link.ic_tried = 0;
 	if (!s->base.main_link.active || s->base.main_link.link.cc.state != DECT_CC_ST_OVERLAP) {
-		s->reg.dial_len = 0;
-		s->reg.dial_change_ms = 0;
+		s->base.main_link.dial_len = 0;
+		s->base.main_link.dial_change_ms = 0;
 		return;
 	}
 	k = dect_cc_keypad(&s->base.main_link.link.cc, &len);
-	if (!s->reg.dial_change_ms || len != s->reg.dial_len) {
-		s->reg.dial_len = len;
-		s->reg.dial_change_ms = now;
+	if (!s->base.main_link.dial_change_ms || len != s->base.main_link.dial_len) {
+		s->base.main_link.dial_len = len;
+		s->base.main_link.dial_change_ms = now;
 		return;
 	}
-	if (!len || now - s->reg.dial_change_ms < s->audio.dial_wait_ms)
+	if (!len || now - s->base.main_link.dial_change_ms < s->audio.dial_wait_ms)
 		return;		/* no digit yet: F<CC.01> covers it */
 	if (!call_auth_ok(s, &s->base.main_link.link))
 		return;		/* the number waits for the proof */
@@ -5627,9 +5617,9 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	s->reg.connect_staged = 0;
 	s->reg.nonspeech_noted = 0;
 	s->reg.cipher_started = 0;
-	s->reg.cipher_done = 0;
+	s->base.main_link.cipher_done = 0;
 	s->reg.cipher_reject_seen = 0;
-	s->reg.auth_refused = 0;
+	s->base.main_link.auth_refused = 0;
 	s->reg.cipher_timeout_seen = 0;
 	/* the other handsets this link may turn out to be: loaded ones, and a
 	 * roamer once fetched */
@@ -6674,13 +6664,13 @@ static int side_start(struct stubd *s, uint8_t handle)
 	dect_cc_set_default_line(&sl->bl.link.cc, STUBD_LINE_ID,
 				 DECT_CALLINFO_NDT_DELAY);
 	sl->lane = -1;
-	sl->ic_tried = 0;
-	sl->dial_len = 0;
-	sl->dial_change_ms = 0;
+	sl->bl.ic_tried = 0;
+	sl->bl.dial_len = 0;
+	sl->bl.dial_change_ms = 0;
 	sl->adopted = -1;
-	sl->cipher_done = 0;
+	sl->bl.cipher_done = 0;
 	sl->located_seen = 0;
-	sl->auth_refused = 0;
+	sl->bl.auth_refused = 0;
 	memset(&sl->last_status, 0, sizeof(sl->last_status));
 	memset(&sl->frames, 0, sizeof(sl->frames));
 	sl->status_ms = 0;
@@ -6810,7 +6800,7 @@ static void side_route(struct stubd *s, struct side_link *sl, uint64_t now)
 {
 	int p = (int)(sl - s->side);
 
-	sl->ic_tried = 1;
+	sl->bl.ic_tried = 1;
 	if (ic_start(s, p, now) || bridge_call_out(s, p, now) ||
 	    dect_cc_accept(&sl->bl.link.cc) == 0) {
 		dect_link_drain(&sl->bl.link, now);
@@ -6832,26 +6822,26 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 	if (!dect_cc_busy(cc))	/* decided for the next SETUP only */
 		dect_cc_set_busy(cc, sl->lane < 0 &&
 				 lanes_available(s, sl) <= 0);
-	if (!sl->ic_tried && number_complete(cc) && call_auth_ok(s, &sl->bl.link))
+	if (!sl->bl.ic_tried && number_complete(cc) && call_auth_ok(s, &sl->bl.link))
 		side_route(s, sl, now);
 	if (!dect_cc_busy(cc))
-		sl->ic_tried = 0;
+		sl->bl.ic_tried = 0;
 	if (cc->state == DECT_CC_ST_OVERLAP) {
 		size_t len;
 
 		(void)dect_cc_keypad(cc, &len);
-		if (!sl->dial_change_ms || len != sl->dial_len) {
-			sl->dial_len = len;
-			sl->dial_change_ms = now;
-		} else if (len && now - sl->dial_change_ms >=
+		if (!sl->bl.dial_change_ms || len != sl->bl.dial_len) {
+			sl->bl.dial_len = len;
+			sl->bl.dial_change_ms = now;
+		} else if (len && now - sl->bl.dial_change_ms >=
 			   s->audio.dial_wait_ms && call_auth_ok(s, &sl->bl.link)) {
 			printf("side: dialled on handle %u -- connecting\n",
 			       sl->bl.handle);
 			side_route(s, sl, now);
 		}
 	} else {
-		sl->dial_len = 0;
-		sl->dial_change_ms = 0;
+		sl->bl.dial_len = 0;
+		sl->bl.dial_change_ms = 0;
 	}
 	if (sl->lane < 0 && cc->state == DECT_CC_ST_ACTIVE &&
 	    (cc->incoming || dect_cc_peer_is_speech(cc)) &&
@@ -9730,12 +9720,12 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	/* a side link's cipher (side_cipher_tick) came along with it */
 	s->reg.cipher_started =
 		s->base.main_link.link.mm.cipher_state != DECT_MM_CIPHER_NONE;
-	s->reg.cipher_done =
+	s->base.main_link.cipher_done =
 		s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_READY ||
 		s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_FAILED;
-	sl->cipher_done = 1;	/* the old main's was the main link's to do */
+	sl->bl.cipher_done = 1;	/* the old main's was the main link's to do */
 	s->reg.cipher_reject_seen = 0;
-	s->reg.auth_refused = 0;
+	s->base.main_link.auth_refused = 0;
 	s->reg.cipher_timeout_seen = 0;
 	s->reg.audio_connected = 0;
 	s->reg.time_sent_for = 0;
@@ -9774,8 +9764,8 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 
 		if (!uak) {
 			/* authfirst: nothing to prove it against (A1) */
-			if (s->audio.auth_first && !sl->auth_refused) {
-				sl->auth_refused = 1;
+			if (s->audio.auth_first && !sl->bl.auth_refused) {
+				sl->bl.auth_refused = 1;
 				(void)dect_cc_release_reason(&l->cc, 0x09u);
 				printf("side: released -- no key to "
 				       "authenticate the handset on handle "
@@ -9786,23 +9776,23 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 			return;
 		}
 		dect_base_cipher_start(&s->base, &sl->bl, uak);
-		sl->cipher_done = 0;
+		sl->bl.cipher_done = 0;
 		printf("side: cipher: authenticating the handset on handle %u\n",
 		       sl->bl.handle);
 		dect_link_drain(l, now);
 		side_pump(s, sl);
 		return;
 	}
-	if (sl->cipher_done)
+	if (sl->bl.cipher_done)
 		return;
 	if (l->mm.cipher_state == DECT_MM_CIPHER_READY) {
-		sl->cipher_done = 1;
+		sl->bl.cipher_done = 1;
 		if (!s->chip_cipher.disabled)
 			(void)dect_base_chip_key(&s->base, &sl->bl);
 		printf("side: cipher: DCK derived, CIPHER-REQUEST sent on "
 		       "handle %u\n", sl->bl.handle);
 	} else if (l->mm.cipher_state == DECT_MM_CIPHER_FAILED) {
-		sl->cipher_done = 1;
+		sl->bl.cipher_done = 1;
 		printf("side: cipher: authentication FAILED on handle %u (%s)\n",
 		       sl->bl.handle, l->mm.stats.auth_timeouts ? "no reply in 10 s"
 		       : l->mm.stats.auth_mismatch ? "WRONG RES"
@@ -10442,14 +10432,14 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * nothing to check it against, so the call ends.
 	 */
 	if (s->audio.auth_first && !s->no_cipher && !s->reg.cipher_started &&
-	    !s->reg.auth_refused && s->base.main_link.active &&
+	    !s->base.main_link.auth_refused && s->base.main_link.active &&
 	    dect_cc_busy(&s->base.main_link.link.cc)) {
 		if (s->base.rec.uak_valid) {
 			printf("call: authenticating the handset before the "
 			       "call goes anywhere\n");
 			start_call_cipher(s, now);
 		} else {
-			s->reg.auth_refused = 1;
+			s->base.main_link.auth_refused = 1;
 			(void)dect_cc_release_reason(&s->base.main_link.link.cc,
 						     0x09u /* auth failed */);
 			printf("call: released -- no key to authenticate this "
@@ -10477,8 +10467,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	}
 
 	/* Never log key material: state only. */
-	if (s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_READY && !s->reg.cipher_done) {
-		s->reg.cipher_done = 1;
+	if (s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_READY && !s->base.main_link.cipher_done) {
+		s->base.main_link.cipher_done = 1;
 		/*
 		 * Key material first, then the over-air request: A-0027 Q5 makes
 		 * loading the chip and negotiating the cipher distinct steps in
@@ -10489,8 +10479,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			send_chip_cipher(s);
 		printf("call: cipher: DCK derived, CIPHER-REQUEST sent\n");
 	} else if (s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_FAILED &&
-		   !s->reg.cipher_done) {
-		s->reg.cipher_done = 1;
+		   !s->base.main_link.cipher_done) {
+		s->base.main_link.cipher_done = 1;
 		printf("call: cipher: authentication FAILED (%s)\n",
 		       s->base.main_link.link.mm.stats.auth_timeouts ? "no reply in 10 s"
 		       : s->base.main_link.link.mm.stats.auth_mismatch ? "WRONG RES"

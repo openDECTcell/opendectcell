@@ -747,3 +747,7 @@ status' is not editable.
 
 **101.** dect_base.h, 2026-10-30: dect_base_uak(), dect_base_cipher_start()
 and dect_base_chip_key() (0x0208, the call key): a call's ciphering (S3a).
+
+**102.** dect_base.h, 2026-10-30: struct dect_base_link gains the call
+state both kinds of link keep: `dial_len`, `dial_change_ms`, `ic_tried`,
+`cipher_done`, `auth_refused` (S3b).

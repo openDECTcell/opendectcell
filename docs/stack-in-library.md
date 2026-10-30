@@ -214,7 +214,11 @@ dect-stubd's mail log masks 0x0208's key octets as well (it never logged
 the mail before; through the library it would have under `-v -p`).
 Traces unchanged.
 
-Next in S3: the per-link call state both kinds of link keep (dialling,
-cipher progress, the connect staging) into `dect_base_link`; then the
-bridge's call table (`struct bcall`) and the ring sequence.
+**S3b.** The call state both kinds of link keep (dialling, the internal
+call check, the cipher's outcome) is `dect_base_link`'s. Data only; the
+main link and side links still reset it at their own points. Traces
+unchanged.
+
+Next in S3: the bridge's call table (`struct bcall`), then the ring
+sequence, the main link's connect staging, and the internal call.
 
