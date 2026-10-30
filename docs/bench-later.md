@@ -126,6 +126,20 @@ Left for a box: the two fixes above (N6 again: `stub_resyncs` listed,
 `reconnects` 2 after two cuts). The 7520 runs wait for the maintainer's
 word on that box.
 
+**U5, S2.2b on the 7412** (written 2026-10-30, before the run): the
+read-back and the audit's answers are judged by the library since
+`0cad99e`, which no trace covers (the traces carry the reads, not the
+answers). The `0cad99e` dect-stubd over the packaged one (kept as
+`/root/dect-stubd.a30793a`), a service start, the control slot, ten
+seconds, the stop, the packaged binary back. Pass: the same three lines
+as U1, from the chip's real answers, about a second after the slots are
+written: `UAK read-back slot 1 at 0x0067F: MATCHES (16 bytes, flag 00)`,
+`chip slot audit: 1=OURS 2=ours 3=- 4=- 5=- 6=-`, `slot table is as we
+intend it`; no `***` line; `parked` says `verified` at the end. Fail: no
+read-back or audit line (the delay timer never fired: the tick), a
+MISMATCH or a foreign slot that U1 did not show (the answer parsed
+wrong), or a different address (the table not handed over).
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
