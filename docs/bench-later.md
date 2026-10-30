@@ -195,6 +195,17 @@ the same as before still none found (the offset did not move: the cause
 is elsewhere, the chip not answering). Unattended starts on the 7412
 cover it, whenever one fails.
 
+**U6b, the fixed packages on the 7412** (written 2026-10-30, before the
+run): packages from `e1a4cbf` (openDECTcell, opendectcell-baresip, opendectcell-carddav,
+luci-app-opendectcell), installed as in U6, a start, the control slot, the
+read-back and audit lines, the stop. Pass: no `settings.js.o` in the
+views and `settings.js` minified (no comment lines left in it); the
+control slot found (in the first start, or after `measuring the lanes
+again`, which then is U7's result); `MATCHES`, `slot table is as we
+intend it`, no `***` line; `parked` says `verified` at the end. Fail: a
+`.o` file still (the package build did not take the fix), or anything
+U6's second start did not show.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
