@@ -164,6 +164,37 @@ installed (`/www/luci-static/resources/view/opendectcell/settings.js`,
 U5 did not show; a `.apk-new` for the init script means the packaged one
 was edited on the box.
 
+**U6 result, 2026-10-30 14:03-14:11 UTC: pass on the second start, two
+findings.** apk kept `/etc/config/opendectcell` only (`.apk-new`), the init
+script was replaced. **The first start failed its control-slot search:**
+it measured lane bit offset 9 (1533 idle lanes, 1022 at 1), tried 9 and
+1 alternately for ten passes and exited with `control slot not found`
+after 68 s; procd started it again, which measured offset 3 and found
+the slot 17 s later (`tx 25, rx 6`). The SSC transport is unchanged
+since `a30793a`, and the seven starts before it that day all found the
+slot: an old weak spot met once, not a regression. The script's own
+checks followed the first pid, so they read "control slot: 0" and "pid
+14779 (was 14594)". From the second start, all as predicted: slots 1
+and 2 restored, the others cleared, mask `00 03`, `UAK read-back slot 1
+at 0x0067F: MATCHES`, audit `1=OURS 2=ours`, `slot table is as we
+intend it`, no `***` line in six minutes, `state.json` with `"api":137`,
+the stop's park read back (`parked`: `verified`). **The LuCI package
+shipped `settings.js.o`:** jsmin failed on the view (a regex after
+`return`) and luci.mk kept its partial output beside the original;
+fixed in `8530657`, with a check in `make check`. Log:
+`/root/t13-u6-20261030-140323.log` (the first pid's lines).
+
+**U7, the slot search measures again** (written 2026-10-30, before any
+run): since the commit after `8530657`, a 7412 start that has tried both
+offsets twice measures the lanes again before going on (passes 4 and 8).
+It changes nothing on a start that finds the slot. Pass, when a search
+fails again: `ssc: no slot at offsets A and B; measuring the lanes
+again`, then `ssc: lane bit offset C`; with C not A or B the slot found
+in that same start (the offset had moved: the cause found), or with C
+the same as before still none found (the offset did not move: the cause
+is elsewhere, the chip not answering). Unattended starts on the 7412
+cover it, whenever one fails.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
