@@ -238,3 +238,29 @@ maintainer's (388 contacts) as the phonebook.
 | C430A and the lists | as expected for a Part 1 handset: no base phonebook, its message key shows its own internal list |
 | Save & Apply after a hand-made stop | **defect, fixed** (`cc89757`): with the service stopped by `/etc/init.d/opendectcell stop`, saving in LuCI did nothing, procd had no trigger left; LuCI now starts the service after an apply if procd does not know it |
 
+
+## Card A: the features of 2026-10-29/30 (written 2026-10-30, not run yet)
+
+Box at `db173c8` or later, A540 (DECT 1) and C430A (DECT 2) with `voip1` as
+Line 1 of both, the phonebook on. Gathers what the two cards above left
+untested and adds the day's features. Log: `logread -e dect` (calls:,
+missed:, bridge:, audio: lines); verbose (`-v`) only for list access.
+Outcomes written before the run:
+
+| test | pass | fail and what it means |
+|---|---|---|
+| A1. Call the number from outside, answer on the C430A | the A540 stops ringing at once; audio both ways; `calls: accepted call from ...` when it ends | the A540 keeps ringing: `remote-released` for the losing leg missing (the module's "answered" handling) |
+| A2. While A1 is up, the A540 dials out | a second SIP call, audio both ways on both; `calls: outgoing call to ...` | `bridge: 3 calls already` or `busy`: the call table; silence on one: the lane |
+| A3. A540 in a SIP call, call the number again (test 9) | waiting tone and the second caller on the A540; accept, toggle, end one, the other stays | busy at once: `waiting_party()`; nothing shown: our call waiting {CC-INFO} |
+| A4. A540 in a call, R key and a number (test 10) | the first on hold, the second connects | a negative tone: the 1CH 15H path, `par_control()` |
+| A5. DTMF into a voicemail menu (test 11) | the menu reacts | no `digit` lines: the keypad path; digits but no reaction: the profile's DTMF mode |
+| A6. Voicemail indicator (test 12; MWI on in the profile, leave a message) | the A540 shows the count; it goes after listening | no `mwi:` lines: no message-summary NOTIFY from the provider |
+| A7. Wideband off, one call out (test 5) | clear narrowband both ways; `at 8000 Hz -- narrowband, passed as it is` | silence or noise: the linear lane's format on the 7412 |
+| A8. Redial from the A540 (test 6) | goes out over SIP; `calls: outgoing call to ...` | a silent local call: `number_complete()` |
+| A9. Phonebook: change a contact's first name on the A540 | Nextcloud shows it within seconds; the first line of `/var/run/opendectcell/contacts` counts `seq=` up | `carddav: change N (put) not written`: the server refused (`docs/phonebook.md`, Limits); nothing at all: the save was refused on the air (`c3 12` with `-v`) |
+| A10. Phonebook: a new contact, then delete it, on the A540 | it appears in the default book, then is gone | as A9 |
+| A11. Call lists: open the A540's call list menu after A1/A2 | accepted and outgoing calls listed with time and line | an empty list: the lists the A540 asks for (`c3 00 0x` with `-v`); it may want the All Calls List (04), not served |
+| A12. Delete the missed call on the A540 | gone on the A540; `missed: DECT 1, line 1: 0 unread of 0 (update)` | a refusal (`c3 12`) or no update line |
+
+After the run: the radio parked and read back, the hand edit of the init
+script undone (verbose off).
