@@ -126,6 +126,19 @@ Left for a box: the two fixes above (N6 again: `stub_resyncs` listed,
 `reconnects` 2 after two cuts). The 7520 runs wait for the maintainer's
 word on that box.
 
+### T13 on the lab 7520 (written 2026-10-30, before the run)
+
+The maintainer's word (2026-10-30): test the 7520 and keep the new build
+running. It ran the 0.3.0 packages with the radio on; its handsets will
+meet the moved stack when it restarts. Packages from the newest commit
+(the T13 fixes included), ipq40xx, OpenWrt 25.12.5.
+
+| test | pass | fail and what it means |
+|---|---|---|
+| V1. Install, start, ten minutes running | as U1: control slot, a `sub: restored subscription` per store, the slots cleared, the mask; the same pid after ten minutes; no trouble lines, no respawn; baresip registered as before (`logread -e baresip`) | as U1; baresip not registered: the bridge's start (not moved) or the config kept from 0.3.0 |
+| V2. The handsets come back by themselves | within the ten minutes each handset that was registered relocates: `reg: connection up`, its `sub: now serving` if not record 0, no `LOCATE-REJECT`; `cap: record N reports ...` once proven | a handset that located on 0.3.0 now gets `LOCATE-REJECT` or keeps searching: the identity gate, `dect_base_main_segment()` or the restore; then put 0.3.0 back at once |
+| V3. Left running | dect-stubd up at the end, radio on, as the maintainer asked; not parked | -- |
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |
