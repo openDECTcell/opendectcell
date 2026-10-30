@@ -35,6 +35,7 @@ Where to start depends on what you want:
 | [capacity.md](capacity.md) | How many handsets and calls one box carries, and how to go beyond |
 | [multicell-experiments.md](multicell-experiments.md) | Experiments towards several boxes as one DECT system |
 | [notes-for-the-controller.md](notes-for-the-controller.md) | Interface notes for the separate multi-cell controller project |
+| [hosting-dect-base.md](hosting-dect-base.md) | For a second host of the stack (the controller): the chip mails, the callbacks, the per-cell chip settings, testing against the golden traces |
 | [stack-in-library.md](stack-in-library.md) | How the DECT stack moved from `dect-stubd` into `libopendectcell` (`struct dect_base`), stage by stage, so the controller can host it |
 | [api-versions.md](api-versions.md) | What changed in `libopendectcell`'s public interface at each API version |
 | [multicell-identities.md](multicell-identities.md) | Identities (RFPI, IPUI) for many cells under one controller |

@@ -789,3 +789,43 @@ Not covered: the mail tunnel (C3 on your side) and media.
   no tag 4 yet (no media). Your side accepts the snapshot and does not
   reconcile yet (C3). Bench N7.
 
+
+## API 100-137: the base stack is in the library; C3 can host it `[2026-10-30 night]`
+
+The move your ADR 0002 option B asked for is done. `dect-stubd` is now a
+host of `struct dect_base` (`src/libopendectcell/dect_base.h`) and keeps only
+the transport, its sockets and files, audio lanes and diagnostics.
+
+- **Read first:** [hosting-dect-base.md](hosting-dect-base.md), written
+  for you: what a second host provides, the chip mails and where each
+  goes, the 23 callbacks with what `dect-stubd` does and what you would
+  do, the per-cell chip settings, testing, limits.
+- **What moved** (record: [stack-in-library.md](stack-in-library.md);
+  every public change: [api-versions.md](api-versions.md) 100-137):
+  calls (ring, call out, dialling, internal calls, side rings, parallel
+  calls, call waiting), the bridge's verbs, lists and notices (names,
+  lines, MWI, missed calls, date and time), deregistration, link set-up,
+  the connection and segment mails, one tick (`dect_base_tick()`), and
+  the key read-back and slot audit (API 137).
+- **Act on:** `cdect.h` checks `OPENDECTCELL_API_VERSION != 99`; a submodule
+  bump needs it raised. The `lc`/`lapc` functions cdect uses did not
+  change shape.
+- **Act on, per cell:** `chip.uak_table` from the cell's `stub_version`
+  (06.88 `0x067F`, 08.25 `0x9518`, 07.56 none known: 0) and
+  `chip.check_delay_ms` 1000 on 06.88. With 0 the library skips the
+  read-back and the audit rather than read the wrong address.
+- **Keys:** `save()` hands you the record with its UAK; your store
+  encrypts it. `random()` must be a CSPRNG.
+- **The behaviour is pinned by fifteen golden traces**
+  (`tests/stubd-traces/`, made-up identities): a host that replays them
+  and gets the same mails and bridge events is the same base. The
+  cheapest first test of a cgo host.
+- **On hardware since the move** (`docs/bench-later.md` §1a): the 7412
+  (06.88) started, restored, read back and audited its slots, served
+  STATS and resumed a link to your controller in Docker (U1-U6); the lab
+  7520 (07.56) runs the new build with three Gigasets (V1, V3; V2, a
+  handset re-locating, waits for the bench).
+- **Open for C3, not decided here:** who sends the chip's audio mails
+  (0x0251, 0x0230, 0x022D) over the tunnel: the controller through
+  `call_up()`, or the cell on MEDIA_OPEN (cell-protocol.md §8). The
+  library works either way.
