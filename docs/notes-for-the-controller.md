@@ -781,3 +781,11 @@ Not covered: the mail tunnel (C3 on your side) and media.
   mail tunnel.
 - `dect_mm_cfg.assign_id` (API 99): an identity to assign in
   {ACCESS-RIGHTS-ACCEPT}, the IPUI O a class B system needs.
+- **Resume** (§6.4): dect-cell announces CAP_RESUME, keeps the session
+  token and grace from HELLO_ACK (tags 4, 8), offers the token in HELLO
+  (tag 13) while the grace lasts, and on `resumed = 1` sends
+  STATE_SNAPSHOT from dect-stubd: tag 1 chip epoch, tag 2 radio (0/1),
+  tag 3 per live connection {handle, tag[3]} (the tag all zero on 06.88),
+  no tag 4 yet (no media). Your side accepts the snapshot and does not
+  reconcile yet (C3). Bench N7.
+

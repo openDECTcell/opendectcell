@@ -81,6 +81,8 @@ logread -e rfpi -e 'control slot'; cat /tmp/dect-fwload.log
 
 | N6. STATS: the 7412 as a cell of the Go controller in Docker (as on 2026-10-30, `docs/notes-for-the-controller.md`), radio parked | T11 | within a minute of the link coming up the controller's cell page lists counters: `mails_up`, `mails_down`, `stub_csum_errors` ... `stub_resyncs` (0 when healthy), `chip_queue_hwm`, `reconnects`; again every 60 s | no counters: dect-cell did not announce CAP_STATS or the request did not reach dect-stubd (`logread -e dect-cell`); `reconnects` only: dect-stubd did not answer STATS_REQUEST |
 
+| N7. Resume: the 7412 as an active cell of the Go controller; cut its link for 4 s (`iptables -I OUTPUT -d <controller> -j DROP; sleep 4; iptables -D OUTPUT -d <controller> -j DROP`), then for 10 s | T11 | 4 s: `controller link resumed` in `logread -e dect-cell`, the controller logs `cell connected resumed=true`, no calls or links released; 10 s: a fresh start (`link up`, `resumed=false`), the cell released its links at 7 s | a fresh start after 4 s: the token or the grace (HELLO tag 13, HELLO_ACK tags 4, 5, 8); the controller rejects the snapshot (ERROR): its layout |
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |

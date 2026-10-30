@@ -701,6 +701,14 @@ struct link {
 	int enrolled;
 	uint32_t dropped;		/* frames for a controller we lack */
 	uint64_t next_stats;		/* §10: STATS every stats_interval_s */
+	/*
+	 * §6.4 resume: the session's token from HELLO_ACK, offered again in
+	 * HELLO while the grace period since the link went down lasts.
+	 */
+	uint8_t  token[16];
+	int      have_token;
+	uint64_t lost_at;
+	uint16_t grace_ms;
 };
 
 /* §10 stats_interval_s, its default: CONFIG_SET is not applied yet */
@@ -802,6 +810,7 @@ static void link_down(struct link *l, const char *why, uint64_t now)
 		backoff(l, now);
 	}
 	logf_("controller link down: %s", why);
+	l->lost_at = now;		/* §6.4: the grace period starts */
 	stubd_cell_state(l, l->cell_state, "link-lost");
 	set_state(l, "connecting");
 }
@@ -852,12 +861,15 @@ static int hello(struct link *l)
 	dect_cell_tlv_u32(&t, 6, l->epoch);
 	/* media is not built yet (§14.3): the mail tunnel and FLOW only */
 	dect_cell_tlv_u32(&t, 7, DECT_CELL_CAP_MAIL | DECT_CELL_CAP_FLOW |
-			  DECT_CELL_CAP_STATS);
+			  DECT_CELL_CAP_STATS | DECT_CELL_CAP_RESUME);
 	dect_cell_tlv_u8(&t, 8, 6);	/* subscription records */
 	dect_cell_tlv_u8(&t, 9, 6);	/* radio connection contexts */
 	dect_cell_tlv_u8(&t, 10, 3);	/* voice channels [CR A-0124] */
 	dect_cell_tlv_u8(&t, 11, 3);
 	dect_cell_tlv_put(&t, 12, formats, sizeof(formats));
+	/* §6.4: resume the session if its grace period still lasts */
+	if (l->have_token && mono_ms() - l->lost_at < l->grace_ms)
+		dect_cell_tlv_put(&t, 13, l->token, sizeof(l->token));
 	dect_cell_tlv_u8(&t, 14, l->radio);
 	dect_cell_tlv_u64(&t, 15, (uint64_t)ts.tv_sec * 1000u +
 			  (uint64_t)ts.tv_nsec / 1000000u);
@@ -872,7 +884,7 @@ static int link_up(struct link *l)
 {
 	struct dect_cell_frame f;
 	uint16_t hb = 1000, dead = 3000;
-	uint8_t st = DECT_CELL_ST_PENDING;
+	uint8_t st = DECT_CELL_ST_PENDING, resumed = 0;
 	long n = 0;
 	uint64_t until;
 
@@ -913,6 +925,18 @@ static int link_up(struct link *l)
 	}
 	(void)dect_cell_tlv_get_u16(f.body, f.len, 6, &hb);
 	(void)dect_cell_tlv_get_u16(f.body, f.len, 7, &dead);
+	{
+		size_t tn = 0;
+		const uint8_t *tok = dect_cell_tlv_get(f.body, f.len, 4, &tn);
+		uint16_t grace = 0;
+
+		(void)dect_cell_tlv_get_u8(f.body, f.len, 5, &resumed);
+		(void)dect_cell_tlv_get_u16(f.body, f.len, 8, &grace);
+		l->grace_ms = grace ? grace : 7000u;
+		l->have_token = tok && tn == sizeof(l->token);
+		if (l->have_token)
+			memcpy(l->token, tok, sizeof(l->token));
+	}
 	/* frames that came with the HELLO_ACK stay for the main loop */
 	{
 		long used = dect_cell_parse(l->rx, (size_t)n, &f);
@@ -926,7 +950,10 @@ static int link_up(struct link *l)
 	l->last_rx = l->last_tx = l->up_since = mono_ms();
 	stubd_cell_state(l, st, NULL);
 	set_state(l, "up");
-	logf_("controller link up to %s, cell %s", l->creds.addr,
+	if (resumed && l->stubd >= 0)	/* §6.4: the snapshot comes next */
+		stubd_send(l, DECT_CELL_STATE_SNAPSHOT, 0, NULL, 0);
+	logf_("controller link %s to %s, cell %s",
+	      resumed ? "resumed" : "up", l->creds.addr,
 	      st == DECT_CELL_ST_ACTIVE ? "active" :
 	      st == DECT_CELL_ST_PENDING ? "pending approval" : "disabled");
 	return 0;

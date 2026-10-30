@@ -641,6 +641,7 @@ struct stubd {
 		uint8_t  flow;		/* §9.3 FLOW state last sent */
 		uint32_t epoch;		/* chip sessions since start */
 		uint8_t  handles;	/* links up, bit per handle 0..7 */
+		uint8_t  tag[8][3];	/* each one's handset tag (0x0203) */
 		uint32_t up, down, rejected, lost_up;
 		uint32_t txq_drops_seen;
 	} cell;
@@ -11016,6 +11017,31 @@ static void cell_status(struct stubd *s, uint64_t now)
 		(void)cell_send(s, DECT_CELL_STATUS, 0, b, t.len);
 }
 
+/*
+ * STATE_SNAPSHOT (cell-protocol.md §6.4) after a resume, at dect-cell's
+ * request: the chip's epoch, the radio, each radio connection still up
+ * (handle and handset tag). No media sessions exist yet (§14.3).
+ */
+static void cell_snapshot(struct stubd *s, uint16_t corr)
+{
+	uint8_t b[64];
+	struct dect_cell_tlv t;
+	unsigned h;
+
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u32(&t, 1, s->cell.epoch);
+	dect_cell_tlv_u8(&t, 2, s->cell.radio_on ? 1 : 0);
+	for (h = 0; h < 8u; h++) {
+		const uint8_t c[4] = { (uint8_t)h, s->cell.tag[h][0],
+				       s->cell.tag[h][1], s->cell.tag[h][2] };
+
+		if (s->cell.handles & (1u << h))
+			dect_cell_tlv_put(&t, 3, c, sizeof(c));
+	}
+	if (!t.err)
+		(void)cell_send(s, DECT_CELL_STATE_SNAPSHOT, corr, b, t.len);
+}
+
 static void cell_reject(struct stubd *s, uint16_t corr, uint8_t why)
 {
 	uint8_t b[3] = { (uint8_t)(corr >> 8), (uint8_t)corr, why };
@@ -11045,10 +11071,16 @@ static void cell_mail_up(struct stubd *s, const struct dect_mail *m,
 	size_t n = dect_cell_mail_up(b, sizeof(b), &cm);
 	uint8_t h = m->param_len ? m->param[0] : 0xFFu;
 
-	if (h < 8u && m->prim == DECT_PRIM_CONN_UP)
+	if (h < 8u && m->prim == DECT_PRIM_CONN_UP) {
 		s->cell.handles |= (uint8_t)(1u << h);
-	else if (h < 8u && m->prim == DECT_PRIM_CONN_DOWN)
+		memset(s->cell.tag[h], 0, 3);
+	} else if (h < 8u && m->prim == DECT_PRIM_CONN_DOWN) {
 		s->cell.handles &= (uint8_t)~(1u << h);
+	} else if (h < 8u && m->prim == 0x0203u && m->param_len >= 13u) {
+		/* 07.56, 08.25: {handle, 01, seg[5], 00, 00, tag[3], handle};
+		 * 06.88 sends no tag (cell-protocol.md §7.1) */
+		memcpy(s->cell.tag[h], &m->param[9], 3);
+	}
 	if (n && cell_send(s, DECT_CELL_MAIL_UP, 0, b, n) == 0)
 		s->cell.up++;
 	else
@@ -11140,6 +11172,9 @@ static void cell_frame(struct stubd *s, const uint8_t *buf, size_t n,
 		break;
 	case DECT_CELL_STATS_REQUEST:
 		cell_stats(s, f.corr);
+		break;
+	case DECT_CELL_STATE_SNAPSHOT:		/* dect-cell asks after a resume */
+		cell_snapshot(s, f.corr);
 		break;
 	case DECT_CELL_MEDIA_OPEN: {
 		/* media is not built yet (§14.3): status 4 */
