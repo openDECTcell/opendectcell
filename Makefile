@@ -34,7 +34,7 @@ STUBD_SRC := src/stubd/dect-stubd.c src/stubd/ssc_align.c src/libopendectcell/de
 	src/libopendectcell/dect_cell.c src/libopendectcell/dect_base.c
 STUBD_INC := -Ikernel/include/uapi -Isrc/libopendectcell
 
-.PHONY: all check cross clean baresip-mod dect-cell
+.PHONY: all check check-cell cross clean baresip-mod dect-cell
 all: $(TESTS) $(BUILD)/dect-fwload $(BUILD)/dect-pcmcap $(BUILD)/dect-stubd $(BUILD)/dect-maildump
 
 $(BUILD)/dect-fwload: $(FWLOAD_SRC) src/fwload/loader.h src/fwload/fwimage.h
@@ -212,6 +212,17 @@ dect-cell: $(BUILD)/dect-cell
 $(BUILD)/dect-cell: src/cell/dect-cell.c src/libopendectcell/dect_cell.c src/libopendectcell/dect_cell.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) -Isrc/libopendectcell -I$(MBEDTLS)/include \
+		-L$(MBEDTLS)/lib -o $@ src/cell/dect-cell.c src/libopendectcell/dect_cell.c \
+		-lmbedtls -lmbedx509 -lmbedcrypto
+
+# dect-cell with the sanitizers against a scripted controller (needs
+# MBEDTLS as above, and Python's cryptography): make check-cell MBEDTLS=...
+check-cell: $(BUILD)/dect-cell-test
+	python3 -I tests/test_cell_link.py $(BUILD)/dect-cell-test
+
+$(BUILD)/dect-cell-test: src/cell/dect-cell.c src/libopendectcell/dect_cell.c src/libopendectcell/dect_cell.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) $(DEFS) -Isrc/libopendectcell -I$(MBEDTLS)/include \
 		-L$(MBEDTLS)/lib -o $@ src/cell/dect-cell.c src/libopendectcell/dect_cell.c \
 		-lmbedtls -lmbedx509 -lmbedcrypto
 

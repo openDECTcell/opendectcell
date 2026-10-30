@@ -17,6 +17,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -129,6 +130,10 @@ static long file_get(const char *name, unsigned char *buf, size_t cap)
 	if (!f)
 		return -1;
 	n = fread(buf, 1, cap - 1u, f);
+	if (n == cap - 1u && fgetc(f) != EOF) {
+		fclose(f);		/* cut short would not load */
+		return -1;
+	}
 	fclose(f);
 	buf[n] = 0;
 	return (long)n;
@@ -302,6 +307,7 @@ struct tls {
 	mbedtls_x509_crt cert;
 	mbedtls_pk_context key;
 	int up;
+	uint64_t deadline;	/* connect and handshake end by then; 0 = none */
 };
 
 static const uint16_t groups[] = { MBEDTLS_SSL_IANA_TLS_GROUP_SECP256R1,
@@ -322,6 +328,85 @@ static void tls_close(struct tls *t)
 }
 
 /*
+ * The handshake's reads: each waits at most the time left until the
+ * deadline, in slices so that a SIGTERM is seen (a peer that dribbles a
+ * byte every few seconds held the handshake for ever: review D2, 6).
+ */
+static int bio_send(void *ctx, const unsigned char *buf, size_t len)
+{
+	return mbedtls_net_send(&((struct tls *)ctx)->net, buf, len);
+}
+
+static int bio_recv(void *ctx, unsigned char *buf, size_t len,
+		    uint32_t timeout)
+{
+	struct tls *t = ctx;
+	uint64_t end = mono_ms() + (timeout ? timeout : 1u);
+
+	if (t->deadline && end > t->deadline)
+		end = t->deadline;
+	for (;;) {
+		uint64_t now = mono_ms();
+		int r;
+
+		if (stop || now >= end)
+			return MBEDTLS_ERR_SSL_TIMEOUT;
+		r = mbedtls_net_recv_timeout(&t->net, buf, len,
+					     end - now < 250u ?
+					     (uint32_t)(end - now) : 250u);
+		if (r != MBEDTLS_ERR_SSL_TIMEOUT)
+			return r;
+	}
+}
+
+/*
+ * TCP connect with a time limit: mbedtls_net_connect() blocks in connect()
+ * until the kernel gives up, two minutes for a SYN nobody answers.
+ */
+static int tcp_connect(struct tls *t, const char *host, const char *port)
+{
+	struct addrinfo hints, *ai, *a;
+	int fd = -1;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	if (getaddrinfo(host, port, &hints, &ai))
+		return -1;
+	for (a = ai; a; a = a->ai_next) {
+		struct pollfd p;
+		int err = 0;
+		socklen_t el = sizeof(err);
+		uint64_t now = mono_ms();
+
+		if (now >= t->deadline || stop)
+			break;
+		fd = socket(a->ai_family, a->ai_socktype | SOCK_CLOEXEC |
+			    SOCK_NONBLOCK, a->ai_protocol);
+		if (fd < 0)
+			continue;
+		if (connect(fd, a->ai_addr, a->ai_addrlen) && errno != EINPROGRESS)
+			goto next;
+		p = (struct pollfd){ fd, POLLOUT, 0 };
+		while (poll(&p, 1, 250) == 0 && !stop &&
+		       mono_ms() < t->deadline)
+			;
+		if (p.revents & (POLLOUT | POLLERR | POLLHUP) &&
+		    !getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el) && !err) {
+			(void)fcntl(fd, F_SETFL,
+				    fcntl(fd, F_GETFL) & ~O_NONBLOCK);
+			t->net.fd = fd;
+			break;
+		}
+next:
+		close(fd);
+		fd = -1;
+	}
+	freeaddrinfo(ai);
+	return fd < 0 ? -1 : 0;
+}
+
+/*
  * Connect to host:port and run the TLS 1.3 handshake, with our certificate
  * if key_pem is given (an enrolled cell) and without it (an enrolment).
  * Blocks for at most CONNECT_MS. 0 or -1.
@@ -334,6 +419,7 @@ static int tls_open(struct tls *t, const char *addr, const char *key_pem,
 	int r;
 
 	memset(t, 0, sizeof(*t));
+	t->deadline = mono_ms() + CONNECT_MS;
 	mbedtls_net_init(&t->net);
 	mbedtls_ssl_init(&t->ssl);
 	mbedtls_ssl_config_init(&t->conf);
@@ -372,9 +458,8 @@ static int tls_open(struct tls *t, const char *addr, const char *key_pem,
 	}
 	if (mbedtls_ssl_setup(&t->ssl, &t->conf))
 		goto fail;
-	if ((r = mbedtls_net_connect(&t->net, host, port,
-				     MBEDTLS_NET_PROTO_TCP))) {
-		logf_("cannot reach %s (%d)", addr, r);
+	if (tcp_connect(t, host, port)) {
+		logf_("cannot reach %s", addr);
 		goto fail;
 	}
 	{
@@ -387,8 +472,7 @@ static int tls_open(struct tls *t, const char *addr, const char *key_pem,
 		(void)setsockopt(t->net.fd, SOL_SOCKET, SO_SNDTIMEO, &tv,
 				 sizeof(tv));
 	}
-	mbedtls_ssl_set_bio(&t->ssl, &t->net, mbedtls_net_send, NULL,
-			    mbedtls_net_recv_timeout);
+	mbedtls_ssl_set_bio(&t->ssl, t, bio_send, NULL, bio_recv);
 	while ((r = mbedtls_ssl_handshake(&t->ssl))) {
 		if (r != MBEDTLS_ERR_SSL_WANT_READ &&
 		    r != MBEDTLS_ERR_SSL_WANT_WRITE) {
@@ -399,6 +483,7 @@ static int tls_open(struct tls *t, const char *addr, const char *key_pem,
 	}
 	if (verify_controller(&t->ssl, pins, n_pins))
 		goto fail;
+	t->deadline = 0;
 	t->up = 1;
 	return 0;
 fail:
@@ -440,7 +525,7 @@ static long tls_recv(struct tls *t, uint8_t *buf, size_t len, size_t cap,
 		int r;
 
 		if (len == cap)
-			return -1;		/* a peer that never frames */
+			return (long)len;	/* the caller frames, then reads on */
 		r = mbedtls_ssl_read(&t->ssl, buf + len, cap - len);
 		if (r > 0) {
 			len += (size_t)r;
@@ -652,7 +737,7 @@ struct creds {
 	char addr[200];
 	char pins[1][48];
 	char key_pem[512];
-	uint8_t cert[2048];
+	uint8_t cert[DECT_CELL_FRAME_MAX];	/* as the enrolment brought it */
 	size_t cert_n;
 	char cell_id[33];
 };
@@ -763,14 +848,17 @@ static void boot_id(uint8_t out[16])
 	fclose(f);
 }
 
-static void stubd_send(struct link *l, uint16_t type, uint16_t corr,
-		       const uint8_t *body, size_t len)
+/* One frame to dect-stubd; -1 if it is not there or not reading. */
+static int stubd_send(struct link *l, uint16_t type, uint16_t corr,
+		      const uint8_t *body, size_t len)
 {
 	uint8_t f[DECT_CELL_FRAME_MAX];
 	size_t n = dect_cell_put(f, sizeof(f), type, corr, body, len);
 
-	if (l->stubd >= 0 && n)
-		(void)send(l->stubd, f, n, MSG_DONTWAIT | MSG_NOSIGNAL);
+	if (l->stubd < 0 || !n)
+		return -1;
+	return send(l->stubd, f, n, MSG_DONTWAIT | MSG_NOSIGNAL) == (ssize_t)n ?
+	       0 : -1;
 }
 
 /* CELL_STATE to dect-stubd: the controller's state, or the link lost. */
@@ -783,7 +871,7 @@ static void stubd_cell_state(struct link *l, uint8_t st, const char *reason)
 	dect_cell_tlv_u8(&t, 1, st);
 	if (reason)
 		dect_cell_tlv_str(&t, 2, reason);
-	stubd_send(l, DECT_CELL_CELL_STATE, 0, b, t.len);
+	(void)stubd_send(l, DECT_CELL_CELL_STATE, 0, b, t.len);
 }
 
 /* §6.4 back-off: at once, then 250 ms doubling to 30 s, each ±20 % */
@@ -958,7 +1046,7 @@ static int link_up(struct link *l)
 	stubd_cell_state(l, st, NULL);
 	set_state(l, "up");
 	if (resumed && l->stubd >= 0)	/* §6.4: the snapshot comes next */
-		stubd_send(l, DECT_CELL_STATE_SNAPSHOT, 0, NULL, 0);
+		(void)stubd_send(l, DECT_CELL_STATE_SNAPSHOT, 0, NULL, 0);
 	logf_("controller link %s to %s, cell %s",
 	      resumed ? "resumed" : "up", l->creds.addr,
 	      st == DECT_CELL_ST_ACTIVE ? "active" :
@@ -1036,23 +1124,28 @@ static void from_controller(struct link *l, const struct dect_cell_frame *f,
 			stats_send(l, f->corr, NULL, 0, now);
 			break;
 		}
-		stubd_send(l, f->type, f->corr, f->body, f->len);
+		(void)stubd_send(l, f->type, f->corr, f->body, f->len);
 		break;
 	case DECT_CELL_MAIL_DOWN:
 	case DECT_CELL_MEDIA_OPEN:
 	case DECT_CELL_MEDIA_CLOSE:
-	case DECT_CELL_STATUS_REQUEST:
-		if (l->stubd < 0) {
-			if (f->type == DECT_CELL_MAIL_DOWN && f->corr) {
-				uint8_t b[3] = { (uint8_t)(f->corr >> 8),
-						 (uint8_t)f->corr,
-						 DECT_CELL_REJ_CHIP_DOWN };
-
-				ctl_send(l, DECT_CELL_MAIL_REJECT, 0, b, 3, now);
-			}
+		/* §5.3: nothing that touches the radio unless active */
+		if (l->cell_state != DECT_CELL_ST_ACTIVE) {
+			ctl_error(l, DECT_CELL_ERR_NOT_ALLOWED, f->type,
+				  f->corr, now);
 			break;
 		}
-		stubd_send(l, f->type, f->corr, f->body, f->len);
+		/* fall through */
+	case DECT_CELL_STATUS_REQUEST:
+		if (stubd_send(l, f->type, f->corr, f->body, f->len) &&
+		    f->type == DECT_CELL_MAIL_DOWN && f->corr) {
+			uint8_t b[3] = { (uint8_t)(f->corr >> 8),
+					 (uint8_t)f->corr,
+					 l->stubd < 0 ? DECT_CELL_REJ_CHIP_DOWN :
+					 DECT_CELL_REJ_QUEUE_FULL };
+
+			ctl_send(l, DECT_CELL_MAIL_REJECT, 0, b, 3, now);
+		}
 		break;
 	case DECT_CELL_CELL_STATE: {
 		uint8_t st;
@@ -1064,7 +1157,11 @@ static void from_controller(struct link *l, const struct dect_cell_frame *f,
 			break;
 		}
 		l->cell_state = st;
-		stubd_send(l, f->type, f->corr, f->body, f->len);
+		/*
+		 * the state alone: a reason in tag 2 is ours to give
+		 * ("link-lost", §14.2), never the controller's
+		 */
+		stubd_cell_state(l, st, NULL);
 		logf_("the controller set the cell %s",
 		      st == DECT_CELL_ST_ACTIVE ? "active" :
 		      st == DECT_CELL_ST_PENDING ? "pending" :
@@ -1227,7 +1324,7 @@ static int run(void)
 			if (l.tls.up && now >= l.next_stats) {
 				l.next_stats = now + STATS_INTERVAL_MS;
 				if (l.stubd >= 0)
-					stubd_send(&l, DECT_CELL_STATS_REQUEST,
+					(void)stubd_send(&l, DECT_CELL_STATS_REQUEST,
 						   0, NULL, 0);
 				else
 					stats_send(&l, 0, NULL, 0, now);
@@ -1274,6 +1371,13 @@ static int run(void)
 			while (l.tls.up &&
 			       (used = dect_cell_parse(l.rx, l.rx_len, &f)) > 0) {
 				from_controller(&l, &f, now);
+				/*
+				 * a GOODBYE or a failed write took the link
+				 * down and emptied rx: nothing to move
+				 * (review D2, finding 1)
+				 */
+				if (!l.tls.up)
+					break;
 				memmove(l.rx, l.rx + used, l.rx_len - (size_t)used);
 				l.rx_len -= (size_t)used;
 			}

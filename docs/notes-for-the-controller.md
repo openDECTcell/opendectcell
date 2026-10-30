@@ -844,3 +844,36 @@ the transport, its sockets and files, audio lanes and diagnostics.
 - **For the cell side:** `dect-stubd -K` already relays every MAIL_DOWN,
   so nothing changes there. What the first call with audio still needs is
   the cell's media (MEDIA_OPEN answers status 4 today).
+
+## The cell's link, after a security review `[2026-10-30, late night]`
+
+An independent review of `dect-cell` and `dect-stubd -K` found nine
+points; seven are fixed. What the controller sees differently:
+
+- **MAIL_DOWN, MEDIA_OPEN and MEDIA_CLOSE while the cell is not active**
+  get `ERROR NOT_ALLOWED` (§5.3), from dect-cell and, as a second lock,
+  from dect-stubd. Before, they went to the chip in any state: a disabled
+  cell's radio came back on with a `0x015B {01}`.
+- **A malformed MAIL_DOWN** gets `ERROR MALFORMED` (§3.4), no longer
+  MAIL_REJECT CHIP_REFUSED.
+- **A MAIL_DOWN that dect-stubd cannot take** (its socket full) gets
+  MAIL_REJECT QUEUE_FULL when it has a corr; it was dropped silently.
+- **CELL_STATE goes to dect-stubd as the state alone.** The controller
+  could put the local reason `link-lost` in tag 2, and dect-stubd then
+  released the links and parked the radio with the link up.
+- **A GOODBYE no longer crashes dect-cell.** Any GOODBYE, or a failed
+  write, inside the frame loop led to a memmove of about 2^64 octets; the
+  cell died and procd gave up after five respawns in an hour.
+- **A TLS record bigger than the receive buffer** (8 kB) took the link
+  down. A controller that coalesces many mails into one record now gets
+  them all.
+- **Connect and handshake together take at most 5 s**, and SIGTERM ends
+  them at once. Before, an unanswered SYN blocked for two minutes and a
+  peer that dribbled the handshake held it for ever.
+
+Open, for later: the enrolment string reaches dect-cell on its command
+line, so it is visible in `/proc` for up to a minute (needs another way
+from LuCI to the init script). §9's P0 bound (close when a frame waits
+over 500 ms) and `TCP_NOTSENT_LOWAT` are not built; writes block for up
+to 5 s. `make check-cell MBEDTLS=...` runs dect-cell with the sanitizers
+against a scripted controller (`tests/test_cell_link.py`).

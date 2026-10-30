@@ -576,6 +576,7 @@ struct stubd {
 		int      radio_on;	/* the controller turned it on */
 		int      sess_up;	/* the chip session, as last reported */
 		uint8_t  flow;		/* §9.3 FLOW state last sent */
+		int      active;	/* CELL_STATE active: mails may go down */
 		uint32_t epoch;		/* chip sessions since start */
 		uint8_t  handles;	/* links up, bit per handle 0..7 */
 		uint8_t  tag[8][3];	/* each one's handset tag (0x0203) */
@@ -6213,6 +6214,7 @@ static void voice_capture(struct stubd *s, const uint8_t *fr, unsigned int fpb)
 #define CELL_GRACE_MS		7000u	/* §6.4 grace_ms */
 #define CELL_ORPHAN_MS		60000u	/* §6.4 orphan_s */
 #define CELL_FLOW_HIGH		2048u	/* §9.3: FLOW state 1 above this */
+#define CELL_FRAMES_PER_TICK	32	/* the rest waits for the next pass */
 #define CELL_STATE_PATH		DECT_RUN_DIR "/cell.json"
 
 static void cell_open(struct stubd *s)
@@ -6377,6 +6379,20 @@ static void cell_snapshot(struct stubd *s, uint16_t corr)
 		(void)cell_send(s, DECT_CELL_STATE_SNAPSHOT, corr, b, t.len);
 }
 
+/* ERROR {code, the frame's type, its corr} (§3.4), forwarded upstream. */
+static void cell_error(struct stubd *s, uint16_t code,
+		       const struct dect_cell_frame *f)
+{
+	uint8_t b[16];
+	struct dect_cell_tlv t;
+
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u16(&t, 1, code);
+	dect_cell_tlv_u16(&t, 2, f->type);
+	dect_cell_tlv_u16(&t, 3, f->corr);
+	(void)cell_send(s, DECT_CELL_ERROR, 0, b, t.len);
+}
+
 static void cell_reject(struct stubd *s, uint16_t corr, uint8_t why)
 {
 	uint8_t b[3] = { (uint8_t)(corr >> 8), (uint8_t)corr, why };
@@ -6428,8 +6444,19 @@ static void cell_mail_down(struct stubd *s, const struct dect_cell_frame *f)
 	struct dect_cell_mail cm;
 	struct dect_mail m;
 
+	/*
+	 * §5.3: only an active cell's radio is the controller's. dect-cell
+	 * refuses these too; this is the second lock (review D2, finding 2:
+	 * a disabled cell's radio came back on with a 0x015B {01}).
+	 */
+	if (!s->cell.active) {
+		s->cell.rejected++;
+		cell_error(s, DECT_CELL_ERR_NOT_ALLOWED, f);
+		return;
+	}
 	if (dect_cell_mail_parse(f->body, f->len, 0, &cm)) {
-		cell_reject(s, f->corr, DECT_CELL_REJ_CHIP_REFUSED);
+		s->cell.rejected++;
+		cell_error(s, DECT_CELL_ERR_MALFORMED, f);
 		return;
 	}
 	if (s->sess.state != DECT_SESS_UP || s->tx_slot < 0) {
@@ -6468,6 +6495,7 @@ static void cell_state(struct stubd *s, const struct dect_cell_frame *f,
 	    dect_cell_tlv_get_u8(f->body, f->len, 1, &st))
 		return;
 	r = dect_cell_tlv_get(f->body, f->len, 2, &rn);
+	s->cell.active = st == DECT_CELL_ST_ACTIVE;
 	if (r && rn == 9 && !memcmp(r, "link-lost", 9)) {
 		if (!s->cell.lost_at) {
 			s->cell.lost_at = now;
@@ -6524,11 +6552,7 @@ static void cell_frame(struct stubd *s, const uint8_t *buf, size_t n,
 		break;
 	}
 	default:
-		dect_cell_tlv_init(&t, b, sizeof(b));
-		dect_cell_tlv_u16(&t, 1, DECT_CELL_ERR_UNSUPPORTED);
-		dect_cell_tlv_u16(&t, 2, f.type);
-		dect_cell_tlv_u16(&t, 3, f.corr);
-		(void)cell_send(s, DECT_CELL_ERROR, 0, b, t.len);
+		cell_error(s, DECT_CELL_ERR_UNSUPPORTED, &f);
 	}
 }
 
@@ -6579,10 +6603,11 @@ static void cell_tick(struct stubd *s, uint64_t now)
 		(void)fcntl(c, F_SETFL, fcntl(c, F_GETFL) | O_NONBLOCK);
 		s->cell.cfd = c;
 		s->cell.flow = 0;
+		s->cell.active = 0;	/* until it tells us the state */
 		printf("cell: dect-cell connected\n");
 		cell_status(s, now);
 	}
-	while (s->cell.cfd >= 0) {
+	for (c = 0; s->cell.cfd >= 0 && c < CELL_FRAMES_PER_TICK; c++) {
 		ssize_t n = recv(s->cell.cfd, buf, sizeof(buf), MSG_DONTWAIT);
 
 		if (n > 0) {
@@ -6595,6 +6620,7 @@ static void cell_tick(struct stubd *s, uint64_t now)
 		/* dect-cell has gone: as good as a lost controller link */
 		close(s->cell.cfd);
 		s->cell.cfd = -1;
+		s->cell.active = 0;
 		printf("cell: dect-cell went away\n");
 		if (!s->cell.lost_at)
 			s->cell.lost_at = now;
