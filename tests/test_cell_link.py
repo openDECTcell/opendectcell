@@ -18,7 +18,14 @@ and is then put through cases from the security review of 2026-10-30
   5. SIGTERM ends dect-cell within two seconds;
   6. a controller that accepts and then stays silent costs at most the
      connect limit (5 s) per attempt, and SIGTERM still ends dect-cell at
-     once (finding 6).
+     once (finding 6);
+  7. media (cell-protocol.md §8, D3): MEDIA_OPEN reaches dect-stubd without
+     keys or address; the stand-in's 20 ms frames come up as SRTP the
+     controller side decrypts here with its own SRTP (Python's
+     cryptography, not mbedTLS), G.722 with AEAD_AES_128_GCM at 20 ms and
+     L16 with AES_CM_128_HMAC_SHA1_80 at 10 ms; packets down arrive as
+     frames, a replayed or forged one does not; plain RTP is refused
+     without -P; MEDIA_CLOSE ends the flow.
 
     python3 -I tests/test_cell_link.py build/dect-cell-test
 """
@@ -34,6 +41,10 @@ import tempfile
 import threading
 import time
 
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 spec = importlib.util.spec_from_file_location(
     "testpeer", os.path.join(HERE, "..", "tools", "cell-testpeer.py"))
@@ -42,7 +53,12 @@ spec.loader.exec_module(tp)
 
 HELLO, HELLO_ACK, HEARTBEAT, ECHO, GOODBYE, ERROR = 1, 2, 3, 4, 5, 6
 MAIL_DOWN, CELL_STATE, STATUS = 0x101, 0x200, 0x203
+MEDIA_OPEN, MEDIA_OPEN_ACK, MEDIA_CLOSE, MEDIA_CLOSED = 0x300, 0x301, 0x302, \
+    0x303
+# HELLO_ACK tag 10: mail, media, SRTP, stats, flow, resume (not plain RTP)
+CAPS = 0x01 | 0x02 | 0x04 | 0x10 | 0x20 | 0x40
 failed = 0
+SEND_LOCK = threading.Lock()
 
 
 def check(ok, what):
@@ -62,14 +78,27 @@ def wait_for(pred, secs):
 
 
 class Stubd:
-    """The local socket dect-stubd -K serves: a STATUS, then it listens."""
+    """The local socket dect-stubd -K serves: a STATUS, then it listens.
 
-    def __init__(self, path):
+    MEDIA_OPEN is taken (status 0) and MEDIA_CLOSE answered as dect-stubd
+    does; on the audio socket a connection's hello names its session, and
+    what it sends down is kept per session.
+    """
+
+    def __init__(self, path, audio=None):
         self.frames = []
+        self.audio = {}            # media id -> connection
+        self.hello = {}            # media id -> its hello
+        self.down = {}             # media id -> frames received
         self.ls = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         self.ls.bind(path)
         self.ls.listen(1)
         threading.Thread(target=self.run, daemon=True).start()
+        if audio:
+            self.als = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            self.als.bind(audio)
+            self.als.listen(4)
+            threading.Thread(target=self.audio_run, daemon=True).start()
 
     def run(self):
         while True:
@@ -86,6 +115,37 @@ class Stubd:
                     break
                 t, corr = struct.unpack(">HH", m[2:6])
                 self.frames.append((t, corr, m[6:]))
+                d = tp.parse_tlv(m[6:]) if t in (MEDIA_OPEN,
+                                                 MEDIA_CLOSE) else {}
+                if t == MEDIA_OPEN:
+                    c.send(tp.frame(MEDIA_OPEN_ACK, corr, tp.tlv([
+                        (1, d[1]), (2, b"\0\0")])))
+                elif t == MEDIA_CLOSE:
+                    c.send(tp.frame(MEDIA_CLOSED, corr, tp.tlv([
+                        (1, d[1]), (2, b"\0")])))
+                    a = self.audio.pop(struct.unpack(">I", d[1])[0], None)
+                    if a:
+                        a.close()
+
+    def audio_run(self):
+        while True:
+            c, _ = self.als.accept()
+            hello = c.recv(64).decode()
+            mid = int(hello.split()[0].split("=")[1])
+            self.hello[mid] = hello
+            self.audio[mid] = c
+            self.down[mid] = []
+
+            def rx(c=c, mid=mid):
+                while True:
+                    try:
+                        m = c.recv(1024)
+                    except OSError:
+                        return
+                    if not m:
+                        return
+                    self.down[mid].append(m)
+            threading.Thread(target=rx, daemon=True).start()
 
     def of(self, t):
         return [f for f in self.frames if f[0] == t]
@@ -142,8 +202,71 @@ def hello_ack(corr, state):
         (1, b"\1\0"), (2, bytes(16)), (3, bytes([state])),
         (4, bytes(16)), (5, b"\0"), (6, struct.pack(">H", 1000)),
         (7, struct.pack(">H", 3000)), (8, struct.pack(">H", 7000)),
-        (9, struct.pack(">H", 60)), (10, struct.pack(">I", 0)),
+        (9, struct.pack(">H", 60)), (10, struct.pack(">I", CAPS)),
         (11, struct.pack(">Q", int(time.time() * 1000)))]))
+
+
+def xor(a, b):
+    return bytes(x ^ y for x, y in zip(a, b))
+
+
+def aes_cm(key, iv, n):
+    return Cipher(algorithms.AES(key), modes.CTR(iv)).encryptor().update(
+        bytes(n))
+
+
+class Srtp:
+    """The controller's SRTP, written from RFC 3711 and RFC 7714 apart from
+    dect_srtp.c: profile 1 AES_CM_128_HMAC_SHA1_80, 2 AEAD_AES_128_GCM."""
+
+    def __init__(self, profile, key):
+        sl = 14 if profile == 1 else 12
+        mk, ms = key[:16], key[16:16 + sl]
+
+        def prf(label, n):         # §4.3.3, the rate 0
+            x = bytearray(ms + bytes(14 - sl))
+            x[7] ^= label
+            return aes_cm(mk, bytes(x) + b"\0\0", n)
+        self.p, self.k, self.s = profile, prf(0, 16), prf(2, sl)
+        self.a = prf(1, 20) if profile == 1 else None
+        self.roc, self.last = 0, None
+
+    def _iv(self, ssrc, seq):
+        if self.p == 1:
+            i = (self.roc << 16 | seq).to_bytes(6, "big")
+            return xor(self.s + b"\0\0", bytes(4) + ssrc + i + b"\0\0")
+        return xor(b"\0\0" + ssrc + self.roc.to_bytes(4, "big") +
+                   seq.to_bytes(2, "big"), self.s)
+
+    def _roc(self, seq):           # in order here: a wrap bumps the ROC
+        if self.last is not None and seq < self.last and \
+                self.last - seq > 0x8000:
+            self.roc += 1
+        self.last = seq
+
+    def protect(self, pkt):
+        seq = int.from_bytes(pkt[2:4], "big")
+        self._roc(seq)
+        iv = self._iv(pkt[8:12], seq)
+        if self.p == 2:
+            return pkt[:12] + AESGCM(self.k).encrypt(iv, pkt[12:], pkt[:12])
+        enc = pkt[:12] + xor(pkt[12:], aes_cm(self.k, iv, len(pkt) - 12))
+        h = hmac.HMAC(self.a, hashes.SHA1())
+        h.update(enc + self.roc.to_bytes(4, "big"))
+        return enc + h.finalize()[:10]
+
+    def unprotect(self, pkt):
+        seq = int.from_bytes(pkt[2:4], "big")
+        self._roc(seq)
+        iv = self._iv(pkt[8:12], seq)
+        if self.p == 2:
+            return pkt[:12] + AESGCM(self.k).decrypt(iv, pkt[12:], pkt[:12])
+        h = hmac.HMAC(self.a, hashes.SHA1())
+        h.update(pkt[:-10] + self.roc.to_bytes(4, "big"))
+        if h.finalize()[:10] != pkt[-10:]:
+            raise ValueError("tag")
+        return pkt[:12] + xor(pkt[12:-10], aes_cm(self.k, iv,
+                                                  len(pkt) - 22))
 
 
 def reader(s, got):
@@ -153,7 +276,8 @@ def reader(s, got):
             while True:
                 t, corr, body = tp.read_frame(s)
                 if t == HEARTBEAT:
-                    s.sendall(tp.frame(ECHO, corr, body))
+                    with SEND_LOCK:     # media() writes from its thread
+                        s.sendall(tp.frame(ECHO, corr, body))
                 got.append((t, corr, body))
         except (EOFError, OSError, ValueError):
             pass
@@ -165,6 +289,146 @@ def mail_down(corr, n):
     return tp.frame(MAIL_DOWN, corr, struct.pack(">BBHB", 0x22, 0x23,
                                                  0xFFF1, 7) +
                     bytes([7, 0x0A, 0x01, 0, 0, n, 0]))
+
+
+def media(stubd, ctl_send, got):
+    """Case 7: two sessions through dect-cell, both ways, then closed."""
+    u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    u.bind(("127.0.0.1", 0))
+    u.settimeout(2)
+    addr = b"\4" + socket.inet_aton("127.0.0.1") + struct.pack(
+        ">H", u.getsockname()[1])
+
+    def open_(corr, mid, ch, fmt, pt, prof, ku, kd, ptime=None):
+        items = [(1, struct.pack(">I", mid)), (2, bytes([ch])),
+                 (3, bytes([fmt])), (5, bytes([pt])), (6, addr),
+                 (7, struct.pack(">I", 0xA0 + ch)),
+                 (8, struct.pack(">I", 0xB0 + ch)), (9, bytes([prof]))]
+        if prof:
+            items += [(10, ku), (11, kd)]
+        if ptime:
+            items.append((4, bytes([ptime])))
+        ctl_send(tp.frame(MEDIA_OPEN, corr, tp.tlv(items)))
+
+    def acked(corr):
+        a = [tp.parse_tlv(b) for t, c, b in got
+             if t == MEDIA_OPEN_ACK and c == corr]
+        return struct.unpack(">H", a[0][2])[0] if a else None
+
+    src = [None]                   # dect-cell's end of the latest flow
+
+    def packets(n):
+        out = []
+        try:
+            for _ in range(n):
+                p, src[0] = u.recvfrom(2048)
+                out.append(p)
+        except socket.timeout:
+            pass
+        return out
+
+    # A: G.722, 20 ms, AEAD_AES_128_GCM
+    ka, kb = os.urandom(28), os.urandom(28)
+    open_(0x51, 0x1001, 1, 6, 9, 2, ka, kb)
+    check(wait_for(lambda: acked(0x51) is not None, 3) and acked(0x51) == 0,
+          "media A: MEDIA_OPEN_ACK status 0")
+    fwd = [tp.parse_tlv(b) for t, c, b in stubd.of(MEDIA_OPEN) if c == 0x51]
+    check(fwd and sorted(fwd[0]) == [1, 2, 3, 4, 13] and fwd[0][3] == b"\6",
+          "... dect-stubd got it without keys or address: tags %s" %
+          (sorted(fwd[0]) if fwd else None))
+    check(wait_for(lambda: 0x1001 in stubd.audio, 3) and
+          stubd.hello[0x1001] == "media=4097 codec=g722",
+          "... and the audio connection named it (%s)" %
+          stubd.hello.get(0x1001))
+    up = [bytes((k * 160 + j) & 0xFF for j in range(160)) for k in range(5)]
+    for f in up:
+        stubd.audio[0x1001].send(f)
+        time.sleep(0.02)
+    rx = Srtp(2, ka)
+    pk = packets(5)
+    try:
+        plain = [rx.unprotect(p) for p in pk]
+    except Exception:
+        plain = []
+    seqs = [struct.unpack(">H", p[2:4])[0] for p in plain]
+    tss = [struct.unpack(">I", p[4:8])[0] for p in plain]
+    check(len(plain) == 5 and [p[12:] for p in plain] == up and
+          [p[1] for p in plain] == [0x89, 9, 9, 9, 9] and
+          all(p[8:12] == b"\0\0\0\xa1" for p in plain) and
+          all((seqs[i + 1] - seqs[i]) & 0xFFFF == 1 for i in range(4)) and
+          all((tss[i + 1] - tss[i]) & 0xFFFFFFFF == 160 for i in range(4)),
+          "... 5 frames up as SRTP (GCM) the controller decrypts: marker, "
+          "pt 9, SSRC, seq +1, ts +160 (%d packets)" % len(plain))
+    tx = Srtp(2, kb)
+    down = [bytes((0x40 + k * 7 + j) & 0xFF for j in range(160))
+            for k in range(3)]
+    sent = []
+    for k, f in enumerate(down):
+        p = tx.protect(struct.pack(">BBHII", 0x80, 9, 100 + k, 1000 + 160 * k,
+                                   0xB1) + f)
+        sent.append(p)
+        u.sendto(p, src[0])
+        time.sleep(0.02)
+    u.sendto(sent[1], src[0])                               # a replay
+    forged = bytearray(tx.protect(struct.pack(">BBHII", 0x80, 9, 103, 1480,
+                                              0xB1) + down[0]))
+    forged[-1] ^= 1
+    u.sendto(bytes(forged), src[0])
+    time.sleep(0.5)
+    check(stubd.down.get(0x1001) == down,
+          "... 3 packets down arrive as 3 frames; the replay and the "
+          "forged one do not (%d frames)" % len(stubd.down.get(0x1001, [])))
+
+    # B: L16 8 kHz, 10 ms, AES_CM_128_HMAC_SHA1_80
+    ka, kb = os.urandom(30), os.urandom(30)
+    open_(0x52, 7, 2, 1, 96, 1, ka, kb, ptime=10)
+    check(wait_for(lambda: acked(0x52) is not None, 3) and acked(0x52) == 0
+          and wait_for(lambda: 7 in stubd.audio, 3) and
+          stubd.hello[7] == "media=7 rate=8000",
+          "media B: open, its audio connection says rate=8000")
+    up = [struct.pack("<160h", *[(k * 1000 + j * 3) - 2000
+                                 for j in range(160)]) for k in range(2)]
+    for f in up:
+        stubd.audio[7].send(f)
+        time.sleep(0.02)
+    rx = Srtp(1, ka)
+    pk = [p for p in packets(4) if p[8:12] == b"\0\0\0\xa2"]
+    try:
+        plain = [rx.unprotect(p) for p in pk]
+    except Exception:
+        plain = []
+    want = []
+    for f in up:
+        be = struct.pack(">160h", *struct.unpack("<160h", f))
+        want += [be[:160], be[160:]]
+    tss = [struct.unpack(">I", p[4:8])[0] for p in plain]
+    check(len(plain) == 4 and [p[12:] for p in plain] == want and
+          all((tss[i + 1] - tss[i]) & 0xFFFFFFFF == 80 for i in range(3)),
+          "... 2 frames up as 4 SRTP packets (HMAC-SHA1), 10 ms each, "
+          "in network order, ts +80 (%d packets)" % len(plain))
+    tx = Srtp(1, kb)
+    pcm = struct.pack(">160h", *range(-80, 80))
+    for k in range(2):
+        u.sendto(tx.protect(struct.pack(">BBHII", 0x80, 96, 500 + k,
+                                        80 * k, 0xB2) +
+                            pcm[k * 160:(k + 1) * 160]), src[0])
+    time.sleep(0.3)
+    check(stubd.down.get(7) == [struct.pack("=160h", *range(-80, 80))],
+          "... two 10 ms packets down make one 20 ms frame in host order")
+
+    # plain RTP: not without -P
+    open_(0x53, 9, 1, 6, 9, 0, b"", b"")
+    check(wait_for(lambda: acked(0x53) is not None, 3) and acked(0x53) == 4
+          and not [f for f in stubd.of(MEDIA_OPEN) if f[1] == 0x53],
+          "plain RTP refused (status 4) without -P, dect-stubd not asked")
+
+    # MEDIA_CLOSE: answered with dect-stubd's MEDIA_CLOSED, the flow stops
+    ctl_send(tp.frame(MEDIA_CLOSE, 0x54, tp.tlv([(1, struct.pack(
+        ">I", 0x1001))])))
+    check(wait_for(lambda: [1 for t, c, b in got
+                            if t == MEDIA_CLOSED and c == 0x54], 3),
+          "MEDIA_CLOSE: MEDIA_CLOSED comes back")
+    u.close()
 
 
 def silent(exe, cell, env):
@@ -210,7 +474,7 @@ def silent(exe, cell, env):
 def main():
     exe = os.path.abspath(sys.argv[1])
     d = tempfile.mkdtemp(prefix="cell-link-")
-    stubd = Stubd(os.path.join(d, "stubd.sock"))
+    stubd = Stubd(os.path.join(d, "stubd.sock"), os.path.join(d, "audio.sock"))
     ctl = Controller(os.path.join(d, "ctl"))
     cell = os.path.join(d, "cell")
     os.mkdir(cell, 0o700)
@@ -224,6 +488,11 @@ def main():
         return 1
 
     got1, got2 = [], []
+    link2 = []
+
+    def send2(b):
+        with SEND_LOCK:
+            link2[0].sendall(b)
 
     def first(s, corr):
         reader(s, got1)
@@ -243,11 +512,13 @@ def main():
         time.sleep(0.5)
         # 600 frames of 21 octets: 12 kB, more than the cell's buffer
         s.sendall(b"".join(mail_down(0x100 + i, 1) for i in range(600)))
-        time.sleep(30)
+        link2.append(s)
+        time.sleep(60)
 
     ctl.scripts = [first, second]
     p = subprocess.Popen([exe, "-d", cell, "-s",
-                          os.path.join(d, "stubd.sock"), "run"],
+                          os.path.join(d, "stubd.sock"), "-a",
+                          os.path.join(d, "audio.sock"), "run"],
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          text=True, env=env)
     try:
@@ -274,6 +545,8 @@ def main():
         time.sleep(4)
         check(ctl.hellos == 2, "... and the link held (%d HELLOs)" %
               ctl.hellos)
+        if link2:
+            media(stubd, send2, got2)
         t0 = time.time()
         p.send_signal(signal.SIGTERM)
         try:

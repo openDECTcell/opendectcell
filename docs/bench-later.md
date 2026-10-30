@@ -285,6 +285,21 @@ it had been copied over the 0.3.0 package's file. Taking
 record is not in `/var/run/opendectcell` yet). Left for the maintainer, as
 it reboots the radio.
 
+## 1b. M1: the cell's media on air (written 2026-10-30, needs C3)
+
+The controller places or takes a call through a cell (the 7412 in cell
+mode, `dect-cell` enrolled) once its C3 host drives calls. Built and tested
+at the desk only (`tests/test_stubd_cell.c`, `make check-cell`); the
+sources are opendectcell-controller cell-protocol.md §8 and
+[notes-for-the-controller.md](notes-for-the-controller.md), "The cell's
+media is built".
+
+| test | pass | fail and what it means |
+|---|---|---|
+| M1a. A wideband call, handset to the controller's SIP peer | the cell's log: `cell: media N: channel 1 on handle H, lane 0 (TDM word W, G.722), G.722 on the socket`, then `media N up: G.722, 20 ms, SRTP AEAD_AES_128_GCM` (or the profile the controller picked); speech both ways, clean | `no lane for channel C (no long 0x0242 ...)`: MEDIA_OPEN came before the chip's answer to the bind, or named another nibble; `(its bind's mask names none)`: the 0x0242 mask is not one bit 1-3. Speech one way only: the 7412's lane numbering (control lane + k) is wrong for the cell's channel; noise: the lane is narrowband but the bind said G.722, or the reverse (the 0x0242's bit 6) |
+| M1b. A narrowband call (`-a narrowband` on the controller's side, or a G.711-only peer) | `... (TDM word W, narrowband), 8 kHz linear on the socket`; speech both ways | noise: byte order on the 7412 (big-endian MIPS: host order on the socket, network order on the wire, `media_up()`/`media_down()`) |
+| M1c. Hang up at either end | `cell: media N closed (requested)` or `(the chip released the channel)`, and the controller's MEDIA_CLOSED; `"media":0` in `/var/run/opendectcell/cell.json` | a session left open: the release path missed `0x0201` on the handle |
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |

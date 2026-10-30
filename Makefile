@@ -15,7 +15,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls $(BUILD)/test_stubd $(BUILD)/test_base
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls $(BUILD)/test_stubd $(BUILD)/test_stubd_cell $(BUILD)/test_base
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 
 # Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
@@ -124,6 +124,13 @@ $(BUILD)/test_stubd: tests/test_stubd.c $(STUBD_SRC) src/stubd/ssc_align.h tests
 		-DAB_PATH='"$(BUILD)/stubd-test-run/audio.sock"' \
 		-o $@ tests/test_stubd.c $(filter-out src/stubd/dect-stubd.c,$(STUBD_SRC)) -lm
 
+# The cell side's media (dect-stubd -K, cell-protocol.md §8), the same way
+$(BUILD)/test_stubd_cell: tests/test_stubd_cell.c $(STUBD_SRC) src/stubd/ssc_align.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(DEFS) $(SAN) $(STUBD_INC) -DSTUBD_TEST -DDECT_RUN_DIR='"$(BUILD)/stubd-cell-run"' \
+		-DAB_PATH='"$(BUILD)/stubd-cell-run/audio.sock"' \
+		-o $@ tests/test_stubd_cell.c $(filter-out src/stubd/dect-stubd.c,$(STUBD_SRC)) -lm
+
 $(BUILD)/test_base: tests/test_base.c $(filter src/libopendectcell/%,$(STUBD_SRC)) src/libopendectcell/dect_base.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -Isrc/libopendectcell -o $@ tests/test_base.c $(filter src/libopendectcell/%,$(STUBD_SRC)) -lm
@@ -208,23 +215,28 @@ baresip-mod: src/baresip/opendectcell.c src/libopendectcell/dect_ctl.c src/libop
 #   make dect-cell CC=<SDK gcc> MBEDTLS=<...>/usr STAGING_DIR=<SDK>/staging_dir
 # The OpenWrt package opendectcell-cell builds it against the feed's mbedTLS.
 MBEDTLS ?= /usr
+CELL_SRC := src/cell/dect-cell.c src/cell/dect_srtp.c src/libopendectcell/dect_cell.c
 dect-cell: $(BUILD)/dect-cell
-$(BUILD)/dect-cell: src/cell/dect-cell.c src/libopendectcell/dect_cell.c src/libopendectcell/dect_cell.h
+$(BUILD)/dect-cell: $(CELL_SRC) src/libopendectcell/dect_cell.h src/cell/dect_srtp.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) -Isrc/libopendectcell -I$(MBEDTLS)/include \
-		-L$(MBEDTLS)/lib -o $@ src/cell/dect-cell.c src/libopendectcell/dect_cell.c \
-		-lmbedtls -lmbedx509 -lmbedcrypto
+	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) -Isrc/libopendectcell -Isrc/cell -I$(MBEDTLS)/include \
+		-L$(MBEDTLS)/lib -o $@ $(CELL_SRC) -lmbedtls -lmbedx509 -lmbedcrypto
 
 # dect-cell with the sanitizers against a scripted controller (needs
 # MBEDTLS as above, and Python's cryptography): make check-cell MBEDTLS=...
-check-cell: $(BUILD)/dect-cell-test
+check-cell: $(BUILD)/test_srtp $(BUILD)/dect-cell-test
+	./$(BUILD)/test_srtp
 	python3 -I tests/test_cell_link.py $(BUILD)/dect-cell-test
 
-$(BUILD)/dect-cell-test: src/cell/dect-cell.c src/libopendectcell/dect_cell.c src/libopendectcell/dect_cell.h
+$(BUILD)/test_srtp: tests/test_srtp.c src/cell/dect_srtp.c src/cell/dect_srtp.h tests/check.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SAN) $(DEFS) -Isrc/libopendectcell -I$(MBEDTLS)/include \
-		-L$(MBEDTLS)/lib -o $@ src/cell/dect-cell.c src/libopendectcell/dect_cell.c \
-		-lmbedtls -lmbedx509 -lmbedcrypto
+	$(CC) $(CFLAGS) $(SAN) -Isrc/cell -I$(MBEDTLS)/include -L$(MBEDTLS)/lib \
+		-o $@ tests/test_srtp.c -lmbedcrypto
+
+$(BUILD)/dect-cell-test: $(CELL_SRC) src/libopendectcell/dect_cell.h src/cell/dect_srtp.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) $(DEFS) -Isrc/libopendectcell -Isrc/cell -I$(MBEDTLS)/include \
+		-L$(MBEDTLS)/lib -o $@ $(CELL_SRC) -lmbedtls -lmbedx509 -lmbedcrypto
 
 check: $(TESTS)
 	@set -e; for t in $(TESTS); do ./$$t; done

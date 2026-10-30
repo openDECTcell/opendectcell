@@ -877,3 +877,48 @@ from LuCI to the init script). §9's P0 bound (close when a frame waits
 over 500 ms) and `TCP_NOTSENT_LOWAT` are not built; writes block for up
 to 5 s. `make check-cell MBEDTLS=...` runs dect-cell with the sanitizers
 against a scripted controller (`tests/test_cell_link.py`).
+
+## The cell's media is built `[2026-10-30, late night]`
+
+MEDIA_OPEN no longer answers status 4. What the cell does (cell-protocol.md
+§8, §14.2):
+
+- **HELLO announces MEDIA and SRTP** (and PLAIN_RTP only where the admin
+  set `opendectcell.main.cell_plain_rtp '1'`, which runs `dect-cell -P`). The
+  cell takes MEDIA_OPEN only if HELLO_ACK tag 10 has MEDIA, and only while
+  the cell is active.
+- **The lane comes from the chip's answer to your bind.** dect-stubd keeps
+  the last long `0x0242 {h, chan_flags, mask0, mask1}` per live handle.
+  MEDIA_OPEN's `audio_channel` must equal that `chan_flags` low nibble
+  (1, 2 or 4 for channels 1, 2, 3 as stock binds them); the mask bit
+  gives the lane, flag bit 6 whether the lane carries G.722. So send
+  MEDIA_OPEN after the long 0x0242, as `call_up()` does. No such 0x0242 on
+  a live handle: status 1. A handle's 0x0201 (connection down) closes its
+  session with MEDIA_CLOSED reason 1, unasked.
+- **One format both ways for now**: tag 3 is 6 (G.722) or 1 (L16 8 kHz);
+  tag 13, if present, must be the same, else status 2. The lane's own
+  format passes as it is; the other is converted on the box (G.722 coded
+  or decoded), so pick the lane's format when the far end allows it.
+  `ptime` 10 or 20; `payload_type` 0-127; `media_id` any u32, 0 too.
+- **SRTP**: profile 1 (AES_CM_128_HMAC_SHA1_80, 30-octet key || salt) and
+  2 (AEAD_AES_128_GCM, 28 octets), RFC 3711 KDF at rate 0, no MKI; the
+  receiver keeps a 64-packet replay window. Checked against the RFC 3711
+  B.2/B.3 and RFC 7714 16.1.1 vectors and, end to end, against an SRTP
+  written apart from it in Python (`make check-cell`). Profile 0 without
+  the admin's setting: status 4.
+- **The UDP socket is connected to `ctl_addr`**: the kernel drops packets
+  from anywhere else; the cell also drops a wrong SSRC or payload type, a
+  failed tag, a replay, and a payload not exactly one ptime long. Your
+  packets: one ptime of audio each, in order (two 10 ms halves make one
+  20 ms frame; a gap drops the first half).
+- **Packets up** start at a random sequence number and timestamp, the
+  marker set on the first; the timestamp counts 8000 per second for both
+  formats (G.722 as RFC 3551 says). They flow while the lane carries live
+  words, which it does through a call; a silent or idle lane sends none
+  (§8.3's "every ptime, silence too" is not met there yet).
+- **MEDIA_CLOSE** is answered by dect-stubd's MEDIA_CLOSED (reason 0),
+  also for a session already gone. dect-stubd's restart closes every
+  session with reason 2. A lost control link leaves the flows running
+  (§6.4).
+- Not on air yet: the first call with audio is C3's. Bench card M1 in
+  `docs/bench-later.md`.

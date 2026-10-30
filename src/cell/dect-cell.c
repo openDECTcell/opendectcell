@@ -38,6 +38,7 @@
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/oid.h>
 #include <mbedtls/pk.h>
+#include <mbedtls/platform_util.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
@@ -45,6 +46,7 @@
 #include <psa/crypto.h>
 
 #include "dect_cell.h"
+#include "dect_srtp.h"
 
 #ifndef OPENDECTCELL_VERSION
 #define OPENDECTCELL_VERSION "dev"
@@ -52,6 +54,7 @@
 
 #define CELL_DIR	"/etc/opendectcell/cell"
 #define STUBD_SOCK	"/var/run/opendectcell-cell.sock"
+#define AUDIO_SOCK	"/var/run/opendectcell-audio.sock"	/* dect-stubd's */
 #define LINK_STATE	"/var/run/opendectcell/cell-link.json"
 #define CONNECT_MS	5000u		/* TCP + TLS + HELLO_ACK */
 #define BACKOFF_MAX_MS	30000u		/* §6.4 */
@@ -61,6 +64,8 @@
 
 static const char *dir = CELL_DIR;
 static const char *stubd_path = STUBD_SOCK;
+static const char *audio_path = AUDIO_SOCK;
+static int allow_plain;		/* -P: the admin allows plain RTP (§8.1) */
 static int verbose;
 static volatile sig_atomic_t stop;
 
@@ -765,6 +770,35 @@ static int creds_load(struct creds *c)
 	return c->addr[0] && c->pins[0][0] ? 0 : -1;
 }
 
+/*
+ * §8 media: a session per MEDIA_OPEN, until MEDIA_CLOSED. The controller's
+ * UDP flow on one side (RTP, SRTP when keyed), dect-stubd's audio socket on
+ * the other: 20 ms frames of 160 G.722 octets or 160 linear samples at
+ * 8 kHz in host order (docs/bridge-interface.md §3, cell-protocol §14.2).
+ * The keys stay here; dect-stubd gets the session without them.
+ */
+#define MEDIA_MAX	3u		/* the chip's voice channels */
+#define RTP_MAX		(12u + 320u + DECT_SRTP_OVERHEAD)
+
+struct media {
+	int      used;		/* MEDIA_OPEN taken, sent to dect-stubd */
+	int      live;		/* dect-stubd took it: the flow runs */
+	uint32_t id;
+	uint8_t  fmt, ptime, pt, profile, dscp;
+	struct sockaddr_storage peer;
+	socklen_t peer_len;
+	uint32_t ssrc_up, ssrc_down;
+	struct dect_srtp tx, rx;
+	int      udp, audio;	/* -1 = none */
+	uint16_t seq;
+	uint32_t ts;
+	int      marker;	/* the first packet's */
+	uint8_t  half[320];	/* ptime 10: the first half of 20 ms down */
+	size_t   half_len;
+	uint16_t half_seq;
+	uint32_t pkts_up, pkts_down, dropped;
+};
+
 struct link {
 	struct tls tls;
 	int stubd;			/* dect-stubd's local socket, -1 */
@@ -794,6 +828,8 @@ struct link {
 	int      have_token;
 	uint64_t lost_at;
 	uint16_t grace_ms;
+	uint32_t caps;			/* HELLO_ACK tag 10: what both have */
+	struct media media[MEDIA_MAX];
 };
 
 /* §10 stats_interval_s, its default: CONFIG_SET is not applied yet */
@@ -947,9 +983,10 @@ static int hello(struct link *l)
 		dect_cell_tlv_str(&t, 4, hw);
 	dect_cell_tlv_put(&t, 5, l->boot_id, sizeof(l->boot_id));
 	dect_cell_tlv_u32(&t, 6, l->epoch);
-	/* media is not built yet (§14.3): the mail tunnel and FLOW only */
 	dect_cell_tlv_u32(&t, 7, DECT_CELL_CAP_MAIL | DECT_CELL_CAP_FLOW |
-			  DECT_CELL_CAP_STATS | DECT_CELL_CAP_RESUME);
+			  DECT_CELL_CAP_STATS | DECT_CELL_CAP_RESUME |
+			  DECT_CELL_CAP_MEDIA | DECT_CELL_CAP_SRTP |
+			  (allow_plain ? DECT_CELL_CAP_PLAIN_RTP : 0u));
 	dect_cell_tlv_u8(&t, 8, 6);	/* subscription records */
 	dect_cell_tlv_u8(&t, 9, 6);	/* radio connection contexts */
 	dect_cell_tlv_u8(&t, 10, 3);	/* voice channels [CR A-0124] */
@@ -1013,6 +1050,8 @@ static int link_up(struct link *l)
 	}
 	(void)dect_cell_tlv_get_u16(f.body, f.len, 6, &hb);
 	(void)dect_cell_tlv_get_u16(f.body, f.len, 7, &dead);
+	l->caps = 0;
+	(void)dect_cell_tlv_get_u32(f.body, f.len, 10, &l->caps);
 	{
 		size_t tn = 0;
 		const uint8_t *tok = dect_cell_tlv_get(f.body, f.len, 4, &tn);
@@ -1058,6 +1097,396 @@ fail:
 		backoff(l, mono_ms());
 	set_state(l, l->enrolled ? "connecting" : "not enrolled");
 	return -1;
+}
+
+/* ---- media (§8) ------------------------------------------------------- */
+
+static void media_free(struct media *m)
+{
+	if (m->udp >= 0)
+		close(m->udp);
+	if (m->audio >= 0)
+		close(m->audio);
+	dect_srtp_free(&m->tx);
+	dect_srtp_free(&m->rx);
+	mbedtls_platform_zeroize(m, sizeof(*m));
+	m->udp = m->audio = -1;
+}
+
+static struct media *media_of(struct link *l, uint32_t id)
+{
+	unsigned i;
+
+	for (i = 0; i < MEDIA_MAX; i++)
+		if (l->media[i].used && l->media[i].id == id)
+			return &l->media[i];
+	return NULL;
+}
+
+static void media_ack(struct link *l, uint16_t corr, uint32_t id,
+		      uint16_t status, uint64_t now)
+{
+	uint8_t b[16];
+	struct dect_cell_tlv t;
+
+	if (!l->tls.up)
+		return;
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u32(&t, 1, id);
+	dect_cell_tlv_u16(&t, 2, status);
+	ctl_send(l, DECT_CELL_MEDIA_OPEN_ACK, corr, b, t.len, now);
+}
+
+static void media_closed(struct link *l, uint32_t id, uint8_t reason,
+			 uint64_t now)
+{
+	uint8_t b[16];
+	struct dect_cell_tlv t;
+
+	if (!l->tls.up)
+		return;
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u32(&t, 1, id);
+	dect_cell_tlv_u8(&t, 2, reason);
+	ctl_send(l, DECT_CELL_MEDIA_CLOSED, 0, b, t.len, now);
+}
+
+/*
+ * MEDIA_OPEN from the controller (§8.1): checked and keyed here, then
+ * passed to dect-stubd without the keys and the address; the flow starts
+ * on its MEDIA_OPEN_ACK.
+ */
+static void media_open(struct link *l, const struct dect_cell_frame *f,
+		       uint64_t now)
+{
+	const uint8_t *body = f->body, *a, *ku, *kd;
+	size_t len = f->len, an = 0, kun = 0, kdn = 0, kl;
+	uint32_t id, su, sd;
+	uint8_t ch, fmt, fmt_up, pt, prof, ptime = 20, dscp = 46;
+	struct media *m = NULL;
+	uint8_t b[32];
+	struct dect_cell_tlv t;
+	unsigned i;
+
+	if (!(l->caps & DECT_CELL_CAP_MEDIA)) {
+		ctl_error(l, DECT_CELL_ERR_NOT_ALLOWED, f->type, f->corr, now);
+		return;
+	}
+	if (dect_cell_tlv_check(body, len) ||
+	    dect_cell_tlv_get_u32(body, len, 1, &id) ||
+	    dect_cell_tlv_get_u8(body, len, 2, &ch) ||
+	    dect_cell_tlv_get_u8(body, len, 3, &fmt) ||
+	    dect_cell_tlv_get_u8(body, len, 5, &pt) ||
+	    !(a = dect_cell_tlv_get(body, len, 6, &an)) ||
+	    dect_cell_tlv_get_u32(body, len, 7, &su) ||
+	    dect_cell_tlv_get_u32(body, len, 8, &sd) ||
+	    dect_cell_tlv_get_u8(body, len, 9, &prof) ||
+	    !((an == 7u && a[0] == 4u) || (an == 19u && a[0] == 6u))) {
+		ctl_error(l, DECT_CELL_ERR_MALFORMED, f->type, f->corr, now);
+		return;
+	}
+	fmt_up = fmt;
+	(void)dect_cell_tlv_get_u8(body, len, 13, &fmt_up);
+	(void)dect_cell_tlv_get_u8(body, len, 4, &ptime);
+	(void)dect_cell_tlv_get_u8(body, len, 12, &dscp);
+	ku = dect_cell_tlv_get(body, len, 10, &kun);
+	kd = dect_cell_tlv_get(body, len, 11, &kdn);
+	kl = prof == DECT_SRTP_AES_CM_SHA1_80 ? 30u :
+	     prof == DECT_SRTP_AEAD_AES_128_GCM ? 28u : 0u;
+	if (prof && (!ku || !kd || kun != kl || kdn != kl)) {
+		ctl_error(l, DECT_CELL_ERR_MALFORMED, f->type, f->corr, now);
+		return;
+	}
+	if ((fmt != DECT_CELL_FMT_G722 && fmt != DECT_CELL_FMT_L16_8K) ||
+	    fmt_up != fmt || (ptime != 10u && ptime != 20u) || pt > 127u ||
+	    (prof && !kl)) {
+		media_ack(l, f->corr, id, 2, now);
+		return;
+	}
+	/* §8.1: plain RTP only where the admin allowed it and both agreed */
+	if (!prof && !(allow_plain && (l->caps & DECT_CELL_CAP_PLAIN_RTP))) {
+		logf_("media %u: plain RTP refused (not allowed here)", id);
+		media_ack(l, f->corr, id, 4, now);
+		return;
+	}
+	if (media_of(l, id)) {
+		media_ack(l, f->corr, id, 3, now);
+		return;
+	}
+	for (i = 0; i < MEDIA_MAX && !m; i++)
+		if (!l->media[i].used)
+			m = &l->media[i];
+	if (!m) {
+		media_ack(l, f->corr, id, 3, now);
+		return;
+	}
+	memset(m, 0, sizeof(*m));
+	m->udp = m->audio = -1;
+	if (prof && (dect_srtp_init(&m->tx, prof, ku, kun) ||
+		     dect_srtp_init(&m->rx, prof, kd, kdn))) {
+		media_free(m);
+		media_ack(l, f->corr, id, 4, now);
+		return;
+	}
+	m->id = id;
+	m->fmt = fmt;
+	m->ptime = ptime;
+	m->pt = pt;
+	m->profile = prof;
+	m->dscp = dscp;
+	m->ssrc_up = su;
+	m->ssrc_down = sd;
+	if (a[0] == 4u) {
+		struct sockaddr_in *sa = (struct sockaddr_in *)&m->peer;
+
+		sa->sin_family = AF_INET;
+		memcpy(&sa->sin_addr, a + 1, 4);
+		memcpy(&sa->sin_port, a + 5, 2);	/* network order */
+		m->peer_len = sizeof(*sa);
+	} else {
+		struct sockaddr_in6 *sa = (struct sockaddr_in6 *)&m->peer;
+
+		sa->sin6_family = AF_INET6;
+		memcpy(&sa->sin6_addr, a + 1, 16);
+		memcpy(&sa->sin6_port, a + 17, 2);
+		m->peer_len = sizeof(*sa);
+	}
+	/* to dect-stubd: the session, the channel, the formats; no keys */
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u32(&t, 1, id);
+	dect_cell_tlv_u8(&t, 2, ch);
+	dect_cell_tlv_u8(&t, 3, fmt);
+	dect_cell_tlv_u8(&t, 4, ptime);
+	dect_cell_tlv_u8(&t, 13, fmt_up);
+	if (stubd_send(l, DECT_CELL_MEDIA_OPEN, f->corr, b, t.len)) {
+		media_free(m);
+		media_ack(l, f->corr, id, 4, now);
+		return;
+	}
+	m->used = 1;
+}
+
+/* dect-stubd took the session: the UDP flow and its audio connection. */
+static int media_start(struct media *m)
+{
+	struct sockaddr_un a;
+	char hello[48];
+	int tos = m->dscp << 2;
+	uint8_t r[6];
+
+	m->udp = socket(m->peer.ss_family, SOCK_DGRAM | SOCK_NONBLOCK |
+			SOCK_CLOEXEC, 0);
+	if (m->udp < 0)
+		return -1;
+	if (m->peer.ss_family == AF_INET)
+		(void)setsockopt(m->udp, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
+	else
+		(void)setsockopt(m->udp, IPPROTO_IPV6, IPV6_TCLASS, &tos,
+				 sizeof(tos));
+	/* connected: the kernel drops what does not come from the peer */
+	if (connect(m->udp, (struct sockaddr *)&m->peer, m->peer_len))
+		return -1;
+	m->audio = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_NONBLOCK |
+			  SOCK_CLOEXEC, 0);
+	memset(&a, 0, sizeof(a));
+	a.sun_family = AF_UNIX;
+	snprintf(a.sun_path, sizeof(a.sun_path), "%s", audio_path);
+	snprintf(hello, sizeof(hello), "media=%u %s", m->id,
+		 m->fmt == DECT_CELL_FMT_G722 ? "codec=g722" : "rate=8000");
+	if (m->audio < 0 ||
+	    connect(m->audio, (struct sockaddr *)&a, sizeof(a)) ||
+	    send(m->audio, hello, strlen(hello), MSG_NOSIGNAL) !=
+	    (ssize_t)strlen(hello))
+		return -1;
+	/* RFC 3550 §5.1: random first sequence number and timestamp */
+	if (mbedtls_ctr_drbg_random(&drbg, r, sizeof(r)))
+		return -1;
+	m->seq = (uint16_t)(r[0] << 8 | r[1]);
+	m->ts = (uint32_t)r[2] << 24 | (uint32_t)r[3] << 16 |
+		(uint32_t)r[4] << 8 | r[5];
+	m->marker = 1;
+	m->live = 1;
+	return 0;
+}
+
+/* MEDIA_OPEN_ACK from dect-stubd: start the flow, then tell the controller. */
+static void media_acked(struct link *l, const struct dect_cell_frame *f,
+			uint64_t now)
+{
+	uint32_t id;
+	uint16_t st;
+	struct media *m;
+
+	if (dect_cell_tlv_check(f->body, f->len) ||
+	    dect_cell_tlv_get_u32(f->body, f->len, 1, &id) ||
+	    dect_cell_tlv_get_u16(f->body, f->len, 2, &st) ||
+	    !(m = media_of(l, id)) || m->live)
+		return;
+	if (st == 0 && media_start(m)) {
+		uint8_t b[8];
+		struct dect_cell_tlv t;
+
+		logf_("media %u: no UDP flow or audio socket: %s", id,
+		      strerror(errno));
+		dect_cell_tlv_init(&t, b, sizeof(b));
+		dect_cell_tlv_u32(&t, 1, id);
+		(void)stubd_send(l, DECT_CELL_MEDIA_CLOSE, 0, b, t.len);
+		st = 4;
+	}
+	if (st) {
+		media_free(m);
+	} else {
+		logf_("media %u up: %s, %u ms, %s", id,
+		      m->fmt == DECT_CELL_FMT_G722 ? "G.722" : "L16 8 kHz",
+		      m->ptime, m->profile == DECT_SRTP_AES_CM_SHA1_80 ?
+		      "SRTP AES_CM_128_HMAC_SHA1_80" : m->profile ?
+		      "SRTP AEAD_AES_128_GCM" : "plain RTP");
+	}
+	media_ack(l, f->corr, id, st, now);
+}
+
+/* MEDIA_CLOSE from the controller: dect-stubd answers MEDIA_CLOSED. */
+static void media_close(struct link *l, const struct dect_cell_frame *f)
+{
+	uint32_t id;
+	struct media *m;
+
+	if (!dect_cell_tlv_check(f->body, f->len) &&
+	    !dect_cell_tlv_get_u32(f->body, f->len, 1, &id) &&
+	    (m = media_of(l, id)))
+		media_free(m);
+	(void)stubd_send(l, f->type, f->corr, f->body, f->len);
+}
+
+/* RTP header (RFC 3550 §5.1) for the next packet up. */
+static void rtp_header(struct media *m, uint8_t *p, uint32_t step)
+{
+	p[0] = 0x80;
+	p[1] = (uint8_t)(m->pt | (m->marker ? 0x80u : 0u));
+	p[2] = (uint8_t)(m->seq >> 8);
+	p[3] = (uint8_t)m->seq;
+	p[4] = (uint8_t)(m->ts >> 24);
+	p[5] = (uint8_t)(m->ts >> 16);
+	p[6] = (uint8_t)(m->ts >> 8);
+	p[7] = (uint8_t)m->ts;
+	p[8] = (uint8_t)(m->ssrc_up >> 24);
+	p[9] = (uint8_t)(m->ssrc_up >> 16);
+	p[10] = (uint8_t)(m->ssrc_up >> 8);
+	p[11] = (uint8_t)m->ssrc_up;
+	m->marker = 0;
+	m->seq++;
+	m->ts += step;
+}
+
+/*
+ * 20 ms from dect-stubd, up to the controller: one packet, or two at a
+ * ptime of 10. L16 goes in network order. Both formats count 8000 per
+ * second on the RTP clock (G.722 too, RFC 3551 §4.5.2).
+ */
+static void media_up(struct media *m)
+{
+	uint8_t fr[320], p[RTP_MAX];
+	size_t want = m->fmt == DECT_CELL_FMT_G722 ? 160u : 320u, part, k;
+	ssize_t n = recv(m->audio, fr, sizeof(fr), MSG_DONTWAIT);
+	unsigned i;
+
+	if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK &&
+		       errno != EINTR)) {
+		close(m->audio);	/* dect-stubd closes it with the lane */
+		m->audio = -1;
+		return;
+	}
+	if (n != (ssize_t)want)
+		return;
+	if (m->fmt == DECT_CELL_FMT_L16_8K)
+		for (k = 0; k < want; k += 2u) {
+			uint16_t v;
+
+			memcpy(&v, fr + k, 2);
+			fr[k] = (uint8_t)(v >> 8);
+			fr[k + 1u] = (uint8_t)v;
+		}
+	part = m->ptime == 10u ? want / 2u : want;
+	for (i = 0; i < want / part; i++) {
+		long len;
+
+		rtp_header(m, p, m->ptime == 10u ? 80u : 160u);
+		memcpy(p + 12, fr + i * part, part);
+		len = (long)(12u + part);
+		if (m->profile)
+			len = dect_srtp_protect(&m->tx, p, (size_t)len, sizeof(p));
+		if (len > 0 && send(m->udp, p, (size_t)len, MSG_DONTWAIT) == len)
+			m->pkts_up++;
+		else
+			m->dropped++;
+	}
+}
+
+/* A packet from the controller, down to dect-stubd in 20 ms frames. */
+static void media_down(struct media *m)
+{
+	uint8_t p[RTP_MAX + 64], fr[320];
+	size_t want = m->fmt == DECT_CELL_FMT_G722 ? 160u : 320u, part, h, k;
+	ssize_t n = recv(m->udp, p, sizeof(p), MSG_DONTWAIT);
+	long len = n;
+	uint16_t seq;
+	const uint8_t *pl;
+
+	if (n <= 0)
+		return;
+	h = dect_rtp_header_len(p, (size_t)n);
+	if (!h || (p[1] & 0x7Fu) != m->pt || ((uint32_t)p[8] << 24 |
+	    (uint32_t)p[9] << 16 | (uint32_t)p[10] << 8 | p[11]) !=
+	    m->ssrc_down) {
+		m->dropped++;
+		return;
+	}
+	if (m->profile)
+		len = dect_srtp_unprotect(&m->rx, p, (size_t)n);
+	part = m->ptime == 10u ? want / 2u : want;
+	if (len < 0 || (size_t)len - h != part) {
+		m->dropped++;		/* forged, replayed or the wrong size */
+		return;
+	}
+	m->pkts_down++;
+	seq = (uint16_t)(p[2] << 8 | p[3]);
+	pl = p + h;
+	if (m->ptime == 10u) {
+		/* two halves in sequence make a frame; a gap starts over */
+		if (!m->half_len || (uint16_t)(m->half_seq + 1u) != seq) {
+			memcpy(m->half, pl, part);
+			m->half_len = part;
+			m->half_seq = seq;
+			return;
+		}
+		memcpy(fr, m->half, part);
+		memcpy(fr + part, pl, part);
+		m->half_len = 0;
+	} else {
+		memcpy(fr, pl, part);
+	}
+	if (m->fmt == DECT_CELL_FMT_L16_8K)
+		for (k = 0; k < want; k += 2u) {
+			uint16_t v = (uint16_t)(fr[k] << 8 | fr[k + 1u]);
+
+			memcpy(fr + k, &v, 2);
+		}
+	if (m->audio >= 0)
+		(void)send(m->audio, fr, want, MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
+/* dect-stubd gone: its lanes with it, every session closed (reason 2). */
+static void media_drop_all(struct link *l, uint64_t now)
+{
+	unsigned i;
+
+	for (i = 0; i < MEDIA_MAX; i++)
+		if (l->media[i].used) {
+			uint32_t id = l->media[i].id;
+
+			media_free(&l->media[i]);
+			media_closed(l, id, 2, now);
+		}
 }
 
 /* One STATS counter, tag 1 {id u16, value u64} (§10). */
@@ -1133,6 +1562,14 @@ static void from_controller(struct link *l, const struct dect_cell_frame *f,
 		if (l->cell_state != DECT_CELL_ST_ACTIVE) {
 			ctl_error(l, DECT_CELL_ERR_NOT_ALLOWED, f->type,
 				  f->corr, now);
+			break;
+		}
+		if (f->type == DECT_CELL_MEDIA_OPEN) {
+			media_open(l, f, now);
+			break;
+		}
+		if (f->type == DECT_CELL_MEDIA_CLOSE) {
+			media_close(l, f);
 			break;
 		}
 		/* fall through */
@@ -1240,6 +1677,24 @@ static void from_stubd(struct link *l, const uint8_t *buf, size_t n,
 		}
 		l->have_status = 1;
 	}
+	/* §8: the flow starts and ends here, whatever the link does */
+	if (f.type == DECT_CELL_MEDIA_OPEN_ACK) {
+		media_acked(l, &f, now);
+		return;
+	}
+	if (f.type == DECT_CELL_MEDIA_CLOSED) {
+		uint32_t id;
+		struct media *m = NULL;
+
+		if (!dect_cell_tlv_check(f.body, f.len) &&
+		    !dect_cell_tlv_get_u32(f.body, f.len, 1, &id) &&
+		    (m = media_of(l, id)))
+			media_free(m);
+		/* one we hold, or the answer to a MEDIA_CLOSE */
+		if (l->tls.up && (m || f.corr))
+			ctl_send(l, f.type, f.corr, f.body, f.len, now);
+		return;
+	}
 	if (!l->tls.up) {
 		l->dropped++;
 		return;
@@ -1288,8 +1743,10 @@ static int run(void)
 	srand((unsigned)mono_ms());
 	while (!stop) {
 		uint64_t now = mono_ms();
-		struct pollfd p[2];
+		struct pollfd p[2u + 2u * MEDIA_MAX];
+		struct media *pm[2u + 2u * MEDIA_MAX] = { NULL };
 		int np = 0, i;
+		unsigned k;
 
 		if (l.stubd < 0 && now >= stubd_at) {
 			stubd_connect(&l);
@@ -1334,6 +1791,18 @@ static int run(void)
 			p[np++] = (struct pollfd){ l.stubd, POLLIN, 0 };
 		if (l.tls.up)
 			p[np++] = (struct pollfd){ l.tls.net.fd, POLLIN, 0 };
+		for (k = 0; k < MEDIA_MAX; k++) {
+			struct media *m = &l.media[k];
+
+			if (!m->live)
+				continue;
+			if (m->audio >= 0) {
+				pm[np] = m;
+				p[np++] = (struct pollfd){ m->audio, POLLIN, 0 };
+			}
+			pm[np] = m;
+			p[np++] = (struct pollfd){ m->udp, POLLIN, 0 };
+		}
 		/* TLS may hold a record already read: do not wait then */
 		if (poll(p, (nfds_t)np, l.tls.up &&
 			 mbedtls_ssl_get_bytes_avail(&l.tls.ssl) ? 0 : 100) < 0 &&
@@ -1354,8 +1823,16 @@ static int run(void)
 					l.stubd = -1;
 					l.have_status = 0;
 					logf_("dect-stubd went away");
+					media_drop_all(&l, now);
 					link_state_write(&l);
 				}
+			}
+			/* a session; one closed above has its fds at -1 */
+			if (pm[i] && p[i].revents && pm[i]->live) {
+				if (p[i].fd == pm[i]->audio)
+					media_up(pm[i]);
+				else if (p[i].fd == pm[i]->udp)
+					media_down(pm[i]);
 			}
 		}
 		if (l.tls.up) {
@@ -1413,24 +1890,29 @@ static int run(void)
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: dect-cell [-d DIR] [-s SOCKET] [-v] COMMAND\n"
+		"usage: dect-cell [-d DIR] [-s SOCKET] [-a SOCKET] [-P] [-v] COMMAND\n"
 		"  enroll STRING  enrol with a controller: STRING is its\n"
 		"                 opendectcell-enroll:v1?... enrollment string\n"
 		"  run            keep the link to the controller and relay\n"
 		"                 frames to dect-stubd -K\n"
 		"  forget         erase this cell's key and certificate\n"
 		"  -d DIR     credentials (default " CELL_DIR ")\n"
-		"  -s SOCKET  dect-stubd's socket (default " STUBD_SOCK ")\n");
+		"  -s SOCKET  dect-stubd's socket (default " STUBD_SOCK ")\n"
+		"  -a SOCKET  dect-stubd's audio socket (default " AUDIO_SOCK ")\n"
+		"  -P         allow plain RTP, unencrypted, for media sessions\n"
+		"             (an admin's choice: trusted networks only)\n");
 }
 
 int main(int argc, char **argv)
 {
 	int c;
 
-	while ((c = getopt(argc, argv, "d:s:vh")) != -1) {
+	while ((c = getopt(argc, argv, "d:s:a:Pvh")) != -1) {
 		switch (c) {
 		case 'd': dir = optarg; break;
 		case 's': stubd_path = optarg; break;
+		case 'a': audio_path = optarg; break;
+		case 'P': allow_plain = 1; break;
 		case 'v': verbose = 1; break;
 		default: usage(); return c == 'h' ? 0 : 2;
 		}

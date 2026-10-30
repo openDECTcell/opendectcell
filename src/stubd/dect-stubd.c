@@ -582,6 +582,24 @@ struct stubd {
 		uint8_t  tag[8][3];	/* each one's handset tag (0x0203) */
 		uint32_t up, down, rejected, lost_up;
 		uint32_t txq_drops_seen;
+		/*
+		 * §8 media: one session per speech lane (ab.l[], same
+		 * index), and each handle's bind as the chip confirmed it
+		 * in the long 0x0242 {h, chan_flags, mask0, mask1}.
+		 */
+		struct {
+			int      open;
+			uint32_t id;	/* the controller's media_id */
+			uint8_t  chan, handle;
+			unsigned word;	/* TDM word, both directions */
+		} media[AB_LANES];
+		unsigned media_n;
+		unsigned media_gen;	/* the lanes' call ids, never 0 */
+		struct {
+			uint8_t nib;	/* chan_flags low nibble; 0 = no bind */
+			uint8_t k;	/* the mask's bit: channel 1..3 */
+			uint8_t wb;	/* bit 6: the coded G.722 lane */
+		} bind[8];
 	} cell;
 	const char *pin;	/* registration PIN / AC */
 	/*
@@ -2008,6 +2026,8 @@ static void tx_templates(const struct stubd *s, uint8_t *t)
  */
 enum lane0_src { L0_IDLE, L0_BRIDGE, L0_PEER, L0_RAW, L0_PLAY, L0_LOOP };
 
+static void cell_media_tx(struct stubd *s, uint8_t *fr, const uint8_t *in);
+
 static enum lane0_src lane0_source(const struct stubd *s, const uint8_t *rx,
 				   unsigned int *peer)
 {
@@ -2105,7 +2125,8 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 
 	if (s->tx_slot < 0)
 		return;
-	tmpl = s->tx_tmpl + (s->base.main_link.bound ? fb : 0u);
+	tmpl = s->tx_tmpl + (s->base.main_link.bound || s->cell.media_n ?
+			     fb : 0u);
 	src0 = lane0_source(s, rx, &peer);
 	for (f = 0; f < fpb; f++) {
 		uint8_t *fr = frames + f * fb;
@@ -2151,6 +2172,8 @@ static void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames,
 			break;
 		}
 		xlane_tx(s, fr, rx, f);
+		if (s->cell_mode)
+			cell_media_tx(s, fr, in);
 		if (ql >= 2u) {
 			fr[(unsigned int)s->tx_slot * 2u] = s->txq[qh];
 			fr[(unsigned int)s->tx_slot * 2u + 1u] =
@@ -5228,15 +5251,13 @@ static void ab_init(struct stubd *s)
 		s->ab.pend[i] = s->ab.l[i].cfd = -1;
 }
 
-static void ab_open(struct stubd *s)
+/* The listening audio socket, for the bridge or, in cell mode, dect-cell. */
+static void ab_listen(struct stubd *s)
 {
 	struct sockaddr_un a;
 	mode_t old;
 	int fd;
 
-	ab_init(s);
-	if (s->ctl.lfd < 0)
-		return;
 	memset(&a, 0, sizeof(a));
 	a.sun_family = AF_UNIX;
 	strcpy(a.sun_path, AB_PATH);
@@ -5255,6 +5276,13 @@ static void ab_open(struct stubd *s)
 	}
 	umask(old);
 	s->ab.lfd = fd;
+}
+
+static void ab_open(struct stubd *s)
+{
+	ab_init(s);
+	if (s->ctl.lfd >= 0)
+		ab_listen(s);
 }
 
 static void ab_end(struct ab_lane *l, const char *why)
@@ -5318,9 +5346,23 @@ static void ab_hello(struct stubd *s, unsigned j, uint64_t now)
 		      errno == EINTR) && now - s->ab.pend_since[j] < AB_HELLO_MS)
 		return;
 	if (n > 0) {
+		unsigned mid;
+
 		buf[n] = '\0';
 		if (sscanf(buf, "call=%u rate=%u", &id, &rate) < 1)
 			id = 0;
+		/*
+		 * cell mode: "media=N codec=g722" or "media=N rate=8000",
+		 * from dect-cell for the controller's media session N (any
+		 * u32, 0 too): the lane that session holds
+		 */
+		if (s->cell_mode && sscanf(buf, "media=%u rate=%u", &mid,
+					   &rate) >= 1) {
+			for (i = 0; i < AB_LANES; i++)
+				if (s->cell.media[i].open &&
+				    s->cell.media[i].id == mid)
+					id = s->ab.l[i].call;
+		}
 		g722 = strstr(buf, " codec=g722") != NULL;
 		if (rate != 8000u || g722)
 			rate = 16000u;
@@ -5366,7 +5408,7 @@ static void ab_tick(struct stubd *s, uint64_t now)
 	if (s->ab.lfd < 0)
 		return;
 	/* each lane: the call on it, announced once its speech is bound */
-	for (i = 0; i < AB_LANES; i++) {
+	for (i = 0; !s->cell_mode && i < AB_LANES; i++) {
 		struct ab_lane *l = &s->ab.l[i];
 		const struct dect_base_call *b;
 		struct dect_ctl_out o;
@@ -6244,6 +6286,7 @@ static void cell_open(struct stubd *s)
 	(void)fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 	s->cell.lfd = fd;
 	s->cell.lost_at = mono_ms();	/* no controller until dect-cell says */
+	ab_listen(s);			/* §14.2: the sessions' speech */
 	printf("cell: cell mode, waiting for dect-cell on " CELL_PATH "\n");
 }
 
@@ -6256,6 +6299,7 @@ static void cell_close(struct stubd *s)
 		(void)unlink(CELL_PATH);
 	}
 	s->cell.cfd = s->cell.lfd = -1;
+	ab_close(s);
 	(void)unlink(CELL_STATE_PATH);
 }
 
@@ -6357,11 +6401,11 @@ static void cell_status(struct stubd *s, uint64_t now)
 /*
  * STATE_SNAPSHOT (cell-protocol.md §6.4) after a resume, at dect-cell's
  * request: the chip's epoch, the radio, each radio connection still up
- * (handle and handset tag). No media sessions exist yet (§14.3).
+ * (handle and handset tag), each media session still open.
  */
 static void cell_snapshot(struct stubd *s, uint16_t corr)
 {
-	uint8_t b[64];
+	uint8_t b[96];
 	struct dect_cell_tlv t;
 	unsigned h;
 
@@ -6375,6 +6419,9 @@ static void cell_snapshot(struct stubd *s, uint16_t corr)
 		if (s->cell.handles & (1u << h))
 			dect_cell_tlv_put(&t, 3, c, sizeof(c));
 	}
+	for (h = 0; h < AB_LANES; h++)
+		if (s->cell.media[h].open)
+			dect_cell_tlv_u32(&t, 4, s->cell.media[h].id);
 	if (!t.err)
 		(void)cell_send(s, DECT_CELL_STATE_SNAPSHOT, corr, b, t.len);
 }
@@ -6412,6 +6459,178 @@ static void cell_park(struct stubd *s, const char *why)
 	printf("cell: radio parked (%s)\n", why);
 }
 
+/*
+ * §8 media. The controller binds a call's audio itself (0x0251, 0x0230,
+ * 0x022D by MAIL_DOWN, cell-protocol.md §8.1) and then names the chip's
+ * channel in MEDIA_OPEN: the low nibble of the long 0x0242 that answered
+ * its 0x0230. That 0x0242 echoes the bind {h, flags, mask}, and its mask
+ * bit is the channel k = 1..3 the lanes are configured by (lane 0 for
+ * k = 1, lane_ch[] for the others, clean room A-0124), its flag bit 6 the
+ * coded G.722 lane. The lane's speech then goes over the audio socket as
+ * a bridged call's does (docs/bridge-interface.md §3), with dect-cell as
+ * the other end and the RTP its business.
+ */
+static void cell_media_end(struct stubd *s, unsigned i, uint8_t reason,
+			   int tell)
+{
+	uint8_t b[16];
+	struct dect_cell_tlv t;
+	uint32_t id = s->cell.media[i].id;
+
+	if (!s->cell.media[i].open)
+		return;
+	ab_end(&s->ab.l[i], reason == 0 ? "closed" : reason == 1 ?
+	       "the chip released the channel" : "local error");
+	s->ab.l[i].call = 0;
+	memset(&s->cell.media[i], 0, sizeof(s->cell.media[i]));
+	s->cell.media_n--;
+	printf("cell: media %u closed (%s)\n", id, reason == 0 ? "requested" :
+	       reason == 1 ? "the chip released the channel" : "local");
+	if (!tell)
+		return;
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u32(&t, 1, id);
+	dect_cell_tlv_u8(&t, 2, reason);
+	(void)cell_send(s, DECT_CELL_MEDIA_CLOSED, 0, b, t.len);
+}
+
+static void cell_media_ack(struct stubd *s, uint16_t corr, uint32_t id,
+			   uint16_t status)
+{
+	uint8_t b[16];
+	struct dect_cell_tlv t;
+
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u32(&t, 1, id);
+	dect_cell_tlv_u16(&t, 2, status);
+	(void)cell_send(s, DECT_CELL_MEDIA_OPEN_ACK, corr, b, t.len);
+}
+
+/* MEDIA_OPEN, as dect-cell passes it on: no keys, no address (§14.2). */
+static void cell_media_open(struct stubd *s, const struct dect_cell_frame *f)
+{
+	uint32_t id;
+	uint8_t ch, fmt, fmt_up, h, k = 0, wb = 0;
+	unsigned i, lane = AB_LANES, word = 0;
+	struct ab_lane *l;
+
+	if (dect_cell_tlv_check(f->body, f->len) ||
+	    dect_cell_tlv_get_u32(f->body, f->len, 1, &id) ||
+	    dect_cell_tlv_get_u8(f->body, f->len, 2, &ch) ||
+	    dect_cell_tlv_get_u8(f->body, f->len, 3, &fmt)) {
+		cell_error(s, DECT_CELL_ERR_MALFORMED, f);
+		return;
+	}
+	fmt_up = fmt;
+	(void)dect_cell_tlv_get_u8(f->body, f->len, 13, &fmt_up);
+	/*
+	 * One socket format both ways: the lane's own (G.722 octets or 8 kHz
+	 * linear) or, converted here, the other (bridge-interface.md §3)
+	 */
+	if ((fmt != DECT_CELL_FMT_G722 && fmt != DECT_CELL_FMT_L16_8K) ||
+	    fmt_up != fmt) {
+		cell_media_ack(s, f->corr, id, 2);
+		return;
+	}
+	for (i = 0; i < AB_LANES; i++)
+		if (s->cell.media[i].open && s->cell.media[i].id == id) {
+			cell_media_ack(s, f->corr, id, 3);	/* not unique */
+			return;
+		}
+	for (h = 0; h < 8u; h++)
+		if ((s->cell.handles & (1u << h)) && s->cell.bind[h].nib &&
+		    s->cell.bind[h].nib == ch) {
+			k = s->cell.bind[h].k;
+			wb = s->cell.bind[h].wb;
+			break;
+		}
+	if (k == 1u) {
+		lane = 0;
+		word = s->audio.lane0_word;
+	}
+	for (i = 0; k > 1u && i < XLANE_MAX; i++)
+		if (s->audio.lane_ch[i] == k) {
+			lane = 1u + i;
+			word = s->audio.lane_word[i];
+		}
+	if (lane == AB_LANES || word >= s->slots ||
+	    word == (unsigned)s->tx_slot) {
+		printf("cell: media %u: no lane for channel %u (%s)\n", id, ch,
+		       h < 8u ? "its bind's mask names none" :
+		       "no long 0x0242 on a live handle names it");
+		cell_media_ack(s, f->corr, id, 1);
+		return;
+	}
+	if (s->cell.media[lane].open) {
+		cell_media_ack(s, f->corr, id, 3);
+		return;
+	}
+	l = &s->ab.l[lane];
+	ab_end(l, "a new session on the lane");
+	memset(l, 0, sizeof(*l));
+	l->cfd = -1;
+	if (!++s->cell.media_gen)
+		s->cell.media_gen = 1;
+	l->call = s->cell.media_gen;
+	l->wideband = wb;
+	l->rx_prev = 0xFFFFFFFFu;
+	dect_g722_init(&l->enc);
+	dect_g722_init(&l->dec);
+	dect_g722_init(&l->sip_enc);
+	dect_g722_init(&l->sip_dec);
+	dect_g722_init(&l->sil);
+	dect_rs2_init(&l->rs_up);
+	dect_rs2_init(&l->rs_down);
+	s->cell.media[lane].open = 1;
+	s->cell.media[lane].id = id;
+	s->cell.media[lane].chan = ch;
+	s->cell.media[lane].handle = h;
+	s->cell.media[lane].word = word;
+	s->cell.media_n++;
+	printf("cell: media %u: channel %u on handle %u, lane %u (TDM word "
+	       "%u, %s), %s on the socket\n", id, ch, h, lane, word,
+	       wb ? "G.722" : "narrowband", fmt == DECT_CELL_FMT_G722 ?
+	       "G.722" : "8 kHz linear");
+	cell_media_ack(s, f->corr, id, 0);
+}
+
+static void cell_media_close(struct stubd *s, const struct dect_cell_frame *f)
+{
+	uint8_t b[16];
+	struct dect_cell_tlv t;
+	uint32_t id;
+	unsigned i;
+
+	if (dect_cell_tlv_check(f->body, f->len) ||
+	    dect_cell_tlv_get_u32(f->body, f->len, 1, &id)) {
+		cell_error(s, DECT_CELL_ERR_MALFORMED, f);
+		return;
+	}
+	for (i = 0; i < AB_LANES; i++)
+		if (s->cell.media[i].open && s->cell.media[i].id == id) {
+			cell_media_end(s, i, 0, 1);
+			return;
+		}
+	/* gone already (the chip released it): closed all the same */
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	dect_cell_tlv_u32(&t, 1, id);
+	dect_cell_tlv_u8(&t, 2, 0);
+	(void)cell_send(s, DECT_CELL_MEDIA_CLOSED, f->corr, b, t.len);
+}
+
+/* The open sessions' lanes for one frame: what dect-cell sent, or silence. */
+static void cell_media_tx(struct stubd *s, uint8_t *fr, const uint8_t *in)
+{
+	unsigned i;
+
+	for (i = 0; s->cell.media_n && i < AB_LANES; i++) {
+		unsigned w = s->cell.media[i].word;
+
+		if (s->cell.media[i].open)
+			ab_frame(&s->ab.l[i], fr, w, in ? in + w * 2u : NULL);
+	}
+}
+
 /* Every mail from the chip, up as it came (§7.1), with the links it opens. */
 static void cell_mail_up(struct stubd *s, const struct dect_mail *m,
 			 uint64_t now)
@@ -6425,8 +6644,24 @@ static void cell_mail_up(struct stubd *s, const struct dect_mail *m,
 	if (h < 8u && m->prim == DECT_PRIM_CONN_UP) {
 		s->cell.handles |= (uint8_t)(1u << h);
 		memset(s->cell.tag[h], 0, 3);
+		memset(&s->cell.bind[h], 0, sizeof(s->cell.bind[h]));
 	} else if (h < 8u && m->prim == DECT_PRIM_CONN_DOWN) {
+		unsigned i;
+
 		s->cell.handles &= (uint8_t)~(1u << h);
+		memset(&s->cell.bind[h], 0, sizeof(s->cell.bind[h]));
+		for (i = 0; i < AB_LANES; i++)
+			if (s->cell.media[i].open &&
+			    s->cell.media[i].handle == h)
+				cell_media_end(s, i, 1, 1);
+	} else if (h < 8u && m->prim == 0x0242u && m->param_len >= 4u) {
+		/* the long form answers a 0x0230: the bind as it took */
+		unsigned mask = m->param[2] | (unsigned)m->param[3] << 8;
+
+		s->cell.bind[h].nib = m->param[1] & 0x0Fu;
+		s->cell.bind[h].wb = (m->param[1] & 0x40u) != 0;
+		s->cell.bind[h].k = (mask & (mask - 1u)) || !mask ? 0 :
+				    (uint8_t)__builtin_ctz(mask);
 	} else if (h < 8u && m->prim == 0x0203u && m->param_len >= 13u) {
 		/* 07.56, 08.25: {handle, 01, seg[5], 00, 00, tag[3], handle};
 		 * 06.88 sends no tag (cell-protocol.md §7.1) */
@@ -6518,8 +6753,6 @@ static void cell_frame(struct stubd *s, const uint8_t *buf, size_t n,
 		       uint64_t now)
 {
 	struct dect_cell_frame f;
-	uint8_t b[16];
-	struct dect_cell_tlv t;
 
 	if (dect_cell_parse(buf, n, &f) != (long)n)
 		return;			/* one frame per message, whole */
@@ -6539,18 +6772,17 @@ static void cell_frame(struct stubd *s, const uint8_t *buf, size_t n,
 	case DECT_CELL_STATE_SNAPSHOT:		/* dect-cell asks after a resume */
 		cell_snapshot(s, f.corr);
 		break;
-	case DECT_CELL_MEDIA_OPEN: {
-		/* media is not built yet (§14.3): status 4 */
-		uint32_t id = 0;
-
-		if (!dect_cell_tlv_check(f.body, f.len))
-			(void)dect_cell_tlv_get_u32(f.body, f.len, 1, &id);
-		dect_cell_tlv_init(&t, b, sizeof(b));
-		dect_cell_tlv_u32(&t, 1, id);
-		dect_cell_tlv_u16(&t, 2, 4);
-		(void)cell_send(s, DECT_CELL_MEDIA_OPEN_ACK, f.corr, b, t.len);
+	case DECT_CELL_MEDIA_OPEN:
+	case DECT_CELL_MEDIA_CLOSE:
+		if (!s->cell.active) {		/* §5.3, as for MAIL_DOWN */
+			cell_error(s, DECT_CELL_ERR_NOT_ALLOWED, &f);
+			break;
+		}
+		if (f.type == DECT_CELL_MEDIA_OPEN)
+			cell_media_open(s, &f);
+		else
+			cell_media_close(s, &f);
 		break;
-	}
 	default:
 		cell_error(s, DECT_CELL_ERR_UNSUPPORTED, &f);
 	}
@@ -6577,12 +6809,13 @@ static void cell_state_write(struct stubd *s, uint64_t now)
 	json_str(f, s->stub_build == STUB_UNKNOWN ? "unknown" : s->stub_name);
 	fprintf(f, ",\"dect_cell\":%s,\"controller\":%s,\"links\":%u,"
 		"\"mails_up\":%u,\"mails_down\":%u,\"rejected\":%u,"
-		"\"not_forwarded\":%u,\"queue_bytes\":%zu,\"queue_drops\":%u}\n",
+		"\"not_forwarded\":%u,\"queue_bytes\":%zu,\"queue_drops\":%u,"
+		"\"media\":%u}\n",
 		s->cell.cfd >= 0 ? "true" : "false",
 		s->cell.lost_at ? "false" : "true",
 		(unsigned)__builtin_popcount(s->cell.handles), s->cell.up,
 		s->cell.down, s->cell.rejected, s->cell.lost_up, s->txq_len,
-		s->txq_drops);
+		s->txq_drops, s->cell.media_n);
 	if (fclose(f) == 0)
 		(void)rename(tmp, CELL_STATE_PATH);
 }
@@ -6591,6 +6824,7 @@ static void cell_tick(struct stubd *s, uint64_t now)
 {
 	uint8_t buf[DECT_CELL_FRAME_MAX];
 	int c;
+	unsigned k;
 	uint8_t flow;
 
 	if (s->cell.lfd < 0)
@@ -6622,6 +6856,8 @@ static void cell_tick(struct stubd *s, uint64_t now)
 		s->cell.cfd = -1;
 		s->cell.active = 0;
 		printf("cell: dect-cell went away\n");
+		for (k = 0; k < AB_LANES; k++)	/* its RTP went with it */
+			cell_media_end(s, k, 2, 0);
 		if (!s->cell.lost_at)
 			s->cell.lost_at = now;
 	}
