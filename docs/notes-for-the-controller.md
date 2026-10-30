@@ -764,3 +764,20 @@ the openDECTcell 424017b packages). Every pre-written outcome passed:
 - teardown: credentials forgotten, park read back.
 
 Not covered: the mail tunnel (C3 on your side) and media.
+
+## 2026-10-30 (evening): STATS from the cell; the stack moving into the library
+
+- **STATS** (§10): dect-cell now announces CAP_STATS, answers
+  STATS_REQUEST and sends STATS every 60 s (`stats_interval_s` from
+  CONFIG_SET is not applied yet). Counters from dect-stubd: 1, 2, 3, 13,
+  15-19; from dect-cell: 6 (reconnects). Without dect-stubd the cell
+  answers with 6 alone. Not yet run on a box: bench N6.
+- **The base stack moves into libopendectcell** (maintainer's choice, your ADR
+  0002 option B): `docs/stack-in-library.md`. S1-S2 are done (API 99):
+  `struct dect_base` holds the handset records, the chip's slot writes,
+  the links' set-up and segment entry, adoption and the registration's
+  completion, with host callbacks (send, random, log, save, install).
+  Calls (S3) are next; that is when C3 can host `dect_base` over the
+  mail tunnel.
+- `dect_mm_cfg.assign_id` (API 99): an identity to assign in
+  {ACCESS-RIGHTS-ACCEPT}, the IPUI O a class B system needs.

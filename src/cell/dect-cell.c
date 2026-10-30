@@ -700,7 +700,11 @@ struct link {
 	struct creds creds;
 	int enrolled;
 	uint32_t dropped;		/* frames for a controller we lack */
+	uint64_t next_stats;		/* §10: STATS every stats_interval_s */
 };
+
+/* §10 stats_interval_s, its default: CONFIG_SET is not applied yet */
+#define STATS_INTERVAL_MS	60000u
 
 static void link_state_write(struct link *l)
 {
@@ -847,7 +851,8 @@ static int hello(struct link *l)
 	dect_cell_tlv_put(&t, 5, l->boot_id, sizeof(l->boot_id));
 	dect_cell_tlv_u32(&t, 6, l->epoch);
 	/* media is not built yet (§14.3): the mail tunnel and FLOW only */
-	dect_cell_tlv_u32(&t, 7, DECT_CELL_CAP_MAIL | DECT_CELL_CAP_FLOW);
+	dect_cell_tlv_u32(&t, 7, DECT_CELL_CAP_MAIL | DECT_CELL_CAP_FLOW |
+			  DECT_CELL_CAP_STATS);
 	dect_cell_tlv_u8(&t, 8, 6);	/* subscription records */
 	dect_cell_tlv_u8(&t, 9, 6);	/* radio connection contexts */
 	dect_cell_tlv_u8(&t, 10, 3);	/* voice channels [CR A-0124] */
@@ -934,6 +939,38 @@ fail:
 	return -1;
 }
 
+/* One STATS counter, tag 1 {id u16, value u64} (§10). */
+static void stats_put(struct dect_cell_tlv *t, uint16_t id, uint64_t v)
+{
+	uint8_t b[10];
+	unsigned j;
+
+	b[0] = (uint8_t)(id >> 8);
+	b[1] = (uint8_t)id;
+	for (j = 0; j < 8u; j++)
+		b[2 + j] = (uint8_t)(v >> (56u - 8u * j));
+	dect_cell_tlv_put(t, 1, b, sizeof(b));
+}
+
+/*
+ * STATS to the controller: dect-stubd's counters (body, may be empty when
+ * it is not there) and this process's own, the reconnects (§10 id 6).
+ */
+static void stats_send(struct link *l, uint16_t corr, const uint8_t *body,
+		       size_t len, uint64_t now)
+{
+	uint8_t b[DECT_CELL_FRAME_MAX];
+	struct dect_cell_tlv t;
+
+	if (len > sizeof(b) - 16u)
+		len = 0;
+	if (len)
+		memcpy(b, body, len);
+	dect_cell_tlv_init(&t, b + len, sizeof(b) - len);
+	stats_put(&t, 6, l->reconnects);
+	ctl_send(l, DECT_CELL_STATS, corr, b, len + t.len, now);
+}
+
 /* A frame from the controller. */
 static void from_controller(struct link *l, const struct dect_cell_frame *f,
 			    uint64_t now)
@@ -960,6 +997,13 @@ static void from_controller(struct link *l, const struct dect_cell_frame *f,
 			l->rtt_ms = (uint32_t)now - ((uint32_t)f->body[0] << 24 |
 				    (uint32_t)f->body[1] << 16 |
 				    (uint32_t)f->body[2] << 8 | f->body[3]);
+		break;
+	case DECT_CELL_STATS_REQUEST:
+		if (l->stubd < 0) {		/* our own counters only */
+			stats_send(l, f->corr, NULL, 0, now);
+			break;
+		}
+		stubd_send(l, f->type, f->corr, f->body, f->len);
 		break;
 	case DECT_CELL_MAIL_DOWN:
 	case DECT_CELL_MEDIA_OPEN:
@@ -1073,6 +1117,10 @@ static void from_stubd(struct link *l, const uint8_t *buf, size_t n,
 	/* §5.3: nothing that touches the radio while not active */
 	if (f.type == DECT_CELL_MAIL_UP && l->cell_state != DECT_CELL_ST_ACTIVE)
 		return;
+	if (f.type == DECT_CELL_STATS) {	/* ours added */
+		stats_send(l, f.corr, f.body, f.len, now);
+		return;
+	}
 	ctl_send(l, f.type, f.corr, f.body, f.len, now);
 }
 
@@ -1141,6 +1189,15 @@ static int run(void)
 						 (uint8_t)now };
 
 				ctl_send(&l, DECT_CELL_HEARTBEAT, 0, b, 4, now);
+			}
+			/* §10: STATS every stats_interval_s, dect-stubd's first */
+			if (l.tls.up && now >= l.next_stats) {
+				l.next_stats = now + STATS_INTERVAL_MS;
+				if (l.stubd >= 0)
+					stubd_send(&l, DECT_CELL_STATS_REQUEST,
+						   0, NULL, 0);
+				else
+					stats_send(&l, 0, NULL, 0, now);
 			}
 		}
 		if (l.stubd >= 0)

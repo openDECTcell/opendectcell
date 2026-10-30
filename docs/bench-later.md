@@ -79,6 +79,8 @@ logread -e rfpi -e 'control slot'; cat /tmp/dect-fwload.log
 |---|---|---|---|
 | N5. After calls in and out, open the A540's call lists; and with `-v`, see whether it ever asks for list 09 (`c3 00 09`) | API 100 | the lists as before; if the A540 opens 09, missed and accepted calls together | an empty or garbled list: the view or its fields; nobody asks for 09: nothing to see, the list is optional |
 
+| N6. STATS: the 7412 as a cell of the Go controller in Docker (as on 2026-10-30, `docs/notes-for-the-controller.md`), radio parked | T11 | within a minute of the link coming up the controller's cell page lists counters: `mails_up`, `mails_down`, `stub_csum_errors` ... `stub_resyncs` (0 when healthy), `chip_queue_hwm`, `reconnects`; again every 60 s | no counters: dect-cell did not announce CAP_STATS or the request did not reach dect-stubd (`logread -e dect-cell`); `reconnects` only: dect-stubd did not answer STATS_REQUEST |
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |

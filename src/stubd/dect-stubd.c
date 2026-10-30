@@ -811,6 +811,7 @@ struct stubd {
 	uint8_t     txq[4096];		/* pending control-slot bytes */
 	size_t      txq_head, txq_len;
 	uint32_t    txq_drops;		/* mails refused: control queue full */
+	size_t      txq_hwm;		/* the queue's high-water mark */
 	uint32_t    tx_write_short;	/* block writes the driver did not take whole */
 	int         parked;		/* run_loop() drained the park mails */
 	uint64_t    park_check_at;	/* 06.88: park read-back sent at */
@@ -1781,6 +1782,8 @@ static int send_mail(struct stubd *s, unsigned int tx_slot,
 			s->txq[(s->txq_head + s->txq_len + k) % sizeof(s->txq)] =
 				el[k];
 		s->txq_len += (size_t)el_len;
+		if (s->txq_len > s->txq_hwm)
+			s->txq_hwm = s->txq_len;
 		s->tx_seq++;
 		return 0;
 	}
@@ -11141,6 +11144,43 @@ static const char *stub_version(const struct stubd *s, char out[8])
 }
 
 /* §10 STATUS: the radio, the chip session, the build in detail. */
+/*
+ * STATS (cell-protocol.md §10, §14.2): the chip side's counters, tag 1 per
+ * counter {id u16, value u64}; dect-cell adds its own and forwards them.
+ */
+static void cell_stats(struct stubd *s, uint16_t corr)
+{
+	const struct {
+		uint16_t id;
+		uint64_t v;
+	} c[] = {
+		{ 1, s->cell.up },			/* mails up */
+		{ 2, s->cell.down },			/* mails down */
+		{ 3, s->cell.rejected },		/* rejected or dropped */
+		{ 13, s->txq_hwm },			/* chip queue high water */
+		{ 15, s->txq_drops },			/* STUB link counters */
+		{ 16, s->rx.stats.csum_errors },
+		{ 17, s->rx.stats.framing_errors },
+		{ 18, s->rx.stats.seq_gaps },
+		{ 19, s->rx.stats.resyncs },
+	};
+	uint8_t b[sizeof(c) / sizeof(c[0]) * 12u];
+	struct dect_cell_tlv t;
+	unsigned k, j;
+
+	dect_cell_tlv_init(&t, b, sizeof(b));
+	for (k = 0; k < sizeof(c) / sizeof(c[0]); k++) {
+		uint8_t v[10];
+
+		v[0] = (uint8_t)(c[k].id >> 8);
+		v[1] = (uint8_t)c[k].id;
+		for (j = 0; j < 8u; j++)
+			v[2 + j] = (uint8_t)(c[k].v >> (56u - 8u * j));
+		dect_cell_tlv_put(&t, 1, v, sizeof(v));
+	}
+	(void)cell_send(s, DECT_CELL_STATS, corr, b, t.len);
+}
+
 static void cell_status(struct stubd *s, uint64_t now)
 {
 	uint8_t b[160];
@@ -11279,6 +11319,9 @@ static void cell_frame(struct stubd *s, const uint8_t *buf, size_t n,
 		break;
 	case DECT_CELL_STATUS_REQUEST:
 		cell_status(s, now);
+		break;
+	case DECT_CELL_STATS_REQUEST:
+		cell_stats(s, f.corr);
 		break;
 	case DECT_CELL_MEDIA_OPEN: {
 		/* media is not built yet (§14.3): status 4 */
