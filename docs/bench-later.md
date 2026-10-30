@@ -105,6 +105,27 @@ and U3 do not (cell role, radio parked). The 7520 runs follow once the
 maintainer says what that box may be used for: it runs 0.3.0 with the
 radio on and may be the household's working VoIP base.
 
+### T13 results, 7412, 2026-10-30 13:04-13:16 UTC (unattended)
+
+Packages from `a30793a` (`build/release/out-a30793a-lantiq-25126`); apk
+kept the box's own `/etc/config/opendectcell` (its SIP accounts and PIN) and
+put the packaged default beside it as `opendectcell.apk-new`, left there.
+Logs on the box: `/root/t13-u1-20261030-130434.log`,
+`/root/t13-u2-20261030-131114.log`; the controller's in the session's
+scratchpad.
+
+| test | result |
+|---|---|
+| U1 | **pass**: control slot 56 s after the start; `sub: restored subscription` for slots 1 and 2 (with call identities), the other chip slots cleared, mask `00 03`; the same pid after five minutes; no trouble lines, no respawn; `state.json` rewritten. No handset located meanwhile, so U1b saw nothing |
+| U2 = N4a, N4b | **pass**: 6 TLV patched (a normal upload: 5), control slot found, and `rfpi: the chip reports the RFPI rfpicheck= names, all 5 octets (0xF601)`: the 06.88 STUB keeps a class B RFPI with RPN 09 (made up, `10f4201109`), radio parked throughout. N4c (a handset finds the base again) stays for the bench |
+| U3 = N6 | **pass, with two bugs found**: the controller's cell page listed `chip_queue_hwm=28 mails_down=0 mails_rejected=0 mails_up=50 reconnects=0 stub_csum_errors=0 stub_framing_errors=0 stub_queue_drops=0 stub_seq_gaps=0`. Missing: `stub_resyncs` -- the STATS buffer held 12 octets per counter where a TLV takes 13, so the ninth never fitted (fixed, `a84dfa8`). And `reconnects` stayed 0 after the two cuts below: dect-cell counted failed attempts, not links re-established (fixed, `6262998`). Both fixes not yet on a box |
+| U3 = N7 | **pass**: a 4 s cut (nftables drop of the box's packets to the controller, as the card's iptables lines): `controller link down: nothing heard` after 3 s, `controller link resumed` 2 s later, the controller `resumed=true`; a 10 s cut: the controller's grace expired at 7 s, a fresh `link up`, `resumed=false`. No links to release (radio parked) |
+| U4 | **pass**: after `cell_leave` and the stop, role base, no credentials, nothing running, `parked` says `verified` |
+
+Left for a box: the two fixes above (N6 again: `stub_resyncs` listed,
+`reconnects` 2 after two cuts). The 7520 runs wait for the maintainer's
+word on that box.
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |
