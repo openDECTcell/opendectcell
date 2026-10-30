@@ -183,3 +183,21 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 		(void)dect_mm_hold(mm, b->rec.port_id, b->rec.port_id_len,
 				   (uint8_t)cfg->sub_slot, NULL, (int)b->cur);
 }
+
+int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
+			   uint64_t now, struct dect_link_ind *ind,
+			   int *switched)
+{
+	struct dect_base_link *bl = &b->main_link;
+	uint8_t rand_f[8], rs[16];
+	int r;
+
+	*switched = 0;
+	dect_base_random(b, rand_f, sizeof(rand_f));
+	dect_base_random(b, rs, sizeof(rs));
+	r = dect_link_rx_segment(&bl->link, m, now, rand_f, rs, ind);
+	if (r >= 0 && bl->link.mm.adopted >= 0 &&
+	    (unsigned)bl->link.mm.adopted != b->cur)
+		*switched = dect_base_switch(b, (unsigned)bl->link.mm.adopted);
+	return r;
+}

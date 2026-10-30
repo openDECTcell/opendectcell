@@ -164,6 +164,17 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 			 uint8_t handle, const struct dect_mm_cfg *cfg,
 			 unsigned hold_mask);
 
+/*
+ * A C-plane segment (0x0203) on the main link: the challenges MM may need
+ * drawn from the host's random(), the segment through the link
+ * (dect_link_rx_segment(), its indication in *ind), and when MM adopted a
+ * held record other than the current one, that one becomes current
+ * (*switched = 1). dect_link_rx_segment()'s result.
+ */
+int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
+			   uint64_t now, struct dect_link_ind *ind,
+			   int *switched);
+
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));

@@ -2789,14 +2789,20 @@ static void hs_load(struct stubd *s, unsigned i)
 
 static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot);
 
+/* The library made another handset current: its file, and say so. */
+static void hs_switched(struct stubd *s, const char *why)
+{
+	hs_took(s, s->base.cur);
+	printf("sub: now serving %s (slot %u)%s\n", s->sub_path,
+	       stubd_sub_slot(s), why);
+}
+
 /* Make handset i the current one; a no-op if it already is. */
 static void hs_switch(struct stubd *s, unsigned i, const char *why)
 {
 	if (!dect_base_switch(&s->base, i))
 		return;
-	hs_took(s, i);
-	printf("sub: now serving %s (slot %u)%s\n", s->sub_path,
-	       stubd_sub_slot(s), why);
+	hs_switched(s, why);
 }
 
 /*
@@ -9926,15 +9932,12 @@ static void start_call_cipher(struct stubd *s, uint64_t now)
 }
 static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now)
 {
-	uint8_t rand_f[8], rs[16];
 	struct dect_link_ind ind;
 	uint32_t collisions = s->base.main_link.link.cc.stats.collisions;
 	uint32_t represented = s->base.main_link.link.cc.stats.represented;
+	int switched;
 
-	dect_base_random(&s->base, rand_f, sizeof(rand_f));
-	dect_base_random(&s->base, rs, sizeof(rs));
-
-	if (dect_link_rx_segment(&s->base.main_link.link, m, now, rand_f, rs, &ind) < 0) {
+	if (dect_base_main_segment(&s->base, m, now, &ind, &switched) < 0) {
 		if (ind.foreign) {
 			/*
 			 * Another handset's connection. The library refused to
@@ -9963,9 +9966,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	 * identities, and its own entry in the Internal Names List, set before
 	 * the list-access session that follows its {CC-SETUP} asks for it.
 	 */
-	if (s->base.main_link.link.mm.adopted >= 0 &&
-	    (unsigned)s->base.main_link.link.mm.adopted != s->base.cur) {
-		hs_switch(s, (unsigned)s->base.main_link.link.mm.adopted, "");
+	if (switched) {
+		hs_switched(s, "");
 		dect_iwu_set_own(&s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
 		iwu_lines(s, &s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
 	}

@@ -721,3 +721,7 @@ dect_link.h.
 C-plane stack set up for the current record, with the records the host
 names held on it (S2.3b). dect_base.c now needs dect_link.c and what it
 links.
+
+**96.** dect_base.h, 2026-10-30: dect_base_main_segment(), a C-plane
+segment on the main link with the challenges drawn and the adopted
+record made current (S2.3c).

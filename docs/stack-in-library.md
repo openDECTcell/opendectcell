@@ -73,6 +73,7 @@ socket. Traces in `tests/stubd-traces/`:
 | `register.trace` | the registration window from the control socket, access rights with key allocation from the PIN, ACCESS-RIGHTS-ACCEPT, the first location registration with the new UAK, the subscription written to the chip, the window closed |
 | `list-access.trace` | a list access call (call class 2) with the A540's own commands: start session on list 00, read entries, end session, release; the authentication the base asks for is left unanswered and the list is served anyway |
 | `internal-call.trace` | two stored handsets with `-a twocalls`: DECT 1 dials "2" (call class 9), DECT 2 is paged and answers on a side link, both are authenticated and ciphered, ringback, both audio channels bound, the caller hangs up and both links are released |
+| `locate-second.trace` | two stored handsets, the second locates on the main link: MM adopts its record, it becomes current, its TPUI in the LOCATE-ACCEPT, the first is current again after the release |
 | `call-in.trace` | the bridge's `call-in`, page, page response, CC-SETUP with CLIP/CNIP, authentication and ciphering (0x0208, 0x0209), alerting, answer, the audio bind (0x0251, 0x0230, 0x022D), `remote-released` and the release (0x0233, 0x0202) |
 
 S0 is complete with these six (2026-10-30). Further traces come with the
@@ -167,6 +168,18 @@ main link, side links and a call in progress (0x0200 and 0x0201 in
 `handle_reg_mail()`), which needs calls (S3) and side links (S2.4) in the
 library first, and the ring target's switch. Traces unchanged.
 
-Next, (c): `reg_segment()` (635 lines) split, the generic segment path
-into the library first, then the identity gate and adoption.
+**S2.3c, 2026-10-30.** `dect_base_main_segment()`: the entry of
+`reg_segment()` (the challenges from the host's random(), the segment
+through the link, the record MM adopted made current). The rest of
+`reg_segment()` is dect-stubd's reaction to the indication: logging,
+ringing, dialling, calls and the registration's completion; it moves with
+the stages it belongs to. A seventh trace, `locate-second.trace` (the
+second of two stored handsets locates on the main link and becomes
+current), passed against the code before this step as well, with the
+daemon's log identical.
+
+Next, (d): the registration's completion on the main link (the first
+locate after a subscription: the gate armed, the install, the save, the
+registration window closed) as a library step with the install policy a
+host callback.
 
