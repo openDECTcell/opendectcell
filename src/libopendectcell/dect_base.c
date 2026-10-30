@@ -387,3 +387,42 @@ struct dect_base_call *dect_base_call_by_dect(struct dect_base *b, int party,
 			return &b->calls[i];
 	return NULL;
 }
+
+unsigned dect_base_party_slot(const struct dect_base *b, int party)
+{
+	if (party == -1) {
+		int a = b->main_link.link.mm.adopted;
+
+		return dect_base_slot(b, a >= 0 ? (unsigned)a : b->cur);
+	}
+	if (party >= 0 && (unsigned)party < DECT_BASE_SIDES &&
+	    b->side[party].adopted >= 0)
+		return dect_base_slot(b, (unsigned)b->side[party].adopted);
+	return 0;
+}
+
+unsigned dect_base_call_slot(const struct dect_base *b,
+			     const struct dect_base_call *c)
+{
+	if (c->party == DECT_BASE_PARTY_PAGING)
+		return c->target >= 0 ? dect_base_slot(b, (unsigned)c->target)
+				      : 0u;
+	return dect_base_party_slot(b, c->party);
+}
+
+void dect_base_call_event(struct dect_base *b, const struct dect_base_call *c,
+			  const char *verb, const char *k2, const char *v2)
+{
+	struct dect_ctl_out o;
+	unsigned hs = dect_base_call_slot(b, c);
+
+	if (!b->ops || !b->ops->event)
+		return;
+	dect_ctl_begin(&o, verb);
+	dect_ctl_add_uint(&o, "call", c->id);
+	if (hs)
+		dect_ctl_add_uint(&o, "hs", hs);
+	if (k2)
+		dect_ctl_add(&o, k2, v2);
+	b->ops->event(b->ctx, &o);
+}

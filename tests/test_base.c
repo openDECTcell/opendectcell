@@ -44,6 +44,16 @@ static void log_line(void *ctx, const char *line)
 }
 
 static unsigned installs;
+static char event_line[300];
+
+static void event(void *ctx, struct dect_ctl_out *o)
+{
+	int n = dect_ctl_end(o);
+
+	(void)ctx;
+	if (n > 0)
+		snprintf(event_line, sizeof(event_line), "%.*s", n, o->buf);
+}
 
 static void install(void *ctx)
 {
@@ -53,7 +63,7 @@ static void install(void *ctx)
 
 static const struct dect_base_ops ops = { .save = save, .send = send,
 					  .random = rnd, .log = log_line,
-					  .install = install };
+					  .install = install, .event = event };
 
 int main(void)
 {
@@ -251,6 +261,31 @@ int main(void)
 		b.calls[2].id = 7;
 		CHECK(dect_base_call_new(&b) == NULL);	/* all taken */
 		memset(b.calls, 0, sizeof(b.calls));
+	}
+
+	/* whose handset a link serves; an event to the bridge (S3e) */
+	{
+		struct dect_base_call c;
+
+		b.main_link.link.mm.adopted = -1;
+		b.side[1].adopted = 2;
+		b.side[0].adopted = -1;
+		CHECK_EQ(dect_base_party_slot(&b, -1), dect_base_slot(&b, b.cur));
+		CHECK_EQ(dect_base_party_slot(&b, 1), 3u);
+		CHECK_EQ(dect_base_party_slot(&b, 0), 0u);
+		memset(&c, 0, sizeof(c));
+		c.id = 9;
+		c.party = DECT_BASE_PARTY_PAGING;
+		c.target = 1;
+		CHECK_EQ(dect_base_call_slot(&b, &c), 2u);
+		b.ops = &ops;
+		c.party = 1;
+		dect_base_call_event(&b, &c, "ringing", NULL, NULL);
+		CHECK_EQ(strcmp(event_line, "ringing call=9 hs=3\n"), 0);
+		c.party = 0;				/* nobody yet: no hs */
+		dect_base_call_event(&b, &c, "released", "by", "hs");
+		CHECK_EQ(strcmp(event_line, "released call=9 by=hs\n"), 0);
+		b.ops = NULL;
 	}
 
 	/* the registration completes: key, gate, install, save, once */

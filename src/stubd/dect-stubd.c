@@ -384,14 +384,15 @@ struct handset {
  * handsets that wanted to locate or sync their lists while we were on a
  * call.
  */
-#define SIDE_MAX	3u
+#define SIDE_MAX	DECT_BASE_SIDES
 
 /* control socket clients at once: the bridge and a few one-shot ones */
 #define CTL_CLIENTS	4u
 
 struct side_link {
-	struct dect_base_link bl;	/* up, its handle, its C-plane stack */
-	int      adopted;	/* handset table index, -1 = nobody yet */
+	/* dect_base's side[] entry: up, its handle, its C-plane stack, the
+	 * record it serves (adopted) */
+	struct dect_base_link *bl;
 	uint32_t rejected_seen;
 	int      lane;		/* -a twocalls: its xlane, -1 = none */
 	uint32_t located_seen;	/* mm.stats.located already answered */
@@ -2900,9 +2901,17 @@ static void base_install(void *ctx)
 	send_subscription(ctx);
 }
 
+static void ctl_send_bridge(struct stubd *s, struct dect_ctl_out *o);
+
+/* dect_base's event(): to the bridge's client. */
+static void base_event(void *ctx, struct dect_ctl_out *o)
+{
+	ctl_send_bridge(ctx, o);
+}
+
 static const struct dect_base_ops base_ops = {
 	.save = base_save, .send = base_send, .random = base_random,
-	.log = base_log, .install = base_install,
+	.log = base_log, .install = base_install, .event = base_event,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -3262,9 +3271,9 @@ static uint8_t alloc_call_id(const struct stubd *s, const struct dect_link *me)
 		    s->base.main_link.link.cc.status_call_id == id)
 			used = 1;
 		for (k = 0; !used && k < SIDE_MAX; k++)
-			if (s->side[k].bl.active && &s->side[k].bl.link != me &&
-			    dect_cc_busy(&s->side[k].bl.link.cc) &&
-			    s->side[k].bl.link.cc.status_call_id == id)
+			if (s->side[k].bl->active && &s->side[k].bl->link != me &&
+			    dect_cc_busy(&s->side[k].bl->link.cc) &&
+			    s->side[k].bl->link.cc.status_call_id == id)
 				used = 1;
 		for (k = 0; !used && k < BC_MAX; k++)
 			if (s->base.calls[k].id && s->base.calls[k].dect_id == id)
@@ -4261,11 +4270,11 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
 	for (k = 0; s->audio.status_ms && k < SIDE_MAX; k++) {
 		struct side_link *sl = &s->side[k];
 
-		if (!sl->bl.active || sl->lane < 0 ||
+		if (!sl->bl->active || sl->lane < 0 ||
 		    (sl->status_ms && now - sl->status_ms < s->audio.status_ms))
 			continue;
 		sl->status_ms = now;
-		send_conn_status_one(s, sl->bl.handle);
+		send_conn_status_one(s, sl->bl->handle);
 	}
 	if (!s->audio.status_ms || !s->reg.call_bound || !s->base.main_link.active)
 		return;
@@ -4752,9 +4761,9 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			unsigned k;
 
 			for (k = 0; k < SIDE_MAX; k++)
-				if (s->side[k].bl.active &&
-				    s->side[k].adopted == (int)s->ring_hs &&
-				    link_in_use(&s->side[k].bl.link) == 2)
+				if (s->side[k].bl->active &&
+				    s->side[k].bl->adopted == (int)s->ring_hs &&
+				    link_in_use(&s->side[k].bl->link) == 2)
 					use = 2;	/* the target, elsewhere */
 			if (use == 2) {
 				printf("ring: the handset (or the main link) is in "
@@ -5233,7 +5242,7 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 		      s->base.main_link.link.mm.port_id_len)))
 			linked = 1;
 		for (k = 0; radio_on && k < SIDE_MAX; k++)
-			if (s->side[k].bl.active && s->side[k].adopted == (int)i)
+			if (s->side[k].bl->active && s->side[k].bl->adopted == (int)i)
 				linked = 1;
 		{
 			char nm[DECT_IWU_NAME_MAX];
@@ -5277,8 +5286,8 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 						    : NULL,
 			   s->reg.frames_total, &first);
 	for (i = 0; radio_on && i < SIDE_MAX; i++)
-		if (s->side[i].bl.active)
-			state_link(s, f, &s->side[i].bl.link,
+		if (s->side[i].bl->active)
+			state_link(s, f, &s->side[i].bl->link,
 				   s->side[i].lane >= 0 &&
 				   s->side[i].last_status.valid
 				   ? &s->side[i].last_status : NULL,
@@ -5524,7 +5533,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 
 		if (sl) {
 			xlane_release(s, sl);	/* never leak its lane */
-			sl->bl.active = 0;		/* the main link takes it */
+			sl->bl->active = 0;		/* the main link takes it */
 		}
 	}
 	memset(&mcfg, 0, sizeof(mcfg));
@@ -6311,8 +6320,8 @@ static void names_notify(struct stubd *s)
 	if (s->base.main_link.active)
 		links[n++] = &s->base.main_link.link;
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active)
-			links[n++] = &s->side[k].bl.link;
+		if (s->side[k].bl->active)
+			links[n++] = &s->side[k].bl->link;
 	for (k = 0; k < n; k++) {
 		struct dect_event ev = { DECT_EVENT_LIST_CHANGE,
 					 DECT_LIA_LIST_INTERNAL_NAMES,
@@ -6375,8 +6384,8 @@ static void names_spread(struct stubd *s, unsigned i)
 	if (s->base.main_link.active)
 		(void)dect_iwu_add_handset(&s->base.main_link.link.cc.iwu, tid, name);
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active)
-			(void)dect_iwu_add_handset(&s->side[k].bl.link.cc.iwu,
+		if (s->side[k].bl->active)
+			(void)dect_iwu_add_handset(&s->side[k].bl->link.cc.iwu,
 						   tid, name);
 }
 
@@ -6410,8 +6419,8 @@ static int slot_in_call(const struct stubd *s, unsigned slot)
 	if (s->base.main_link.active)
 		ls[n++] = &s->base.main_link.link;
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active)
-			ls[n++] = &s->side[k].bl.link;
+		if (s->side[k].bl->active)
+			ls[n++] = &s->side[k].bl->link;
 	for (k = 0; k < n; k++) {
 		int i = hs_of_link(s, ls[k]);
 
@@ -6498,10 +6507,10 @@ static void names_tick(struct stubd *s)
 		lists_tick(s, &s->base.main_link.link);
 	}
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active) {
-			names_take(s, &s->side[k].bl.link);
-			uak_for_link(s, &s->side[k].bl.link, 0);
-			lists_tick(s, &s->side[k].bl.link);
+		if (s->side[k].bl->active) {
+			names_take(s, &s->side[k].bl->link);
+			uak_for_link(s, &s->side[k].bl->link, 0);
+			lists_tick(s, &s->side[k].bl->link);
 		}
 }
 
@@ -6521,7 +6530,7 @@ static struct side_link *side_find(struct stubd *s, uint8_t handle)
 	unsigned i;
 
 	for (i = 0; i < SIDE_MAX; i++)
-		if (s->side[i].bl.active && s->side[i].bl.handle == handle)
+		if (s->side[i].bl->active && s->side[i].bl->handle == handle)
 			return &s->side[i];
 	return NULL;
 }
@@ -6553,7 +6562,7 @@ static int side_start(struct stubd *s, uint8_t handle)
 		return 0;
 	}
 	for (i = 0; i < SIDE_MAX && !sl; i++)
-		if (!s->side[i].bl.active)
+		if (!s->side[i].bl->active)
 			sl = &s->side[i];
 	if (!sl)
 		return -1;
@@ -6582,11 +6591,11 @@ static int side_start(struct stubd *s, uint8_t handle)
 		if ((i == s->base.cur || s->hs[i].loaded) &&
 		    !(s->hs[i].remote && !s->hs[i].fetched))
 			hold |= 1u << i;
-	dect_base_side_open(&s->base, &sl->bl, handle, &mcfg, hold);
-	dect_mm_set_uak_lookup(&sl->bl.link.mm, uak_lookup, s);
-	dect_link_set_tx_log(&sl->bl.link, log_nwk_out_side, s);
+	dect_base_side_open(&s->base, sl->bl, handle, &mcfg, hold);
+	dect_mm_set_uak_lookup(&sl->bl->link.mm, uak_lookup, s);
+	dect_link_set_tx_log(&sl->bl->link, log_nwk_out_side, s);
 
-	dect_iwu_set_line(&sl->bl.link.cc.iwu, STUBD_LINE_ID,
+	dect_iwu_set_line(&sl->bl->link.cc.iwu, STUBD_LINE_ID,
 			  s->audio.line_name ? s->audio.line_name : "Line 1");
 	for (i = 0; i < s->base.n_hs; i++) {
 		size_t len;
@@ -6596,32 +6605,32 @@ static int side_start(struct stubd *s, uint8_t handle)
 		if (!len || !(hold & (1u << i)))
 			continue;
 		hs_name(s, i, name, sizeof(name));
-		dect_iwu_add_handset(&sl->bl.link.cc.iwu, (uint8_t)hs_slot(s, i),
+		dect_iwu_add_handset(&sl->bl->link.cc.iwu, (uint8_t)hs_slot(s, i),
 				     name);
 	}
-	dect_cc_set_signal(&sl->bl.link.cc, s->audio.signal_on,
+	dect_cc_set_signal(&sl->bl->link.cc, s->audio.signal_on,
 			   s->audio.signal_value);
 	/* no audio path here, unless -a twocalls gives it a lane */
-	dect_cc_set_busy(&sl->bl.link.cc, !s->audio.two_calls);
-	dect_cc_set_wideband(&sl->bl.link.cc, !s->audio.narrowband);
-	dect_cc_set_overlap(&sl->bl.link.cc, !s->audio.no_overlap);
-	dect_cc_set_route_complete(&sl->bl.link.cc, 1);
-	dect_cc_set_call_status(&sl->bl.link.cc, !s->audio.no_call_status,
+	dect_cc_set_busy(&sl->bl->link.cc, !s->audio.two_calls);
+	dect_cc_set_wideband(&sl->bl->link.cc, !s->audio.narrowband);
+	dect_cc_set_overlap(&sl->bl->link.cc, !s->audio.no_overlap);
+	dect_cc_set_route_complete(&sl->bl->link.cc, 1);
+	dect_cc_set_call_status(&sl->bl->link.cc, !s->audio.no_call_status,
 				s->audio.callinfo.has_call_id ?
 				s->audio.callinfo.call_id : 1u);
-	sl->bl.link.call_status_for = call_status_for;
-	sl->bl.link.call_id_for = call_id_for;
-	sl->bl.link.call_status_ctx = s;
-	dect_cc_set_default_line(&sl->bl.link.cc, STUBD_LINE_ID,
+	sl->bl->link.call_status_for = call_status_for;
+	sl->bl->link.call_id_for = call_id_for;
+	sl->bl->link.call_status_ctx = s;
+	dect_cc_set_default_line(&sl->bl->link.cc, STUBD_LINE_ID,
 				 DECT_CALLINFO_NDT_DELAY);
 	sl->lane = -1;
-	sl->bl.ic_tried = 0;
-	sl->bl.dial_len = 0;
-	sl->bl.dial_change_ms = 0;
-	sl->adopted = -1;
-	sl->bl.cipher_done = 0;
+	sl->bl->ic_tried = 0;
+	sl->bl->dial_len = 0;
+	sl->bl->dial_change_ms = 0;
+	sl->bl->adopted = -1;
+	sl->bl->cipher_done = 0;
 	sl->located_seen = 0;
-	sl->bl.auth_refused = 0;
+	sl->bl->auth_refused = 0;
 	memset(&sl->last_status, 0, sizeof(sl->last_status));
 	memset(&sl->frames, 0, sizeof(sl->frames));
 	sl->status_ms = 0;
@@ -6664,8 +6673,8 @@ static int lanes_available(const struct stubd *s, const struct side_link *me)
 	for (i = 0; i < SIDE_MAX; i++) {
 		const struct side_link *o = &s->side[i];
 
-		if (o != me && o->bl.active && o->lane < 0 &&
-		    dect_cc_busy(&o->bl.link.cc))
+		if (o != me && o->bl->active && o->lane < 0 &&
+		    dect_cc_busy(&o->bl->link.cc))
 			n--;
 	}
 	return n;
@@ -6697,11 +6706,11 @@ static void xlane_bind(struct stubd *s, struct side_link *sl, int i)
 
 	memset(x, 0, sizeof(*x));
 	x->used = 1;
-	x->handle = sl->bl.handle;
+	x->handle = sl->bl->handle;
 	x->channel = a->lane_ch[i];
 	x->word = a->lane_word[i];
 	x->wideband = !a->narrowband &&
-		dect_cc_codec(&sl->bl.link.cc) == DECT_CC_CODEC_G722;
+		dect_cc_codec(&sl->bl->link.cc) == DECT_CC_CODEC_G722;
 	sl->lane = i;
 	mask = (uint16_t)(1u << x->channel);
 
@@ -6737,7 +6746,7 @@ static void xlane_release(struct stubd *s, struct side_link *sl)
 	if (sl->lane < 0)
 		return;
 	if (s->xl[sl->lane].connected || s->xl[sl->lane].used)
-		send_audio_disconnect(s, sl->bl.handle);
+		send_audio_disconnect(s, sl->bl->handle);
 	memset(&s->xl[sl->lane], 0, sizeof(s->xl[0]));
 	sl->lane = -1;
 	/* the Monitor's figures belong to the call that ended */
@@ -6751,10 +6760,10 @@ static void side_route(struct stubd *s, struct side_link *sl, uint64_t now)
 {
 	int p = (int)(sl - s->side);
 
-	sl->bl.ic_tried = 1;
+	sl->bl->ic_tried = 1;
 	if (ic_start(s, p, now) || bridge_call_out(s, p, now) ||
-	    dect_cc_accept(&sl->bl.link.cc) == 0) {
-		dect_link_drain(&sl->bl.link, now);
+	    dect_cc_accept(&sl->bl->link.cc) == 0) {
+		dect_link_drain(&sl->bl->link, now);
 		side_pump(s, sl);
 	}
 }
@@ -6766,37 +6775,37 @@ static void side_route(struct stubd *s, struct side_link *sl, uint64_t now)
  */
 static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 {
-	struct dect_cc *cc = &sl->bl.link.cc;
+	struct dect_cc *cc = &sl->bl->link.cc;
 
 	if (!s->audio.two_calls)
 		return;
 	if (!dect_cc_busy(cc))	/* decided for the next SETUP only */
 		dect_cc_set_busy(cc, sl->lane < 0 &&
 				 lanes_available(s, sl) <= 0);
-	if (!sl->bl.ic_tried && number_complete(cc) && call_auth_ok(s, &sl->bl.link))
+	if (!sl->bl->ic_tried && number_complete(cc) && call_auth_ok(s, &sl->bl->link))
 		side_route(s, sl, now);
 	if (!dect_cc_busy(cc))
-		sl->bl.ic_tried = 0;
+		sl->bl->ic_tried = 0;
 	if (cc->state == DECT_CC_ST_OVERLAP) {
 		size_t len;
 
 		(void)dect_cc_keypad(cc, &len);
-		if (!sl->bl.dial_change_ms || len != sl->bl.dial_len) {
-			sl->bl.dial_len = len;
-			sl->bl.dial_change_ms = now;
-		} else if (len && now - sl->bl.dial_change_ms >=
-			   s->audio.dial_wait_ms && call_auth_ok(s, &sl->bl.link)) {
+		if (!sl->bl->dial_change_ms || len != sl->bl->dial_len) {
+			sl->bl->dial_len = len;
+			sl->bl->dial_change_ms = now;
+		} else if (len && now - sl->bl->dial_change_ms >=
+			   s->audio.dial_wait_ms && call_auth_ok(s, &sl->bl->link)) {
 			printf("side: dialled on handle %u -- connecting\n",
-			       sl->bl.handle);
+			       sl->bl->handle);
 			side_route(s, sl, now);
 		}
 	} else {
-		sl->bl.dial_len = 0;
-		sl->bl.dial_change_ms = 0;
+		sl->bl->dial_len = 0;
+		sl->bl->dial_change_ms = 0;
 	}
 	if (sl->lane < 0 && cc->state == DECT_CC_ST_ACTIVE &&
 	    (cc->incoming || dect_cc_peer_is_speech(cc)) &&
-	    call_auth_ok(s, &sl->bl.link)) {
+	    call_auth_ok(s, &sl->bl->link)) {
 		int i = xlane_free(s);
 
 		if (i >= 0)
@@ -6816,7 +6825,7 @@ static void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now)
 
 static struct dect_cc *ic_cc(struct stubd *s, int side)
 {
-	return side < 0 ? &s->base.main_link.link.cc : &s->side[side].bl.link.cc;
+	return side < 0 ? &s->base.main_link.link.cc : &s->side[side].bl->link.cc;
 }
 
 /* The CC identities of handset i, current or stashed. */
@@ -6834,12 +6843,12 @@ static void hs_cc_ids(const struct stubd *s, unsigned i, const uint8_t **port,
 
 static int ic_active(const struct stubd *s, int p)
 {
-	return p == -1 ? s->base.main_link.active : p >= 0 && s->side[p].bl.active;
+	return p == -1 ? s->base.main_link.active : p >= 0 && s->side[p].bl->active;
 }
 
 static struct dect_link *ic_link(struct stubd *s, int p)
 {
-	return p == -1 ? &s->base.main_link.link : &s->side[p].bl.link;
+	return p == -1 ? &s->base.main_link.link : &s->side[p].bl->link;
 }
 
 static void ic_drain(struct stubd *s, int p, uint64_t now)
@@ -6916,7 +6925,7 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 		if (s->hs[i].loaded && hs_slot(s, i) == slot)
 			break;
 	if (i >= s->base.n_hs || (side < 0 && i == s->base.cur) ||
-	    (side >= 0 && (int)i == s->side[side].adopted)) {
+	    (side >= 0 && (int)i == s->side[side].bl->adopted)) {
 		printf("intern: no other handset in slot %u -- releasing, "
 		       "\"user unknown\"\n", slot);
 		(void)dect_cc_release_reason(cc, DECT_CC_REASON_USER_UNKNOWN);
@@ -6997,7 +7006,7 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 	 */
 	{
 		int ci_hs = s->ic.caller < 0 ? (int)s->base.cur
-			    : s->side[s->ic.caller].adopted;
+			    : s->side[s->ic.caller].bl->adopted;
 		unsigned slot = ci_hs >= 0 ? hs_slot(s, (unsigned)ci_hs) : 0u;
 		char num[12], name[DECT_IWU_NAME_MAX + 12];
 		struct dect_callinfo prev = l->cc.callinfo, ci;
@@ -7065,7 +7074,7 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 	s->ic.st = IC_SETUP;
 	printf("intern: the target %s on %s link %u -- SETUP sent\n", how,
 	       p == -1 ? "the main" : "side", p == -1 ? s->base.main_link.handle :
-	       s->side[p].bl.handle);
+	       s->side[p].bl->handle);
 	ic_drain(s, p, now);
 }
 
@@ -7141,8 +7150,8 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 		(void)dect_iwu_remove_handset(&s->base.main_link.link.cc.iwu,
 					      (uint8_t)slot);
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active)
-			(void)dect_iwu_remove_handset(&s->side[k].bl.link.cc.iwu,
+		if (s->side[k].bl->active)
+			(void)dect_iwu_remove_handset(&s->side[k].bl->link.cc.iwu,
 						      (uint8_t)slot);
 	send_subscription_tail(s);	/* the mask without it */
 	names_notify(s);		/* §7.4.10.2.2: one removed */
@@ -7165,8 +7174,8 @@ static struct dect_link *link_known_hs(struct stubd *s, int i)
 	if (s->base.main_link.active && s->base.main_link.link.mm.adopted == i)
 		return &s->base.main_link.link;
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active && s->side[k].bl.link.mm.adopted == i)
-			return &s->side[k].bl.link;
+		if (s->side[k].bl->active && s->side[k].bl->link.mm.adopted == i)
+			return &s->side[k].bl->link;
 	return NULL;
 }
 
@@ -7178,7 +7187,7 @@ static struct dect_link *link_known_hs(struct stubd *s, int i)
 static int page_adopt(struct stubd *s, struct side_link *sl,
 		      const struct dect_link_ind *ind, int i, const char *why)
 {
-	struct dect_link *l = sl ? &sl->bl.link : &s->base.main_link.link;
+	struct dect_link *l = sl ? &sl->bl->link : &s->base.main_link.link;
 	unsigned k;
 
 	for (k = 0; k < l->mm.n_held; k++)
@@ -7189,7 +7198,7 @@ static int page_adopt(struct stubd *s, struct side_link *sl,
 		return 0;
 	(void)dect_mm_adopt(&l->mm, ind->page_id, ind->page_id_len);
 	if (sl) {
-		sl->adopted = i;
+		sl->bl->adopted = i;
 	} else if ((unsigned)i != s->base.cur) {
 		hs_switch(s, (unsigned)i, why);
 		dect_iwu_set_own(&s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
@@ -7317,7 +7326,7 @@ static void dereg_tick(struct stubd *s, uint64_t now)
 	/* a handset that deregistered itself: erase it the same way */
 	for (k = 0; k <= SIDE_MAX; k++) {
 		struct dect_link *pl = k < SIDE_MAX
-			? (s->side[k].bl.active ? &s->side[k].bl.link : NULL)
+			? (s->side[k].bl->active ? &s->side[k].bl->link : NULL)
 			: (s->base.main_link.active ? &s->base.main_link.link : NULL);
 
 		if (!pl || !pl->mm.term_by_pt)
@@ -7421,7 +7430,7 @@ static int time_base_busy(struct stubd *s)
 	if (s->base.main_link.active && dect_cc_busy(&s->base.main_link.link.cc))
 		return 1;
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active && dect_cc_busy(&s->side[k].bl.link.cc))
+		if (s->side[k].bl->active && dect_cc_busy(&s->side[k].bl->link.cc))
 			return 1;
 	return 0;
 }
@@ -7436,7 +7445,7 @@ static void time_pump(struct stubd *s, struct dect_link *l, uint64_t now)
 		return;
 	}
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active && &s->side[k].bl.link == l)
+		if (s->side[k].bl->active && &s->side[k].bl->link == l)
 			side_pump(s, &s->side[k]);
 }
 
@@ -7796,21 +7805,10 @@ static unsigned bridge_new_id(struct stubd *s)
 	return s->ctl.next_call;
 }
 
-static unsigned main_hs_slot(struct stubd *s)
-{
-	int a = s->base.main_link.link.mm.adopted;
-
-	return hs_slot(s, a >= 0 ? (unsigned)a : s->base.cur);
-}
-
 /* The handset a call's party serves, as its slot; 0 = nobody yet. */
 static unsigned party_hs_slot(struct stubd *s, int p)
 {
-	if (p == -1)
-		return main_hs_slot(s);
-	if (p >= 0 && s->side[p].adopted >= 0)
-		return hs_slot(s, (unsigned)s->side[p].adopted);
-	return 0;
+	return dect_base_party_slot(&s->base, p);
 }
 
 /* The handset on link p has a Line 2 (an account for it). */
@@ -7818,7 +7816,7 @@ static int party_has_line2(const struct stubd *s, int p)
 {
 	int a = p == -1 ? (s->base.main_link.link.mm.adopted >= 0 ?
 			   s->base.main_link.link.mm.adopted : (int)s->base.cur)
-			: p >= 0 ? s->side[p].adopted : -1;
+			: p >= 0 ? s->side[p].bl->adopted : -1;
 
 	return a >= 0 && (unsigned)a < s->base.n_hs && s->hs[a].line2;
 }
@@ -7860,17 +7858,7 @@ static void bc_clear(struct stubd *s, struct dect_base_call *b)
 static void bridge_event(struct stubd *s, const struct dect_base_call *b,
 			 const char *verb, const char *k2, const char *v2)
 {
-	struct dect_ctl_out o;
-	unsigned hs = b->party == BC_PAGING ? hs_slot(s, (unsigned)b->target)
-					    : party_hs_slot(s, b->party);
-
-	dect_ctl_begin(&o, verb);
-	dect_ctl_add_uint(&o, "call", b->id);
-	if (hs)
-		dect_ctl_add_uint(&o, "hs", hs);
-	if (k2)
-		dect_ctl_add(&o, k2, v2);
-	ctl_send_bridge(s, &o);
+	dect_base_call_event(&s->base, b, verb, k2, v2);
 }
 
 /* The handset on link p dialled a number: hand it to the bridge. */
@@ -8036,7 +8024,7 @@ static int party_hs_index(const struct stubd *s, int p)
 		a = s->base.main_link.link.mm.adopted;
 		return a >= 0 ? a : (int)s->base.cur;
 	}
-	return p >= 0 ? s->side[p].adopted : -1;
+	return p >= 0 ? s->side[p].bl->adopted : -1;
 }
 
 /*
@@ -8283,8 +8271,8 @@ static int hs_in_call(const struct stubd *s, unsigned t)
 	    (a >= 0 ? (unsigned)a : s->base.cur) == t)
 		return 1;
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active && s->side[k].adopted == (int)t &&
-		    dect_cc_busy(&s->side[k].bl.link.cc))
+		if (s->side[k].bl->active && s->side[k].bl->adopted == (int)t &&
+		    dect_cc_busy(&s->side[k].bl->link.cc))
 			return 1;
 	for (k = 0; k < BC_MAX; k++)
 		if (s->base.calls[k].id && !s->base.calls[k].out &&
@@ -8363,7 +8351,7 @@ static int sr_part3(const struct stubd *s, unsigned t)
 static void sr_setup(struct stubd *s, struct dect_base_call *b, unsigned k,
 		     uint64_t now, const char *how)
 {
-	struct dect_link *l = &s->side[k].bl.link;
+	struct dect_link *l = &s->side[k].bl->link;
 	unsigned t = (unsigned)b->target;
 	const struct dect_hs_profile *hp = &s->hs[t].prof;
 	struct dect_callinfo prev = l->cc.callinfo, ci;
@@ -8408,7 +8396,7 @@ static void sr_setup(struct stubd *s, struct dect_base_call *b, unsigned k,
 	}
 	b->party = (int)k;
 	printf("bridge: call %u: DECT %u %s on side link %u -- SETUP sent%s\n",
-	       b->id, hs_slot(s, t), how, s->side[k].bl.handle,
+	       b->id, hs_slot(s, t), how, s->side[k].bl->handle,
 	       ci.has_call_status ? " (full call information, Part 3)" : "");
 	ic_drain(s, (int)k, now);
 }
@@ -8445,8 +8433,8 @@ static void sr_tick(struct stubd *s, struct dect_base_call *b, uint64_t now)
 		return;
 	}
 	for (k = 0; k < SIDE_MAX && b->party == BC_PAGING; k++)
-		if (s->side[k].bl.active && s->side[k].adopted == b->target &&
-		    !dect_cc_busy(&s->side[k].bl.link.cc))
+		if (s->side[k].bl->active && s->side[k].bl->adopted == b->target &&
+		    !dect_cc_busy(&s->side[k].bl->link.cc))
 			sr_setup(s, b, k, now, "came up (adopted, no page "
 				 "response)");
 	if (b->party != BC_PAGING || now < b->page_at)
@@ -8997,7 +8985,7 @@ static const struct dect_base_call *ab_call_of(struct stubd *s, unsigned i, int 
 	if (!x->used || !x->connected)
 		return NULL;
 	for (k = 0; k < SIDE_MAX; k++)
-		if (s->side[k].bl.active && s->side[k].lane == (int)(i - 1u))
+		if (s->side[k].bl->active && s->side[k].lane == (int)(i - 1u))
 			return bc_active(s, (int)k);
 	return NULL;
 }
@@ -9464,9 +9452,9 @@ static void ic_tick(struct stubd *s, uint64_t now)
 		unsigned k;
 
 		for (k = 0; k < SIDE_MAX && s->ic.st == IC_PAGING; k++)
-			if (s->side[k].bl.active &&
-			    s->side[k].adopted == s->ic.target &&
-			    !dect_cc_busy(&s->side[k].bl.link.cc))
+			if (s->side[k].bl->active &&
+			    s->side[k].bl->adopted == s->ic.target &&
+			    !dect_cc_busy(&s->side[k].bl->link.cc))
 				ic_setup(s, (int)k, now,
 					 "came up (adopted, no page response)");
 		/*
@@ -9511,7 +9499,7 @@ static void ic_tick(struct stubd *s, uint64_t now)
 	}
 	if (s->ic.st != IC_UP && t->state == DECT_CC_ST_ACTIVE &&
 	    call_auth_ok(s, s->ic.tside < 0 ? &s->base.main_link.link
-					    : &s->side[s->ic.tside].bl.link)) {
+					    : &s->side[s->ic.tside].bl->link)) {
 		(void)dect_cc_connect(c);
 		s->ic.st = IC_UP;
 		printf("intern: the target answered -- connected, bridging\n");
@@ -9564,7 +9552,7 @@ static void side_pump(struct stubd *s, struct side_link *sl)
 	struct dect_mail m;
 
 	while (sizeof(s->txq) - s->txq_len >= DECT_TX_ELEM_MAX &&
-	       dect_link_poll_append_mail(&sl->bl.link, &m)) {
+	       dect_link_poll_append_mail(&sl->bl->link, &m)) {
 		if (send_mail(s, (unsigned int)s->tx_slot, &m))
 			printf("side: C-plane mail LOST (%u bytes)\n",
 			       (unsigned)m.param_len);
@@ -9595,24 +9583,24 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	    memcmp(ind->page_id, tgt, tgt_len) != 0 ||
 	    s->reg.call_bound || dect_cc_busy(&s->base.main_link.link.cc) ||
 	    s->base.main_link.link.mm.state == DECT_MM_WAIT_AUTH ||
-	    dect_cc_busy(&sl->bl.link.cc))
+	    dect_cc_busy(&sl->bl->link.cc))
 		return 0;
 	old_main = s->base.main_link.link.mm.adopted >= 0 ? s->base.main_link.link.mm.adopted :
 		   s->base.main_link.link.mm.port_id_len ? (int)s->base.cur : -1;
 	tmp = s->base.main_link.link;
-	s->base.main_link.link = sl->bl.link;
-	sl->bl.link = tmp;
+	s->base.main_link.link = sl->bl->link;
+	sl->bl->link = tmp;
 	h = s->base.main_link.handle;
-	s->base.main_link.handle = sl->bl.handle;
-	sl->bl.handle = h;
-	sl->adopted = old_main;
+	s->base.main_link.handle = sl->bl->handle;
+	sl->bl->handle = h;
+	sl->bl->adopted = old_main;
 	dect_link_set_tx_log(&s->base.main_link.link, log_nwk_out, s);
-	dect_link_set_tx_log(&sl->bl.link, log_nwk_out_side, s);
+	dect_link_set_tx_log(&sl->bl->link, log_nwk_out_side, s);
 
 	/* the old main is a side link now: no enrolment, no speech */
-	sl->bl.link.mm.cfg.registration = DECT_MM_REG_CLOSED;
-	dect_cc_set_busy(&sl->bl.link.cc, 1);
-	sl->rejected_seen = sl->bl.link.cc.stats.rejected_identity;
+	sl->bl->link.mm.cfg.registration = DECT_MM_REG_CLOSED;
+	dect_cc_set_busy(&sl->bl->link.cc, 1);
+	sl->rejected_seen = sl->bl->link.cc.stats.rejected_identity;
 
 	/*
 	 * The new main serves the target: the page response matched the ring
@@ -9640,7 +9628,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->base.main_link.cipher_done =
 		s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_READY ||
 		s->base.main_link.link.mm.cipher_state == DECT_MM_CIPHER_FAILED;
-	sl->bl.cipher_done = 1;	/* the old main's was the main link's to do */
+	sl->bl->cipher_done = 1;	/* the old main's was the main link's to do */
 	s->reg.cipher_reject_seen = 0;
 	s->base.main_link.auth_refused = 0;
 	s->reg.cipher_timeout_seen = 0;
@@ -9648,7 +9636,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->reg.time_sent_for = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
 	       "link; handle %u (%s) is a side link now\n", s->base.main_link.handle,
-	       sl->bl.handle, (unsigned)old_main < s->base.n_hs ?
+	       sl->bl->handle, (unsigned)old_main < s->base.n_hs ?
 	       s->hs[old_main].path : "?");
 	ring_queue_setup(s, now, "page response received on a side link");
 	dect_link_drain(&s->base.main_link.link, now);
@@ -9667,7 +9655,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 			     uint64_t now)
 {
-	struct dect_link *l = &sl->bl.link;
+	struct dect_link *l = &sl->bl->link;
 	const struct dect_cc *cc = &l->cc;
 	int a = l->mm.adopted;
 
@@ -9681,37 +9669,37 @@ static void side_cipher_tick(struct stubd *s, struct side_link *sl,
 
 		if (!uak) {
 			/* authfirst: nothing to prove it against (A1) */
-			if (s->audio.auth_first && !sl->bl.auth_refused) {
-				sl->bl.auth_refused = 1;
+			if (s->audio.auth_first && !sl->bl->auth_refused) {
+				sl->bl->auth_refused = 1;
 				(void)dect_cc_release_reason(&l->cc, 0x09u);
 				printf("side: released -- no key to "
 				       "authenticate the handset on handle "
-				       "%u with\n", sl->bl.handle);
+				       "%u with\n", sl->bl->handle);
 				dect_link_drain(l, now);
 				side_pump(s, sl);
 			}
 			return;
 		}
-		dect_base_cipher_start(&s->base, &sl->bl, uak);
-		sl->bl.cipher_done = 0;
+		dect_base_cipher_start(&s->base, sl->bl, uak);
+		sl->bl->cipher_done = 0;
 		printf("side: cipher: authenticating the handset on handle %u\n",
-		       sl->bl.handle);
+		       sl->bl->handle);
 		dect_link_drain(l, now);
 		side_pump(s, sl);
 		return;
 	}
-	if (sl->bl.cipher_done)
+	if (sl->bl->cipher_done)
 		return;
 	if (l->mm.cipher_state == DECT_MM_CIPHER_READY) {
-		sl->bl.cipher_done = 1;
+		sl->bl->cipher_done = 1;
 		if (!s->chip_cipher.disabled)
-			(void)dect_base_chip_key(&s->base, &sl->bl);
+			(void)dect_base_chip_key(&s->base, sl->bl);
 		printf("side: cipher: DCK derived, CIPHER-REQUEST sent on "
-		       "handle %u\n", sl->bl.handle);
+		       "handle %u\n", sl->bl->handle);
 	} else if (l->mm.cipher_state == DECT_MM_CIPHER_FAILED) {
-		sl->bl.cipher_done = 1;
+		sl->bl->cipher_done = 1;
 		printf("side: cipher: authentication FAILED on handle %u (%s)\n",
-		       sl->bl.handle, l->mm.stats.auth_timeouts ? "no reply in 10 s"
+		       sl->bl->handle, l->mm.stats.auth_timeouts ? "no reply in 10 s"
 		       : l->mm.stats.auth_mismatch ? "WRONG RES"
 		       : "the handset refused");
 		/* EN 300 444 8.23.2.3, as on the main link */
@@ -9733,33 +9721,33 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 	int a;
 
 	side_call_tick(s, sl, now);	/* busy or not, before a SETUP lands */
-	if (dect_base_link_segment(&s->base, &sl->bl, m, now, &ind) < 0) {
+	if (dect_base_link_segment(&s->base, sl->bl, m, now, &ind) < 0) {
 		side_pump(s, sl);
 		return;
 	}
 	side_call_tick(s, sl, now);
-	a = sl->bl.link.mm.adopted;
+	a = sl->bl->link.mm.adopted;
 	if (a >= 0 && (unsigned)a < s->base.n_hs)
 		s->hs[a].last_seen_ms = now;
-	if (a >= 0 && a != sl->adopted && (unsigned)a < s->base.n_hs) {
-		sl->adopted = a;
-		dect_iwu_set_own(&sl->bl.link.cc.iwu,
+	if (a >= 0 && a != sl->bl->adopted && (unsigned)a < s->base.n_hs) {
+		sl->bl->adopted = a;
+		dect_iwu_set_own(&sl->bl->link.cc.iwu,
 				 (uint8_t)hs_slot(s, (unsigned)a));
-		iwu_lines(s, &sl->bl.link.cc.iwu, (uint8_t)hs_slot(s, (unsigned)a));
-		printf("side: handle %u serves %s (slot %u)\n", sl->bl.handle,
+		iwu_lines(s, &sl->bl->link.cc.iwu, (uint8_t)hs_slot(s, (unsigned)a));
+		printf("side: handle %u serves %s (slot %u)\n", sl->bl->handle,
 		       s->hs[a].path, hs_slot(s, (unsigned)a));
 	}
 	/* a location registration here: the waiting messages again */
-	if (sl->bl.link.mm.stats.located != sl->located_seen) {
-		sl->located_seen = sl->bl.link.mm.stats.located;
-		mwi_locate(s, &sl->bl.link);
-		missed_locate(s, &sl->bl.link);
+	if (sl->bl->link.mm.stats.located != sl->located_seen) {
+		sl->located_seen = sl->bl->link.mm.stats.located;
+		mwi_locate(s, &sl->bl->link);
+		missed_locate(s, &sl->bl->link);
 	}
-	if (sl->bl.link.cc.stats.rejected_identity != sl->rejected_seen) {
-		sl->rejected_seen = sl->bl.link.cc.stats.rejected_identity;
+	if (sl->bl->link.cc.stats.rejected_identity != sl->rejected_seen) {
+		sl->rejected_seen = sl->bl->link.cc.stats.rejected_identity;
 		printf("side: turned away a call from a handset we are not "
 		       "subscribed to (handle %u, release reason 0x0a)\n",
-		       sl->bl.handle);
+		       sl->bl->handle);
 	}
 	/*
 	 * Ringing has started and a locating handset took the main link
@@ -9784,7 +9772,7 @@ static void side_segment(struct stubd *s, struct side_link *sl,
 	if (ind.page_response)
 		printf("side: page response on handle %u while the main link "
 		       "is busy -- not ours to ring here, ignored\n",
-		       sl->bl.handle);
+		       sl->bl->handle);
 	side_pump(s, sl);
 }
 
@@ -10459,11 +10447,11 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			for (k = 0; m->param_len >= 1 && k < SIDE_MAX; k++) {
 				struct side_link *sl = &s->side[k];
 
-				if (!sl->bl.active || sl->bl.handle != m->param[0] ||
-				    sl->bl.link.mm.cipher_on)
+				if (!sl->bl->active || sl->bl->handle != m->param[0] ||
+				    sl->bl->link.mm.cipher_on)
 					continue;
-				dect_mm_cipher_on(&sl->bl.link.mm);
-				if (sl->bl.link.mm.cipher_on)
+				dect_mm_cipher_on(&sl->bl->link.mm);
+				if (sl->bl->link.mm.cipher_on)
 					printf("side: cipher: the chip reports "
 					       "link %u ciphered (0x0209)\n",
 					       (unsigned)m->param[0]);
@@ -10548,7 +10536,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 				struct side_link *sl = side_find(s, h);
 
 				if (sl && (sl->lane >= 0 ||
-					   dect_cc_busy(&sl->bl.link.cc))) {
+					   dect_cc_busy(&sl->bl->link.cc))) {
 					printf("side: connection up (handle %u) "
 					       "repeated during its call -- "
 					       "keeping its side link\n", h);
@@ -10592,7 +10580,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 
 		if (sl && !(s->base.main_link.active && h == s->base.main_link.handle)) {
 			xlane_release(s, sl);
-			sl->bl.active = 0;
+			sl->bl->active = 0;
 			printf("side: connection released (handle %u)\n", h);
 			break;
 		}
@@ -10668,7 +10656,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			struct side_link *sl = side_find(s, m->param[0]);
 			struct dect_diag_status st;
 
-			if (sl && sl->bl.active &&
+			if (sl && sl->bl->active &&
 			    !dect_diag_decode_status(m->param, m->param_len,
 						     &st)) {
 				sl->last_status = st;
@@ -11385,7 +11373,7 @@ static void loop_tick(struct stubd *s, uint64_t now)
 		unsigned k;
 
 		for (k = 0; k < SIDE_MAX; k++)
-			if (s->side[k].bl.active)
+			if (s->side[k].bl->active)
 				side_call_tick(s, &s->side[k], now);
 		ic_tick(s, now);
 		dereg_tick(s, now);
@@ -11445,11 +11433,11 @@ static void loop_tick(struct stubd *s, uint64_t now)
 		unsigned k;
 
 		for (k = 0; k < SIDE_MAX; k++) {
-			if (!s->side[k].bl.active)
+			if (!s->side[k].bl->active)
 				continue;
-			dect_link_tick(&s->side[k].bl.link, now);
-			lapc_failed_note(&s->side[k].bl.link, "side");
-			cap_tick(s, &s->side[k].bl.link);
+			dect_link_tick(&s->side[k].bl->link, now);
+			lapc_failed_note(&s->side[k].bl->link, "side");
+			cap_tick(s, &s->side[k].bl->link);
 			side_cipher_tick(s, &s->side[k], now);
 			side_pump(s, &s->side[k]);
 		}
@@ -12671,6 +12659,12 @@ int main(int argc, char **argv)
 	memset(&s, 0, sizeof(s));
 	s.base.ops = &base_ops;
 	s.base.ctx = &s;
+	{
+		unsigned k;
+
+		for (k = 0; k < SIDE_MAX; k++)
+			s.side[k].bl = &s.base.side[k];
+	}
 	s.tx_slot = s.rx_slot = -1;
 	s.rand_fd = -1;
 	memset(&cfg, 0, sizeof(cfg));

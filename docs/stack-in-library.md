@@ -230,7 +230,14 @@ id, the active one, a free entry) are the library's; dect-stubd's
 dect-stubd while it also stops the main link's ring. Unit tests; traces
 unchanged.
 
-Next in S3: the events to the bridge as a host callback (`bridge_event()`),
-then the ring sequence, the main link's connect staging, and the internal
-call.
+**S3e.** `dect_base` holds the side links' `dect_base_link`s
+(`side[3]`, with the record each adopted); dect-stubd's `struct
+side_link` points to its one and keeps the rest (lane, status, call
+staging). The events to the bridge go through the host's `event()`:
+`dect_base_call_event()` builds `verb call=ID hs=SLOT ...` with the
+handset a link serves (`dect_base_party_slot()`). Unit tests; traces
+unchanged.
+
+Next in S3: the ring sequence (`ring_tick()`, 273 lines, with the page),
+the main link's connect staging, and the internal call.
 

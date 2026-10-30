@@ -18,6 +18,7 @@
 
 #include "dect_cc.h"
 #include "dect_clip.h"
+#include "dect_ctl.h"
 #include "dect_link.h"
 #include "dect_mail.h"
 #include "dect_mm.h"
@@ -55,6 +56,7 @@ struct dect_hs_rec {
  * current record when the stack says it changed.
  */
 #define DECT_BASE_HS_MAX	DECT_MM_MAX_SLOT
+#define DECT_BASE_SIDES		3u
 
 /* What the host does for the stack (S1c, S2.1). Any may be NULL. */
 struct dect_base_ops {
@@ -71,6 +73,8 @@ struct dect_base_ops {
 	 * dect_base_slot_*() writers): a record's key changed (S2.3d).
 	 */
 	void (*install)(void *ctx);
+	/* A line for the bridge (docs/bridge-interface.md §2.1) (S3e). */
+	void (*event)(void *ctx, struct dect_ctl_out *o);
 };
 
 /*
@@ -101,6 +105,7 @@ struct dect_base_link {
 	enum dect_mm_state reported_state;	/* MM's state last logged */
 	int      enrol_routed;		/* this enrolment's record is chosen */
 	int      enrol_switched;	/* ... and it moved off record 0 */
+	int      adopted;		/* side link: the record it serves, -1 */
 	/* Stage S3b, the call on this link: */
 	size_t   dial_len;		/* digits seen so far, overlap sending */
 	uint64_t dial_change_ms;	/* when the last ones arrived */
@@ -165,6 +170,11 @@ struct dect_base {
 	void *ctx;
 	struct dect_base_chip chip;
 	struct dect_base_link main_link;	/* calls, enrolment */
+	/*
+	 * Side links: connections while the main link is busy, for location
+	 * registration, list access and a second call (S2.4, S3e).
+	 */
+	struct dect_base_link side[DECT_BASE_SIDES];
 	/* subslot=: record 0's chip slot instead of its own, 0 = none */
 	unsigned slot0;
 	struct dect_base_call calls[DECT_BASE_CALLS];
@@ -315,6 +325,24 @@ struct dect_base_call *dect_base_call_active(struct dect_base *b, int party);
 /* Link `party`'s call the handset knows by call id `id`, or NULL. */
 struct dect_base_call *dect_base_call_by_dect(struct dect_base *b, int party,
 					      uint8_t id);
+
+/*
+ * The chip slot of the handset link `party` serves (S3e): the main link's
+ * adopted record or the current one, a side link's adopted record; 0 for
+ * nobody yet.
+ */
+unsigned dect_base_party_slot(const struct dect_base *b, int party);
+
+/* The same for a call; a side ring's paging target counts. */
+unsigned dect_base_call_slot(const struct dect_base *b,
+			     const struct dect_base_call *c);
+
+/*
+ * An event about call c to the bridge through the host's event(): `verb
+ * call=ID hs=SLOT [k2=v2]`, hs left out for nobody yet.
+ */
+void dect_base_call_event(struct dect_base *b, const struct dect_base_call *c,
+			  const char *verb, const char *k2, const char *v2);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

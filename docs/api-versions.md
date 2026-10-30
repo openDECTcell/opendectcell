@@ -760,3 +760,8 @@ DECT_BASE_PARTY_NONE (S3c). dect_base.h now includes dect_clip.h.
 **104.** dect_base.h, 2026-10-30: the call table's lookups:
 dect_base_call_by_id(), _call_on(), _call_new(), _calls_on(),
 _call_active(), _call_by_dect() (S3d).
+
+**105.** dect_base.h, 2026-10-30: struct dect_base holds the side links
+(`side[DECT_BASE_SIDES]`, dect_base_link gains `adopted`), dect_base_ops
+gains event(), and dect_base_party_slot(), _call_slot(), _call_event()
+(S3e). dect_base.h now includes dect_ctl.h.
