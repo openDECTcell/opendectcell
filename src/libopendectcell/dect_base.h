@@ -291,6 +291,7 @@ struct dect_base_cfg {
 	unsigned ring_attach_ms;	/* ringattach= test timing */
 	unsigned time_every_min;	/* the periodic date and time */
 	const char *pin;	/* the base PIN, decimal; NULL: none (S4d) */
+	const char *line_name;	/* Line 1's default name, NULL: "Line 1" (S3x) */
 	/* callinfo keys: a fixed <<CALL-INFORMATION>> for every SETUP (S3k) */
 	struct dect_callinfo callinfo;
 	/* infoie=: IEs in a {CC-INFO} on ALERTING, a lab option (S3r) */
@@ -428,6 +429,8 @@ struct dect_base {
 	unsigned next_call;		/* the last call id given, 1..127 */
 	/* record i has a Line 2, an account of its own (lines-and-calls.md) */
 	int      line2[DECT_BASE_HS_MAX];
+	/* its lines' names, empty: the default (S3x) */
+	char     line_name[DECT_BASE_HS_MAX][2][DECT_IWU_NAME_MAX];
 	/* the chip's RFPI, from its contact answer 0xF601 (S3w) */
 	uint8_t  rfpi[DECT_MM_RFPI_LEN];
 	int      have_rfpi;
@@ -450,7 +453,7 @@ struct dect_base {
 	/* record i's store does not exist: free for enrolment (S5a) */
 	int      absent[DECT_BASE_HS_MAX];
 	/* the Contact List the host keeps, NULL: none (S5a) */
-	const struct dect_contacts *contacts;
+	struct dect_contacts *contacts;
 	/* the call lists the host keeps, NULL: none (S4a) */
 	struct dect_calls *call_lists;
 	/* what each record is due to hear, and what it heard (S4a) */
@@ -1058,6 +1061,36 @@ void dect_base_main_ids(struct dect_base *b, int cc_message);
  * change notices, the messages waiting and the missed calls.
  */
 void dect_base_main_located(struct dect_base *b);
+
+/*
+ * Page responses (S3x). The lines a link's Line Settings List offers: those
+ * of the handset in `slot`, and the Contact List and call lists the host
+ * keeps.
+ */
+void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
+			 unsigned slot);
+/*
+ * A page response on link p (-1 the main link) from record i, which we
+ * paged without a call: if it carries that handset's identity, the link
+ * adopts it, so dect_base_link_known() finds it. 1 when it was i's.
+ */
+int dect_base_page_adopt(struct dect_base *b, int p,
+			 const struct dect_link_ind *ind, int i,
+			 const char *why);
+/*
+ * The page responses the base waits for besides a ring's, on link p: a
+ * deregistration's or the date and time's target (1: consumed), an
+ * internal call's target (its SETUP follows), a side ring's handset on a
+ * side link (1: its SETUP follows).
+ */
+int dect_base_dereg_page_response(struct dect_base *b, int p,
+				  const struct dect_link_ind *ind);
+int dect_base_time_page_response(struct dect_base *b, int p,
+				 const struct dect_link_ind *ind);
+void dect_base_ic_target_link(struct dect_base *b, int p,
+			      const struct dect_link_ind *ind, uint64_t now);
+int dect_base_side_ring_answer(struct dect_base *b, unsigned k,
+			       const struct dect_link_ind *ind, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

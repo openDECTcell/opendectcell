@@ -877,3 +877,8 @@ _side_cipher_tick() (S3v).
 dect_base_link's `time_sent_for`; dect_base's `rfpi`, `have_rfpi`,
 `cc_id_foreign_warned`, `cc_id_unarmed_warned`; dect_base_serve(),
 _main_ids(), _main_located() (S3w).
+
+**130.** dect_base.h, 2026-10-30: dect_base's `line_name[][][]` and
+`contacts` no longer const; dect_base_cfg's `line_name`;
+dect_base_iwu_lines(), _page_adopt(), _dereg_page_response(),
+_time_page_response(), _ic_target_link(), _side_ring_answer() (S3x).

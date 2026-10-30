@@ -3765,3 +3765,113 @@ void dect_base_main_located(struct dect_base *b)
 	dect_base_mwi_locate(b, &bl->link);
 	dect_base_missed_locate(b, &bl->link);
 }
+
+void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
+			 unsigned slot)
+{
+	const char *def = b->cfg.line_name ? b->cfg.line_name : "Line 1";
+	uint32_t att = slot >= 1u && slot <= 32u ? 1u << (slot - 1u) : 0u;
+	unsigned i;
+
+	iwu->contacts = b->contacts;
+	iwu->calls = b->call_lists;
+	for (i = 0; i < b->n_hs; i++)
+		if (dect_base_slot(b, i) == slot)
+			break;
+	if (!slot || i == b->n_hs)
+		return;
+	dect_iwu_clear_lines(iwu);
+	(void)dect_iwu_add_line(iwu, DECT_BASE_LINE_ID, b->line_name[i][0][0]
+				? b->line_name[i][0] : def, att);
+	if (b->line2[i])
+		(void)dect_iwu_add_line(iwu, DECT_BASE_LINE_ID + 1u,
+					b->line_name[i][1][0]
+					? b->line_name[i][1] : "Line 2", att);
+}
+
+int dect_base_page_adopt(struct dect_base *b, int p,
+			 const struct dect_link_ind *ind, int i,
+			 const char *why)
+{
+	struct dect_link *l = &dect_base_party_link(b, p)->link;
+	unsigned k;
+
+	for (k = 0; k < l->mm.n_held; k++)
+		if (l->mm.held[k].tag == i)
+			break;
+	if (k == l->mm.n_held || l->mm.held[k].id_len != ind->page_id_len ||
+	    memcmp(l->mm.held[k].id, ind->page_id, ind->page_id_len))
+		return 0;
+	(void)dect_mm_adopt(&l->mm, ind->page_id, ind->page_id_len);
+	if (p >= 0) {
+		b->side[p].adopted = i;
+	} else if ((unsigned)i != b->cur) {
+		(void)dect_base_serve(b, (unsigned)i, why);
+		dect_iwu_set_own(&b->main_link.link.cc.iwu,
+				 (uint8_t)dect_base_slot(b, b->cur));
+		dect_base_iwu_lines(b, &b->main_link.link.cc.iwu,
+				    dect_base_slot(b, b->cur));
+	}
+	return 1;
+}
+
+int dect_base_dereg_page_response(struct dect_base *b, int p,
+				  const struct dect_link_ind *ind)
+{
+	int i = b->dereg.target;
+
+	if (b->dereg.st != DECT_BASE_DEREG_PAGING || !ind->page_response ||
+	    !dect_base_page_adopt(b, p, ind, i, " (deregistration)"))
+		return 0;
+	dect_base_log(b, "dereg: DECT %u answered the page with its own "
+		      "identity", dect_base_slot(b, (unsigned)i));
+	return 1;
+}
+
+int dect_base_time_page_response(struct dect_base *b, int p,
+				 const struct dect_link_ind *ind)
+{
+	int i = b->tu.target;
+
+	if (b->tu.st != DECT_BASE_TIME_PAGING || !ind->page_response ||
+	    !dect_base_page_adopt(b, p, ind, i, " (date and time)"))
+		return 0;
+	b->tu.answered = 1;
+	dect_base_log(b, "time: DECT %u answered the page",
+		      dect_base_slot(b, (unsigned)i));
+	return 1;
+}
+
+void dect_base_ic_target_link(struct dect_base *b, int p,
+			      const struct dect_link_ind *ind, uint64_t now)
+{
+	/*
+	 * The link adopts the target, as for a deregistration's or the date
+	 * and time's page: authfirst authenticates the call with the key of
+	 * the handset the link adopted, and a link that adopted no one was
+	 * released with "no key" -- the target rang for a moment and stopped
+	 * (7412, 2026-10-29).
+	 */
+	if (b->ic.st != DECT_BASE_IC_PAGING ||
+	    !dect_base_page_adopt(b, p, ind, b->ic.target, " (internal call)"))
+		return;
+	dect_base_ic_setup(b, p, now, "answered the page");
+}
+
+int dect_base_side_ring_answer(struct dect_base *b, unsigned k,
+			       const struct dect_link_ind *ind, uint64_t now)
+{
+	unsigned i;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++) {
+		struct dect_base_call *c = &b->calls[i];
+
+		if (!c->id || c->party != DECT_BASE_PARTY_PAGING ||
+		    !dect_base_page_adopt(b, (int)k, ind, c->target,
+					  " (external call)"))
+			continue;
+		dect_base_side_ring_setup(b, c, k, now, "answered the page");
+		return 1;
+	}
+	return 0;
+}

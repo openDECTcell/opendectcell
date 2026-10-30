@@ -342,11 +342,7 @@ struct handset {
 	int      fetched;	/* ... and has, this run */
 	/* its <<TERMINAL-CAPABILITY>>: base.cap[] (dect_base.h, S3k) */
 	/* its name, kept in <path>.name: base.name[] (dect_base.h) */
-	/*
-	 * its lines' names, Line 2 only when its account is on (lines_load,
-	 * which sets base.line2[])
-	 */
-	char     line_name[2][DECT_IWU_NAME_MAX];
+	/* its lines' names and Line 2: base.line_name[], base.line2[] (lines_load) */
 	/*
 	 * Its handset profile (docs/handset-profiles.md): the model the user
 	 * picked, in <path>.profile (the id, and optionally the firmware
@@ -4825,7 +4821,7 @@ static void lines_load(struct stubd *s, unsigned i)
 	char path[256], buf[64];
 	FILE *f;
 
-	s->hs[i].line_name[0][0] = s->hs[i].line_name[1][0] = '\0';
+	s->base.line_name[i][0][0] = s->base.line_name[i][1][0] = '\0';
 	s->base.line2[i] = 0;
 	snprintf(path, sizeof(path), "/etc/opendectcell/handset%u.lines",
 		 hs_slot(s, i));
@@ -4838,15 +4834,15 @@ static void lines_load(struct stubd *s, unsigned i)
 		buf[strcspn(buf, "\r\n")] = '\0';
 		if ((buf[0] != '1' && buf[0] != '2') || buf[1] != ' ')
 			continue;
-		snprintf(s->hs[i].line_name[buf[0] - '1'],
-			 sizeof(s->hs[i].line_name[0]), "%.15s", nm);
+		snprintf(s->base.line_name[i][buf[0] - '1'],
+			 sizeof(s->base.line_name[i][0]), "%.15s", nm);
 		if (buf[0] == '2')
 			s->base.line2[i] = 1;
 	}
 	fclose(f);
 	printf("sub: DECT %u's lines: 1 \"%s\"%s%s%s\n", hs_slot(s, i),
-	       s->hs[i].line_name[0], s->base.line2[i] ? ", 2 \"" : "",
-	       s->base.line2[i] ? s->hs[i].line_name[1] : "",
+	       s->base.line_name[i][0], s->base.line2[i] ? ", 2 \"" : "",
+	       s->base.line2[i] ? s->base.line_name[i][1] : "",
 	       s->base.line2[i] ? "\"" : "");
 }
 
@@ -4856,25 +4852,7 @@ static struct dect_calls stubd_calls;		/* ... and call lists */
 
 static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
 {
-	const char *def = s->audio.line_name ? s->audio.line_name : "Line 1";
-	uint32_t att = slot >= 1u && slot <= 32u ? 1u << (slot - 1u) : 0u;
-	unsigned i;
-
-	iwu->contacts = s->contacts_path ? &stubd_contacts : NULL;
-	iwu->calls = &stubd_calls;
-
-	for (i = 0; i < s->base.n_hs; i++)
-		if (hs_slot(s, i) == slot)
-			break;
-	if (!slot || i == s->base.n_hs)
-		return;
-	dect_iwu_clear_lines(iwu);
-	(void)dect_iwu_add_line(iwu, STUBD_LINE_ID, s->hs[i].line_name[0][0]
-				? s->hs[i].line_name[0] : def, att);
-	if (s->base.line2[i])
-		(void)dect_iwu_add_line(iwu, STUBD_LINE_ID + 1u,
-					s->hs[i].line_name[1][0]
-					? s->hs[i].line_name[1] : "Line 2", att);
+	dect_base_iwu_lines(&s->base, iwu, slot);
 }
 
 /*
@@ -5621,37 +5599,6 @@ static int ic_start(struct stubd *s, int side, uint64_t now)
 	return dect_base_ic_start(&s->base, side, now);
 }
 
-static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how);
-static int page_adopt(struct stubd *s, struct side_link *sl,
-		      const struct dect_link_ind *ind, int i, const char *why);
-
-/* The target answered our page on side link sl (NULL: the main link). */
-static void ic_target_link(struct stubd *s, struct side_link *sl,
-			   const struct dect_link_ind *ind, uint64_t now)
-{
-	/*
-	 * The link adopts the target, as for a deregistration's or the date
-	 * and time's page (page_adopt()): authfirst authenticates the call
-	 * with the key of the handset the link adopted, and a link that
-	 * adopted no one was released with "no key" -- the target rang for
-	 * a moment and stopped (7412, 2026-10-29).
-	 */
-	if (s->base.ic.st != IC_PAGING ||
-	    !page_adopt(s, sl, ind, s->base.ic.target, " (internal call)"))
-		return;
-	ic_setup(s, sl ? (int)(sl - s->side) : -1, now, "answered the page");
-}
-
-/*
- * Place our SETUP to the target on its side link -- after its page
- * response, or once the link has adopted it (the A540 answers a page with
- * a location registration, M2' and 12b).
- */
-static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
-{
-	dect_base_ic_setup(&s->base, p, now, how);
-}
-
 static int ic_wideband(const struct stubd *s, int p);
 
 #define DEREG_IDLE	DECT_BASE_DEREG_IDLE
@@ -5697,32 +5644,12 @@ static void base_mask(void *ctx)
 	send_subscription_tail(ctx);
 }
 
-/*
- * A page response from handset i, which we paged without a call: if it
- * carries that handset's identity, the link adopts it, so link_known_hs()
- * finds it. Returns 1 when it was handset i's.
- */
-static int page_adopt(struct stubd *s, struct side_link *sl,
-		      const struct dect_link_ind *ind, int i, const char *why)
+/* The internal call's target answered our page on sl (NULL: the main link). */
+static void ic_target_link(struct stubd *s, struct side_link *sl,
+			   const struct dect_link_ind *ind, uint64_t now)
 {
-	struct dect_link *l = sl ? &sl->bl->link : &s->base.main_link.link;
-	unsigned k;
-
-	for (k = 0; k < l->mm.n_held; k++)
-		if (l->mm.held[k].tag == i)
-			break;
-	if (k == l->mm.n_held || l->mm.held[k].id_len != ind->page_id_len ||
-	    memcmp(l->mm.held[k].id, ind->page_id, ind->page_id_len))
-		return 0;
-	(void)dect_mm_adopt(&l->mm, ind->page_id, ind->page_id_len);
-	if (sl) {
-		sl->bl->adopted = i;
-	} else if ((unsigned)i != s->base.cur) {
-		hs_switch(s, (unsigned)i, why);
-		dect_iwu_set_own(&s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
-		iwu_lines(s, &s->base.main_link.link.cc.iwu, stubd_sub_slot(s));
-	}
-	return 1;
+	dect_base_ic_target_link(&s->base, sl ? (int)(sl - s->side) : -1, ind,
+				 now);
 }
 
 /*
@@ -5733,28 +5660,16 @@ static int page_adopt(struct stubd *s, struct side_link *sl,
 static int dereg_page_response(struct stubd *s, struct side_link *sl,
 			       const struct dect_link_ind *ind)
 {
-	int i = s->base.dereg.target;
-
-	if (s->base.dereg.st != DEREG_PAGING || !ind->page_response ||
-	    !page_adopt(s, sl, ind, i, " (deregistration)"))
-		return 0;
-	printf("dereg: DECT %u answered the page with its own identity\n",
-	       hs_slot(s, (unsigned)i));
-	return 1;
+	return dect_base_dereg_page_response(&s->base,
+					     sl ? (int)(sl - s->side) : -1, ind);
 }
 
 /* The same for a handset paged for the date and time (time_tick). */
 static int time_page_response(struct stubd *s, struct side_link *sl,
 			      const struct dect_link_ind *ind)
 {
-	int i = s->base.tu.target;
-
-	if (s->base.tu.st != DECT_BASE_TIME_PAGING || !ind->page_response ||
-	    !page_adopt(s, sl, ind, i, " (date and time)"))
-		return 0;
-	s->base.tu.answered = 1;
-	printf("time: DECT %u answered the page\n", hs_slot(s, (unsigned)i));
-	return 1;
+	return dect_base_time_page_response(&s->base,
+					    sl ? (int)(sl - s->side) : -1, ind);
 }
 
 static void dereg_begin(struct stubd *s, unsigned slot, uint64_t now,
@@ -6013,30 +5928,12 @@ static struct dect_base_call *bc_active(struct stubd *s, int p)
 	return dect_base_call_active(&s->base, p);
 }
 
-/* Side ring b's SETUP to its handset, on side link k. */
-static void sr_setup(struct stubd *s, struct dect_base_call *b, unsigned k,
-		     uint64_t now, const char *how)
-{
-	dect_base_side_ring_setup(&s->base, b, k, now, how);
-}
-
 /* A page response on side link sl: the handset a side ring pages? */
 static int sr_target_link(struct stubd *s, struct side_link *sl,
 			  const struct dect_link_ind *ind, uint64_t now)
 {
-	unsigned i;
-
-	for (i = 0; i < BC_MAX; i++) {
-		struct dect_base_call *b = &s->base.calls[i];
-
-		if (!b->id || b->party != BC_PAGING ||
-		    !page_adopt(s, sl, ind, b->target, " (external call)"))
-			continue;
-		sr_setup(s, b, (unsigned)(sl - s->side), now,
-			 "answered the page");
-		return 1;
-	}
-	return 0;
+	return dect_base_side_ring_answer(&s->base, (unsigned)(sl - s->side),
+					  ind, now);
 }
 
 /* A bridge command about a call. Returns 1 when the verb was one of ours. */
@@ -9726,6 +9623,7 @@ int main(int argc, char **argv)
 	s.base.cfg.ring_ms = s.audio.ring_ms;
 	s.base.cfg.ring_attach_ms = s.audio.ring_attach_ms;
 	s.base.cfg.pin = s.pin;
+	s.base.cfg.line_name = s.audio.line_name;
 	s.base.cfg.time_every_min = s.audio.time_every_min;
 	s.base.cfg.callinfo = s.audio.callinfo;
 	s.base.contacts = s.contacts_path ? &stubd_contacts : NULL;

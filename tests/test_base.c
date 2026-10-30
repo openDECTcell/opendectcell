@@ -868,5 +868,30 @@ int main(void)
 		dect_base_main_ids(&b, 0);
 		CHECK_EQ(b.rec.cc_fixed_id_len, 0u);
 	}
+
+	/* page responses and lines (S3x) */
+	{
+		struct dect_link_ind ind;
+		struct dect_iwu *iwu = &b.main_link.link.cc.iwu;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.line2[0] = 1;
+		snprintf(b.line_name[0][1], sizeof(b.line_name[0][1]), "Work");
+		dect_base_iwu_lines(&b, iwu, 1);
+		CHECK_EQ(iwu->n_lines, 2u);
+		CHECK_EQ(strcmp(iwu->lines[0].name, "Line 1"), 0);
+		CHECK_EQ(strcmp(iwu->lines[1].name, "Work"), 0);
+		memset(&ind, 0, sizeof(ind));
+		ind.page_response = 1;
+		/* not paging for any of these: nothing consumed */
+		CHECK_EQ(dect_base_dereg_page_response(&b, -1, &ind), 0);
+		CHECK_EQ(dect_base_time_page_response(&b, -1, &ind), 0);
+		CHECK_EQ(dect_base_side_ring_answer(&b, 0, &ind, 0), 0);
+		/* a page response with an identity MM does not hold */
+		CHECK_EQ(dect_base_page_adopt(&b, 0, &ind, 0, ""), 0);
+	}
 	return CHECK_DONE();
 }

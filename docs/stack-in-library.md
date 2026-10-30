@@ -384,6 +384,16 @@ the current handset (`dect_base_main_ids()`, with the chip's RFPI now
 registration (`dect_base_main_located()`). The fourteen traces
 unchanged.
 
+**S3x.** The page responses the base waits for besides a ring's are the
+library's: a link adopting the handset that answered a page of ours
+(`dect_base_page_adopt()`), and the deregistration's, the date and
+time's, the internal call's and a side ring's (`dect_base_*_page_response()`,
+`dect_base_ic_target_link()`, `dect_base_side_ring_answer()`). So are
+the lines a link's Line Settings List offers (`dect_base_iwu_lines()`,
+with each record's line names in `line_name[]`; the host still reads
+them from `/etc/opendectcell/handsetN.lines`). Unit tests; the fourteen
+traces unchanged.
+
 ## S5, the control verbs (started 2026-10-30)
 
 **S5a.** The bridge's call verbs are the library's:
