@@ -276,3 +276,8 @@ mask, mode and codec bytes). In cell mode the controller sends exactly
 these through the tunnel. Every audio mail dect-stubd sends goes through
 them. Unit test; traces unchanged.
 
+**S3k.** Each record's terminal capability (seen, Part 3, NG-DECT) is
+`dect_base.cap[]`, and the fixed call information option is
+`cfg.callinfo`. Data only, with what the ring's SETUP needs now in the
+library; traces unchanged.
+

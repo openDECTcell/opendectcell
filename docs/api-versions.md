@@ -786,3 +786,8 @@ timing, the periodic date and time) (S3i).
 **110.** dect_base.h, 2026-10-30: the audio binds:
 dect_base_audio_param() (0x0251), _audio_assign() (0x0230),
 _audio_path() (0x022D) and _audio_release() (0x0233) (S3j).
+
+**111.** dect_base.h, 2026-10-30: struct dect_base_cap and struct
+dect_base's `cap[]` (each record's terminal capability), and
+dect_base_cfg's `callinfo` (S3k). dect_base.h now includes
+dect_callinfo.h.

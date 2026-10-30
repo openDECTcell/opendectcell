@@ -340,10 +340,7 @@ struct handset {
 	int      remote;	/* remote=: a roamer the cell must fetch */
 	int      absent;	/* the file does not exist: free for enrolment */
 	int      fetched;	/* ... and has, this run */
-	/* runtime only: its <<TERMINAL-CAPABILITY>>, once seen (cap_tick) */
-	int      cap_known;
-	int      cap_part3;	/* NG-DECT Part 3: call status allowed */
-	int      cap_ng;	/* NG-DECT Part 1 or 3: not a pure GAP handset */
+	/* its <<TERMINAL-CAPABILITY>>: base.cap[] (dect_base.h, S3k) */
 	/*
 	 * The name a handset gave it in the Internal Names List (TS 102 527-3
 	 * §7.4.10.5.8), kept in <path>.name; empty = the default "DECT n".
@@ -3153,7 +3150,7 @@ static void cap_save(const struct stubd *s, unsigned i)
 	f = fopen(path, "w");
 	if (!f)
 		return;
-	fprintf(f, "part3 %d\nng %d\n", s->hs[i].cap_part3, s->hs[i].cap_ng);
+	fprintf(f, "part3 %d\nng %d\n", s->base.cap[i].part3, s->base.cap[i].ng);
 	fclose(f);
 }
 
@@ -3169,17 +3166,17 @@ static void cap_load(struct stubd *s, unsigned i)
 		return;
 	while (fscanf(f, "%7s %d", key, &v) == 2) {
 		if (!strcmp(key, "part3"))
-			s->hs[i].cap_part3 = v != 0, got |= 1;
+			s->base.cap[i].part3 = v != 0, got |= 1;
 		else if (!strcmp(key, "ng"))
-			s->hs[i].cap_ng = v != 0, got |= 2;
+			s->base.cap[i].ng = v != 0, got |= 2;
 	}
 	fclose(f);
 	if (got != 3)
 		return;
-	s->hs[i].cap_known = 1;
+	s->base.cap[i].known = 1;
 	printf("cap: %s reported %s (remembered)\n", s->hs[i].path,
-	       s->hs[i].cap_part3 ? "NG-DECT Part 3" :
-	       s->hs[i].cap_ng ? "NG-DECT Part 1" : "GAP only");
+	       s->base.cap[i].part3 ? "NG-DECT Part 3" :
+	       s->base.cap[i].ng ? "NG-DECT Part 1" : "GAP only");
 }
 
 /*
@@ -3203,25 +3200,25 @@ static void cap_tick(struct stubd *s, struct dect_link *l)
 	/* the profile says the handset's own report is wrong (§5.3) */
 	if (!s->base.prof[i].trust_terminal_capability &&
 	    s->base.prof[i].cap_ngdect) {
-		if (!h->cap_known)
+		if (!s->base.cap[i].known)
 			printf("cap: %s: the profile sets %s (the handset's "
 			       "report is not trusted)\n", h->path,
 			       s->base.prof[i].cap_ngdect == 3 ? "NG-DECT Part 3" :
 			       s->base.prof[i].cap_ngdect == 2 ? "NG-DECT Part 1" :
 			       "GAP only");
-		h->cap_known = 1;
-		h->cap_part3 = s->base.prof[i].cap_ngdect == 3;
-		h->cap_ng = s->base.prof[i].cap_ngdect >= 2;
+		s->base.cap[i].known = 1;
+		s->base.cap[i].part3 = s->base.prof[i].cap_ngdect == 3;
+		s->base.cap[i].ng = s->base.prof[i].cap_ngdect >= 2;
 		return;
 	}
 	if (!tc->present)
 		return;
-	if (h->cap_known && h->cap_part3 == tc->ng_part3 &&
-	    h->cap_ng == (tc->ng_part1 || tc->ng_part3))
+	if (s->base.cap[i].known && s->base.cap[i].part3 == tc->ng_part3 &&
+	    s->base.cap[i].ng == (tc->ng_part1 || tc->ng_part3))
 		return;
-	h->cap_known = 1;
-	h->cap_part3 = tc->ng_part3;
-	h->cap_ng = tc->ng_part1 || tc->ng_part3;
+	s->base.cap[i].known = 1;
+	s->base.cap[i].part3 = tc->ng_part3;
+	s->base.cap[i].ng = tc->ng_part1 || tc->ng_part3;
 	cap_save(s, (unsigned)i);
 	printf("cap: %s reports %s%s\n", h->path,
 	       tc->ng_part3 ? "NG-DECT Part 3" :
@@ -3242,7 +3239,7 @@ static uint8_t alloc_call_id(const struct stubd *s, const struct dect_link *me)
 {
 	unsigned id, k;
 
-	if (s->audio.callinfo.has_call_id)
+	if (s->base.cfg.callinfo.has_call_id)
 		return 0;
 	for (id = 1; id <= 127u; id++) {
 		int used = 0;
@@ -3313,9 +3310,9 @@ static int call_status_for(void *ctx, const uint8_t *ipui, size_t len)
 
 	if (i >= 0 && s->base.prof[i].cc_call_status != DECT_PROF_AUTO)
 		return s->base.prof[i].cc_call_status == DECT_PROF_ON;
-	if (i < 0 || !s->hs[i].cap_known || s->base.cfg.all_call_status)
+	if (i < 0 || !s->base.cap[i].known || s->base.cfg.all_call_status)
 		return -1;
-	return !s->base.cfg.no_call_status && s->hs[i].cap_part3;
+	return !s->base.cfg.no_call_status && s->base.cap[i].part3;
 }
 
 /*
@@ -4434,8 +4431,8 @@ static uint8_t target_svc(const struct stubd *s, int i, uint8_t configured)
 		return (uint8_t)((configured & 0xF0u) |
 				 (s->base.prof[i].cc_basic_service == 1 ? 0x08u
 								      : 0x00u));
-	if (i >= 0 && (unsigned)i < s->base.n_hs && s->hs[i].cap_known &&
-	    !s->hs[i].cap_ng)
+	if (i >= 0 && (unsigned)i < s->base.n_hs && s->base.cap[i].known &&
+	    !s->base.cap[i].ng)
 		return 0x80u;
 	return configured;
 }
@@ -4458,11 +4455,11 @@ static uint8_t ring_svc(const struct stubd *s, unsigned t, int narrow)
  */
 static int ring_target_part3(const struct stubd *s)
 {
-	const struct dect_callinfo *o = &s->audio.callinfo;
+	const struct dect_callinfo *o = &s->base.cfg.callinfo;
 
 	return !o->has_line && !o->has_call_id && !o->has_call_status &&
-	       s->base.n_hs && s->hs[s->base.ring.hs].cap_known &&
-	       s->hs[s->base.ring.hs].cap_part3;
+	       s->base.n_hs && s->base.cap[s->base.ring.hs].known &&
+	       s->base.cap[s->base.ring.hs].part3;
 }
 
 /*
@@ -4481,8 +4478,8 @@ static void ring_callinfo(struct stubd *s, int on)
 	unsigned i;
 
 	if (!on || !ring_target_part3(s)) {
-		dect_cc_set_callinfo(&s->base.main_link.link.cc, &s->audio.callinfo);
-		if (on && s->base.n_hs && !s->hs[s->base.ring.hs].cap_known)
+		dect_cc_set_callinfo(&s->base.main_link.link.cc, &s->base.cfg.callinfo);
+		if (on && s->base.n_hs && !s->base.cap[s->base.ring.hs].known)
 			printf("ring: the target's terminal capability is not "
 			       "known yet -- no call information (an A540 "
 			       "then rings silently)\n");
@@ -5234,9 +5231,9 @@ static void state_write(struct stubd *s, uint64_t now, int radio_on,
 			fprintf(f, ",\"profile\":");
 			json_str(f, s->hs[i].prof_id);
 		}
-		if (s->hs[i].cap_known)
+		if (s->base.cap[i].known)
 			fprintf(f, ",\"part3\":%s",
-				s->hs[i].cap_part3 ? "true" : "false");
+				s->base.cap[i].part3 ? "true" : "false");
 		/* in contact right now while it holds a link */
 		if (seen || linked)
 			fprintf(f, ",\"seen_ms_ago\":%llu", linked ? 0ull :
@@ -5471,15 +5468,15 @@ static void main_cc_setup(struct stubd *s)
 	dect_cc_set_overlap(&s->base.main_link.link.cc, !s->base.cfg.no_overlap);
 	dect_cc_set_route_complete(&s->base.main_link.link.cc, 1);
 	dect_cc_set_call_status(&s->base.main_link.link.cc, !s->base.cfg.no_call_status,
-				s->audio.callinfo.has_call_id ?
-				s->audio.callinfo.call_id : 1u);
+				s->base.cfg.callinfo.has_call_id ?
+				s->base.cfg.callinfo.call_id : 1u);
 	s->base.main_link.link.call_status_for = call_status_for;
 	s->base.main_link.link.call_id_for = call_id_for;
 	s->base.main_link.link.call_status_ctx = s;
 	/* our one line for FP-managed selection ('None', §7.4.5.2.4) */
 	dect_cc_set_default_line(&s->base.main_link.link.cc, STUBD_LINE_ID,
 				 DECT_CALLINFO_NDT_DELAY);
-	dect_cc_set_callinfo(&s->base.main_link.link.cc, &s->audio.callinfo);
+	dect_cc_set_callinfo(&s->base.main_link.link.cc, &s->base.cfg.callinfo);
 	/* the lowest free transaction value, 0 (EN 300 444 §6.9.2) */
 	dect_cc_set_next_ti(&s->base.main_link.link.cc, 0);
 }
@@ -6063,7 +6060,7 @@ static int notify_ok(const struct stubd *s, const struct dect_link *l)
 	if (l->mm.peer_cap.present)
 		return l->mm.peer_cap.ng_part3;
 	/* a link up for a page or a call: what the handset said before */
-	return i >= 0 && s->hs[i].cap_known && s->hs[i].cap_part3;
+	return i >= 0 && s->base.cap[i].known && s->base.cap[i].part3;
 }
 
 /*
@@ -6233,7 +6230,7 @@ static int notify_known(const struct stubd *s, unsigned i)
 {
 	if (s->base.prof[i].notify != DECT_PROF_AUTO)
 		return s->base.prof[i].notify == DECT_PROF_ON;
-	return s->hs[i].cap_known && s->hs[i].cap_part3;
+	return s->base.cap[i].known && s->base.cap[i].part3;
 }
 
 /*
@@ -6582,8 +6579,8 @@ static int side_start(struct stubd *s, uint8_t handle)
 	dect_cc_set_overlap(&sl->bl->link.cc, !s->base.cfg.no_overlap);
 	dect_cc_set_route_complete(&sl->bl->link.cc, 1);
 	dect_cc_set_call_status(&sl->bl->link.cc, !s->base.cfg.no_call_status,
-				s->audio.callinfo.has_call_id ?
-				s->audio.callinfo.call_id : 1u);
+				s->base.cfg.callinfo.has_call_id ?
+				s->base.cfg.callinfo.call_id : 1u);
 	sl->bl->link.call_status_for = call_status_for;
 	sl->bl->link.call_id_for = call_id_for;
 	sl->bl->link.call_status_ctx = s;
@@ -6989,8 +6986,8 @@ static void ic_setup(struct stubd *s, int p, uint64_t now, const char *how)
 		 * 00 81 02 01 81 [CR A-0125]; TS 102 527-3 §7.4.6.3.
 		 */
 		dect_callinfo_init(&ci);
-		if (s->hs[s->ic.target].cap_known &&
-		    s->hs[s->ic.target].cap_part3 && !s->base.cfg.no_call_status) {
+		if (s->base.cap[s->ic.target].known &&
+		    s->base.cap[s->ic.target].part3 && !s->base.cfg.no_call_status) {
 			ci.has_call_id = 1;
 			ci.call_id = l->cc.status_call_id;
 			ci.has_call_status = 1;
@@ -7093,7 +7090,7 @@ static void dereg_erase(struct stubd *s, int i, const char *why)
 	s->base.hs[i].uak_valid = 0;
 	s->hs[i].absent = 1;		/* free for a new enrolment */
 	s->hs[i].name[0] = '\0';
-	s->hs[i].cap_known = 0;
+	s->base.cap[i].known = 0;
 	memset(s->hs[i].mwi, 0, sizeof(s->hs[i].mwi));
 	s->hs[i].mwi_known = s->hs[i].mwi_due = 0;
 	s->tu.want &= ~(1u << i);
@@ -7679,8 +7676,8 @@ static void ctl_hs_to(struct stubd *s, int c, unsigned i, const char *state)
 		dect_ctl_add(&o, "name", nm);
 		if (s->hs[i].prof_id[0])
 			dect_ctl_add(&o, "model", s->hs[i].prof_id);
-		if (s->hs[i].cap_known)
-			dect_ctl_add_uint(&o, "part3", s->hs[i].cap_part3 ? 1 : 0);
+		if (s->base.cap[i].known)
+			dect_ctl_add_uint(&o, "part3", s->base.cap[i].part3 ? 1 : 0);
 		/* 0: we call it narrowband, so its account may answer G.711 */
 		dect_ctl_add_uint(&o, "wideband", !s->base.cfg.narrowband &&
 				  (target_svc(s, (int)i, s->base.cfg.basic_svc) &
@@ -8289,11 +8286,11 @@ static void sr_start(struct stubd *s, struct dect_base_call *b, unsigned t,
 
 static int sr_part3(const struct stubd *s, unsigned t)
 {
-	const struct dect_callinfo *o = &s->audio.callinfo;
+	const struct dect_callinfo *o = &s->base.cfg.callinfo;
 
 	return !o->has_line && !o->has_call_id && !o->has_call_status &&
-	       !s->base.cfg.no_call_status && s->hs[t].cap_known &&
-	       s->hs[t].cap_part3;
+	       !s->base.cfg.no_call_status && s->base.cap[t].known &&
+	       s->base.cap[t].part3;
 }
 
 /* Side ring b's SETUP to its handset, on side link k. */
@@ -12893,6 +12890,7 @@ int main(int argc, char **argv)
 	s.base.cfg.ring_ms = s.audio.ring_ms;
 	s.base.cfg.ring_attach_ms = s.audio.ring_attach_ms;
 	s.base.cfg.time_every_min = s.audio.time_every_min;
+	s.base.cfg.callinfo = s.audio.callinfo;
 
 	s.stub_build = stub_build_read(s.stub_name, sizeof(s.stub_name));
 	printf("chip: STUB second stage %s\n",

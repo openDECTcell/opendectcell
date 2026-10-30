@@ -16,6 +16,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "dect_callinfo.h"
 #include "dect_cc.h"
 #include "dect_clip.h"
 #include "dect_ctl.h"
@@ -224,6 +225,15 @@ struct dect_base_cfg {
 	unsigned ring_ms;	/* ring= test timing */
 	unsigned ring_attach_ms;	/* ringattach= test timing */
 	unsigned time_every_min;	/* the periodic date and time */
+	/* callinfo keys: a fixed <<CALL-INFORMATION>> for every SETUP (S3k) */
+	struct dect_callinfo callinfo;
+};
+
+/* What a handset said of itself in <<TERMINAL-CAPABILITY>> (S3k). */
+struct dect_base_cap {
+	int known;			/* seen (cap_tick) */
+	int part3;			/* NG-DECT Part 3: call status allowed */
+	int ng;				/* NG-DECT Part 1 or 3: not pure GAP */
 };
 
 struct dect_base {
@@ -247,6 +257,7 @@ struct dect_base {
 	 * by the host from the model it was given (S3h): defaults otherwise.
 	 */
 	struct dect_hs_profile prof[DECT_BASE_HS_MAX];
+	struct dect_base_cap cap[DECT_BASE_HS_MAX];	/* runtime, per record */
 	unsigned n_hs;			/* records in use, hs[0] first */
 	unsigned cur;			/* the current one */
 	struct dect_hs_rec rec;		/* hs[cur], being worked on */
