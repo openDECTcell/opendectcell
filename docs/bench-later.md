@@ -169,6 +169,22 @@ restore lines as V1; still running five minutes later. Fail: `unknown`
 again means the fallback never reached the file (owner or mode); trouble
 lines with the build named mean an audit gap other than the record.
 
+**V1b result, 2026-10-30 13:40-13:45 UTC: pass.** `chip: STUB second
+stage dectfw_secondlevel_441-07.56.hex`, `slot audit skipped`, no
+`***` line; slots 1, 3, 2 restored, the others cleared, mask `00 07`;
+baresip `200 OK [1 binding]`; the same pid five minutes later. Log:
+`/root/t13-v1b-20261030-143958.log`. The box is left running the
+`51a5f95` dect-stubd (over the `d1cdd37` package's binary; the next apk
+upgrade replaces it), radio on, as asked.
+
+The kept `/etc/init.d/opendectcell` on the 7520 is byte for byte the
+committed `00741ff` version, not a hand edit: apk kept it only because
+it had been copied over the 0.3.0 package's file. Taking
+`/etc/init.d/opendectcell.apk-new` loses nothing and brings the park guard
+(`1c081ee`) and role `cell`; its first start boots the chip afresh (its
+record is not in `/var/run/opendectcell` yet). Left for the maintainer, as
+it reboots the radio.
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |
