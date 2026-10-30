@@ -376,6 +376,14 @@ release on a failure, the timeout and rejection reported once
 call-in, call-out and internal-call traces take both paths; the fourteen
 traces unchanged.
 
+**S3w.** Parts of the main link's segment handler are the library's:
+making another record current (`dect_base_serve()`, the host told
+through `switched()`), learning or deriving the identities for calling
+the current handset (`dect_base_main_ids()`, with the chip's RFPI now
+`dect_base`'s), and the date, time and notices after each location
+registration (`dect_base_main_located()`). The fourteen traces
+unchanged.
+
 ## S5, the control verbs (started 2026-10-30)
 
 **S5a.** The bridge's call verbs are the library's:

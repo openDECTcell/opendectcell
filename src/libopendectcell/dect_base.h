@@ -119,6 +119,11 @@ struct dect_base_ops {
 	 * host keeps the name (b->name[i]) and tells its clients.
 	 */
 	void (*named)(void *ctx, unsigned i);
+	/*
+	 * The stack made record b->cur the current one (S3w): the host serves
+	 * its store from now on; why says what made it so (log text).
+	 */
+	void (*switched)(void *ctx, const char *why);
 };
 
 /*
@@ -159,6 +164,7 @@ struct dect_base_link {
 	int      cipher_started;	/* main link: the call's challenge sent (S3v) */
 	int      cipher_reject_seen;	/* ... CIPHER-REJECT reported */
 	int      cipher_timeout_seen;	/* ... <MM_cipher.1> reported */
+	uint32_t time_sent_for;		/* main link: mm.stats.located answered (S3w) */
 	/* Stage S3p, the main link's call: */
 	int      bound;			/* its audio channel bound */
 	int      path_on;		/* ... and connected (0x022D sent) */
@@ -422,6 +428,11 @@ struct dect_base {
 	unsigned next_call;		/* the last call id given, 1..127 */
 	/* record i has a Line 2, an account of its own (lines-and-calls.md) */
 	int      line2[DECT_BASE_HS_MAX];
+	/* the chip's RFPI, from its contact answer 0xF601 (S3w) */
+	uint8_t  rfpi[DECT_MM_RFPI_LEN];
+	int      have_rfpi;
+	/* identities not learned for the current record, said once (S3w) */
+	int      cc_id_foreign_warned, cc_id_unarmed_warned;
 	uint64_t start_ms;		/* the host's start, for ring= */
 	uint64_t first_contact_ms;	/* a handset's first C-plane segment, for ringattach= */
 	struct dect_base_cfg cfg;
@@ -1028,6 +1039,25 @@ void dect_base_main_cipher_tick(struct dect_base *b, uint64_t now);
  */
 void dect_base_side_cipher_tick(struct dect_base *b, unsigned k,
 				uint64_t now);
+
+/*
+ * The main link after a segment (S3w). Make record i the current one and
+ * tell the host (switched()); 0 when it already was.
+ */
+int dect_base_serve(struct dect_base *b, unsigned i, const char *why);
+/*
+ * The identities an FP-originated {CC-SETUP} needs, for the current
+ * record: learned from a call the handset placed (once proven, audit A3;
+ * never another handset's), else derived from the subscription and our
+ * PARK (EN 300 444 table 21 specifies both). Saved through save().
+ */
+void dect_base_main_ids(struct dect_base *b, int cc_message);
+/*
+ * After each location registration on the main link: the date and time
+ * when the host's clock is right (TS 102 527-3 §7.4.20.2), the list
+ * change notices, the messages waiting and the missed calls.
+ */
+void dect_base_main_located(struct dect_base *b);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)

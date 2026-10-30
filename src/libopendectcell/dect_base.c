@@ -3620,3 +3620,148 @@ void dect_base_side_cipher_tick(struct dect_base *b, unsigned k,
 		}
 	}
 }
+
+int dect_base_serve(struct dect_base *b, unsigned i, const char *why)
+{
+	if (!dect_base_switch(b, i))
+		return 0;
+	b->cc_id_foreign_warned = 0;
+	b->cc_id_unarmed_warned = 0;
+	if (b->ops && b->ops->switched)
+		b->ops->switched(b->ctx, why);
+	return 1;
+}
+
+void dect_base_main_ids(struct dect_base *b, int cc_message)
+{
+	struct dect_link *l = &b->main_link.link;
+	struct dect_hs_rec *r = &b->rec;
+
+	/*
+	 * A call the handset places carries the two identities an
+	 * FP-originated SETUP needs, in the handset's own encoding. Keep the
+	 * first pair we see and persist it, so calling the handset later
+	 * needs no guesswork about identity types, bit lengths or padding.
+	 */
+	if (cc_message && !r->cc_id_learned && l->cc.peer_fixed_id_len &&
+	    !dect_cc_peer_is(&l->cc, r->port_id, r->port_id_len)) {
+		/*
+		 * A CC transaction from a handset we are not subscribed to.
+		 * Learning from it would persist ANOTHER handset's identities
+		 * into this record, and every later FP-originated {CC-SETUP}
+		 * would address the wrong handset -- which is exactly what
+		 * happened on 2026-10-24: a second handset runs a CAT-iq
+		 * list-access call every ~22 s, so it reliably spoke first and
+		 * won the race for `cc_id_learned`.
+		 *
+		 * `cc_id_learned` is deliberately NOT set here: the subscribed
+		 * handset may still speak later and should be allowed to.
+		 */
+		if (!b->cc_id_foreign_warned) {
+			b->cc_id_foreign_warned = 1;
+			dect_base_log(b, "call: ignoring call identities from a "
+				      "handset we are not subscribed to -- not "
+				      "learning, not saving");
+		}
+	} else if (cc_message && !r->cc_id_learned &&
+		   l->cc.peer_fixed_id_len && !r->port_id_len) {
+		/*
+		 * No handset registered yet, so nothing to check the caller
+		 * against, and dect_cc_peer_is() says yes to anyone. On
+		 * 2026-10-24 the A540 placed its list-access call in the
+		 * AS690H's enrolment window, before the AS690H had registered;
+		 * its identities went into the AS690H's store, and the next
+		 * call to the AS690H addressed the A540 and was refused with
+		 * "invalid identity". Learn only once an identity is armed.
+		 */
+		if (!b->cc_id_unarmed_warned) {
+			b->cc_id_unarmed_warned = 1;
+			dect_base_log(b, "call: not learning call identities -- "
+				      "no handset registered yet to check them "
+				      "against");
+		}
+	} else if (cc_message && !r->cc_id_learned &&
+		   l->cc.peer_fixed_id_len &&
+		   /* not from whoever named its IPUI (audit A3) */
+		   l->mm.authenticated) {
+		memcpy(r->cc_port_id, l->cc.peer_port_id,
+		       sizeof(r->cc_port_id));
+		r->cc_port_id_len = l->cc.peer_port_id_len;
+		memcpy(r->cc_fixed_id, l->cc.peer_fixed_id,
+		       sizeof(r->cc_fixed_id));
+		r->cc_fixed_id_len = l->cc.peer_fixed_id_len;
+		r->cc_id_learned = 1;
+		dect_base_log(b, "call: learned the identities for calling the "
+			      "handset (%zu + %zu bytes), saving",
+			      r->cc_port_id_len, r->cc_fixed_id_len);
+		dect_base_changed(b);
+	}
+
+	/*
+	 * Derive them instead, if the handset has not placed a call: the
+	 * portable one is the IPUI it gave us during registration, and the
+	 * fixed one is our own PARK, which we already send it in
+	 * {ACCESS-RIGHTS-ACCEPT}. Measured on the A540, our accept and the
+	 * {CC-SETUP} the handset later places carry byte-identical IEs. A
+	 * handset that never places a call, or a freshly registered one,
+	 * could not be rung at all otherwise.
+	 */
+	if (!r->cc_fixed_id_len && b->have_rfpi && r->port_id_len &&
+	    r->port_id_len <= sizeof(r->cc_port_id)) {
+		uint8_t fid[DECT_CC_ID_MAX];
+		size_t n = dect_mm_fixed_identity(&l->mm, fid, sizeof(fid));
+
+		if (n) {
+			/* this handset's identity, not the link MM's */
+			memcpy(r->cc_port_id, r->port_id, r->port_id_len);
+			r->cc_port_id_len = r->port_id_len;
+			memcpy(r->cc_fixed_id, fid, n);
+			r->cc_fixed_id_len = n;
+			dect_base_log(b, "call: derived the identities for "
+				      "calling the handset (%zu + %zu bytes) "
+				      "from the subscription, saving",
+				      r->cc_port_id_len, r->cc_fixed_id_len);
+			dect_base_changed(b);
+		}
+	}
+}
+
+void dect_base_main_located(struct dect_base *b)
+{
+	struct dect_base_link *bl = &b->main_link;
+	struct dect_time dt;
+	long off_s;
+
+	if (bl->link.mm.stats.located == bl->time_sent_for)
+		return;
+	bl->time_sent_for = bl->link.mm.stats.located;
+	/*
+	 * TS 102 527-3 §7.4.20.2: "If the system Date and Time on FT side is
+	 * valid, the FT shall systematically use the 'FT initiated Date and
+	 * Time synchronization procedure' after successful PT location
+	 * registration", "even if the PT does not indicate support" and
+	 * "independently of the 'Clock master' setting value". The duty is
+	 * conditional on the FT's own time being valid, and a confidently
+	 * wrong clock is worse than none.
+	 */
+	if (base_clock(b, &dt, &off_s)) {
+		if (dect_link_send_time(&bl->link, &dt) == 0)
+			dect_base_log(b, "reg: sent the date and time "
+				      "(20%02u-%02u-%02u %02u:%02u:%02u, "
+				      "GMT%+ld:%02ld)", dt.year, dt.month,
+				      dt.day, dt.hour, dt.minute, dt.second,
+				      off_s / 3600, labs(off_s % 3600) / 60);
+		else
+			dect_base_log(b, "reg: could not queue the date and "
+				      "time");
+	} else {
+		dect_base_log(b, "reg: the clock is not known to be right (no "
+			      "NTP sync reported) -- sending no date and time. "
+			      "TS 102 527-3 7.4.20.2 makes the duty "
+			      "conditional on ours being valid, and a "
+			      "confidently wrong clock is worse than none");
+	}
+	dect_base_locate_notify(b, &bl->link);
+	dect_base_mwi_locate(b, &bl->link);
+	dect_base_missed_locate(b, &bl->link);
+}

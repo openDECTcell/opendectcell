@@ -63,6 +63,14 @@ static void named(void *ctx, unsigned i)
 	named_i = i;
 }
 
+static char switched_why[64];
+
+static void switched(void *ctx, const char *why)
+{
+	(void)ctx;
+	snprintf(switched_why, sizeof(switched_why), "%s", why);
+}
+
 static void install(void *ctx)
 {
 	(void)ctx;
@@ -81,7 +89,8 @@ static void pump(void *ctx, struct dect_base_link *bl)
 static const struct dect_base_ops ops = { .save = save, .send = send,
 					  .random = rnd, .log = log_line,
 					  .install = install, .event = event,
-					  .pump = pump, .named = named };
+					  .pump = pump, .named = named,
+					  .switched = switched };
 
 int main(void)
 {
@@ -841,6 +850,23 @@ int main(void)
 				       strlen("calllog kind=lost"), &m), 0);
 		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 1);
 		CHECK_EQ(strcmp(r.err, "malformed"), 0);
+	}
+
+	/* serving another record (S3w) */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.cc_id_foreign_warned = 1;
+		CHECK_EQ(dect_base_serve(&b, 0, " (test)"), 0);	/* already */
+		CHECK_EQ(dect_base_serve(&b, 1, " (test)"), 1);
+		CHECK_EQ(b.cur, 1u);
+		CHECK_EQ(strcmp(switched_why, " (test)"), 0);
+		CHECK_EQ(b.cc_id_foreign_warned, 0);
+		/* no RFPI yet: nothing to derive the identities from */
+		b.rec.port_id_len = 7;
+		dect_base_main_ids(&b, 0);
+		CHECK_EQ(b.rec.cc_fixed_id_len, 0u);
 	}
 	return CHECK_DONE();
 }

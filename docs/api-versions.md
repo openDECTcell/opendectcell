@@ -872,3 +872,8 @@ dect_base_ctl_call() also takes mwi and calllog (S5b).
 `cipher_reject_seen`, `cipher_timeout_seen`; dect_base_cfg's
 `no_chip_key`; dect_base_main_cipher_start(), _main_cipher_tick(),
 _side_cipher_tick() (S3v).
+
+**129.** dect_base.h, 2026-10-30: dect_base_ops' `switched`;
+dect_base_link's `time_sent_for`; dect_base's `rfpi`, `have_rfpi`,
+`cc_id_foreign_warned`, `cc_id_unarmed_warned`; dect_base_serve(),
+_main_ids(), _main_located() (S3w).

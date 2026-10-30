@@ -598,8 +598,7 @@ struct stubd {
 	 */
 	/* wrong PINs and their lock: base.pin_wrong (dect_base.h, S4d) */
 	int rand_fd;		/* /dev/urandom, -1 if unavailable */
-	uint8_t rfpi[DECT_MM_RFPI_LEN];
-	int have_rfpi;
+	/* the chip's RFPI: base.rfpi (dect_base.h, S3w) */
 	/*
 	 * The handset's long-term key, kept across connections: registration and a
 	 * later call run on different connections (each re-inits the MM FSM), and
@@ -623,8 +622,6 @@ struct stubd {
 	 */
 	struct handset hs[DECT_BASE_HS_MAX];
 	struct dect_base base;
-	int         cc_id_foreign_warned;
-	int         cc_id_unarmed_warned;
 	/* rejected_identity of this connection's CC, as last reported */
 	uint32_t    cc_rejected_seen;
 	struct side_link side[SIDE_MAX];
@@ -1119,7 +1116,6 @@ struct stubd {
 	 */
 	struct reg_ctx {
 		int nonspeech_noted;	/* logged "not a speech call" once */
-		uint32_t time_sent_for;	/* mm.stats.located we last answered */
 		uint64_t remode_at;	/* when to send the mode-2 re-assign, 0 = off */
 		int      remode_done;	/* the mode-2 re-assign has been sent */
 		uint64_t seq_t0;	/* when the call bound, 0 = no call */
@@ -2641,8 +2637,6 @@ static uint8_t stubd_sub_slot(const struct stubd *s)
 static void hs_took(struct stubd *s, unsigned i)
 {
 	s->sub_path = s->hs[i].path;
-	s->cc_id_foreign_warned = 0;
-	s->cc_id_unarmed_warned = 0;
 }
 
 /* Handset i's record as the working copy, at start (dect_base_load()). */
@@ -2662,12 +2656,16 @@ static void hs_switched(struct stubd *s, const char *why)
 	       stubd_sub_slot(s), why);
 }
 
+/* dect_base's switched(): the library made another handset current. */
+static void base_switched(void *ctx, const char *why)
+{
+	hs_switched(ctx, why);
+}
+
 /* Make handset i the current one; a no-op if it already is. */
 static void hs_switch(struct stubd *s, unsigned i, const char *why)
 {
-	if (!dect_base_switch(&s->base, i))
-		return;
-	hs_switched(s, why);
+	(void)dect_base_serve(&s->base, i, why);
 }
 
 /*
@@ -2844,6 +2842,7 @@ static void base_forget(void *ctx, unsigned i, const char *why);
 static void base_mask(void *ctx);
 static int base_clock(void *ctx, struct dect_time *dt, long *off_s);
 static void base_named(void *ctx, unsigned i);
+static void base_switched(void *ctx, const char *why);
 static void base_wall(void *ctx, struct dect_time *dt);
 
 static const struct dect_base_ops base_ops = {
@@ -2851,7 +2850,7 @@ static const struct dect_base_ops base_ops = {
 	.log = base_log, .install = base_install, .event = base_event,
 	.pump = base_pump, .lanes = base_lanes, .forget = base_forget,
 	.mask = base_mask, .clock = base_clock, .named = base_named,
-	.wall = base_wall,
+	.wall = base_wall, .switched = base_switched,
 };
 
 /* Load the stored subscription, if any. Returns 1 when a record was adopted. */
@@ -4747,8 +4746,8 @@ static void reg_start(struct stubd *s, uint8_t handle)
 		snprintf(mcfg.pin, sizeof(mcfg.pin), "%s", s->pin);
 	mcfg.authenticate = 1;
 	mcfg.narrowband_only = (uint8_t)s->base.cfg.narrowband;
-	if (s->have_rfpi)
-		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
+	if (s->base.have_rfpi)
+		memcpy(mcfg.rfpi, s->base.rfpi, DECT_MM_RFPI_LEN);
 	/*
 	 * Who may enrol. Closed unless regopen. With the first store already
 	 * holding a handset, only that handset may re-enrol into it (or a held
@@ -4792,7 +4791,7 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	dect_base_link_open(&s->base, &s->base.main_link, handle, &mcfg, hold);
 	dect_mm_set_uak_lookup(&s->base.main_link.link.mm, uak_lookup, s);
 	dect_link_set_tx_log(&s->base.main_link.link, log_nwk_out, s);
-	s->reg.time_sent_for = 0;
+	s->base.main_link.time_sent_for = 0;
 	main_cc_setup(s);
 	printf("reg: connection up (handle %u), C-plane armed\n", handle);
 }
@@ -5269,11 +5268,6 @@ static void profiles_resolve_all(struct stubd *s, const char *why)
 	fflush(stdout);
 }
 
-static void locate_notify(struct stubd *s, struct dect_link *l)
-{
-	dect_base_locate_notify(&s->base, l);
-}
-
 static void mwi_locate(struct stubd *s, struct dect_link *l)
 {
 	dect_base_mwi_locate(&s->base, l);
@@ -5385,8 +5379,8 @@ static int side_start(struct stubd *s, uint8_t handle)
 	mcfg.authenticate = 1;
 	mcfg.narrowband_only = (uint8_t)s->base.cfg.narrowband;
 	mcfg.auth_locate = (uint8_t)s->base.cfg.locauth;
-	if (s->have_rfpi)
-		memcpy(mcfg.rfpi, s->rfpi, DECT_MM_RFPI_LEN);
+	if (s->base.have_rfpi)
+		memcpy(mcfg.rfpi, s->base.rfpi, DECT_MM_RFPI_LEN);
 	/*
 	 * Every handset we hold, the current one included; strangers meet
 	 * the gates as usual. A roamer only once fetched.
@@ -6715,7 +6709,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	s->base.main_link.auth_refused = 0;
 	s->base.main_link.cipher_timeout_seen = 0;
 	s->base.main_link.path_on = 0;
-	s->reg.time_sent_for = 0;
+	s->base.main_link.time_sent_for = 0;
 	printf("ring: page response on side link %u -- promoted to the main "
 	       "link; handle %u (%s) is a side link now\n", s->base.main_link.handle,
 	       sl->bl->handle, (unsigned)old_main < s->base.n_hs ?
@@ -7031,106 +7025,8 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 		fflush(stdout);
 	}
 
-	/*
-	 * A call the handset places carries the two identities an
-	 * FP-originated SETUP needs, in the handset's own encoding. Keep the
-	 * first pair we see and persist it, so calling the handset later needs
-	 * no guesswork about identity types, bit lengths or padding.
-	 */
-	if (ind.cc_message && !s->base.rec.cc_id_learned &&
-	    s->base.main_link.link.cc.peer_fixed_id_len &&
-	    !dect_cc_peer_is(&s->base.main_link.link.cc, s->base.rec.port_id,
-			     s->base.rec.port_id_len)) {
-		/*
-		 * A CC transaction from a handset we are not subscribed to.
-		 * Learning from it would persist ANOTHER handset's identities
-		 * into this handset's store, and every later FP-originated
-		 * {CC-SETUP} would address the wrong handset -- which is
-		 * exactly what happened on 2026-10-24: a second handset runs a
-		 * CAT-iq list-access call every ~22 s, so it reliably spoke
-		 * first and won the race for `cc_id_learned`.
-		 *
-		 * `cc_id_learned` is deliberately NOT set here: the subscribed
-		 * handset may still speak later in this run and should be
-		 * allowed to.
-		 */
-		if (!s->cc_id_foreign_warned) {
-			s->cc_id_foreign_warned = 1;
-			printf("call: ignoring call identities from a handset "
-			       "we are not subscribed to -- not learning, "
-			       "not saving\n");
-			fflush(stdout);
-		}
-	} else if (ind.cc_message && !s->base.rec.cc_id_learned &&
-		   s->base.main_link.link.cc.peer_fixed_id_len && !s->base.rec.port_id_len) {
-		/*
-		 * No handset registered yet, so nothing to check the caller
-		 * against, and dect_cc_peer_is() says yes to anyone. On
-		 * 2026-10-24 the A540 placed its list-access call in the
-		 * AS690H's enrolment window, before the AS690H had registered;
-		 * its identities went into the AS690H's store, and the next
-		 * call to the AS690H addressed the A540 and was refused with
-		 * "invalid identity". Learn only once an identity is armed.
-		 */
-		if (!s->cc_id_unarmed_warned) {
-			s->cc_id_unarmed_warned = 1;
-			printf("call: not learning call identities -- no "
-			       "handset registered yet to check them "
-			       "against\n");
-			fflush(stdout);
-		}
-	} else if (ind.cc_message && !s->base.rec.cc_id_learned &&
-		   s->base.main_link.link.cc.peer_fixed_id_len &&
-		   /* not from whoever named its IPUI (audit A3) */
-		   s->base.main_link.link.mm.authenticated) {
-		memcpy(s->base.rec.cc_port_id, s->base.main_link.link.cc.peer_port_id,
-		       sizeof(s->base.rec.cc_port_id));
-		s->base.rec.cc_port_id_len = s->base.main_link.link.cc.peer_port_id_len;
-		memcpy(s->base.rec.cc_fixed_id, s->base.main_link.link.cc.peer_fixed_id,
-		       sizeof(s->base.rec.cc_fixed_id));
-		s->base.rec.cc_fixed_id_len = s->base.main_link.link.cc.peer_fixed_id_len;
-		s->base.rec.cc_id_learned = 1;
-		printf("call: learned the identities for calling the handset "
-		       "(%zu + %zu bytes), saving\n",
-		       s->base.rec.cc_port_id_len, s->base.rec.cc_fixed_id_len);
-		dect_base_changed(&s->base);
-	}
-
-	/*
-	 * Derive them instead, if the handset has not placed a call.
-	 *
-	 * Both identities are ours to build the moment the handset is known:
-	 * the portable one is the IPUI it gave us during registration, and the
-	 * fixed one is our own PARK, which we already send it in
-	 * {ACCESS-RIGHTS-ACCEPT}. Measured on the A540, our accept and the
-	 * {CC-SETUP} the handset later places carry byte-identical IEs.
-	 *
-	 * Waiting for the handset to dial first was never a DECT requirement
-	 * -- EN 300 444 table 21 specifies both elements exactly -- it was an
-	 * artefact of the PARK encoding living only inside dect_mm.c. Stock
-	 * does not need it either. A handset that never places a call, or a
-	 * freshly registered one, could not be rung at all.
-	 */
-	if (!s->base.rec.cc_fixed_id_len && s->have_rfpi && s->base.rec.port_id_len &&
-	    s->base.rec.port_id_len <= sizeof(s->base.rec.cc_port_id)) {
-		uint8_t fid[DECT_CC_ID_MAX];
-		size_t n = dect_mm_fixed_identity(&s->base.main_link.link.mm, fid,
-						  sizeof(fid));
-
-		if (n) {
-			/* this handset's identity, not the link MM's */
-			memcpy(s->base.rec.cc_port_id, s->base.rec.port_id,
-			       s->base.rec.port_id_len);
-			s->base.rec.cc_port_id_len = s->base.rec.port_id_len;
-			memcpy(s->base.rec.cc_fixed_id, fid, n);
-			s->base.rec.cc_fixed_id_len = n;
-			printf("call: derived the identities for calling the "
-			       "handset (%zu + %zu bytes) from the "
-			       "subscription, saving\n",
-			       s->base.rec.cc_port_id_len, s->base.rec.cc_fixed_id_len);
-			dect_base_changed(&s->base);
-		}
-	}
+	/* the identities for calling it (dect_base.h, S3w) */
+	dect_base_main_ids(&s->base, ind.cc_message);
 
 	/*
 	 * Once the handset is authenticated (UAK valid) and we have answered its
@@ -7161,47 +7057,10 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 	/*
 	 * A base is where a handset gets its clock, and we never sent one --
 	 * so every timestamp a handset showed, call lists above all, was
-	 * whatever it had invented.
-	 *
-	 * TS 102 527-3 §7.4.20.2: "If the system Date and Time on FT side is
-	 * valid, the FT shall systematically use the 'FT initiated Date and
-	 * Time synchronization procedure' after successful PT location
-	 * registration". It adds that we send it "even if the PT does not
-	 * indicate support" and "independently of the 'Clock master' setting
-	 * value" -- so there is nothing to negotiate and nothing to check.
-	 *
-	 * Our clock is the box's. If the box has no valid time (no RTC on
-	 * this hardware, so this means NTP has not landed yet) we send
-	 * nothing: the same clause makes the duty conditional on the FT's own
-	 * time being valid, and a confidently wrong clock is worse than none.
+	 * whatever it had invented. After each location registration: the
+	 * date and time, and the notices (dect_base.h, S3w).
 	 */
-	if (s->base.main_link.link.mm.stats.located != s->reg.time_sent_for) {
-		struct dect_time dt;
-		long off_s;
-
-		s->reg.time_sent_for = s->base.main_link.link.mm.stats.located;
-		if (clock_now(s->audio.timesync, &dt, &off_s)) {
-			if (dect_link_send_time(&s->base.main_link.link, &dt) == 0)
-				printf("reg: sent the date and time "
-				       "(20%02u-%02u-%02u %02u:%02u:%02u, "
-				       "GMT%+ld:%02ld)\n",
-				       dt.year, dt.month, dt.day, dt.hour,
-				       dt.minute, dt.second,
-				       off_s / 3600, labs(off_s % 3600) / 60);
-			else
-				printf("reg: could not queue the date and "
-				       "time\n");
-		} else {
-			printf("reg: the clock is not known to be right (no "
-			       "NTP sync reported) -- sending no date and "
-			       "time. TS 102 527-3 7.4.20.2 makes the duty "
-			       "conditional on ours being valid, and a "
-			       "confidently wrong clock is worse than none\n");
-		}
-		locate_notify(s, &s->base.main_link.link);
-		mwi_locate(s, &s->base.main_link.link);
-		missed_locate(s, &s->base.main_link.link);
-	}
+	dect_base_main_located(&s->base);
 
 	if (s->base.main_link.link.mm.state != DECT_MM_WAIT_AUTH)
 		s->base.main_link.enrol_routed = 0;
@@ -7379,9 +7238,9 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		}
 		break;
 	case DECT_PRIM_CONTACT_ACK1:	/* 0xF601 carries the base RFPI */
-		if (!s->have_rfpi && m->param_len >= DECT_MM_RFPI_LEN) {
-			memcpy(s->rfpi, m->param, DECT_MM_RFPI_LEN);
-			s->have_rfpi = 1;
+		if (!s->base.have_rfpi && m->param_len >= DECT_MM_RFPI_LEN) {
+			memcpy(s->base.rfpi, m->param, DECT_MM_RFPI_LEN);
+			s->base.have_rfpi = 1;
 		}
 		break;
 	case DECT_PRIM_CONN_UP: {
