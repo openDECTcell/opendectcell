@@ -38,6 +38,7 @@
 #define DECT_CALLS_OUTGOING	0x02u
 #define DECT_CALLS_ACCEPTED	0x03u
 #define DECT_CALLS_ALL		0x04u	/* a view: the three merged */
+#define DECT_CALLS_ALL_INCOMING	0x09u	/* a view: missed and accepted */
 
 struct dect_call {
 	uint16_t id;				/* entry identifier, 1.. */
@@ -72,8 +73,8 @@ unsigned dect_calls_add(struct dect_calls *c, unsigned list, const char *number,
 			const uint8_t line[DECT_CALLS_TERMINALS]);
 
 /*
- * The list queries and deletions below take DECT_CALLS_ALL too; adding
- * does not. Entries of a list the handset with this terminal id sees.
+ * The list queries and deletions below take DECT_CALLS_ALL and
+ * DECT_CALLS_ALL_INCOMING too; adding does not. Entries of a list the handset with this terminal id sees.
  */
 unsigned dect_calls_count(const struct dect_calls *c, unsigned list,
 			  unsigned tid);

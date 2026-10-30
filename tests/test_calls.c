@@ -98,9 +98,9 @@ static void test_lists_and_fields(void)
 
 	session(&iwu, 0x00);
 	handle(&iwu, read_lists, sizeof(read_lists));
-	/* data packet: entry 1, list identifiers 00 01 02 03 04 06 07 08 */
+	/* data packet: entry 1, list identifiers 00 01 02 03 04 06 07 08 09 */
 	CHECK_EQ(out.msg[1][1], DECT_LIA_DATA_LAST);
-	CHECK_EQ(memcmp(&out.msg[1][8], "\x00\x01\x02\x03\x04\x06\x07\x08", 8), 0);
+	CHECK_EQ(memcmp(&out.msg[1][8], "\x00\x01\x02\x03\x04\x06\x07\x08\x09", 9), 0);
 
 	dect_iwu_reset_sessions(&iwu);
 	session(&iwu, 0x01);
@@ -286,6 +286,68 @@ static void test_all_calls(void)
 	CHECK_EQ(dect_calls_count(&store, DECT_CALLS_ALL, 2), 0u);
 }
 
+/*
+ * The All Incoming Calls List (7.4.10.5.11): missed and accepted calls,
+ * the Missed Calls List's fields; an accepted call reads 'read', one call,
+ * and its 'Read status' cannot be edited (table 41 note 6).
+ */
+static void test_all_incoming(void)
+{
+	static const struct dect_time t3 = { 26, 10, 30, 9, 25, 0, 4, 1 };
+	/* read entry 1, no mark, fields Read status and Number of calls */
+	static const uint8_t read[] = { 0xC3, DECT_LIA_READ_ENTRIES, 0x81, 0x81,
+					0x01, 0x00, 0x04, 0x07 };
+	uint8_t edit[] = { 0xC3, DECT_LIA_EDIT_ENTRY, 0x81, 0x80, 0x04 };
+	uint8_t save[] = { 0xC3, DECT_LIA_SAVE_ENTRY, 0x81, 0x80 };
+	uint8_t data[] = { 0xC3, DECT_LIA_DATA_LAST, 0x81, 0x80, 0x83, 0x04,
+			   0x81, 0xE0 };
+	struct dect_iwu iwu;
+	unsigned missed, accepted;
+
+	dect_calls_init(&store);
+	missed = dect_calls_add(&store, DECT_CALLS_MISSED, "0301234", "", &t1,
+				both);
+	(void)dect_calls_add(&store, DECT_CALLS_MISSED, "0301234", "", &t2,
+			     both);		/* merged: two calls */
+	(void)dect_calls_add(&store, DECT_CALLS_OUTGOING, "0555", "", &t3, both);
+	accepted = dect_calls_add(&store, DECT_CALLS_ACCEPTED, "0666", "", &t3,
+				  both);
+	CHECK_EQ(dect_calls_count(&store, DECT_CALLS_ALL_INCOMING, 1), 2u);
+	CHECK_EQ(dect_calls_at(&store, DECT_CALLS_ALL_INCOMING, 1, 1)->id,
+		 accepted);
+	CHECK_EQ(dect_calls_at(&store, DECT_CALLS_ALL_INCOMING, 1, 2)->id,
+		 missed);
+
+	dect_iwu_init(&iwu);
+	dect_iwu_set_own(&iwu, 1);
+	iwu.calls = &store;
+	session(&iwu, DECT_LIA_LIST_ALL_INCOMING);
+	handle(&iwu, read, sizeof(read));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_READ_ENTRIES_CFM);
+	/* the accepted call: Read status 'read', not editable; one call */
+	CHECK_EQ(out.msg[1][3], (uint8_t)(0x80u | accepted));
+	CHECK_EQ(out.msg[1][5], 0x04);
+	CHECK_EQ(out.msg[1][7], 0x80);
+	CHECK_EQ(out.msg[1][8], 0x07);
+	CHECK_EQ(out.msg[1][11], 0x01);		/* after its properties octet */
+
+	/* editing the accepted call's Read status: refused */
+	edit[3] = save[3] = data[3] = (uint8_t)(0x80u | accepted);
+	handle(&iwu, edit, sizeof(edit));
+	handle(&iwu, save, sizeof(save));
+	handle(&iwu, data, sizeof(data));
+	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_NOT_ALLOWED);
+	/* ... the missed one's: accepted */
+	dect_calls_at(&store, DECT_CALLS_MISSED, 1, 1)->unread = 0;
+	edit[3] = save[3] = data[3] = (uint8_t)(0x80u | missed);
+	handle(&iwu, edit, sizeof(edit));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_EDIT_ENTRY_CFM);
+	handle(&iwu, save, sizeof(save));
+	handle(&iwu, data, sizeof(data));
+	CHECK_EQ(out.msg[0][1], DECT_LIA_SAVE_ENTRY_CFM);
+	CHECK_EQ(dect_calls_at(&store, DECT_CALLS_MISSED, 1, 1)->unread, 1u);
+}
+
 static void test_not_offered_without_store(void)
 {
 	static const uint8_t start[] = { 0xC3, DECT_LIA_START_SESSION, 0x01, 0x00 };
@@ -344,6 +406,7 @@ int main(void)
 {
 	test_save_and_load();
 	test_all_calls();
+	test_all_incoming();
 	test_store();
 	test_lists_and_fields();
 	test_read_and_mark();

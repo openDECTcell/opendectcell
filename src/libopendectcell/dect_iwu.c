@@ -21,6 +21,7 @@ static const uint8_t supported_lists[] = {
 	DECT_LIA_LIST_INTERNAL_NAMES,
 	DECT_LIA_LIST_SYSTEM_SETTINGS,
 	DECT_LIA_LIST_LINE_SETTINGS,
+	DECT_LIA_LIST_ALL_INCOMING,
 };
 
 /* Field identifiers per list; also the "Query supported entry fields" reply. */
@@ -58,7 +59,14 @@ static const uint8_t fields_all_calls[] = { 0x01, 0x02, 0x03, 0x04, 0x05,
 static int is_call_list(int list)
 {
 	return list == DECT_LIA_LIST_MISSED || list == DECT_LIA_LIST_OUTGOING ||
-	       list == DECT_LIA_LIST_ACCEPTED || list == DECT_LIA_LIST_ALL_CALLS;
+	       list == DECT_LIA_LIST_ACCEPTED || list == DECT_LIA_LIST_ALL_CALLS ||
+	       list == DECT_LIA_LIST_ALL_INCOMING;
+}
+
+/* Lists with the Missed Calls List's fields (7.4.10.5.3, 7.4.10.5.11). */
+static int has_read_status(int list)
+{
+	return list == DECT_LIA_LIST_MISSED || list == DECT_LIA_LIST_ALL_INCOMING;
 }
 
 void dect_iwu_init(struct dect_iwu *iwu)
@@ -349,6 +357,7 @@ static unsigned entry_count(const struct dect_iwu *iwu, uint8_t list)
 	case DECT_LIA_LIST_OUTGOING:
 	case DECT_LIA_LIST_ACCEPTED:
 	case DECT_LIA_LIST_ALL_CALLS:
+	case DECT_LIA_LIST_ALL_INCOMING:
 		return iwu->calls ? dect_calls_count(iwu->calls, list,
 						     iwu->own_terminal_id) : 0;
 	case DECT_LIA_LIST_INTERNAL_NAMES:	return iwu->n_handsets;
@@ -372,6 +381,7 @@ static const uint8_t *list_fields(uint8_t list, size_t *n)
 	case DECT_LIA_LIST_CONTACTS:
 		*n = sizeof(fields_contacts); return fields_contacts;
 	case DECT_LIA_LIST_MISSED:
+	case DECT_LIA_LIST_ALL_INCOMING:
 		*n = sizeof(fields_missed); return fields_missed;
 	case DECT_LIA_LIST_OUTGOING:
 	case DECT_LIA_LIST_ACCEPTED:
@@ -394,6 +404,7 @@ static uint8_t default_sort_field(uint8_t list)
 	case DECT_LIA_LIST_OUTGOING:
 	case DECT_LIA_LIST_ACCEPTED:		return 0x03;	/* Date and time */
 	case DECT_LIA_LIST_ALL_CALLS:		return 0x04;	/* Date and time */
+	case DECT_LIA_LIST_ALL_INCOMING:	return 0x03;	/* Date and time */
 	default:				return 0;
 	}
 }
@@ -720,25 +731,33 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 	case DECT_LIA_LIST_MISSED:
 	case DECT_LIA_LIST_OUTGOING:
 	case DECT_LIA_LIST_ACCEPTED:
-	case DECT_LIA_LIST_ALL_CALLS: {
+	case DECT_LIA_LIST_ALL_CALLS:
+	case DECT_LIA_LIST_ALL_INCOMING: {
 		/*
-		 * 7.4.10.5.3-6. Field ids after 'Date and time' differ: the
-		 * Missed Calls List has 'Read status' at 04H and the rest one
-		 * further. Nothing but 'Read status' is editable. The All
-		 * Calls List puts 'Call type' first and the rest one further.
+		 * 7.4.10.5.3-6, 7.4.10.5.11. Field ids after 'Date and time'
+		 * differ: the Missed Calls List and the All Incoming Calls List
+		 * have 'Read status' at 04H and the rest one further. Nothing
+		 * but 'Read status' is editable, and in the All Incoming Calls
+		 * List only for a missed call: an accepted one reads 'read',
+		 * one call (7.4.10.5.11). The All Calls List puts 'Call type'
+		 * first and the rest one further.
 		 */
 		const struct dect_call *c = call_at(iwu, list, idx);
 		unsigned f = field;
 		uint8_t tbuf[16], v[2];
 		size_t tn;
+		int missed;
 
 		if (!c)
 			break;
-		if (list == DECT_LIA_LIST_MISSED) {
+		missed = list == DECT_LIA_LIST_MISSED ||
+			 dect_calls_type(iwu->calls, c) == DECT_CALLS_MISSED;
+		if (has_read_status(list)) {
 			if (field == FIELD_READ_STATUS) {
 				/* 7.4.10.5.1.5: the 'unread' bit, no value */
-				put_field(b, field, (uint8_t)(0x40u |
-					  (c->unread ? 0x20u : 0u)), NULL, 0);
+				put_field(b, field, missed ? (uint8_t)(0x40u |
+					  (c->unread ? 0x20u : 0u)) : 0x00u,
+					  NULL, 0);
 				break;
 			}
 			if (field > FIELD_READ_STATUS)
@@ -801,7 +820,7 @@ static void put_entry_field(const struct dect_iwu *iwu, struct buf *b,
 			break;
 		case 0x06:
 			/* 7.4.10.5.1.8 'Number of calls' */
-			v[0] = c->count;
+			v[0] = missed ? c->count : 1u;
 			put_field(b, field, 0x00, v, 1);
 			break;
 		default:
@@ -1028,8 +1047,8 @@ static void query_fields(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 		put(&b, (uint8_t)nf);
 		put_bytes(&b, f, nf);
 		put(&b, 0x00);
-	} else if (list == DECT_LIA_LIST_MISSED) {
-		/* only 'Read status' editable (table 41 note 5) */
+	} else if (has_read_status(list)) {
+		/* only 'Read status' editable (table 41 notes 5 and 6) */
 		size_t i;
 
 		put(&b, 0x01);
@@ -1143,13 +1162,14 @@ static void read_entries(struct dect_iwu *iwu, const uint8_t *p, size_t n,
 	 * After the entries are assembled: they carry the status the handset
 	 * shows them with (new or not), the mark is for the next reading.
 	 */
-	if (list == DECT_LIA_LIST_MISSED && (mark == 0x7Fu || mark == 0xFFu)) {
+	if (has_read_status(list) && (mark == 0x7Fu || mark == 0xFFu)) {
 		unsigned i, upto = nwanted ? (got ? first + got - 1u : 0u) : mlast;
 
 		for (i = nwanted ? first : mfirst; i && i <= upto; i++) {
 			struct dect_call *c = call_at(iwu, (uint8_t)list, i);
 
-			if (c && c->unread != (mark == 0xFFu)) {
+			if (c && dect_calls_type(iwu->calls, c) ==
+			    DECT_CALLS_MISSED && c->unread != (mark == 0xFFu)) {
 				c->unread = mark == 0xFFu;
 				iwu->calls->missed_changed = 1;
 			}
@@ -1562,8 +1582,10 @@ static void finish_save_call(struct dect_iwu *iwu, unsigned session,
 	iwu->sessions[session - 1u].locked = 0;
 	idx = iwu->save_entry ? entry_index(iwu, list, iwu->save_entry) : 0;
 	c = call_at(iwu, list, idx);
-	if (list != DECT_LIA_LIST_MISSED || !c || locked != iwu->save_entry) {
-		nack(iwu, out, session, c || list != DECT_LIA_LIST_MISSED
+	/* table 41 notes 5 and 6: a missed call's 'Read status' only */
+	if (!has_read_status(list) || !c || locked != iwu->save_entry ||
+	    dect_calls_type(iwu->calls, c) != DECT_CALLS_MISSED) {
+		nack(iwu, out, session, c || !has_read_status(list)
 		     ? DECT_LIA_NACK_NOT_ALLOWED : DECT_LIA_NACK_NO_ENTRY);
 		return;
 	}

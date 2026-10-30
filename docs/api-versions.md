@@ -738,3 +738,9 @@ dect_base_main_segment() now uses dect_base_link_segment().
 **99.** dect_mm.h, 2026-10-30: struct dect_mm_cfg gains `assign_id` and
 `assign_id_len`, an identity to assign in {ACCESS-RIGHTS-ACCEPT} (an IPUI
 O for bench B4a and class B); empty keeps the old behaviour.
+
+**100.** dect_calls.h, 2026-10-30: DECT_CALLS_ALL_INCOMING, the All
+Incoming Calls List (09H) as a view over the missed and accepted lists.
+dect_iwu.c serves it (TS 102 527-3 7.4.10.5.11): the List of Supported
+Lists gains 09H; an accepted call reads 'read', one call, and its 'Read
+status' is not editable.

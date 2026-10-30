@@ -40,7 +40,7 @@ tick 200
 # read entries: session 1, from entry 1, one entry, no mark, field 01
 pp 03 60 77 07 c3 06 81 81 01 00 01
 fp 83 60 77 05 c3 07 81 81 01
-fp 83 60 77 10 c3 14 81 81 8b 01 89 80 00 01 02 03 04 06 07 08
+fp 83 60 77 11 c3 14 81 81 8c 01 8a 80 00 01 02 03 04 06 07 08 09
 tick 200
 # end session 1
 pp 03 60 77 03 c3 02 81

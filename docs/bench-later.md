@@ -75,6 +75,10 @@ logread -e rfpi -e 'control slot'; cat /tmp/dect-fwload.log
 | N4b. The read-back | `rfpi: the chip reports the RFPI rfpicheck= names, all 5 octets` | `DIFFERS ... octet(s) 5`: the STUB rewrote the RPN (it keeps 3 bits: class A only); other octets: it rewrote the ARI; no `rfpi:` line: no 0xF601 came (the contact answer) |
 | N4c. Back to the factory RFPI (the afterwards lines), then a handset | the base back as before, the A540 finds it | the chip kept the class B RFPI: the reload did not run (`stub.second` still there) |
 
+| test | needs | pass | fail and what it means |
+|---|---|---|---|
+| N5. After calls in and out, open the A540's call lists; and with `-v`, see whether it ever asks for list 09 (`c3 00 09`) | API 100 | the lists as before; if the A540 opens 09, missed and accepted calls together | an empty or garbled list: the view or its fields; nobody asks for 09: nothing to see, the list is optional |
+
 ## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
 
 | test | state |

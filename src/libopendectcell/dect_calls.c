@@ -116,11 +116,16 @@ static int seen_by(const struct dect_call *e, unsigned tid)
 	return tid < DECT_CALLS_TERMINALS && e->line[tid];
 }
 
-/* The stored lists a list shows: one, or all three for the All Calls List. */
+/*
+ * The stored lists a list shows: one, all three for the All Calls List,
+ * missed and accepted for the All Incoming Calls List.
+ */
 static unsigned view_of(unsigned list)
 {
 	if (list == DECT_CALLS_ALL)
 		return 7u;
+	if (list == DECT_CALLS_ALL_INCOMING)
+		return 1u | 4u;
 	return list_ok(list) ? 1u << (list - 1u) : 0u;
 }
 

@@ -63,7 +63,10 @@ table 9 makes mandatory for the FP.
 - **Search:** the call lists are sorted by date and time, and the standard
   gives the searched value as a string with no form for a date. A search on
   them answers "not matching", which 7.4.10.4.8.2 allows.
-- **Not yet:** the All Incoming Calls List (09H, optional for both sides).
+- **The All Incoming Calls List** (09H, since API 100) is a view as well:
+  missed and accepted calls, with the Missed Calls List's fields; an
+  accepted call reads "read" and one call, and only a missed call's read
+  status can be changed (7.4.10.5.11, table 41 note 6).
 
 ## Parts
 
