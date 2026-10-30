@@ -426,6 +426,13 @@ struct xlane {
 	uint32_t rx_prev;
 };
 
+/* The ring sequence's states are dect_base's (dect_base.h, S3f). */
+#define RING_IDLE		DECT_BASE_RING_IDLE
+#define RING_RELEASING		DECT_BASE_RING_RELEASING
+#define RING_PAGING		DECT_BASE_RING_PAGING
+#define RING_WAIT_PAGE_RESP	DECT_BASE_RING_WAIT_PAGE_RESP
+#define RING_DONE		DECT_BASE_RING_DONE
+
 /* The bridge's calls are dect_base's (dect_base.h, S3c). */
 #define BC_MAX		DECT_BASE_CALLS
 #define BC_PAGING	DECT_BASE_PARTY_PAGING
@@ -689,30 +696,7 @@ struct stubd {
 	uint64_t    fetch_req_ms, fetch_at;
 	int         fetch_idx;		/* matching remote store, -1 none */
 	uint32_t    fetch_retrans_seen;
-	/*
-	 * Ringing the handset. A page is a broadcast the handset may simply
-	 * miss, and the stock host guards each one with a 3 s timer, so page
-	 * again until the handset brings up a link or we give up.
-	 */
-	enum { RING_IDLE, RING_RELEASING, RING_PAGING, RING_WAIT_PAGE_RESP,
-	       RING_DONE } ring_state;
-	uint64_t ring_release_until;	/* give the link time to go down */
-	uint64_t ring_wait_since;	/* a link in use held the ring back */
-	uint64_t ring_resp_deadline;	/* fall back if no page response comes */
-	unsigned ring_setup_tries;	/* refused CC-SETUPs, see ring_queue_setup */
-	/*
-	 * After the SETUP is queued: watch it until the handset alerts. A
-	 * call lost to a crossing {CC-SETUP} of the handset's (its list sync)
-	 * is rung again once the link is free, at most RING_REQUEUE_MAX times.
-	 */
-	int      ring_watch;
-	int      ring_now;	/* a call-in: ring at once, no ring= timing */
-	unsigned ring_hs;	/* the handset we ring (table index), 0 by
-				 * default; a call-in names its own */
-	uint32_t ring_coll0, ring_alert0;	/* cc stats when queued */
-	unsigned ring_requeues;
-	unsigned    ring_pages;		/* pages sent for this attempt */
-	uint64_t    ring_last;		/* when the last one went out */
+	/* Ringing the handset: base.ring (dect_base.h, S3f). */
 	uint64_t    first_contact_ms;	/* the handset's first C-plane segment, for ringattach= */
 	int sub_restored;	/* stored subscription already pushed to the chip */
 	/*
@@ -2767,18 +2751,18 @@ static void hs_switch(struct stubd *s, unsigned i, const char *why)
  */
 static size_t ring_target_fixed_len(const struct stubd *s)
 {
-	return s->base.cur == s->ring_hs || !s->base.n_hs ? s->base.rec.cc_fixed_id_len
-		: s->base.hs[s->ring_hs].cc_fixed_id_len;
+	return s->base.cur == s->base.ring.hs || !s->base.n_hs ? s->base.rec.cc_fixed_id_len
+		: s->base.hs[s->base.ring.hs].cc_fixed_id_len;
 }
 
 static const uint8_t *ring_target_port_id(const struct stubd *s, size_t *len)
 {
-	if (s->base.cur == s->ring_hs || !s->base.n_hs) {
+	if (s->base.cur == s->base.ring.hs || !s->base.n_hs) {
 		*len = s->base.rec.cc_port_id_len;
 		return s->base.rec.cc_port_id;
 	}
-	*len = s->base.hs[s->ring_hs].cc_port_id_len;
-	return s->base.hs[s->ring_hs].cc_port_id;
+	*len = s->base.hs[s->base.ring.hs].cc_port_id_len;
+	return s->base.hs[s->base.ring.hs].cc_port_id;
 }
 
 static void sub_save(struct stubd *s)
@@ -3445,7 +3429,7 @@ static void info_tick(struct stubd *s, uint64_t now)
 	if (s->reg.info_sent || !cc->incoming ||
 	    cc->state != DECT_CC_ST_RINGING)
 		return;
-	r = s->base.n_hs ? name_display_info(s, cc, s->ring_hs, &s->clip) : 0;
+	r = s->base.n_hs ? name_display_info(s, cc, s->base.ring.hs, &s->clip) : 0;
 	if (r) {
 		s->reg.info_sent = 1;
 		if (r > 0) {
@@ -4411,12 +4395,12 @@ static void ring_target_tpui(const struct stubd *s, uint8_t tpui[3])
 	struct dect_mm mm;
 
 	memset(&cfg, 0, sizeof(cfg));
-	if (s->base.cur == s->ring_hs || !s->base.n_hs)
+	if (s->base.cur == s->base.ring.hs || !s->base.n_hs)
 		cfg.sub_slot = stubd_sub_slot(s);
 	else
-		cfg.sub_slot = (uint8_t)(s->audio.sub_slot && !s->ring_hs
+		cfg.sub_slot = (uint8_t)(s->audio.sub_slot && !s->base.ring.hs
 					 ? s->audio.sub_slot
-					 : s->base.hs[s->ring_hs].slot);
+					 : s->base.hs[s->base.ring.hs].slot);
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tpui(&mm, tpui);
 }
@@ -4438,7 +4422,7 @@ static void send_page(struct stubd *s)
 	chip_mail(s, 0x0300u, p, sizeof(p));
 	printf("ring: paged the handset, attempt %u of %u "
 	       "(0x0300 {%02x %02x %02x}, basic service %02x)%s\n",
-	       s->ring_pages, RING_PAGE_RETRIES, p[0],
+	       s->base.ring.pages, RING_PAGE_RETRIES, p[0],
 	       tpui[1], tpui[2], s->audio.basic_svc,
 	       /*
 		* We page BY the TPUI we assigned. If the handset never
@@ -4495,8 +4479,8 @@ static int ring_target_part3(const struct stubd *s)
 	const struct dect_callinfo *o = &s->audio.callinfo;
 
 	return !o->has_line && !o->has_call_id && !o->has_call_status &&
-	       s->base.n_hs && s->hs[s->ring_hs].cap_known &&
-	       s->hs[s->ring_hs].cap_part3;
+	       s->base.n_hs && s->hs[s->base.ring.hs].cap_known &&
+	       s->hs[s->base.ring.hs].cap_part3;
 }
 
 /*
@@ -4516,7 +4500,7 @@ static void ring_callinfo(struct stubd *s, int on)
 
 	if (!on || !ring_target_part3(s)) {
 		dect_cc_set_callinfo(&s->base.main_link.link.cc, &s->audio.callinfo);
-		if (on && s->base.n_hs && !s->hs[s->ring_hs].cap_known)
+		if (on && s->base.n_hs && !s->hs[s->base.ring.hs].cap_known)
 			printf("ring: the target's terminal capability is not "
 			       "known yet -- no call information (an A540 "
 			       "then rings silently)\n");
@@ -4595,7 +4579,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	if (!s->base.main_link.active) {
 		printf("ring: no link up at the page-response deadline -- "
 		       "paging again\n");
-		s->ring_state = RING_PAGING;
+		s->base.ring.state = RING_PAGING;
 		return;
 	}
 	/*
@@ -4603,10 +4587,10 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 * another handset is that handset's; a {CC-SETUP} on it would address
 	 * the wrong one. Wait for it to clear, as for a busy CC entity.
 	 */
-	if (s->base.cur != s->ring_hs) {
+	if (s->base.cur != s->base.ring.hs) {
 		printf("ring: this link serves %s, not the handset we ring -- "
 		       "waiting\n", s->sub_path);
-		s->ring_resp_deadline = now + RING_SETUP_RETRY_MS;
+		s->base.ring.resp_deadline = now + RING_SETUP_RETRY_MS;
 		return;
 	}
 	/*
@@ -4627,7 +4611,7 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 		/* the ring target's profile: its alerting pattern, unless
 		 * -a signal= chose one, and whether the name goes as CNIP */
 		const struct dect_hs_profile *hp = s->base.n_hs ?
-			&s->hs[s->ring_hs].prof : NULL;
+			&s->hs[s->base.ring.hs].prof : NULL;
 
 		ring_clip = s->clip;
 		if (hp && !s->audio.signal_set &&
@@ -4645,27 +4629,27 @@ static void ring_queue_setup(struct stubd *s, uint64_t now, const char *why)
 	 */
 	if (!dect_cc_setup_id(&s->base.main_link.link.cc, s->base.rec.cc_port_id, s->base.rec.cc_port_id_len,
 			      s->base.rec.cc_fixed_id, s->base.rec.cc_fixed_id_len,
-			      ring_svc(s, s->ring_hs, main_ring_narrow(s)),
+			      ring_svc(s, s->base.ring.hs, main_ring_narrow(s)),
 			      &ring_clip)) {
 		ring_callinfo(s, 0);
-		s->ring_state = RING_DONE;
-		s->ring_watch = 1;
-		s->ring_coll0 = s->base.main_link.link.cc.stats.collisions;
-		s->ring_alert0 = s->base.main_link.link.cc.stats.alerting;
+		s->base.ring.state = RING_DONE;
+		s->base.ring.watch = 1;
+		s->base.ring.coll0 = s->base.main_link.link.cc.stats.collisions;
+		s->base.ring.alert0 = s->base.main_link.link.cc.stats.alerting;
 		printf("ring: CC-SETUP queued (%s) -- the handset should ring\n",
 		       why);
 		return;
 	}
-	if (++s->ring_setup_tries >= (s->audio.setup_tries ?
+	if (++s->base.ring.setup_tries >= (s->audio.setup_tries ?
 				      s->audio.setup_tries : RING_SETUP_TRIES)) {
-		s->ring_state = RING_DONE;
+		s->base.ring.state = RING_DONE;
 		printf("ring: CC-SETUP refused %u times, the handset's own call "
-		       "never cleared; giving up\n", s->ring_setup_tries);
+		       "never cleared; giving up\n", s->base.ring.setup_tries);
 		return;
 	}
-	s->ring_resp_deadline = now + RING_SETUP_RETRY_MS;
+	s->base.ring.resp_deadline = now + RING_SETUP_RETRY_MS;
 	printf("ring: CC-SETUP refused (a call is in progress), retry %u of %u "
-	       "in %u ms\n", s->ring_setup_tries,
+	       "in %u ms\n", s->base.ring.setup_tries,
 	       s->audio.setup_tries ? s->audio.setup_tries : RING_SETUP_TRIES,
 	       RING_SETUP_RETRY_MS);
 }
@@ -4682,39 +4666,39 @@ static void ring_watch_tick(struct stubd *s)
 {
 	const struct dect_cc *cc = &s->base.main_link.link.cc;
 
-	if (s->ring_state != RING_DONE || !s->ring_watch)
+	if (s->base.ring.state != RING_DONE || !s->base.ring.watch)
 		return;
-	if (s->base.main_link.active && cc->stats.alerting != s->ring_alert0) {
-		s->ring_watch = 0;		/* it rings */
+	if (s->base.main_link.active && cc->stats.alerting != s->base.ring.alert0) {
+		s->base.ring.watch = 0;		/* it rings */
 		return;
 	}
 	if (s->base.main_link.active && cc->incoming && dect_cc_busy(cc))
 		return;				/* still presented */
-	s->ring_watch = 0;
-	if (!s->base.main_link.active || cc->stats.collisions == s->ring_coll0)
+	s->base.ring.watch = 0;
+	if (!s->base.main_link.active || cc->stats.collisions == s->base.ring.coll0)
 		return;				/* refused or ended otherwise */
-	if (s->ring_requeues >= RING_REQUEUE_MAX) {
+	if (s->base.ring.requeues >= RING_REQUEUE_MAX) {
 		printf("ring: lost to the handset's own call again -- giving "
-		       "up after %u new attempts\n", s->ring_requeues);
+		       "up after %u new attempts\n", s->base.ring.requeues);
 		return;
 	}
-	s->ring_requeues++;
-	s->ring_state = RING_IDLE;
-	s->ring_setup_tries = 0;
-	s->ring_pages = 0;
-	s->ring_wait_since = 0;
+	s->base.ring.requeues++;
+	s->base.ring.state = RING_IDLE;
+	s->base.ring.setup_tries = 0;
+	s->base.ring.pages = 0;
+	s->base.ring.wait_since = 0;
 	printf("ring: our call was lost to the handset's own call (collision, "
 	       "9.5.2.3) -- ringing again when the link is free (%u of %u)\n",
-	       s->ring_requeues, RING_REQUEUE_MAX);
+	       s->base.ring.requeues, RING_REQUEUE_MAX);
 }
 
 static void ring_tick(struct stubd *s, uint64_t now)
 {
-	if ((!s->audio.ring_ms && !s->audio.ring_attach_ms && !s->ring_now) ||
+	if ((!s->audio.ring_ms && !s->audio.ring_attach_ms && !s->base.ring.now) ||
 	    s->sess.state != DECT_SESS_UP)
 		return;
 	ring_watch_tick(s);
-	if (s->ring_state == RING_DONE)
+	if (s->base.ring.state == RING_DONE)
 		return;
 
 	/*
@@ -4722,16 +4706,16 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	 * deadline passes, so a handset that never answers the page the way
 	 * we expect still gets a call rather than silence.
 	 */
-	if (s->ring_state == RING_WAIT_PAGE_RESP) {
-		if (now >= s->ring_resp_deadline)
-			ring_queue_setup(s, now, s->ring_setup_tries
+	if (s->base.ring.state == RING_WAIT_PAGE_RESP) {
+		if (now >= s->base.ring.resp_deadline)
+			ring_queue_setup(s, now, s->base.ring.setup_tries
 					 ? "retrying after a refusal"
 					 : "no page response, deadline");
 		return;
 	}
 
-	if (s->ring_state == RING_IDLE) {
-		if (s->ring_now) {
+	if (s->base.ring.state == RING_IDLE) {
+		if (s->base.ring.now) {
 			/* a call-in from the bridge: now */
 		} else if (s->audio.ring_attach_ms) {
 			/* Count from the handset's first contact, not ours. */
@@ -4745,7 +4729,7 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			printf("ring: no call identities -- the handset is not "
 			       "registered here, or -s is off so nothing was "
 			       "stored\n");
-			s->ring_state = RING_DONE;
+			s->base.ring.state = RING_DONE;
 			return;
 		}
 		/*
@@ -4762,32 +4746,32 @@ static void ring_tick(struct stubd *s, uint64_t now)
 
 			for (k = 0; k < SIDE_MAX; k++)
 				if (s->side[k].bl->active &&
-				    s->side[k].bl->adopted == (int)s->ring_hs &&
+				    s->side[k].bl->adopted == (int)s->base.ring.hs &&
 				    link_in_use(&s->side[k].bl->link) == 2)
 					use = 2;	/* the target, elsewhere */
 			if (use == 2) {
 				printf("ring: the handset (or the main link) is in "
 				       "a call -- busy, nothing released, ring "
 				       "abandoned\n");
-				s->ring_state = RING_DONE;
+				s->base.ring.state = RING_DONE;
 				return;
 			}
-			if (use == 1 && !s->ring_wait_since) {
-				s->ring_wait_since = now;
+			if (use == 1 && !s->base.ring.wait_since) {
+				s->base.ring.wait_since = now;
 				printf("ring: the link carries a list session or "
 				       "an MM procedure -- waiting for it to end\n");
 			}
 			if (use == 1 &&
-			    now - s->ring_wait_since < RING_IN_USE_WAIT_MS)
+			    now - s->base.ring.wait_since < RING_IN_USE_WAIT_MS)
 				return;
 			if (use == 1)
 				printf("ring: still in use after %u ms -- releasing "
 				       "it all the same\n", RING_IN_USE_WAIT_MS);
-			else if (s->ring_wait_since)
+			else if (s->base.ring.wait_since)
 				printf("ring: the link is free after %llu ms\n",
 				       (unsigned long long)(now -
-							    s->ring_wait_since));
-			s->ring_wait_since = 0;
+							    s->base.ring.wait_since));
+			s->base.ring.wait_since = 0;
 		}
 		/*
 		 * **Page for every call, even when the handset is attached.**
@@ -4842,11 +4826,11 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			       "bearer\n");
 			dect_lapc_disconnect(&s->base.main_link.link.lapc);
 			pump_lapc(s);
-			s->ring_release_until = now + RING_RELEASE_WAIT_MS;
-			s->ring_state = RING_RELEASING;
+			s->base.ring.release_until = now + RING_RELEASE_WAIT_MS;
+			s->base.ring.state = RING_RELEASING;
 			return;
 		}
-		s->ring_state = RING_PAGING;
+		s->base.ring.state = RING_PAGING;
 	}
 
 	/*
@@ -4856,18 +4840,18 @@ static void ring_tick(struct stubd *s, uint64_t now)
 	 * that goes unanswered costs one ring attempt, and the fallback below
 	 * still rings the handset over the old link.
 	 */
-	if (s->ring_state == RING_RELEASING) {
-		if (s->base.main_link.active && now < s->ring_release_until)
+	if (s->base.ring.state == RING_RELEASING) {
+		if (s->base.main_link.active && now < s->base.ring.release_until)
 			return;
 		printf("ring: link %s -- paging now\n",
 		       s->base.main_link.active ? "did not go down in time, paging anyway"
 				     : "released");
-		s->ring_state = RING_PAGING;
+		s->base.ring.state = RING_PAGING;
 	}
 
-	if (s->ring_pages && now - s->ring_last < RING_PAGE_INTERVAL)
+	if (s->base.ring.pages && now - s->base.ring.last < RING_PAGE_INTERVAL)
 		return;
-	if (s->ring_pages >= RING_PAGE_RETRIES) {
+	if (s->base.ring.pages >= RING_PAGE_RETRIES) {
 		/*
 		 * An attached handset does not answer our page. Measured
 		 * 2026-10-23 (vF423): with the attachment link up, 16 pages
@@ -4888,17 +4872,17 @@ static void ring_tick(struct stubd *s, uint64_t now)
 			printf("ring: %u pages unanswered -- the handset is "
 			       "attached and ignores them; falling back to the "
 			       "SETUP on the existing link; EXPECT NO AUDIO\n",
-			       s->ring_pages);
+			       s->base.ring.pages);
 			ring_queue_setup(s, now, "a link was already up");
 			return;
 		}
 		printf("ring: the handset did not answer %u pages, giving up\n",
-		       s->ring_pages);
-		s->ring_state = RING_DONE;
+		       s->base.ring.pages);
+		s->base.ring.state = RING_DONE;
 		return;
 	}
-	s->ring_pages++;
-	s->ring_last = now;
+	s->base.ring.pages++;
+	s->base.ring.last = now;
 	send_page(s);
 }
 
@@ -5526,8 +5510,8 @@ static void reg_start(struct stubd *s, uint8_t handle)
 	unsigned i, hold = 0;
 
 	/* a new connection is nobody's yet; default to the ring target */
-	hs_switch(s, s->ring_state == RING_IDLE || s->ring_state == RING_DONE
-		  ? 0u : s->ring_hs, " (new connection)");
+	hs_switch(s, s->base.ring.state == RING_IDLE || s->base.ring.state == RING_DONE
+		  ? 0u : s->base.ring.hs, " (new connection)");
 	{
 		struct side_link *sl = side_find(s, handle);
 
@@ -7425,7 +7409,7 @@ static int time_base_busy(struct stubd *s)
 	unsigned k;
 
 	if (s->dereg.st != DEREG_IDLE || s->ic.st != IC_IDLE ||
-	    (s->ring_state != RING_IDLE && s->ring_state != RING_DONE))
+	    (s->base.ring.state != RING_IDLE && s->base.ring.state != RING_DONE))
 		return 1;
 	if (s->base.main_link.active && dect_cc_busy(&s->base.main_link.link.cc))
 		return 1;
@@ -7847,10 +7831,10 @@ static struct dect_base_call *bc_new(struct stubd *s)
 static void bc_clear(struct stubd *s, struct dect_base_call *b)
 {
 	if (b->party == -1) {
-		s->ring_now = 0;
-		s->ring_watch = 0;
-		if (s->ring_state != RING_IDLE)
-			s->ring_state = RING_DONE;
+		s->base.ring.now = 0;
+		s->base.ring.watch = 0;
+		if (s->base.ring.state != RING_IDLE)
+			s->base.ring.state = RING_DONE;
 	}
 	b->id = 0;
 }
@@ -8276,7 +8260,7 @@ static int hs_in_call(const struct stubd *s, unsigned t)
 			return 1;
 	for (k = 0; k < BC_MAX; k++)
 		if (s->base.calls[k].id && !s->base.calls[k].out &&
-		    ((s->base.calls[k].party == -1 && s->ring_hs == t) ||
+		    ((s->base.calls[k].party == -1 && s->base.ring.hs == t) ||
 		     (s->base.calls[k].party == BC_PAGING && s->base.calls[k].target == (int)t)))
 			return 1;
 	return 0;
@@ -8287,20 +8271,20 @@ static int main_free(struct stubd *s)
 {
 	return !bc_on(s, -1) &&
 	       !(s->base.main_link.active && dect_cc_busy(&s->base.main_link.link.cc)) &&
-	       (s->ring_state == RING_IDLE || s->ring_state == RING_DONE);
+	       (s->base.ring.state == RING_IDLE || s->base.ring.state == RING_DONE);
 }
 
 /* Ring handset t on the main link for b; ring_tick() pages it. */
 static void ring_main(struct stubd *s, struct dect_base_call *b, unsigned t)
 {
 	b->party = -1;
-	s->ring_hs = t;
-	s->ring_state = RING_IDLE;
-	s->ring_now = 1;
-	s->ring_requeues = 0;
-	s->ring_setup_tries = 0;
-	s->ring_pages = 0;
-	s->ring_wait_since = 0;
+	s->base.ring.hs = t;
+	s->base.ring.state = RING_IDLE;
+	s->base.ring.now = 1;
+	s->base.ring.requeues = 0;
+	s->base.ring.setup_tries = 0;
+	s->base.ring.pages = 0;
+	s->base.ring.wait_since = 0;
 }
 
 /* -------------------------------------------------------------------------
@@ -8888,8 +8872,8 @@ static void bridge_tick(struct stubd *s, uint64_t now)
 		/* a call-in that never got a handset: the ring gave up */
 		if (!b->out && !b->busy_seen &&
 		    (now - b->since > 75000u ||
-		     (b->party == -1 && s->ring_state == RING_DONE &&
-		      !s->ring_watch && now - b->since > 5000u))) {
+		     (b->party == -1 && s->base.ring.state == RING_DONE &&
+		      !s->base.ring.watch && now - b->since > 5000u))) {
 			printf("bridge: call %u in -- no handset answered the "
 			       "page\n", b->id);
 			bridge_event(s, b, "released", "by", "base");
@@ -9578,7 +9562,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	uint8_t h;
 
 	/* not mid-enrolment either: a side link cannot persist a key */
-	if (s->ring_state != RING_WAIT_PAGE_RESP || !s->base.main_link.active ||
+	if (s->base.ring.state != RING_WAIT_PAGE_RESP || !s->base.main_link.active ||
 	    !tgt_len || ind->page_id_len != tgt_len ||
 	    memcmp(ind->page_id, tgt, tgt_len) != 0 ||
 	    s->reg.call_bound || dect_cc_busy(&s->base.main_link.link.cc) ||
@@ -9608,7 +9592,7 @@ static int side_promote(struct stubd *s, struct side_link *sl,
 	 * a page response does not adopt (review, finding 2).
 	 */
 	hs_switch(s, s->base.main_link.link.mm.adopted >= 0 ?
-		  (unsigned)s->base.main_link.link.mm.adopted : s->ring_hs,
+		  (unsigned)s->base.main_link.link.mm.adopted : s->base.ring.hs,
 		  " (promoted side link)");
 	s->base.main_link.link.mm.cfg.registration = reg_policy(s);
 	s->base.main_link.link.mm.cfg.defer_unknown = s->audio.remote_path != NULL;
@@ -9946,7 +9930,7 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 			ind.page_response = 0;
 	}
 
-	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP &&
+	if (ind.page_response && s->base.ring.state == RING_WAIT_PAGE_RESP &&
 	    tgt_len && (ind.page_id_len != tgt_len ||
 			memcmp(ind.page_id, tgt, tgt_len) != 0)) {
 		int rejected = dect_link_page_reject(&s->base.main_link.link, ind.page_id,
@@ -9966,9 +9950,9 @@ static void reg_segment(struct stubd *s, const struct dect_mail *m, uint64_t now
 				: "could not send LCE-PAGE-REJECT, ignored");
 		ind.page_response = 0;
 	}
-	if (ind.page_response && s->ring_state == RING_WAIT_PAGE_RESP) {
-		if (s->base.cur != s->ring_hs)
-			hs_switch(s, s->ring_hs, " (the ring target answered)");
+	if (ind.page_response && s->base.ring.state == RING_WAIT_PAGE_RESP) {
+		if (s->base.cur != s->base.ring.hs)
+			hs_switch(s, s->base.ring.hs, " (the ring target answered)");
 		ring_queue_setup(s, now, "page response received");
 		/*
 		 * Push it out in the same breath. The main loop would now get
@@ -10513,7 +10497,7 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 		 * a re-arm would lose the call we are placing.
 		 */
 		{
-			int ring_busy = s->ring_state == RING_WAIT_PAGE_RESP;
+			int ring_busy = s->base.ring.state == RING_WAIT_PAGE_RESP;
 			int busy = s->base.main_link.active &&
 				   (s->reg.call_bound ||
 				    dect_cc_busy(&s->base.main_link.link.cc) ||
@@ -10556,9 +10540,9 @@ static void handle_reg_mail(struct stubd *s, const struct dect_mail *m, uint64_t
 			}
 		}
 		reg_start(s, h);
-		if (s->ring_state == RING_PAGING) {
-			s->ring_state = RING_WAIT_PAGE_RESP;
-			s->ring_resp_deadline = now + RING_PAGE_RESP_MS;
+		if (s->base.ring.state == RING_PAGING) {
+			s->base.ring.state = RING_WAIT_PAGE_RESP;
+			s->base.ring.resp_deadline = now + RING_PAGE_RESP_MS;
 			printf("ring: link up -- waiting for the handset's "
 			       "page response before the CC-SETUP\n");
 		}

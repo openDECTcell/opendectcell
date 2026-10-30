@@ -165,6 +165,39 @@ struct dect_base_call {
 	char     num[DECT_CC_KEYPAD_MAX + 1];
 };
 
+/*
+ * Stage S3f: ringing a handset. A page is a broadcast the handset may
+ * simply miss, and the stock host guards each one with a 3 s timer, so the
+ * base pages again until the handset brings up a link or gives up.
+ */
+enum dect_base_ring_state {
+	DECT_BASE_RING_IDLE,
+	DECT_BASE_RING_RELEASING,	/* the link is being released first */
+	DECT_BASE_RING_PAGING,
+	DECT_BASE_RING_WAIT_PAGE_RESP,	/* link up, the page response next */
+	DECT_BASE_RING_DONE,
+};
+
+struct dect_base_ring {
+	enum dect_base_ring_state state;
+	uint64_t release_until;		/* give the link time to go down */
+	uint64_t wait_since;		/* a link in use held the ring back */
+	uint64_t resp_deadline;		/* fall back if no page response comes */
+	unsigned setup_tries;		/* refused CC-SETUPs */
+	/*
+	 * After the SETUP is queued: watch it until the handset alerts. A call
+	 * lost to a crossing {CC-SETUP} of the handset's (its list sync) is
+	 * rung again once the link is free, a few times at most.
+	 */
+	int      watch;
+	int      now;			/* a call-in: ring at once */
+	unsigned hs;			/* the record rung (table index) */
+	uint32_t coll0, alert0;		/* CC's counters when queued */
+	unsigned requeues;
+	unsigned pages;			/* pages sent for this attempt */
+	uint64_t last;			/* when the last one went out */
+};
+
 struct dect_base {
 	const struct dect_base_ops *ops;	/* NULL: nothing is stored */
 	void *ctx;
@@ -178,6 +211,7 @@ struct dect_base {
 	/* subslot=: record 0's chip slot instead of its own, 0 = none */
 	unsigned slot0;
 	struct dect_base_call calls[DECT_BASE_CALLS];
+	struct dect_base_ring ring;
 	struct dect_hs_rec hs[DECT_BASE_HS_MAX];
 	unsigned n_hs;			/* records in use, hs[0] first */
 	unsigned cur;			/* the current one */

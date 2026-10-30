@@ -765,3 +765,7 @@ _call_active(), _call_by_dect() (S3d).
 (`side[DECT_BASE_SIDES]`, dect_base_link gains `adopted`), dect_base_ops
 gains event(), and dect_base_party_slot(), _call_slot(), _call_event()
 (S3e). dect_base.h now includes dect_ctl.h.
+
+**106.** dect_base.h, 2026-10-30: enum dect_base_ring_state, struct
+dect_base_ring and struct dect_base's `ring`: the ring sequence's state
+(was dect-stubd's ring_* fields) (S3f).

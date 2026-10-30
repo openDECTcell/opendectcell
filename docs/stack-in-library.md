@@ -238,6 +238,11 @@ staging). The events to the bridge go through the host's `event()`:
 handset a link serves (`dect_base_party_slot()`). Unit tests; traces
 unchanged.
 
-Next in S3: the ring sequence (`ring_tick()`, 273 lines, with the page),
-the main link's connect staging, and the internal call.
+**S3f.** The ring sequence's state is `dect_base.ring` (state, timers,
+pages, the record rung); dect-stubd's `RING_*` names are aliases. Data
+only; traces unchanged.
+
+Next in S3: the ring sequence's behaviour (`ring_tick()`, 273 lines, the
+page, `ring_queue_setup()`), the main link's connect staging, and the
+internal call.
 
