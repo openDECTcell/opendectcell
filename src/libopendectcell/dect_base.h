@@ -298,6 +298,24 @@ void dect_base_cipher_start(struct dect_base *b, struct dect_base_link *bl,
  */
 int dect_base_chip_key(struct dect_base *b, const struct dect_base_link *bl);
 
+/*
+ * The call table (S3d). party -1 is the main link, a side link's index,
+ * or DECT_BASE_PARTY_PAGING.
+ */
+struct dect_base_call *dect_base_call_by_id(struct dect_base *b,
+					    unsigned id);
+/* The call on link `party`, or NULL. */
+struct dect_base_call *dect_base_call_on(struct dect_base *b, int party);
+/* A free entry, zeroed; it is taken once its id is set. NULL: all taken. */
+struct dect_base_call *dect_base_call_new(struct dect_base *b);
+/* How many calls link `party` carries. */
+unsigned dect_base_calls_on(const struct dect_base *b, int party);
+/* The call link `party`'s lane carries (in CS call connect), or NULL. */
+struct dect_base_call *dect_base_call_active(struct dect_base *b, int party);
+/* Link `party`'s call the handset knows by call id `id`, or NULL. */
+struct dect_base_call *dect_base_call_by_dect(struct dect_base *b, int party,
+					      uint8_t id);
+
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));

@@ -224,7 +224,13 @@ dect_base_call`, `calls[3]`, one per audio channel (was dect-stubd's
 `struct bcall`; its constants are aliases now). Data only; traces
 unchanged.
 
-Next in S3, the behaviour: the call table's functions (find, allocate,
-free, the events to the bridge as a host callback), then the ring
-sequence, the main link's connect staging, and the internal call.
+**S3d.** The call table's lookups (by id, by link, by the handset's call
+id, the active one, a free entry) are the library's; dect-stubd's
+`bc_*` helpers wrap them. Freeing a call (`bc_clear()`) stays with
+dect-stubd while it also stops the main link's ring. Unit tests; traces
+unchanged.
+
+Next in S3: the events to the bridge as a host callback (`bridge_event()`),
+then the ring sequence, the main link's connect staging, and the internal
+call.
 

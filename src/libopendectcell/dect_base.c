@@ -322,3 +322,68 @@ int dect_base_chip_key(struct dect_base *b, const struct dect_base_link *bl)
 		      (unsigned)n);
 	return 0;
 }
+
+struct dect_base_call *dect_base_call_by_id(struct dect_base *b, unsigned id)
+{
+	unsigned i;
+
+	for (i = 0; id && i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id == id)
+			return &b->calls[i];
+	return NULL;
+}
+
+struct dect_base_call *dect_base_call_on(struct dect_base *b, int party)
+{
+	unsigned i;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == party)
+			return &b->calls[i];
+	return NULL;
+}
+
+struct dect_base_call *dect_base_call_new(struct dect_base *b)
+{
+	unsigned i;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (!b->calls[i].id) {
+			memset(&b->calls[i], 0, sizeof(b->calls[i]));
+			return &b->calls[i];
+		}
+	return NULL;
+}
+
+unsigned dect_base_calls_on(const struct dect_base *b, int party)
+{
+	unsigned i, n = 0;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == party)
+			n++;
+	return n;
+}
+
+struct dect_base_call *dect_base_call_active(struct dect_base *b, int party)
+{
+	unsigned i;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == party &&
+		    b->calls[i].cs == DECT_CS_CALL_CONNECT)
+			return &b->calls[i];
+	return NULL;
+}
+
+struct dect_base_call *dect_base_call_by_dect(struct dect_base *b, int party,
+					      uint8_t id)
+{
+	unsigned i;
+
+	for (i = 0; id && i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == party &&
+		    b->calls[i].dect_id == id)
+			return &b->calls[i];
+	return NULL;
+}

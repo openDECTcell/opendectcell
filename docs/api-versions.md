@@ -756,3 +756,7 @@ state both kinds of link keep: `dial_len`, `dial_change_ms`, `ic_tried`,
 dect_base's `calls[DECT_BASE_CALLS]`, the external calls the bridge
 carries (was dect-stubd's struct bcall), with DECT_BASE_PARTY_PAGING and
 DECT_BASE_PARTY_NONE (S3c). dect_base.h now includes dect_clip.h.
+
+**104.** dect_base.h, 2026-10-30: the call table's lookups:
+dect_base_call_by_id(), _call_on(), _call_new(), _calls_on(),
+_call_active(), _call_by_dect() (S3d).

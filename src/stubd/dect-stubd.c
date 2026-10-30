@@ -7825,36 +7825,19 @@ static int party_has_line2(const struct stubd *s, int p)
 
 static struct dect_base_call *bc_by_id(struct stubd *s, unsigned id)
 {
-	unsigned i;
-
-	for (i = 0; id && i < BC_MAX; i++)
-		if (s->base.calls[i].id == id)
-			return &s->base.calls[i];
-	return NULL;
+	return dect_base_call_by_id(&s->base, id);
 }
 
 /* The bridged call on link p (-1 the main link), or NULL. */
 static struct dect_base_call *bc_on(struct stubd *s, int p)
 {
-	unsigned i;
-
-	for (i = 0; i < BC_MAX; i++)
-		if (s->base.calls[i].id && s->base.calls[i].party == p)
-			return &s->base.calls[i];
-	return NULL;
+	return dect_base_call_on(&s->base, p);
 }
 
 /* A free entry, zeroed; it is taken once its id is set. NULL: all taken. */
 static struct dect_base_call *bc_new(struct stubd *s)
 {
-	unsigned i;
-
-	for (i = 0; i < BC_MAX; i++)
-		if (!s->base.calls[i].id) {
-			memset(&s->base.calls[i], 0, sizeof(s->base.calls[i]));
-			return &s->base.calls[i];
-		}
-	return NULL;
+	return dect_base_call_new(&s->base);
 }
 
 /*
@@ -7966,36 +7949,19 @@ static uint8_t bridge_reason(const char *r)
 /* The calls the bridge carries on link p. */
 static unsigned bc_live(const struct stubd *s, int p)
 {
-	unsigned i, n = 0;
-
-	for (i = 0; i < BC_MAX; i++)
-		if (s->base.calls[i].id && s->base.calls[i].party == p)
-			n++;
-	return n;
+	return dect_base_calls_on(&s->base, p);
 }
 
 /* The call link p's lane carries -- in CS call connect -- or NULL. */
 static struct dect_base_call *bc_active(struct stubd *s, int p)
 {
-	unsigned i;
-
-	for (i = 0; i < BC_MAX; i++)
-		if (s->base.calls[i].id && s->base.calls[i].party == p &&
-		    s->base.calls[i].cs == DECT_CS_CALL_CONNECT)
-			return &s->base.calls[i];
-	return NULL;
+	return dect_base_call_active(&s->base, p);
 }
 
 /* Link p's call the handset knows by call id id, or NULL. */
 static struct dect_base_call *bc_by_dect(struct stubd *s, int p, uint8_t id)
 {
-	unsigned i;
-
-	for (i = 0; id && i < BC_MAX; i++)
-		if (s->base.calls[i].id && s->base.calls[i].party == p &&
-		    s->base.calls[i].dect_id == id)
-			return &s->base.calls[i];
-	return NULL;
+	return dect_base_call_by_dect(&s->base, p, id);
 }
 
 static const char *cs_name(uint8_t cs)

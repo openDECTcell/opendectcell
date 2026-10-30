@@ -224,6 +224,35 @@ int main(void)
 	CHECK_EQ(dect_base_uak(&b, b.cur)[0], 0x22);
 	CHECK(dect_base_uak(&b, DECT_BASE_HS_MAX) == NULL);
 
+	/* the call table (S3d) */
+	{
+		struct dect_base_call *c1, *c2;
+
+		memset(b.calls, 0, sizeof(b.calls));
+		c1 = dect_base_call_new(&b);
+		c1->id = 5;
+		c1->party = -1;
+		c1->dect_id = 1;
+		c2 = dect_base_call_new(&b);
+		CHECK(c2 != c1);
+		c2->id = 6;
+		c2->party = -1;
+		c2->dect_id = 2;
+		c2->cs = DECT_CS_CALL_CONNECT;
+		CHECK(dect_base_call_by_id(&b, 6) == c2);
+		CHECK(dect_base_call_by_id(&b, 0) == NULL);
+		CHECK(dect_base_call_on(&b, -1) == c1);
+		CHECK(dect_base_call_on(&b, 0) == NULL);
+		CHECK_EQ(dect_base_calls_on(&b, -1), 2u);
+		CHECK(dect_base_call_active(&b, -1) == c2);
+		CHECK(dect_base_call_by_dect(&b, -1, 1) == c1);
+		CHECK(dect_base_call_by_dect(&b, -1, 0) == NULL);
+		CHECK(dect_base_call_new(&b) != NULL);	/* the third */
+		b.calls[2].id = 7;
+		CHECK(dect_base_call_new(&b) == NULL);	/* all taken */
+		memset(b.calls, 0, sizeof(b.calls));
+	}
+
 	/* the registration completes: key, gate, install, save, once */
 	{
 		struct dect_mm *mm = &b.main_link.link.mm;
