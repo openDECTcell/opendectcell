@@ -8505,8 +8505,22 @@ int main(int argc, char **argv)
 			fprintf(stderr, "control slot not found yet (pass %d of "
 				"%d) -- the chip may still be starting\n", pass,
 				passes);
-			if (s.ssc)
+			/*
+			 * Both offsets tried twice: measure the lanes again.
+			 * T13 U6 (7412, 2026-10-30): a start measured 9,
+			 * tried 9 and 1 for ten passes and gave up; procd's
+			 * restart measured 3 and found the slot at once. The
+			 * new measurement says whether the offset had moved.
+			 */
+			if (s.ssc && pass % 4 == 0) {
+				printf("ssc: no slot at offsets %u and %u; "
+				       "measuring the lanes again\n",
+				       s.ssc_al.off, (s.ssc_al.off + 8u) % 16u);
+				if (ssc_measure(&s))
+					ssc_flip(&s);
+			} else if (s.ssc) {
 				ssc_flip(&s);
+			}
 			sleep(1);
 		}
 	} else {
