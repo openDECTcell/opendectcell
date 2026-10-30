@@ -807,3 +807,7 @@ frames to the chip), struct dect_base's `start_ms` and
 _REQUEUE_MAX, _RELEASE_WAIT_MS, _IN_USE_WAIT_MS) and its sequencing:
 dect_base_link_use(), _ring_fixed_len(), _ring_page(), _ring_watch(),
 _ring_tick() (S3n).
+
+**115.** dect_base.h, 2026-10-30: struct dect_base's `bridge`,
+`next_call` and `line2[]`; dect_base_party_link(), _drain(),
+_call_new_id(), _party_line2(), _call_out() (S3o).

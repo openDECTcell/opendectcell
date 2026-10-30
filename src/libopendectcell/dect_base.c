@@ -947,3 +947,90 @@ void dect_base_ring_tick(struct dect_base *b, uint64_t now)
 	r->last = now;
 	dect_base_ring_page(b);
 }
+
+struct dect_base_link *dect_base_party_link(struct dect_base *b, int p)
+{
+	return p < 0 ? &b->main_link : &b->side[p];
+}
+
+void dect_base_drain(struct dect_base *b, int p, uint64_t now)
+{
+	struct dect_base_link *bl = dect_base_party_link(b, p);
+
+	dect_link_drain(&bl->link, now);
+	pump(b, bl);
+}
+
+unsigned dect_base_call_new_id(struct dect_base *b)
+{
+	unsigned i;
+
+	do {
+		b->next_call = b->next_call % 127u + 1u;
+		for (i = 0; i < DECT_BASE_CALLS; i++)
+			if (b->calls[i].id == b->next_call)
+				break;
+	} while (i < DECT_BASE_CALLS);
+	return b->next_call;
+}
+
+int dect_base_party_line2(const struct dect_base *b, int p)
+{
+	int a = p == -1 ? (b->main_link.link.mm.adopted >= 0 ?
+			   b->main_link.link.mm.adopted : (int)b->cur)
+			: p >= 0 ? b->side[p].adopted : -1;
+
+	return a >= 0 && (unsigned)a < b->n_hs && b->line2[a];
+}
+
+int dect_base_call_out(struct dect_base *b, int p, uint64_t now)
+{
+	struct dect_cc *cc = &dect_base_party_link(b, p)->link.cc;
+	struct dect_ctl_out o;
+	struct dect_base_call *c;
+	const uint8_t *k;
+	size_t len;
+	char num[DECT_CTL_VAL_MAX];
+
+	if (!b->bridge)
+		return 0;
+	k = dect_cc_keypad(cc, &len);
+	if (len >= sizeof(num))
+		len = sizeof(num) - 1;
+	if (len)
+		memcpy(num, k, len);
+	num[len] = '\0';
+	c = dect_base_call_new(b);
+	if (!c) {
+		(void)dect_cc_busy_system(cc);
+		dect_base_log(b, "bridge: %u calls already -- busy",
+			      DECT_BASE_CALLS);
+		dect_base_drain(b, p, now);
+		return 1;
+	}
+	if (dect_cc_proceed(cc))
+		return 0;
+	c->id = dect_base_call_new_id(b);
+	c->party = p;
+	c->out = 1;
+	c->since = now;
+	/* the line the handset chose (§7.4.5.2), if it has it; else Line 1 */
+	c->line = dect_cc_line(cc);
+	if (c->line != DECT_BASE_LINE_ID + 1u || !dect_base_party_line2(b, p))
+		c->line = DECT_BASE_LINE_ID;
+	dect_ctl_begin(&o, "call-out");
+	dect_ctl_add_uint(&o, "call", c->id);
+	dect_ctl_add_uint(&o, "hs", dect_base_party_slot(b, p));
+	dect_ctl_add_uint(&o, "line", c->line);
+	/* nb: the handset's call is narrowband, so the INVITE offers G.711 */
+	dect_ctl_add(&o, "codec", dect_cc_codec(cc) == DECT_CC_CODEC_G722 ?
+		     "wb" : "nb");
+	dect_ctl_add(&o, "number", num);
+	if (b->ops && b->ops->event)
+		b->ops->event(b->ctx, &o);
+	dect_base_log(b, "bridge: call %u out from DECT %u to \"%s\" -- "
+		      "waiting for the far end", c->id,
+		      dect_base_party_slot(b, p), num);
+	dect_base_drain(b, p, now);
+	return 1;
+}

@@ -346,9 +346,11 @@ struct handset {
 	 * §7.4.10.5.8), kept in <path>.name; empty = the default "DECT n".
 	 */
 	char     name[DECT_IWU_NAME_MAX];
-	/* its lines' names, Line 2 only when its account is on (lines_load) */
+	/*
+	 * its lines' names, Line 2 only when its account is on (lines_load,
+	 * which sets base.line2[])
+	 */
 	char     line_name[2][DECT_IWU_NAME_MAX];
-	int      line2;
 	/*
 	 * Its handset profile (docs/handset-profiles.md): the model the user
 	 * picked, in <path>.profile (the id, and optionally the firmware
@@ -595,7 +597,6 @@ struct stubd {
 		} cl[CTL_CLIENTS];
 		int      cur;		/* the client whose command runs, -1 */
 		int      bridge;	/* the client that said "bridge", -1 */
-		unsigned next_call;	/* call ids, 1..127 */
 	} ctl;
 	/*
 	 * The bridged calls' speech (docs/bridge-interface.md §3): one
@@ -5132,7 +5133,7 @@ static void lines_load(struct stubd *s, unsigned i)
 	FILE *f;
 
 	s->hs[i].line_name[0][0] = s->hs[i].line_name[1][0] = '\0';
-	s->hs[i].line2 = 0;
+	s->base.line2[i] = 0;
 	snprintf(path, sizeof(path), "/etc/opendectcell/handset%u.lines",
 		 hs_slot(s, i));
 	f = fopen(path, "r");
@@ -5147,13 +5148,13 @@ static void lines_load(struct stubd *s, unsigned i)
 		snprintf(s->hs[i].line_name[buf[0] - '1'],
 			 sizeof(s->hs[i].line_name[0]), "%.15s", nm);
 		if (buf[0] == '2')
-			s->hs[i].line2 = 1;
+			s->base.line2[i] = 1;
 	}
 	fclose(f);
 	printf("sub: DECT %u's lines: 1 \"%s\"%s%s%s\n", hs_slot(s, i),
-	       s->hs[i].line_name[0], s->hs[i].line2 ? ", 2 \"" : "",
-	       s->hs[i].line2 ? s->hs[i].line_name[1] : "",
-	       s->hs[i].line2 ? "\"" : "");
+	       s->hs[i].line_name[0], s->base.line2[i] ? ", 2 \"" : "",
+	       s->base.line2[i] ? s->hs[i].line_name[1] : "",
+	       s->base.line2[i] ? "\"" : "");
 }
 
 /* The lines a link's Line Settings List offers: those of its handset. */
@@ -5177,7 +5178,7 @@ static void iwu_lines(struct stubd *s, struct dect_iwu *iwu, unsigned slot)
 	dect_iwu_clear_lines(iwu);
 	(void)dect_iwu_add_line(iwu, STUBD_LINE_ID, s->hs[i].line_name[0][0]
 				? s->hs[i].line_name[0] : def, att);
-	if (s->hs[i].line2)
+	if (s->base.line2[i])
 		(void)dect_iwu_add_line(iwu, STUBD_LINE_ID + 1u,
 					s->hs[i].line_name[1][0]
 					? s->hs[i].line_name[1] : "Line 2", att);
@@ -5747,7 +5748,7 @@ static unsigned missed_send(struct stubd *s, struct dect_link *l, unsigned i)
 /* The lines handset i has: 1, and 2 if it has a second. */
 static uint8_t hs_lines(const struct stubd *s, unsigned i)
 {
-	return (uint8_t)(s->hs[i].line2 ? 3u : 1u);
+	return (uint8_t)(s->base.line2[i] ? 3u : 1u);
 }
 
 /*
@@ -6351,11 +6352,7 @@ static struct dect_link *ic_link(struct stubd *s, int p)
 
 static void ic_drain(struct stubd *s, int p, uint64_t now)
 {
-	dect_link_drain(ic_link(s, p), now);
-	if (p == -1)
-		pump_lapc(s);
-	else
-		side_pump(s, &s->side[p]);
+	dect_base_drain(&s->base, p, now);
 }
 
 /* the party has its audio channel bound */
@@ -7146,6 +7143,7 @@ static void ctl_drop(struct stubd *s, int c, const char *why)
 		unsigned i;
 
 		s->ctl.bridge = -1;
+		s->base.bridge = 0;
 		for (i = 0; i < BC_MAX; i++) {
 			struct dect_base_call *b = &s->base.calls[i];
 			int p = b->party;
@@ -7283,31 +7281,13 @@ static void ctl_reply(struct stubd *s, const char *verb, const char *reason,
  */
 static unsigned bridge_new_id(struct stubd *s)
 {
-	unsigned i;
-
-	do {
-		s->ctl.next_call = s->ctl.next_call % 127u + 1u;
-		for (i = 0; i < BC_MAX; i++)
-			if (s->base.calls[i].id == s->ctl.next_call)
-				break;
-	} while (i < BC_MAX);
-	return s->ctl.next_call;
+	return dect_base_call_new_id(&s->base);
 }
 
 /* The handset a call's party serves, as its slot; 0 = nobody yet. */
 static unsigned party_hs_slot(struct stubd *s, int p)
 {
 	return dect_base_party_slot(&s->base, p);
-}
-
-/* The handset on link p has a Line 2 (an account for it). */
-static int party_has_line2(const struct stubd *s, int p)
-{
-	int a = p == -1 ? (s->base.main_link.link.mm.adopted >= 0 ?
-			   s->base.main_link.link.mm.adopted : (int)s->base.cur)
-			: p >= 0 ? s->side[p].bl->adopted : -1;
-
-	return a >= 0 && (unsigned)a < s->base.n_hs && s->hs[a].line2;
 }
 
 static struct dect_base_call *bc_by_id(struct stubd *s, unsigned id)
@@ -7353,50 +7333,7 @@ static void bridge_event(struct stubd *s, const struct dect_base_call *b,
 /* The handset on link p dialled a number: hand it to the bridge. */
 static int bridge_call_out(struct stubd *s, int p, uint64_t now)
 {
-	struct dect_cc *cc = ic_cc(s, p);
-	struct dect_ctl_out o;
-	struct dect_base_call *b;
-	const uint8_t *k;
-	size_t len;
-	char num[DECT_CTL_VAL_MAX];
-
-	if (s->ctl.bridge < 0)
-		return 0;
-	k = dect_cc_keypad(cc, &len);
-	if (len >= sizeof(num))
-		len = sizeof(num) - 1;
-	memcpy(num, k, len);
-	num[len] = '\0';
-	b = bc_new(s);
-	if (!b) {
-		(void)dect_cc_busy_system(cc);
-		printf("bridge: %u calls already -- busy\n", BC_MAX);
-		ic_drain(s, p, now);
-		return 1;
-	}
-	if (dect_cc_proceed(cc))
-		return 0;
-	b->id = bridge_new_id(s);
-	b->party = p;
-	b->out = 1;
-	b->since = now;
-	/* the line the handset chose (§7.4.5.2), if it has it; else Line 1 */
-	b->line = dect_cc_line(cc);
-	if (b->line != STUBD_LINE_ID + 1u || !party_has_line2(s, p))
-		b->line = STUBD_LINE_ID;
-	dect_ctl_begin(&o, "call-out");
-	dect_ctl_add_uint(&o, "call", b->id);
-	dect_ctl_add_uint(&o, "hs", party_hs_slot(s, p));
-	dect_ctl_add_uint(&o, "line", b->line);
-	/* nb: the handset's call is narrowband, so the INVITE offers G.711 */
-	dect_ctl_add(&o, "codec", dect_cc_codec(cc) == DECT_CC_CODEC_G722 ?
-		     "wb" : "nb");
-	dect_ctl_add(&o, "number", num);
-	ctl_send_bridge(s, &o);
-	printf("bridge: call %u out from DECT %u to \"%s\" -- waiting for the "
-	       "far end\n", b->id, party_hs_slot(s, p), num);
-	ic_drain(s, p, now);
-	return 1;
+	return dect_base_call_out(&s->base, p, now);
 }
 
 /* remote-released's reason, as a CC release reason (§2.2 of the page) */
@@ -7983,6 +7920,7 @@ static int bridge_command(struct stubd *s, const struct dect_ctl_msg *m,
 			return 1;
 		}
 		s->ctl.bridge = s->ctl.cur;
+		s->base.bridge = 1;
 		printf("bridge: client %d carries external calls\n",
 		       s->ctl.cur + 1);
 		ctl_reply(s, m->verb, NULL, NULL, 0);

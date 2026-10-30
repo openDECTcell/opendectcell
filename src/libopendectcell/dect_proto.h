@@ -13,7 +13,7 @@
  * not on comments. Consumers compiling against a pinned checkout can refuse to
  * build against an API they were not written for:
  *
- *	#if OPENDECTCELL_API_VERSION != 114
+ *	#if OPENDECTCELL_API_VERSION != 115
  *	#error libopendectcell API version mismatch
  *	#endif
  *
@@ -21,7 +21,7 @@
  * a stable signature: treat it as a build-time guard. The record of each
  * version is docs/api-versions.md.
  */
-#define OPENDECTCELL_API_VERSION 114
+#define OPENDECTCELL_API_VERSION 115
 
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_CONTACT_DST	0x02u	/* contact destination task [CR A-0003] */

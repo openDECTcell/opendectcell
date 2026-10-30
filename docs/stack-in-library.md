@@ -304,3 +304,11 @@ The host gives the stack its start time and the handset's first contact
 `pump()`, sends the frames a link has queued (the LAPC release before the
 page). dect-stubd's `ring_tick()` only checks that the chip is up. Unit
 tests; traces unchanged.
+
+**S3o.** A call out is the library's: `dect_base_call_out()` takes the
+number a handset dialled to the bridge (`call-out`, a call table entry,
+the call proceeding), with the call ids (`next_call`) and each record's
+Line 2 (`line2[]`, set by the host from its accounts). The host says
+whether a bridge client is connected (`bridge`). `dect_base_drain()`
+sends what a link's stack queued, main or side. Unit tests; traces
+unchanged.

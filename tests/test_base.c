@@ -486,5 +486,25 @@ int main(void)
 		CHECK_EQ(r->watch, 0);
 		CHECK_EQ(r->requeues, 1u);
 	}
+
+	/* the calls out (S3o) */
+	{
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.next_call = 126;
+		b.calls[0].id = 127;			/* taken */
+		CHECK_EQ(dect_base_call_new_id(&b), 1u);	/* wraps past it */
+		CHECK_EQ(dect_base_call_new_id(&b), 2u);
+		b.n_hs = 2;
+		b.cur = 1;
+		b.main_link.link.mm.adopted = -1;
+		b.side[0].adopted = 0;
+		b.line2[1] = 1;
+		CHECK_EQ(dect_base_party_line2(&b, -1), 1);	/* the current one */
+		CHECK_EQ(dect_base_party_line2(&b, 0), 0);
+		CHECK(dect_base_party_link(&b, -1) == &b.main_link);
+		CHECK(dect_base_party_link(&b, 2) == &b.side[2]);
+		CHECK_EQ(dect_base_call_out(&b, -1, 0), 0);	/* no bridge */
+	}
 	return CHECK_DONE();
 }

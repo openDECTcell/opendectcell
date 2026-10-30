@@ -266,6 +266,14 @@ struct dect_base {
 	unsigned slot0;
 	struct dect_base_call calls[DECT_BASE_CALLS];
 	struct dect_base_ring ring;
+	/*
+	 * The bridge (docs/bridge-interface.md): a client takes the calls out,
+	 * and the ids it knows them by (S3o).
+	 */
+	int      bridge;		/* a bridge client is connected */
+	unsigned next_call;		/* the last call id given, 1..127 */
+	/* record i has a Line 2, an account of its own (lines-and-calls.md) */
+	int      line2[DECT_BASE_HS_MAX];
 	uint64_t start_ms;		/* the host's start, for ring= */
 	uint64_t first_contact_ms;	/* a handset's first C-plane segment, for ringattach= */
 	struct dect_base_cfg cfg;
@@ -544,6 +552,23 @@ void dect_base_ring_page(struct dect_base *b);
 void dect_base_ring_watch(struct dect_base *b);
 /* The ring, driven by time; the host calls it while the chip is up. */
 void dect_base_ring_tick(struct dect_base *b, uint64_t now);
+
+/*
+ * The calls out (S3o). Link p: -1 the main link, else side link p.
+ * dect_base_drain() sends what p's stack queued.
+ */
+struct dect_base_link *dect_base_party_link(struct dect_base *b, int p);
+void dect_base_drain(struct dect_base *b, int p, uint64_t now);
+/* A call id for the bridge, 1..127, that no call holds. */
+unsigned dect_base_call_new_id(struct dect_base *b);
+/* The handset on link p has a Line 2. */
+int dect_base_party_line2(const struct dect_base *b, int p);
+/*
+ * The handset on link p dialled a number: hand it to the bridge as
+ * `call-out` (bridge-interface.md §2.1), the call proceeding. 0: no bridge
+ * client, or CC refused; 1: done (busy if the call table is full).
+ */
+int dect_base_call_out(struct dect_base *b, int p, uint64_t now);
 
 /* A log line, printf-style, cut at 255 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
