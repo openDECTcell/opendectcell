@@ -1,8 +1,22 @@
 # Dedicated OpenWrt images for the 7520 and the 7412
 
 Written 2026-11-01 after the maintainer's request (2026-10-31): the controller's
-and the cells' builds are not enough, a user needs a flashable image. **Not
-started**; this is the plan and what it found out.
+and the cells' builds are not enough, a user needs a flashable image.
+
+**Status 2026-11-01 (night):** built and tried locally for the 7520 target;
+nothing dispatched in CI (the maintainer watches CI minutes). `tools/release/images.sh`
+makes the image from the packages `build.sh` made; the `images` job in
+`packages.yml` runs it on a tag or when the Packages workflow is started by
+hand with "images" ticked. Run locally on 2026-11-01 against the 25.12.5
+ImageBuilder with the CI packages of run 41239885068: it produced
+`openwrt-25.12.5-ipq40xx-generic-avm_fritzbox-7530-squashfs-sysupgrade.bin`
+(11 MB; manifest lists openDECTcell, opendectcell-cell, opendectcell-baresip, the kernel
+module, LuCI, baresip). **Not flashed.** The 7412 target is untried (see I2).
+Answers of the maintainer, 2026-11-01: I1 one release (25.12.6) for both,
+I2 a read-only deploy key for the PCM module's repository (to be created by
+the maintainer, see below), I3 my lean, I5 images only on tags and manual runs.
+The lab 7520 runs 25.12.5, so the new kernel module package fits it only after
+it is flashed with an image (the userspace packages install over apk).
 
 ## Why images, and what the first look found
 
@@ -59,3 +73,14 @@ started**; this is the plan and what it found out.
 - The 7412's NAND layout and AVM's environment variables matter for the first
   flash from AVM firmware: `docs/models/` has the notes; an image must not
   change them.
+
+## What the maintainer has to do for I2
+
+`kmod-lantiq-ssc-pcm` lives in its own repository (`../kmod-lantiq-ssc-pcm`
+locally). Without CI access to it the 7412 packages and image have no PCM
+transport. Make a read-only **deploy key** for that repository, add its private
+half as a secret of the openDECTcell repository (say `(vendor-internal name)`), and the
+`build` job can fetch it the way the controller's CI fetches the openDECTcell
+submodule (`openDECTcell/opendectcell-controller` `ci.yml`, the step "Check out the openDECTcell
+submodule"). I did not add that step: it needs the key's name and the
+repository's URL as it will be reachable from CI.

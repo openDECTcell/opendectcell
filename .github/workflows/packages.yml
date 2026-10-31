@@ -8,6 +8,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      images:
+        description: "also build the flashable images (about 10 more minutes)"
+        type: boolean
+        default: false
 
 # The token reads the repository and nothing more; the release job asks
 # for what it needs itself (security audit 2026-10-29, C1).
@@ -15,18 +20,19 @@ permissions:
   contents: read
 
 env:
-  # for the release notes; each target builds against the release its box runs
-  OPENWRT: 25.12.5 (FRITZ!Box 7520) and 25.12.6 (FRITZ!Box 7412)
+  # for the release notes; each job sets its own from the matrix
+  OPENWRT: 25.12.6
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        # The kernel module must match the kernel on the box: the 7520 runs
-        # OpenWrt 25.12.5 (kernel 6.12.94), the 7412 25.12.6 (6.12.112).
+        # One release for both boxes (maintainer, 2026-11-01). The kernel module
+        # only fits the kernel it was built for: a box on an older release
+        # takes the userspace packages over apk and the module with the image.
         include:
-          - { target: ipq40xx/generic, openwrt: "25.12.5" }
+          - { target: ipq40xx/generic, openwrt: "25.12.6" }
           - { target: lantiq/xrx200, openwrt: "25.12.6" }
     runs-on: ubuntu-24.04
     env:
@@ -76,8 +82,49 @@ jobs:
           path: out/*.apk
           if-no-files-found: error
 
-  release:
+  images:
+    # One ImageBuilder run per target with the packages just built. Only on a
+    # tag or when asked for: it costs CI minutes.
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.images
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: ipq40xx/generic, openwrt: "25.12.6" }
+          - { target: lantiq/xrx200, openwrt: "25.12.6" }
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make gawk python3 file wget zstd rsync unzip \
+            tar gettext git bzip2 patch xz-utils
+
+      - name: Slug
+        id: slug
+        run: echo "name=$(echo '${{ matrix.target }}' | tr / -)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: packages-${{ steps.slug.outputs.name }}
+          path: apks
+
+      - name: Image
+        env:
+          OPENWRT: ${{ matrix.openwrt }}
+        run: tools/release/images.sh '${{ matrix.target }}' apks images
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-${{ steps.slug.outputs.name }}
+          path: images/*
+          if-no-files-found: error
+
+  release:
+    needs: [build, images]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -96,11 +143,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           cd out
-          sha256sum *.apk > SHA256SUMS
+          rm -f SHA256SUMS-*.images
+          sha256sum *.apk *sysupgrade* > SHA256SUMS
           notes=../tools/release/notes-${TAG#v}.md
           [ -f "$notes" ] || notes=../tools/release/notes.md
           sed -e "s/{VERSION}/${TAG#v}/g" -e "s/{OPENWRT}/$OPENWRT/g" \
             "$notes" > ../notes.md
           gh release create "$TAG" --draft --verify-tag \
             --title "openDECTcell ${TAG#v}" --notes-file ../notes.md \
-            *.apk SHA256SUMS ../openwrt/opendectcell-signing-key.pem
+            *.apk *sysupgrade* *.manifest SHA256SUMS ../openwrt/opendectcell-signing-key.pem
