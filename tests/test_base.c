@@ -465,6 +465,14 @@ int main(void)
 		dect_base_tpui(&b, 1, tpui);		/* slot 2 */
 		CHECK_EQ(tpui[1], 0x11);
 		CHECK_EQ(tpui[2], 0x02);
+		/* a TPUI off the slot (tpuioffset=, docs/more-than-six.md T-C) */
+		b.cfg.tpui_offset = 0x40;
+		dect_base_tpui(&b, 1, tpui);
+		CHECK_EQ(tpui[1], 0x11);
+		CHECK_EQ(tpui[2], 0x42);
+		b.cfg.tpui_offset = 0;
+		dect_base_tpui(&b, 1, tpui);
+		CHECK_EQ(tpui[2], 0x02);
 		b.ops = &ops;
 		n_sent = 0;
 		dect_base_page(&b, 0x2C, tpui);

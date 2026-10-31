@@ -91,12 +91,29 @@ dial out) are marked **[person]** and wait for a bench day.
 | **T-D** key loaded just before a call | evict a handset's slot, then ring it; load on the page | ringing and (answered **[person]**) a ciphered call | the call ends at ciphering: the key was not effective yet, widen the wait from T-A |
 | **T-E** eviction under a live call **[person]** | one handset in a call; another's slot rewritten | the call is undisturbed | a drop: never rewrite while any connection is live, not only the target's |
 
+## 4a. Knobs built for the tests (2026-10-31)
+
+Both are `-a` options of `dect-stubd` (LuCI: Network > DECT, Extra options;
+uci `opendectcell.main.options`), off by default, no behaviour change when unset:
+
+| Option | What it does | Test |
+|---|---|---|
+| `keycheckms=MS` | how long the UAK read-back and the slot audit wait after the key writes (default 0; 1000 on the 7412's 06.88). The verdict lines carry no key bytes | T-A |
+| `tpuioffset=N` | the TPUI assigned in LOCATE-ACCEPT and used for pages is `{0x00, 0x11, slot + N}` instead of `{0x00, 0x11, slot}`; `dect_base_cfg.tpui_offset`, applied at every site that builds an MM from a slot (`tpui_cfg_for_slot()` in `dect_base.c`) | T-C |
+
+With `tpuioffset=0x40` slot 1's handset gets TPUI `0x1141`. A handset that
+already holds `0x1101` takes the new one when it next locates (a daemon
+restart does not make it; a power-cycle of the handset, or `locvalid=1`,
+does). Revert by removing the option and locating once more. Unit test:
+`tests/test_base.c` (`dect_base_tpui`). Not an API bump: a test knob in the
+config, the TPUI per record for the controller's pool is the later change.
+
 ## 5. Build order
 
 1. T-A and T-B need no code (existing options: the audit, `nochipkeys`).
-2. The base passes a record TPUI (`dect_base_tpui_for()` used at every
-   site that sets `cfg.sub_slot`), with a daemon knob to set it for a test:
-   unit tests first (`tests/test_base.c`, `test_mm.c`).
+2. The base passes a record TPUI at every site that sets `cfg.sub_slot`
+   (done as a test knob, §4a; per-record values come with the controller's
+   pool).
 3. The host store / chip slot split, then the cache in `dect_base`, behind
    the controller's placement rules. API bump, notes for the controller.
 4. Standalone boxes keep six until T-C, T-D and T-E have passed.

@@ -371,6 +371,8 @@ struct dect_base_cfg {
 	uint8_t  codeclist[31];
 	size_t   codeclist_len;
 	unsigned locate_validity;	/* locvalid=N x 40.96 s */
+	/* tpuioffset=N: TPUI = {0x00, 0x11, slot + N}, off the slot (T-C, 0 = off) */
+	unsigned tpui_offset;
 	int      defer_unknown;	/* hold an unknown LOCATE-REQUEST (the host fetches) */
 	int      ipuio_set;	/* ipuio=N: assign IPUI O N at registration */
 	uint32_t ipuio;

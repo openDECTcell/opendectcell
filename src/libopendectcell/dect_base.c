@@ -71,6 +71,9 @@ void dect_base_log(struct dect_base *b, const char *fmt, ...)
 }
 
 /* One mail to the STUB's contact task. */
+static void tpui_cfg_for_slot(const struct dect_base *b, unsigned slot,
+			      uint8_t tpui[3]);
+
 static void chip_mail(struct dect_base *b, uint16_t prim, const uint8_t *p,
 		      size_t n)
 {
@@ -419,6 +422,7 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 {
 	struct dect_mm *mm = &bl->link.mm;
 	unsigned i;
+	uint8_t tp[3];
 
 	bl->active = 1;
 	bl->persisted = 0;
@@ -435,14 +439,19 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 
 		if (i == b->cur || !(hold_mask & (1u << i)) || !r->port_id_len)
 			continue;
+		tpui_cfg_for_slot(b, r->slot, tp);
 		if (dect_mm_hold(mm, r->port_id, r->port_id_len,
-				 (uint8_t)r->slot, NULL, (int)i) < 0)
+				 (uint8_t)r->slot, b->cfg.tpui_offset ? tp : NULL,
+				 (int)i) < 0)
 			dect_base_log(b, "sub: could not hold record %u on "
 				      "this link", i);
 	}
-	if (b->rec.port_id_len)
+	if (b->rec.port_id_len) {
+		tpui_cfg_for_slot(b, cfg->sub_slot, tp);
 		(void)dect_mm_hold(mm, b->rec.port_id, b->rec.port_id_len,
-				   (uint8_t)cfg->sub_slot, NULL, (int)b->cur);
+				   (uint8_t)cfg->sub_slot,
+				   b->cfg.tpui_offset ? tp : NULL, (int)b->cur);
+	}
 }
 
 int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
@@ -506,6 +515,7 @@ void dect_base_side_open(struct dect_base *b, struct dect_base_link *bl,
 			 unsigned hold_mask)
 {
 	unsigned i;
+	uint8_t tp[3];
 
 	bl->active = 1;
 	bl->persisted = 0;
@@ -518,8 +528,10 @@ void dect_base_side_open(struct dect_base *b, struct dect_base_link *bl,
 
 		if (!r->port_id_len || !(hold_mask & (1u << i)))
 			continue;
+		tpui_cfg_for_slot(b, dect_base_slot(b, i), tp);
 		(void)dect_mm_hold(&bl->link.mm, r->port_id, r->port_id_len,
-				   (uint8_t)dect_base_slot(b, i), NULL, (int)i);
+				   (uint8_t)dect_base_slot(b, i),
+				   b->cfg.tpui_offset ? tp : NULL, (int)i);
 	}
 }
 
@@ -705,6 +717,23 @@ void dect_base_call_event(struct dect_base *b, const struct dect_base_call *c,
 	b->ops->event(b->ctx, &o);
 }
 
+/*
+ * The TPUI configured for the record in chip slot "slot": all-zero (the
+ * default) lets MM derive {0x00, 0x11, slot}, the historical behaviour.
+ * With cfg.tpui_offset the low byte moves off the slot, which is the test
+ * for a TPUI that is not slot-derived (docs/more-than-six.md, T-C); the
+ * controller's pool will set per-record values in the same place.
+ */
+static void tpui_cfg_for_slot(const struct dect_base *b, unsigned slot,
+			      uint8_t tpui[3])
+{
+	memset(tpui, 0, 3);
+	if (!b->cfg.tpui_offset)
+		return;
+	tpui[1] = 0x11u;
+	tpui[2] = (uint8_t)(slot + b->cfg.tpui_offset);
+}
+
 void dect_base_tpui(const struct dect_base *b, unsigned i, uint8_t tpui[3])
 {
 	struct dect_mm_cfg cfg;
@@ -712,6 +741,7 @@ void dect_base_tpui(const struct dect_base *b, unsigned i, uint8_t tpui[3])
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.sub_slot = (uint8_t)dect_base_slot(b, i);
+	tpui_cfg_for_slot(b, cfg.sub_slot, cfg.tpui);
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tpui(&mm, tpui);
 }
@@ -1549,6 +1579,7 @@ int dect_base_ic_start(struct dect_base *b, int p, uint64_t now)
 	(void)dect_cc_proceed(cc);
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.sub_slot = (uint8_t)dect_base_slot(b, i);
+	tpui_cfg_for_slot(b, cfg.sub_slot, cfg.tpui);
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tpui(&mm, ic->tpui);
 	ic->st = DECT_BASE_IC_PAGING;
@@ -1843,6 +1874,7 @@ void dect_base_side_ring_start(struct dect_base *b, struct dect_base_call *c,
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.sub_slot = (uint8_t)dect_base_slot(b, t);
+	tpui_cfg_for_slot(b, cfg.sub_slot, cfg.tpui);
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tpui(&mm, c->tpui);
 	c->party = DECT_BASE_PARTY_PAGING;
@@ -3236,6 +3268,7 @@ void dect_base_dereg_begin(struct dect_base *b, unsigned slot, uint64_t now,
 	}
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.sub_slot = (uint8_t)slot;
+	tpui_cfg_for_slot(b, cfg.sub_slot, cfg.tpui);
 	dect_mm_init(&mm, &cfg);
 	dect_mm_tpui(&mm, d->tpui);
 	d->st = DECT_BASE_DEREG_PAGING;
@@ -3437,6 +3470,7 @@ void dect_base_time_tick(struct dect_base *b, uint64_t now)
 		tu->st = DECT_BASE_TIME_PAGING;
 		memset(&cfg, 0, sizeof(cfg));
 		cfg.sub_slot = (uint8_t)dect_base_slot(b, (unsigned)tu->target);
+		tpui_cfg_for_slot(b, cfg.sub_slot, cfg.tpui);
 		dect_mm_init(&mm, &cfg);
 		dect_mm_tpui(&mm, tu->tpui);
 	}
@@ -4303,6 +4337,7 @@ static void enrol_route(struct dect_base *b)
 	bl->enrol_switched = 1;		/* undone if the PIN fails */
 	slot = dect_base_slot(b, b->cur);
 	bl->link.mm.cfg.sub_slot = (uint8_t)slot;
+	tpui_cfg_for_slot(b, slot, bl->link.mm.cfg.tpui);
 	snprintf(name, sizeof(name), "DECT %u", slot);
 	dect_iwu_add_handset(&bl->link.cc.iwu, (uint8_t)slot, name);
 	dect_iwu_set_own(&bl->link.cc.iwu, (uint8_t)slot);
@@ -4357,6 +4392,8 @@ void dect_base_main_enrolment(struct dect_base *b)
 			(void)dect_base_serve(b, 0, " (enrolment failed)");
 			bl->link.mm.cfg.sub_slot =
 				(uint8_t)dect_base_slot(b, b->cur);
+			tpui_cfg_for_slot(b, bl->link.mm.cfg.sub_slot,
+					  bl->link.mm.cfg.tpui);
 		}
 	}
 	if (mm->state == DECT_MM_REGISTERED)
@@ -4562,6 +4599,7 @@ void dect_base_main_open(struct dect_base *b, uint8_t handle)
 	link_mm_cfg(b, &mcfg);
 	/* subslot=N wins, else the slot the record was saved with, else 0 */
 	mcfg.sub_slot = (uint8_t)dect_base_slot(b, b->cur);
+	tpui_cfg_for_slot(b, mcfg.sub_slot, mcfg.tpui);
 	/*
 	 * Who may enrol. Closed unless the window is open. With the first
 	 * record already holding a handset, only that handset may re-enrol

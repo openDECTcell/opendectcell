@@ -834,6 +834,9 @@ struct stubd {
 		int      no_chip_keys;	/* nochipkeys, multi-cell test M2 */
 		const char *remote_path;	/* remote=PATH, test M4 */
 		unsigned fetch_delay_ms;	/* fetchdelay=MS, test M4 */
+		unsigned keycheck_ms;	/* keycheckms=MS: read-back delay */
+		unsigned tpui_offset;	/* tpuioffset=N: TPUI off the slot */
+		int      keycheck_set;
 		unsigned locate_validity;	/* locvalid=N x 40.96 s, M4 */
 		int      no_led;	/* noled */
 		int      remode_set;	/* remode= or noremode given */
@@ -7657,6 +7660,13 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->remote_path = path;
 		} else if (klen == 10 && !memcmp(key, "fetchdelay", 10)) {
 			a->fetch_delay_ms = (unsigned)v;
+		} else if (klen == 10 && !memcmp(key, "tpuioffset", 10)) {
+			if (v > 200)
+				return -1;
+			a->tpui_offset = (unsigned)v;
+		} else if (klen == 10 && !memcmp(key, "keycheckms", 10)) {
+			a->keycheck_ms = (unsigned)v;
+			a->keycheck_set = 1;
 		} else if (klen == 8 && !memcmp(key, "locvalid", 8)) {
 			if (v > 255)
 				return -1;
@@ -7918,6 +7928,11 @@ static void usage(void)
 		"           holdback=MS nochipkeys remote=PATH fetchdelay=MS\n"
 		"           locvalid=N: the multi-cell tests M2 and M4\n"
 		"           (docs/multicell-experiments.md)\n"
+		"           tpuioffset=N assign TPUI {0x00,0x11,slot+N} instead of the\n"
+		"           slot's own (a TPUI that is not slot-derived, docs/more-than-six.md T-C)\n"
+		"           keycheckms=MS how long the UAK read-back and slot audit\n"
+		"           wait after the writes (default 0; 1000 on the 7412's\n"
+		"           06.88): the key-write delay sweep of docs/more-than-six.md\n"
 		"           Default: sel=1,gain=0x2b,flags=1,mask=0,mode=0,codec=0\n"
 		"           (flags=0x41 is the wideband bind used at G7),\n"
 		"           txidle=0xff,voiceidle=0xff\n");
@@ -8511,6 +8526,7 @@ int main(int argc, char **argv)
 	memcpy(s.base.cfg.codeclist, s.audio.codeclist, s.audio.codeclist_len);
 	s.base.cfg.codeclist_len = s.audio.codeclist_len;
 	s.base.cfg.locate_validity = s.audio.locate_validity;
+	s.base.cfg.tpui_offset = s.audio.tpui_offset;
 	s.base.cfg.defer_unknown = s.audio.remote_path != NULL;
 	s.base.cfg.ipuio_set = s.audio.ipuio_set;
 	s.base.cfg.ipuio = s.audio.ipuio;
@@ -8551,6 +8567,8 @@ int main(int argc, char **argv)
 		s.base.chip.uak_table = sub_uak_base;
 	s.base.chip.uak_guess = s.stub_build == STUB_UNKNOWN;
 	s.base.chip.check_delay_ms = s.uak_0688 ? SUB_CHECK_DELAY_0688_MS : 0u;
+	if (s.audio.keycheck_set)	/* key-write delay sweep */
+		s.base.chip.check_delay_ms = s.audio.keycheck_ms;
 	s.base.chip.stub = s.stub_build == STUB_UNKNOWN ? NULL : s.stub_name;
 	if (auto_bringup && !strcmp(s.stub_name, DECT_STUB_0688)) {
 		memmove(&s.xmail[1], &s.xmail[0],
