@@ -211,3 +211,12 @@ wrote no `lines` file and started no baresip (the handsets' profile side files
 `/etc/opendectcell-sub.N.profile` are gone since today's re-registrations), so
 nothing was dialled. Not yet shown: the same with the table read back (08.25,
 where the slot audit exists), and a call to such a handset (paging by TPUI).
+
+**Block E, run 1, addendum (maintainer, same evening):** after a line was
+assigned to the A540 (still no key in the chip, slot 3, `holdback` not over),
+an outgoing call went through at once with audio both ways, and an incoming
+call rang with audio both ways. So both directions work for a handset whose
+key the chip does not hold: the call key reaches the chip with `0x0208`, and
+the chip pages by the TPUI. Open: the same with a read-back of the table
+(08.25), and a handset that has never had a slot at all (here the A540 still
+has its slot and identity entry; only its key is missing).
