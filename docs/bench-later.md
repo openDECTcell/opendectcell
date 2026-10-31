@@ -388,12 +388,28 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
     radio was parked, so there may be more than one entry into the same
     state; one sample each.
 
-    **Next, running (2026-10-31 12:17):** campaign v2 with `netguard.sh` on
-    the box (every 1 s a ping to the gateway; after 8 failures it saves
-    `dmesg`, `/proc/interrupts` twice, `/proc/net/dev`, link state and `top`
-    to `/tmp/hang-N`, then tries `ip link set eth0 down/up`, then
-    `network restart`, and says which one recovered the network). A box that
-    recovers on its own is not power-cycled, so its RAM can be read.
+    **Later the same day (unattended).**
+
+    | run | result |
+    |---|---|
+    | campaign v2 (`netguard.sh` on the box, 10 cycles) | **hang 4**: an ordinary stop from radio up (12:34:45). The guard's `eth0` down/up and `network restart` did not bring the network back in 8 minutes; its RAM evidence was lost with the power cycle (the guard now copies it to `/root/hangevid` before the remedies) |
+    | campaign v3 (the same, evidence to flash, 40 cycles, 80 stops: A 40 pass, B 40 pass) | **no hang** |
+    | total | four hangs in about 190 stops (two ordinary stops from radio up, two quick-start stops), none in the last 80. One hang is not a rate; nothing explains why the last 80 passed (the diagnostic module and the guard ran in v2 as well). The `ssh` poller that ran in the earlier runs was off from 12:17 |
+
+    The cause is still open. What is established: the watchdog works and did
+    not fire, the module's teardown is not reached, the network dies within
+    about 180 ms of the radio park mails, and `eth0` down/up does not revive
+    it. A run with the maintainer watching the 7412's LEDs, and the evidence
+    file from the next hang, are the next steps.
+
+    **T-A, key-write delay (lab 7520, 08.25, chip warm).** Method after two
+    void designs (identical rewrites; a store glob the init rejected): two
+    different handsets' keys swapped through slot 2 (`subslot=2`), the
+    read-back after `keycheckms=N`. N = 0: no answer, 6 of 6. N = 20, 50,
+    100, 200, 400, 800: MATCHES, 36 of 36 (three repeats, both directions,
+    no void). A key write is effective within about 20 ms; the first daemon
+    run after a fresh chip upload reads back nothing. A slot clear leaves the
+    key bytes readable 1 s and 5 s later (Q-0073).
 
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
