@@ -328,26 +328,34 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
     14 also occurred in two passing ones (09:30:19, 09:30:59); the offsets are
     scattered over 0-15.
 
-    Open readings (one hang, so none is established):
-    - **H1, a freeze inside the stop** (`hrtimer_cancel()` on the per-CPU ring
-      timers, or `ltq_dma_close()` / `ssc_dma_free()` with a burst still in
-      flight): the missing kernel line puts it before `ssc_dma_stop()`, unless
-      the UDP line was lost with the box. Paper check of
-      `kmod-lantiq-ssc-pcm/src/ssc_pcm_hw.c`: `ssc_engine_stop()` is not called
-      under `engine_lock`, so the plain two-CPU deadlock is not there.
-    - **H2, the box alive but its network dead.** The watchdog not firing fits
-      this (procd would still kick it) and fits a dead CPU only if the
-      watchdog cannot reset this board.
-    - Discriminator for both: **W-1**, a deliberate watchdog test with the
-      service stopped and parked (`ubus call system watchdog '{"stop":true}'`,
-      expect a reboot by itself within about 60 s). It reboots, so the
-      maintainer should be at the box in case it does not. If it reboots: the
-      watchdog works, so procd was alive in the hang (H2). If not: H1 with a
-      useless watchdog stays open.
-    - Next series (maintainer present): the same cycles with `ping -D`
-      running on the PC and a step marker in the module's stop (a printk
-      before and after each of `hrtimer_cancel`, `ssc_dma_stop`, the register
-      write), so the last line names the step.
+    The signature is U8e's (network gone for 6+ minutes, no reboot, watchdog
+    silent), so the U8e analysis above stands: the kernel and procd ran on
+    while the Ethernet path was gone, not memory. What is new: U8e's first
+    suspect, **a stop while the SSC slot search runs, is reproduced** (1 of 4
+    quick-start stops; one hang is not a rate), and **the cell-to-base path is
+    not needed** (no cell mode here). U8f-3 stays as a check, no longer as the
+    only explanation.
+
+    Still open:
+    - **What takes the network down.** The kernel's line from `ssc_engine_stop()`
+      (after `hrtimer_cancel()`, before `ssc_dma_stop()`) is missing; the box's
+      own log cannot say more, since a log line leaves over the interface that
+      is going. Paper check of `kmod-lantiq-ssc-pcm/src/ssc_pcm_hw.c`:
+      `ssc_engine_stop()` is not called under `engine_lock`, so there is no
+      plain two-CPU deadlock between the stop and the ring timers. Candidate
+      to look at next: `ssc_dma_stop()` closing the two `ltq_dma` channels and
+      freeing the rings two frame times later, on the DMA controller the
+      Ethernet driver also uses.
+    - **The U8e conclusion assumes the hardware watchdog works on this
+      board; that was never shown.** W-1 shows it: service stopped and parked,
+      `ubus call system watchdog '{"stop":true}'`, expect a reboot by itself
+      within about 60 s. If it does not reboot, the box needs a power cycle,
+      so the maintainer should be there.
+    - **Next series (maintainer present):** the same quick-start stops with
+      `ping -D` running on the PC (does ping stop before or after the last
+      log line?) and a step marker in the module's stop (`dev_info` before and
+      after `hrtimer_cancel`, the DMA register write, `ltq_dma_close` and
+      `ssc_dma_free`), so the last line that arrives names the step.
     - The box was parked after the hang (stop from radio up, marker present),
       log forwarding to the PC left on.
 
