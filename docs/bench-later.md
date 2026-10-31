@@ -402,6 +402,15 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
     it. A run with the maintainer watching the 7412's LEDs, and the evidence
     file from the next hang, are the next steps.
 
+    **T-A on the 7412 (06.88, 14:23-14:38).** Same method (keys of the two
+    stores swapped through slot 2, `keycheckms=N`, two repeats each way, no
+    void): N = 0: no answer, 4 of 4; N = 20 to 200, 1000, 1500: MATCHES, 24 of
+    24; N = 400 and 800: MATCHES 6 of 8, no answer 2 of 8; never a MISMATCH. A
+    key write is effective within 20 ms on 06.88 as on 08.25; a read-back may
+    occasionally get no answer and should be repeated once. The 7412 runs the
+    keycheck daemon now (`/root/dect-stubd.pre-keycheck-20261031` is the
+    packaged one) and is stopped.
+
     **T-A, key-write delay (lab 7520, 08.25, chip warm).** Method after two
     void designs (identical rewrites; a store glob the init rejected): two
     different handsets' keys swapped through slot 2 (`subslot=2`), the
