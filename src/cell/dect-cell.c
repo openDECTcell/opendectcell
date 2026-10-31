@@ -1858,6 +1858,29 @@ static int identity_apply(struct link *l, const uint8_t rfpi[5], int *restart)
 }
 
 /*
+ * The way back (CONFIG_SET tag 6 empty): the controller no longer sets this
+ * cell's identity. With a file there the chip was loaded with it, so the file
+ * goes and the service restarts, which uploads the factory RFPI again.
+ */
+static void identity_clear(int *restart)
+{
+	unsigned char cur[16];
+	char p[256];
+
+	if (file_get("rfpi", cur, sizeof(cur)) < 0) {
+		logf_("identity: nothing set, nothing to undo");
+		return;
+	}
+	path_of(p, sizeof(p), "rfpi");
+	(void)unlink(p);
+	path_of(p, sizeof(p), "rfpi.tried");
+	(void)unlink(p);
+	logf_("identity: the controller's RFPI is dropped: the chip is "
+	      "reloaded with the factory one");
+	*restart = 1;
+}
+
+/*
  * Restart the service from outside it: the restart stops this process too,
  * so it runs in a session of its own and waits a second for the ack to leave.
  */
@@ -1991,6 +2014,10 @@ static void from_controller(struct link *l, const struct dect_cell_frame *f,
 		if (r && rn == 5u && identity_apply(l, r, &restart) == 0 &&
 		    f->len == 8u)
 			status = 0;
+		else if (r && rn == 0u && f->len == 3u) {
+			identity_clear(&restart);
+			status = 0;
+		}
 		dect_cell_tlv_init(&t, b, sizeof(b));
 		dect_cell_tlv_u16(&t, 1, status);
 		ctl_send(l, DECT_CELL_CONFIG_ACK, f->corr, b, t.len, now);

@@ -34,7 +34,8 @@ and is then put through cases from the security review of 2026-10-30
   9. identity (CONFIG_SET tag 6): the chip's RFPI from dect-stubd's STATUS
      goes into HELLO (tag 17); a new RFPI is stored for the init script and
      restarts the service once, a repeat does not loop, the chip's own RFPI
-     only stores, a class that is not A or B is refused (status 1).
+     only stores, a class that is not A or B is refused (status 1), and an
+     empty tag 6 drops the identity and restarts once more.
 
     python3 -I tests/test_cell_link.py build/dect-cell-test
 """
@@ -544,6 +545,7 @@ def identity(exe, ctl, d, env):
     chip = bytes.fromhex("0102030405")
     other = bytes.fromhex("10f4201101")          # class B, RPN 1
     class_c = bytes.fromhex("20f4201101")        # ARC 010: refused
+    revert = b""                                 # tag 6 empty: the way back
     Stubd(sock, rfpi=chip)
     marker = os.path.join(d, "restarted")
     fake = os.path.join(d, "restart.sh")
@@ -555,7 +557,7 @@ def identity(exe, ctl, d, env):
     def script(s, corr):
         reader(s, acks)
         s.sendall(hello_ack(corr, 1))
-        for want in (other, other, chip, class_c):
+        for want in (other, other, chip, class_c, revert):
             time.sleep(1.5)
             s.sendall(tp.frame(CONFIG_SET, 0x40 + len(acks),
                                tp.tlv([(6, want)])))
@@ -571,18 +573,20 @@ def identity(exe, ctl, d, env):
                                          0, 10), "identity: connected")
     hello = tp.parse_tlv(ctl.hello_body)
     check(hello.get(17) == chip, "HELLO tag 17 is the RFPI the chip reports")
-    check(wait_for(lambda: len([a for a in acks if a[0] == CONFIG_ACK]) >= 4,
-                   14), "four CONFIG_ACKs")
+    check(wait_for(lambda: len([a for a in acks if a[0] == CONFIG_ACK]) >= 5,
+                   16), "five CONFIG_ACKs")
     st = [tp.parse_tlv(b).get(1) for t, c, b in acks if t == CONFIG_ACK]
-    check(st == [b"\0\0", b"\0\1", b"\0\0", b"\0\1"],
+    check(st == [b"\0\0", b"\0\1", b"\0\0", b"\0\1", b"\0\0"],
           "ack status: new identity ok, repeat refused (no loop), the chip's "
-          "own ok, class C refused: %r" % st)
+          "own ok, class C refused, the way back ok: %r" % st)
     f = os.path.join(cell, "rfpi")
-    check(os.path.exists(f) and open(f).read() == chip.hex(),
-          "the file the init script reads holds the last accepted RFPI")
-    time.sleep(2.5)         # the restart waits a second before it runs
-    check(os.path.exists(marker) and open(marker).read() == "restart\n",
-          "the service was restarted exactly once")
+    check(not os.path.exists(f) and
+          not os.path.exists(os.path.join(cell, "rfpi.tried")),
+          "the way back removes the files the init script reads")
+    time.sleep(3.5)         # the restart waits a second before it runs
+    check(os.path.exists(marker) and open(marker).read() == "restart\n" * 2,
+          "the service was restarted for the new identity and for the way "
+          "back, not for the repeat or the chip's own")
     p.send_signal(signal.SIGTERM)
     try:
         p.wait(timeout=5)
