@@ -220,3 +220,20 @@ key the chip does not hold: the call key reaches the chip with `0x0208`, and
 the chip pages by the TPUI. Open: the same with a read-back of the table
 (08.25), and a handset that has never had a slot at all (here the A540 still
 has its slot and identity entry; only its key is missing).
+
+**Block E / B, run 2: lab 7520 on 08.25, 2026-10-31 18:55-19:05 (A540, warm chip, key verified absent).** Chip
+reloaded, then two more daemon runs until the read-back answered (the first
+two did not: cold chip). Slot audit: `1=OURS 2=- 3=- 4=- 5=- 6=-`: the
+C430A's key in slot 1, nothing for the A540 (slot 3) or AS690H (slot 2);
+`holdback=3600000` not over. **Block B answered on 08.25: with one other key
+in the table and a warm chip, the A540 connected on its own within about 20
+s of the daemon coming up, with no key in the chip** (world A, as on 06.88
+and 07.56; the earlier "08.25 silent" runs were an empty table on a cold
+chip). **Block E passed on 08.25:** authentication, call key `0x0208`,
+CIPHER-REQUEST and "the chip reports link N ciphered (`0x0209`)" on three
+links; an outgoing call (audio both ways, timer, number shown) and an
+incoming one (ringing DECT 3, audio both ways) per the maintainer.
+**Caveat on the incoming call:** the A540's TPUI is `11 03`, the form the chip
+treats as slot 3 (A-0133 §1 item 4), so this page went by that shortcut, not
+by an entry for the handset. A handset with no slot and a pool TPUI of 7 or
+more has still not been paged; that is the remaining test for the host cache.

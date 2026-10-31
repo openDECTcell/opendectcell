@@ -3453,8 +3453,8 @@ static int park_check_done(struct stubd *s, uint64_t now)
 
 /*
  * -a memdump: print the bytes of a reply whose range lies outside the
- * subscription tables (key table, identity block and masks, 0x9518..0x95EF),
- * so a probe of chip RAM can be read without -p. -p also shows box identity
+ * subscription tables (key table and identity block, 0x9518..0x95E3; the
+ * masks after them are readable), so a probe of chip RAM can be read without -p. -p also shows box identity
  * data in other mails; this line shows only what the probe asked for.
  */
 static void mem_probe_log(struct stubd *s, const struct dect_mail *m,
@@ -3464,7 +3464,7 @@ static void mem_probe_log(struct stubd *s, const struct dect_mail *m,
 
 	if (!s->audio.n_memdump || !n)
 		return;
-	if (addr < 0x95F0u && addr + n > SUB_UAK_BASE)
+	if (addr < 0x95E4u && addr + n > SUB_UAK_BASE)
 		return;
 	printf("[%5llu] mem: probe 0x%05x len %u:",
 	       (unsigned long long)(mono_ms() - g_start), addr, n);
