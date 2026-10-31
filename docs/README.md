@@ -34,6 +34,7 @@ Where to start depends on what you want:
 | [diagnostics.md](diagnostics.md) | What the DECT Monitor shows, and where each value comes from |
 | [capacity.md](capacity.md) | How many handsets and calls one box carries, and how to go beyond |
 | [more-than-six.md](more-than-six.md) | Design and test plan for more than six stand-by handsets in one base (chip slots as a cache), 2026-10-31 |
+| [bench-2026-11-01.md](bench-2026-11-01.md) | Run sheet for the bench day 2026-11-01: the open tests in 14 blocks, box state, restore commands |
 | [multicell-experiments.md](multicell-experiments.md) | Experiments towards several boxes as one DECT system |
 | [notes-for-the-controller.md](notes-for-the-controller.md) | Interface notes for the separate multi-cell controller project |
 | [hosting-dect-base.md](hosting-dect-base.md) | For a second host of the stack (the controller): the chip mails, the callbacks, the per-cell chip settings, testing against the golden traces |
