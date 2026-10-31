@@ -481,6 +481,35 @@ int main(void)
 		b.cfg.tpui_offset = 0;
 		dect_base_tpui(&b, 1, tpui);
 		CHECK_EQ(tpui[2], 0x02);
+		/* a record's own TPUI wins over the slot and the offset (API 141) */
+		{
+			const uint8_t own[3] = { 0x00, 0x11, 0x9a };
+			const unsigned cur = b.cur;
+			uint8_t keep[3];
+
+			b.cfg.tpui_offset = 0x40;
+			if (cur == 1u) {
+				memcpy(keep, b.rec.tpui, 3);
+				memcpy(b.rec.tpui, own, 3);
+			} else {
+				memcpy(keep, b.hs[1].tpui, 3);
+				memcpy(b.hs[1].tpui, own, 3);
+			}
+			dect_base_tpui(&b, 1, tpui);
+			CHECK_EQ(tpui[1], 0x11);
+			CHECK_EQ(tpui[2], 0x9a);
+			dect_base_tpui(&b, 0, tpui);		/* no TPUI of its own */
+			CHECK_EQ(tpui[2], 0x41);
+			if (cur == 1u)
+				memcpy(b.rec.tpui, keep, 3);
+			else
+				memcpy(b.hs[1].tpui, keep, 3);
+			dect_base_tpui(&b, 1, tpui);
+			CHECK_EQ(tpui[2], 0x42);
+			b.cfg.tpui_offset = 0;
+		}
+		dect_base_tpui(&b, 1, tpui);			/* back to slot 2 */
+		CHECK_EQ(tpui[2], 0x02);
 		b.ops = &ops;
 		n_sent = 0;
 		dect_base_page(&b, 0x2C, tpui);
@@ -560,6 +589,8 @@ int main(void)
 		CHECK_EQ(b.rec.port_id_len, 7u);
 		CHECK_EQ(installs, 1u);
 		CHECK_EQ(saved_i, b.cur);
+		CHECK_EQ(b.rec.tpui[1], 0x11);			/* the TPUI it was assigned */
+		CHECK(b.rec.tpui[2] != 0);
 		CHECK_EQ(b.main_link.persisted, 1);
 		CHECK_EQ(dect_base_main_registered(&b), 0);	/* once */
 		CHECK_EQ(installs, 1u);

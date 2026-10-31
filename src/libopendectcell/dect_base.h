@@ -57,6 +57,15 @@ struct dect_hs_rec {
 	 * it to the user whose window issued that PIN. API 139.
 	 */
 	unsigned reg_pin1;
+	/*
+	 * The TPUI this handset holds: {byte 0, 0x11, byte 2}, all zero = derive
+	 * it from the slot (and cfg.tpui_offset). A host that keeps a pool sets
+	 * it on a record before the handset locates (a free record taken by an
+	 * enrolment too); a registration records the TPUI it assigned here.
+	 * A handset takes a new TPUI only at its next location registration, so
+	 * do not change one that is in use (bench 2026-10-31, T-C). API 141.
+	 */
+	uint8_t  tpui[3];
 };
 
 /*

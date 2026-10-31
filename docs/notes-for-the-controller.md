@@ -1040,3 +1040,23 @@ Bench results of the same day (T-B, T-C, registration during a call) are in
 the maintainers' notes and §0m of your repo. **The pin of the submodule** needs
 `140` in `cdect.h` when you take it.
 
+## API 141: the TPUI per record `[2026-10-31, evening]`
+
+`dect_hs_rec.tpui[3]` (openDECTcell `docs/api-versions.md` #141) is the pool's
+hook. Set it on a record before the handset locates (a free record an
+enrolment is going to take too) and the library uses it in the location
+accept and in every page and link for that record; all zero keeps the old
+slot-derived value. A registration fills it with what it assigned, so the
+record `save()` hands you carries the TPUI the handset holds: **keep it and
+give it back unchanged when you load the record again**. A handset takes a
+new TPUI only at its next location registration, so never change one that is
+in use (a page by a TPUI it does not hold is silent). Bench-tested on air
+for the form `{00, 11, N}` only (N = slot + 0x40, 06.88, two handsets);
+another high byte is untested. `cdect.h` needs `141` when you take it.
+
+**From the chip room (A-0133, 08.25 STUB, static reading):** the chip has a
+shortcut for TPUIs `11 nn` with nn from 1 to 6 (treated as slot nn); values
+above 6 take the normal path. Keep pool values at N of 7 or more, as the
+bench did, until it is shown otherwise. That is also why your pool must not
+hand out `11 01`..`11 06`.
+

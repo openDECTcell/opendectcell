@@ -963,3 +963,16 @@ not the first in list order. In `dect-stubd` the read-back and slot audit
 wait 50 ms on every build (they waited 1000 ms on 06.88 and 0 elsewhere):
 a key write is effective within 20 ms (bench T-A on 08.25 and 06.88).
 
+**141.** dect_base.h, 2026-10-31: `dect_hs_rec` gains `tpui[3]`, the TPUI the
+handset holds (`{byte 0, 0x11, byte 2}`; all zero = derive it from the slot
+and `cfg.tpui_offset`, as before). It is applied at every site that builds
+an MM or a page from a slot (`tpui_cfg_for_slot()`): the location accept,
+the pages, holds, the live links. A host with a TPUI pool sets it on a
+record before the handset locates, a free record taken by an enrolment
+included; a registration records the TPUI it assigned in `b->rec.tpui`, so
+`save()` sees it. `dect-stubd` does not store it (its record file has no
+field): after a restart a stored handset's TPUI is derived again, which
+gives the same value unless `tpuioffset=` changed. A handset takes a new
+TPUI only at its next location registration (bench T-C, 2026-10-31): do not
+change one that is in use. Tested on air for the form `{00, 11, N}` only.
+

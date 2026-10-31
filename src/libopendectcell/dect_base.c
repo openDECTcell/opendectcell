@@ -508,6 +508,7 @@ int dect_base_main_registered(struct dect_base *b)
 	memcpy(b->rec.uak, mm->uak, DECT_MM_UAK_LEN);
 	b->rec.uak_valid = 1;
 	b->rec.reg_pin1 = mm->reg_pin >= 0 ? (unsigned)mm->reg_pin + 1u : 0u;
+	dect_mm_tpui(mm, b->rec.tpui);	/* the TPUI its location accept assigned */
 	/*
 	 * The identity gate for every later link, as a stored record arms it:
 	 * a {LOCATE-REQUEST} is rejected when nothing is armed, and a handset
@@ -782,7 +783,21 @@ void dect_base_call_event(struct dect_base *b, const struct dect_base_call *c,
 static void tpui_cfg_for_slot(const struct dect_base *b, unsigned slot,
 			      uint8_t tpui[3])
 {
+	unsigned i;
+
 	memset(tpui, 0, 3);
+	/* the record in this slot may carry its own TPUI (API 141) */
+	for (i = 0; i < b->n_hs && i < DECT_BASE_HS_MAX; i++) {
+		const struct dect_hs_rec *r = i == b->cur ? &b->rec : &b->hs[i];
+
+		if (dect_base_slot(b, i) != slot)
+			continue;
+		if (r->tpui[0] || r->tpui[1] || r->tpui[2]) {
+			memcpy(tpui, r->tpui, 3);
+			return;
+		}
+		break;
+	}
 	if (!b->cfg.tpui_offset)
 		return;
 	tpui[1] = 0x11u;
