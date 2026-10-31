@@ -20,7 +20,8 @@ decides it:
 |---|---|
 | The chip admits a handset it holds no key for; our host's identity gates decide who may open a link. Measured on 07.56: A540 and AS690H located and connected with the chip's table empty | `multicell-experiments.md` M1, 2026-10-25 |
 | A keyless handset is paged and rings (it answers the page with a location registration first) | M2', same day |
-| **Unmeasured:** whether a call with ciphering works when the key is written just before it, and how long the chip needs to make a written key effective | below, T-A and T-C |
+| **Measured 2026-10-31 (08.25, warm chip):** a changed key written with `0x020A` reads back correctly 20 ms later (36 of 36 from 20 to 800 ms); a read in the same instant gets no answer. A slot clear (`0x0247` op 0) leaves the key bytes in the table | §4b |
+| **Unmeasured:** whether a call with ciphering works when the key is written just before it; whether a cleared slot still admits its handset | T-C, T-D, Q-0073 |
 | **Open contradiction:** on 08.25 clearing the other slots stopped a foreign handset dead (`vF427`, 2026-10-23); on 07.56 it did not. Every claim here is 07.56 until T-B on 08.25 | M1 |
 
 A stand-by handset needs nothing from the chip: it is locked to the RFPI
@@ -107,6 +108,14 @@ restart does not make it; a power-cycle of the handset, or `locvalid=1`,
 does). Revert by removing the option and locating once more. Unit test:
 `tests/test_base.c` (`dect_base_tpui`). Not an API bump: a test knob in the
 config, the TPUI per record for the controller's pool is the later change.
+
+## 4b. Results, 2026-10-31 (lab 7520, 08.25 chip, unattended)
+
+| Test | Result |
+|---|---|
+| **T-A** key-write delay | Two different handsets' keys swapped through slot 2 (`subslot=2`, stores `as*` and `c*` alternately, chip warm), read back after `keycheckms=` N, 3 repeats each way: **N = 0: no answer, 6 of 6. N = 20, 50, 100, 200, 400, 800: MATCHES, 36 of 36.** So a key write is effective within about 20 ms; the host can wait 50 ms and not the 1000 ms the 7412's 06.88 needs. Raw: bench-later U8f-1d. *Earlier sweeps of the same day were void:* they rewrote identical content (the read-back matches whatever the delay) or the init rejected the store glob |
+| right after a chip upload | the first daemon run reads back nothing; from the next run on it answers (warm-up, a few seconds to a minute; not measured further) |
+| **slot clear** | after `0x0247 {slot, 0, 0}` the slot's 17 bytes still read as the old key, 1 s and 5 s later. The audit calls that "held" and says *the clear did not take*. On 08.25 a clear did stop a foreign handset in 2026-10-23 (`vF427`), so it likely resets a flag elsewhere and leaves the bytes: the audit's "held" would then be a false alarm. **Open: Q-0073.** For the cache: evict by overwriting with the new key, not by clearing, until the room says what the clear does |
 
 ## 5. Build order
 
