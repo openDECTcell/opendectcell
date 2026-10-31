@@ -22,7 +22,7 @@ or here for the tests written here.
 - **At the end:** stop the service, check `cat /var/run/opendectcell/parked`
   says `verified` (or the hold message in the log).
 
-## 0. Bench day 2026-11-01 results (maintainer at the bench)
+## 0. Bench day results, 2026-10-31 afternoon (the bench day of 2026-11-01 moved up; maintainer at the bench)
 
 | test | result |
 |---|---|
