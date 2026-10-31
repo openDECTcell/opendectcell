@@ -22,6 +22,16 @@ or here for the tests written here.
 - **At the end:** stop the service, check `cat /var/run/opendectcell/parked`
   says `verified` (or the hold message in the log).
 
+## 0. Bench day 2026-11-01 results (maintainer at the bench)
+
+| test | result |
+|---|---|
+| V2b (lab 7520, 08.25) | **pass**: after a restart all three handsets located (`connection up`, `sent the date and time`), no LOCATE-REJECT |
+| T-B (08.25 and 06.88) | **08.25: world B** (the chip needs the key, two runs, with the mask at `00 00` and `00 07`, control connects); **06.88: world A** (a keyless handset is admitted, AS690H fully located). `more-than-six.md` §4b |
+| T-C (06.88) | **pass**, the form `{00,11,N}`: LOCATE-ACCEPT with `0x1143`, ASSIGN-ACK, page answered, ciphered call. A handset takes a new TPUI only at its next location registration. `more-than-six.md` §4b |
+| 4b, registration open during a call (7412, 06.88, AS690H) | **pass**: window opened 15:39:48 (`0x022B`) and closed 15:41:48 (`0x022C`, window elapsed) during one ciphered call; no click or dropout heard at either, the call stayed up until the maintainer hung up; starvation 0.00 %, radio error counters 0 at the two moments (a few single CRC errors 36-60 s after the opening). One handset, no registration attempt during the call |
+| fresh registration (N2c/N2d/card 37, partly) | the three handsets registered on the 7520 and the AS690H on the 7412 (fresh stores): saved, keys landed, located after restarts, a ring-in call ciphered on the 7412. Two defects found: a new handset takes the first free record in list order, not the lowest slot (the A540 landed in slot 3 on the 7520); re-registering a handset the base already holds, without a deregistration, is not saved (C430A on the 7412). Also: after a registration on 08.25 the key read-back runs at once and reports a false `READ-BACK MISMATCH` (the default `keycheckms` is 0; 50 ms is enough) |
+
 ## 1. New since 2026-10-30 afternoon (desk work)
 
 Added as the tasks land; each with the commit it needs.
