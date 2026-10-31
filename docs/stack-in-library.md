@@ -547,3 +547,28 @@ loads a record in between). 35 unit tests; the fifteen traces unchanged
 What dect-stubd still holds of the stack: the main call's audio path
 (`call_up()`, `call_down()`), the side links' lanes, the controller-fetch
 experiment (M4), and the control verbs that are not the bridge's (S5c).
+
+## S7 (decided 2026-10-31): the host's steps move into the library
+
+The maintainer's objection to S6c's boundary: the controller's `host.c` (773
+lines, opendectcell-controller `internal/dect/cdect`) is a copy of `dect-stubd`'s
+glue (`send_subscription()`, the audio bind and lanes, `pump_lapc()`,
+`handle_reg_mail()`, `base_registered()`, `base_call_up()`, `side_route()`,
+`side_call_tick()`, `ctl_command()`); a change in the library or in the
+daemon would have to be carried into the controller by hand. The glue goes
+into `libopendectcell` behind the same I/O-free interface, so `dect-stubd` and the
+controller are two thin hosts of one thing.
+
+| Stage | What moves | Check |
+|---|---|---|
+| S7.1 | `install()`: which records go into the chip and when (`send_subscription()`, `clear_foreign_slots()`, the audit order) | the 15 traces unchanged; `test_base` |
+| S7.2 | the audio bind: `call_up()`/`call_down()`, the 500 ms fallback, the lanes and the side calls' channels | traces; the golden audio traces |
+| S7.3 | `pump_lapc()` (a frame leaves only when the transport has room), the connection-up arbitration of `handle_reg_mail()`, `base_registered()` and the register window, `side_route()`, `side_call_tick()` | traces |
+| S7.4 | `ctl_command()`'s verbs and the hello and `hs` lines as library calls; `dect-stubd` shrinks to its I/O (device, sockets, lab options) | traces; the bench cards on both boxes |
+
+Each stage is an API bump with a note in `notes-for-the-controller.md`; the
+controller replaces its copy of a step with the library call when the note
+lands and keeps its own trace replay as the check. Work on a branch; merge
+to `main` only after a bench pass on the 7520 and the 7412 (the daemon is
+what the maintainer's boxes run). Not started.
+
