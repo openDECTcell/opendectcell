@@ -6373,6 +6373,10 @@ static const char *stub_version(const struct stubd *s, char out[8])
 
 	if (s->stub_build == STUB_UNKNOWN)
 		return "unknown";
+	/* the 08.25 default file name carries no version: the controller needs
+	 * "08.25" to know the key table's address (found 2026-11-01 on the 7520) */
+	if (s->stub_build == STUB_0825)
+		return "08.25";
 	for (p = s->stub_name; *p; p++)
 		if ((p[0] == '-' || p[0] == '_') &&
 		    isdigit((unsigned char)p[1]) &&

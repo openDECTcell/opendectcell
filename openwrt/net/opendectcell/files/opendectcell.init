@@ -192,6 +192,18 @@ load_chip() {
 	}
 	# dect-stubd reads this to know which build's RAM addresses apply.
 	echo "$second" > /var/run/opendectcell/stub.second
+	chip_fresh=$second
+}
+
+# The first daemon run on a chip just uploaded gets no answer to memory reads
+# on 08.25 (bench 2026-10-31, again with the cell's audit on 2026-11-01), so a
+# cell could not check its key table. One short run that only parks the radio
+# gets the chip past it; the real daemon is then the second run.
+warm_chip() {
+	log "chip freshly uploaded: one short run to warm it"
+	# shellcheck disable=SC2086
+	$PROG $PCM_ARGS -M "0x22:0x02:0x022c:01" -M "0x22:0x02:0x015b:00" -t 6 \
+		>/tmp/dect-warm.log 2>&1
 }
 
 # The chip's reset line in /sys/class/gpio: the board profile's GPIO chip
@@ -610,9 +622,11 @@ start_service() {
 	# admit them. Booting the chip afresh empties it (L8); the cell's host
 	# stack then writes one dummy key, so the radio has a key to run on.
 	[ "$role" = cell ] && rm -f /var/run/opendectcell/stub.second
+	chip_fresh=""
 	load_chip || return 1
 	rm -f /var/run/opendectcell/parked
 	if [ "$role" = cell ]; then
+		[ "$chip_fresh" = dectfw_secondlevel_441.hex ] && warm_chip
 		start_cell
 		return
 	fi
