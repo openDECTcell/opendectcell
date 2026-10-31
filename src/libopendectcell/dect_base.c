@@ -4328,6 +4328,52 @@ int dect_base_free_record(const struct dect_base *b)
 	return best;
 }
 
+/*
+ * A handset that a bridged call pages on a side ring answered on the MAIN
+ * link, because the main link was the one that was free: the main ring
+ * machine is still waiting for another handset's answer and would reject
+ * this one ("identity differs"), so a handset that does not answer kept the
+ * others from ringing (7412, 2026-10-31). The answering handset's call takes
+ * the main ring; the call that held it goes on paging its handset as a side
+ * ring. Returns 1 when the answer belongs to a side ring and the swap was made.
+ */
+static int main_ring_swap(struct dect_base *b, const struct dect_link_ind *ind,
+			  uint64_t now)
+{
+	struct dect_base_call *held = NULL, *c = NULL;
+	unsigned i, old = b->ring.hs;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == -1)
+			held = &b->calls[i];
+	if (!held)
+		return 0;
+	for (i = 0; i < DECT_BASE_CALLS; i++) {
+		struct dect_base_call *k = &b->calls[i];
+
+		if (k->id && k->party == DECT_BASE_PARTY_PAGING &&
+		    dect_base_page_adopt(b, -1, ind, k->target,
+					 " (external call, answered on the "
+					 "main link)")) {
+			c = k;
+			break;
+		}
+	}
+	if (!c)
+		return 0;
+	dect_base_log(b, "ring: DECT %u answered the page of call %u on the "
+		      "main link -- it takes the main ring, call %u keeps "
+		      "paging DECT %u as a side ring",
+		      dect_base_slot(b, (unsigned)c->target), c->id, held->id,
+		      dect_base_slot(b, old));
+	dect_base_side_ring_start(b, held, old, now);
+	b->clip = c->clip;
+	dect_base_ring_main(b, c, (unsigned)c->target);
+	b->ring.state = DECT_BASE_RING_WAIT_PAGE_RESP;
+	b->ring.pages = 1;
+	return 1;
+}
+
 void dect_base_main_page_response(struct dect_base *b,
 				  struct dect_link_ind *ind, uint64_t now)
 {
@@ -4346,6 +4392,13 @@ void dect_base_main_page_response(struct dect_base *b,
 		if (b->ic.st == DECT_BASE_IC_SETUP)
 			ind->page_response = 0;
 	}
+
+	/* the answer of a handset a side ring pages: hand over the main ring */
+	if (ind->page_response && b->ring.state == DECT_BASE_RING_WAIT_PAGE_RESP &&
+	    tgt_len && (ind->page_id_len != tgt_len ||
+			memcmp(ind->page_id, tgt, tgt_len) != 0) &&
+	    main_ring_swap(b, ind, now))
+		tgt = dect_base_ring_port_id(b, &tgt_len);
 
 	/*
 	 * The release goes out only once the reject is in LAPC ahead of it;

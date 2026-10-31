@@ -297,3 +297,24 @@ HEAD (`dect_base.c`, `dect_base_main_page_response`): it handles an internal
 call's target and the deregistration and time pages, but not the target of a
 bridge side ring. Effect on a cell: one handset that is out of range or
 switched off can stop other handsets ringing for the same external call.
+
+**The room's A-0141 (2026-10-31 night), on Q-0077: security and the number of calls.**
+- *Cipher:* none of the three STUB builds contains AES tables; the chip's only
+  cipher is the standard DECT cipher with a 64-bit key (the `0x0208` key
+  field). `0x0208` has no cipher-type byte. So no DSC2 on any build. A handset
+  that insists on it cannot be served that way.
+- *Authentication:* entirely on the host (A-0139), so DSAA2 would be a host
+  software change (AES-128). Its 128-bit key does not fit the chip's 64-bit
+  cipher: DSAA2 authentication with the standard cipher on the air is the only
+  combination the chip supports; whether the Gigasets accept it is a
+  negotiation question for our NWK code.
+- *Host-side speech ciphering:* not possible. The cipher is hardware in the
+  chip's radio layer, and the speech reaches the host already deciphered and
+  decoded (PCM). Stronger protection of the speech means SRTP on the VoIP leg.
+- *Calls at once:* the limit is not "three" in general. It is the number of
+  DSP channel chains in the build's microcode: **three on 07.56, five on
+  08.25** (06.88, the 7412, not counted yet; at least three is observed).
+  Our main plus two side channels are three PCM lanes we allocate, which
+  coincides with 07.56. **Five speech calls on 08.25 needs host work only**: PCM
+  audio lanes 4 and 5, a bearer each, and `0x0230`/`0x0242` driven for channels
+  4 and 5 as for 1 to 3. Six is beyond every build. Not tried.

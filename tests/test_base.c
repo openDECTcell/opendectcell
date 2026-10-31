@@ -991,6 +991,55 @@ int main(void)
 			 0);
 	}
 
+	/*
+	 * A handset a side ring pages answers on the main link while the main
+	 * ring waits for another handset that never answers (7412, 2026-10-31):
+	 * the answer must not be rejected, the answering handset takes the main
+	 * ring and the other call keeps paging as a side ring.
+	 */
+	{
+		struct dect_base_call *c1, *c2;
+		struct dect_link_ind ind;
+		static const uint8_t id1[5] = { 0x01, 0x11, 0x11, 0x00, 0x01 };
+		static const uint8_t id2[5] = { 0x01, 0x22, 0x22, 0x00, 0x02 };
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 2;
+		b.hs[0].slot = 1;
+		b.hs[1].slot = 3;
+		b.cur = 0;
+		memcpy(b.main_link.link.mm.held[0].id, id1, sizeof(id1));
+		b.main_link.link.mm.held[0].id_len = sizeof(id1);
+		b.main_link.link.mm.held[0].tag = 0;
+		memcpy(b.main_link.link.mm.held[1].id, id2, sizeof(id2));
+		b.main_link.link.mm.held[1].id_len = sizeof(id2);
+		b.main_link.link.mm.held[1].tag = 1;
+		b.main_link.link.mm.n_held = 2;
+		memcpy(b.rec.cc_port_id, id1, sizeof(id1));
+		b.rec.cc_port_id_len = sizeof(id1);
+		memcpy(b.hs[1].cc_port_id, id2, sizeof(id2));
+		b.hs[1].cc_port_id_len = sizeof(id2);
+		c1 = dect_base_call_new(&b);
+		c1->id = 9;
+		dect_base_ring_main(&b, c1, 0);
+		b.ring.state = DECT_BASE_RING_WAIT_PAGE_RESP;
+		c2 = dect_base_call_new(&b);
+		c2->id = 10;
+		dect_base_side_ring_start(&b, c2, 1, 100);
+		memset(&ind, 0, sizeof(ind));
+		ind.page_response = 1;
+		memcpy(ind.page_id, id2, sizeof(id2));
+		ind.page_id_len = sizeof(id2);
+		n_sent = 0;
+		dect_base_main_page_response(&b, &ind, 200);
+		CHECK_EQ(c2->party, -1);		/* it took the main ring */
+		CHECK_EQ(c1->party, DECT_BASE_PARTY_PAGING);
+		CHECK_EQ(c1->target, 0);
+		CHECK_EQ(b.ring.hs, 1u);
+		CHECK_EQ(b.cur, 1u);
+	}
+
 	/* parallel calls (S3s) */
 	{
 		dect_base_init(&b);
