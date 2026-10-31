@@ -1101,3 +1101,9 @@ chip needs no key for it; `install()` (host.c) writes only records numbered 1 to
 the dummy key keeps the table non-empty when there is none. Limits that remain: the
 names list holds eight handsets and the call lists seven terminal ids, so a record
 numbered 8 or more shows in neither. `cdect.h` needs `144` when you take it.
+
+## API 145: thirty-two records per base `[2026-11-01]`
+
+`DECT_HS_MAX` is 32 (openDECTcell `docs/api-versions.md` #145): record numbers 1 to 32, the
+chip's slots still 1 to 6. A stack is 63 kB instead of 55 kB. Not a bit per record number
+in an `unsigned`: 32 does not fit. `cdect.h` needs `145` when you take it.

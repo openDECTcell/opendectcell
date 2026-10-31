@@ -1064,7 +1064,7 @@ int main(void)
 		b.cur = 11;
 		b.rec.slot = 12;
 		CHECK_EQ(dect_base_slot(&b, 11), 12u);
-		CHECK_EQ(dect_base_slot(&b, 15), (unsigned)DECT_BASE_HS_MAX);
+		CHECK_EQ(dect_base_slot(&b, DECT_BASE_HS_MAX - 1u), (unsigned)DECT_BASE_HS_MAX);
 		for (k = 0; k < DECT_BASE_HS_MAX; k++) {
 			uint8_t id[5] = { 0x01, 0x11, 0x11, 0x00, (uint8_t)k };
 

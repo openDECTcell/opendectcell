@@ -73,7 +73,7 @@ enum dect_mm_registration {
  * keyless, paged by the record's own TPUI and called with a key the host
  * derives (openDECTcell docs/more-than-six.md §6).
  */
-#define DECT_HS_MAX		16u
+#define DECT_HS_MAX		32u
 
 #define DECT_MM_DCK_LEN		8u	/* derived cipher key (64-bit) */
 

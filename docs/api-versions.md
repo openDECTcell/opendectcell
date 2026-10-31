@@ -1011,3 +1011,13 @@ audit leave it alone. Not widened: the Internal Names List (8 entries, the first
 eight handsets) and the call lists (terminal ids 1 to 7, a persisted format), so a
 record numbered 8 or more has neither. Layout change of `struct dect_base`; `dect-stubd`
 stays at six stores.
+
+**145.** dect_mm.h, 2026-11-01: **`DECT_HS_MAX` is 32** (was 16). The maintainer's call:
+the table is host memory, and a `struct dect_base` grows from 55 336 to 62 856
+octets (measured, x86-64). Everything that follows `DECT_HS_MAX` follows (API 144):
+the record numbers 1 to 32, `hs=N` in the bridge verbs, `DECT_BASE_HS_MAX`, the held
+identities of a link. The chip slots stay 1 to 6, the Internal Names List stays at 8
+entries and the call lists at terminal ids 1 to 7, so a record numbered 8 or more has
+neither. Layout change of `struct dect_base` and `struct dect_mm`; `dect-stubd` stays
+at six stores. A host that keeps a bit per record in an `unsigned` must not shift by
+the record number (32 is out of range); `hold_mask` is per record index, 0 to 31.
