@@ -75,7 +75,7 @@ struct dect_hs_rec {
  * current. The host loads the table from its store at start and saves the
  * current record when the stack says it changed.
  */
-#define DECT_BASE_HS_MAX	DECT_MM_MAX_SLOT
+#define DECT_BASE_HS_MAX	DECT_HS_MAX
 /*
  * The base's one line, as the line list (TS 102 527-3 7.4.11) names it; a
  * <<CALL-INFORMATION>> line identifier must name the same line (bench 21c:
@@ -499,7 +499,7 @@ struct dect_base_dereg {
 	uint8_t  tpui[3];
 	unsigned pages;
 	uint64_t page_at;
-	unsigned queue[DECT_MM_MAX_SLOT];	/* slots asked meanwhile */
+	unsigned queue[DECT_BASE_HS_MAX];	/* slots asked meanwhile */
 	unsigned nq;
 };
 

@@ -557,7 +557,7 @@ unsigned dect_base_slot(const struct dect_base *b, unsigned i)
 	if (i == b->cur) {
 		unsigned v = b->slot0 && b->cur == 0 ? b->slot0 : b->rec.slot;
 
-		return v >= 1u && v <= DECT_MM_MAX_SLOT ? v : DECT_MM_REG_SLOT;
+		return v >= 1u && v <= DECT_BASE_HS_MAX ? v : DECT_MM_REG_SLOT;
 	}
 	if (i == 0 && b->slot0)
 		return b->slot0;		/* subslot= is the target's */
@@ -2663,7 +2663,7 @@ static void call_in(struct dect_base *b, const struct dect_ctl_msg *m,
 
 	/* hs=N: the handset whose line was called (its own account) */
 	if (dect_ctl_get(m, "hs")) {
-		if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, &want)) {
+		if (dect_ctl_get_uint(m, "hs", 1, DECT_BASE_HS_MAX, &want)) {
 			reply(r, "bad-hs", NULL, 0);
 			return;
 		}
@@ -2768,7 +2768,7 @@ static void mwi_verb(struct dect_base *b, const struct dect_ctl_msg *m,
 	unsigned want, line, count, t;
 	uint8_t bit;
 
-	if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, &want) ||
+	if (dect_ctl_get_uint(m, "hs", 1, DECT_BASE_HS_MAX, &want) ||
 	    dect_ctl_get_uint(m, "line", 1, 2, &line) ||
 	    dect_ctl_get_uint(m, "count", 0, 16383, &count)) {
 		reply(r, "malformed", NULL, 0);
@@ -3319,7 +3319,7 @@ void dect_base_dereg_begin(struct dect_base *b, unsigned slot, uint64_t now,
 		for (k = 0; k < d->nq; k++)
 			if (d->queue[k] == slot)
 				break;
-		if (k == d->nq && d->nq < DECT_MM_MAX_SLOT &&
+		if (k == d->nq && d->nq < DECT_BASE_HS_MAX &&
 		    (int)i != d->target)
 			d->queue[d->nq++] = slot;
 		dect_base_log(b, "dereg: one at a time -- DECT %u waits its "
@@ -5494,7 +5494,7 @@ static int ctl_record(const struct dect_base *b, const struct dect_ctl_msg *m,
 {
 	unsigned i;
 
-	if (dect_ctl_get_uint(m, "hs", 1, DECT_MM_MAX_SLOT, slot)) {
+	if (dect_ctl_get_uint(m, "hs", 1, DECT_BASE_HS_MAX, slot)) {
 		reply(r, "bad-hs", NULL, 0);
 		return -1;
 	}

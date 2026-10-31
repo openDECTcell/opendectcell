@@ -395,7 +395,7 @@ int main(void)
 		CHECK_EQ(dect_base_slot(&b, 1), 2u);
 		b.slot0 = 5;
 		CHECK_EQ(dect_base_slot(&b, 0), 5u);	/* current, record 0 */
-		b.rec.slot = 9;
+		b.rec.slot = DECT_BASE_HS_MAX + 1u;
 		b.slot0 = 0;
 		CHECK_EQ(dect_base_slot(&b, 0), DECT_MM_REG_SLOT); /* bad slot */
 		b.rec.slot = 1;
@@ -1038,6 +1038,48 @@ int main(void)
 		CHECK_EQ(c1->target, 0);
 		CHECK_EQ(b.ring.hs, 1u);
 		CHECK_EQ(b.cur, 1u);
+	}
+
+	/*
+	 * More records than the chip has slots (docs/more-than-six.md): record
+	 * numbers go to DECT_HS_MAX, the verbs take them, the MM can hold their
+	 * identities, and nothing about a record above the chip's six is written
+	 * into the chip.
+	 */
+	{
+		struct dect_ctl_msg m;
+		struct dect_base_reply r;
+		unsigned k;
+		const uint8_t tp[3] = { 0x00, 0x11, 0x50 };
+
+		CHECK(DECT_BASE_HS_MAX > DECT_MM_MAX_SLOT);
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = DECT_BASE_HS_MAX;
+		for (k = 0; k < b.n_hs; k++) {
+			b.hs[k].slot = k + 1u;
+			b.loaded[k] = 1;
+			b.hs[k].uak_valid = 1;
+		}
+		b.cur = 11;
+		b.rec.slot = 12;
+		CHECK_EQ(dect_base_slot(&b, 11), 12u);
+		CHECK_EQ(dect_base_slot(&b, 15), (unsigned)DECT_BASE_HS_MAX);
+		for (k = 0; k < DECT_BASE_HS_MAX; k++) {
+			uint8_t id[5] = { 0x01, 0x11, 0x11, 0x00, (uint8_t)k };
+
+			CHECK_EQ(dect_mm_hold(&b.main_link.link.mm, id, sizeof(id),
+					      (uint8_t)(k + 1u), tp, (int)k), 0);
+		}
+		CHECK_EQ(dect_mm_hold(&b.main_link.link.mm, (const uint8_t *)"\x01\x02", 2,
+				      (uint8_t)(DECT_BASE_HS_MAX + 1u), tp, 0), -1);
+		CHECK_EQ(dect_ctl_parse("mwi hs=12 line=1 count=2", strlen("mwi hs=12 line=1 count=2"), &m), 0);
+		memset(&r, 0, sizeof(r));
+		(void)dect_base_ctl_call(&b, &m, 1, 0, &r);
+		CHECK(!r.err || (strcmp(r.err, "malformed") != 0 && strcmp(r.err, "bad-hs") != 0));
+		/* the chip is not touched for a record above its slots */
+		n_sent = 0;
+		CHECK_EQ(dect_base_slot_install(&b, DECT_MM_MAX_SLOT + 1u, b.hs[11].uak), -1);
 	}
 
 	/* parallel calls (S3s) */

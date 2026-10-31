@@ -1090,3 +1090,14 @@ the service once per value asked for; a chip that still reports another RFPI aft
 that reload is not reloaded again, and the CONFIG_ACK says status 1. Leaving cell
 mode erases the file and reloads the chip with the factory RFPI. `cdect.h` needs
 `143` when you take it.
+
+## API 144: sixteen records per base `[2026-11-01]`
+
+The library's record capacity is 16 (`DECT_HS_MAX`), no longer the chip's six slots
+(openDECTcell `docs/api-versions.md` #144). A record's slot number is its record number;
+only 1 to 6 are chip slots. For the controller: give a handset on every cell a record
+numbered 7 or more and a TPUI of its own (the form `{00, 11, N}` with N from 7), and the
+chip needs no key for it; `install()` (host.c) writes only records numbered 1 to 6 and
+the dummy key keeps the table non-empty when there is none. Limits that remain: the
+names list holds eight handsets and the call lists seven terminal ids, so a record
+numbered 8 or more shows in neither. `cdect.h` needs `144` when you take it.

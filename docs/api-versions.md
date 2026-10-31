@@ -998,3 +998,16 @@ a factory RFPI has RPN 0 and is unchanged), a **class B RFPI (ARC 001)** gets PL
 31 (or `park_pli`, 19 for ARC and EIC: one subscription for every system of one
 EIC, `multicell-identities.md` §7.7) and its LOCATE-ACCEPT names the 31-bit PARI as
 the location area. Class A is as before. New field at the end of both structs.
+
+**144.** dect_mm.h, dect_base.h, 2026-11-01: **a base holds up to `DECT_HS_MAX` = 16
+handset records, six of which can be chip slots.** `DECT_BASE_HS_MAX` (the
+arrays of `struct dect_base` and the base's dereg queue), `DECT_MM_HELD_MAX` and
+the range of `hs=N` in the bridge verbs and of `dect_mm_hold()`'s slot follow it:
+a record's number (`dect_hs_rec.slot`, `cfg.sub_slot`) is 1 to 16, and the chip
+slots stay 1 to `DECT_MM_MAX_SLOT` = 6. Only a record numbered 1 to 6 has a key in
+the chip; a record numbered 7 to 16 is host-only (keyless admission, its own TPUI,
+the per-call key: `more-than-six.md` §6), and `dect_base_slot_install()` and the
+audit leave it alone. Not widened: the Internal Names List (8 entries, the first
+eight handsets) and the call lists (terminal ids 1 to 7, a persisted format), so a
+record numbered 8 or more has neither. Layout change of `struct dect_base`; `dect-stubd`
+stays at six stores.

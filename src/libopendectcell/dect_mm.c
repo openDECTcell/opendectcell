@@ -91,7 +91,7 @@ int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
 	struct dect_mm_held *h;
 
 	if (mm->n_held >= DECT_MM_HELD_MAX || !id || !id_len ||
-	    id_len > DECT_MM_PORTID_MAX || slot < 1u || slot > DECT_MM_MAX_SLOT)
+	    id_len > DECT_MM_PORTID_MAX || slot < 1u || slot > DECT_HS_MAX)
 		return -1;
 	h = &mm->held[mm->n_held++];
 	memset(h, 0, sizeof(*h));
@@ -663,7 +663,7 @@ uint8_t dect_mm_sub_slot(const struct dect_mm *mm)
 {
 	uint8_t slot = mm->cfg.sub_slot;
 
-	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
+	if (slot < 1u || slot > DECT_HS_MAX)
 		return DECT_MM_REG_SLOT;
 	return slot;
 }

@@ -1457,9 +1457,13 @@ static void test_sub_slot_drives_the_tpui(void)
 	}
 
 	/* Out of range falls back rather than indexing off the end. */
-	cfg.sub_slot = DECT_MM_MAX_SLOT + 1u;
+	cfg.sub_slot = DECT_HS_MAX + 1u;
 	dect_mm_init(&mm, &cfg);
 	CHECK_EQ(dect_mm_sub_slot(&mm), DECT_MM_REG_SLOT);
+	/* a record number above the chip's slots is a record number (no chip slot) */
+	cfg.sub_slot = DECT_MM_MAX_SLOT + 1u;
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(dect_mm_sub_slot(&mm), DECT_MM_MAX_SLOT + 1u);
 
 	/* An explicitly configured TPUI still wins over the slot. */
 	cfg.sub_slot = 3u;
@@ -1764,7 +1768,7 @@ static void test_hold_rejects_what_it_cannot_serve(void)
 	memset(big, 0x80, sizeof(big));
 	dect_mm_init(&mm, &cfg);
 	CHECK_EQ(dect_mm_hold(&mm, id, sizeof(id), 0, NULL, 0), -1);
-	CHECK_EQ(dect_mm_hold(&mm, id, sizeof(id), DECT_MM_MAX_SLOT + 1u, NULL,
+	CHECK_EQ(dect_mm_hold(&mm, id, sizeof(id), DECT_HS_MAX + 1u, NULL,
 			      0), -1);
 	CHECK_EQ(dect_mm_hold(&mm, id, 0, 1, NULL, 0), -1);
 	CHECK_EQ(dect_mm_hold(&mm, big, sizeof(big), 1, NULL, 0), -1);

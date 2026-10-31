@@ -64,7 +64,16 @@ enum dect_mm_registration {
  * does not range-check the index itself. Slot 0 takes a different command path.
  * Never emit 0x020A with a slot outside 1..6, not even as an experiment.
  */
-#define DECT_MM_MAX_SLOT	6u
+#define DECT_MM_MAX_SLOT	6u	/* the chip's subscription slots */
+/*
+ * Handset records one base holds. A record has a number, its "slot", 1 to
+ * DECT_HS_MAX; the first DECT_MM_MAX_SLOT of the numbers are also the chip's
+ * subscription slots (the chip keeps keys only for those), the rest are held
+ * by the host alone: a standby handset needs no chip slot, it is admitted
+ * keyless, paged by the record's own TPUI and called with a key the host
+ * derives (openDECTcell docs/more-than-six.md §6).
+ */
+#define DECT_HS_MAX		16u
 
 #define DECT_MM_DCK_LEN		8u	/* derived cipher key (64-bit) */
 
@@ -114,7 +123,7 @@ struct dect_mm_cfg {
 	uint8_t rfpi[DECT_MM_RFPI_LEN];		/* base identity for FIXED-IDENTITY */
 	uint8_t authenticate;			/* 1 = challenge the PP (default) */
 	/*
-	 * Chip subscription slot for this handset, 1..DECT_MM_MAX_SLOT.
+	 * The handset's record number, 1..DECT_HS_MAX (the chip slot when 1..DECT_MM_MAX_SLOT).
 	 * 0 selects DECT_MM_REG_SLOT, which is what a single-cell base wants.
 	 */
 	uint8_t sub_slot;
@@ -235,7 +244,7 @@ struct dect_mm_held {
 	int     tag;			/* the owner's handle for it */
 };
 
-#define DECT_MM_HELD_MAX	DECT_MM_MAX_SLOT
+#define DECT_MM_HELD_MAX	DECT_HS_MAX
 
 /*
  * <<TERMINAL-CAPABILITY>> (EN 300 175-5 §7.7.41, figure 85): what the
