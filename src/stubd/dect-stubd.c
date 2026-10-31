@@ -6991,7 +6991,9 @@ static void rfpi_check(const struct stubd *s, const struct dect_mail *m)
  */
 static void loop_tick(struct stubd *s, uint64_t now)
 {
-	led_tick(s, now, s->do_register && s->sess.state == DECT_SESS_UP);
+	/* in cell mode the radio is on when the controller turned it on */
+	led_tick(s, now, (s->do_register && s->sess.state == DECT_SESS_UP) ||
+		 (s->cell_mode && s->cell.radio_on));
 	state_write(s, now, s->do_register &&
 		    s->sess.state == DECT_SESS_UP, 0);
 	holdback_tick(s, now);
