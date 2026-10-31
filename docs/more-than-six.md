@@ -137,3 +137,34 @@ config, the TPUI per record for the controller's pool is the later change.
 3. The host store / chip slot split, then the cache in `dect_base`, behind
    the controller's placement rules. API bump, notes for the controller.
 4. Standalone boxes keep six until T-C, T-D and T-E have passed.
+
+## 6. More than six in the chip: the room's route (A-0136, A-0137)
+
+The maintainer wants at least 16 chip slots (a makerspace cell). The room
+(A-0137): sixteen cannot be reached by operand edits alone (eight is the
+byte-mask ceiling), so some authored code is needed. The cheaper shape (I):
+keep six to eight active handset numbers, grow only the key and identity
+tables to 16, pick the entry by identity at link setup. About one in three or
+four for a working 08.25 build, with bench iteration. Delivery would be a
+plain-text patch list (offset, width, old bytes, new bytes, comment) applied
+by a script to the image the user supplies, after a whole-image SHA-256
+check; nothing patched is shipped and no image reaches this side. Whether the
+list may live in the repo is the maintainer's decision (the room keeps CODE
+entries out of it); nothing is committed. The room also asks first: if the
+chip does not need the key at all for ciphering (A-0126: the per-call key
+arrives with `0x0208`), 16 host-cached keys may already do everything and the
+patch is unnecessary.
+
+Free-RAM probe, lab 7520 on 08.25, idle, 2026-10-31 17:34 (`-a memdump`, 24
+blocks of 32 bytes, three per window, 16 sweeps; `mem: probe` log lines print
+the bytes of any block outside 0x9518..0x95EF without `-p`):
+
+| window | blocks read | result |
+|---|---|---|
+| 0xA000..0xBC00, 0x6301..0x7855, 0x4D46..0x6100, 0x400D..0x4844, 0x893C..0x9000, 0x8400..0x8800, 0x97F4..0x9B85, 0xC001..0xCFFF (0xC001 and 0xC800 only) | 24, every sweep answered | all zero in every sweep, idle |
+| control: 0x08B0, 0x010A, 0x1AB9 | 3 | non-zero, answered (the reads work) |
+
+Open: all-zero cannot tell free RAM from memory that reads as zero but is not
+RAM (0xC001 in particular: it answered all-zero like the others); the same
+windows during a call are not read yet (needs a call, the user at the bench).
+Both go to the room.

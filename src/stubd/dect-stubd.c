@@ -3445,6 +3445,28 @@ static int park_check_done(struct stubd *s, uint64_t now)
 }
 
 /*
+ * -a memdump: print the bytes of a reply whose range lies outside the
+ * subscription tables (key table, identity block and masks, 0x9518..0x95EF),
+ * so a probe of chip RAM can be read without -p. -p also shows box identity
+ * data in other mails; this line shows only what the probe asked for.
+ */
+static void mem_probe_log(struct stubd *s, const struct dect_mail *m,
+			  uint32_t addr)
+{
+	uint32_t n = m->param_len - 7u, i;
+
+	if (!s->audio.n_memdump || !n)
+		return;
+	if (addr < 0x95F0u && addr + n > SUB_UAK_BASE)
+		return;
+	printf("[%5llu] mem: probe 0x%05x len %u:",
+	       (unsigned long long)(mono_ms() - g_start), addr, n);
+	for (i = 0; i < n && 7u + i < sizeof(m->param); i++)
+		printf(" %02x", m->param[7u + i]);
+	printf("\n");
+}
+
+/*
  * A 0xFFF1 answer from the chip: our own park's read-back, then the
  * library's subscription read-back and slot audit (S2.2b).
  */
@@ -3458,6 +3480,7 @@ static void mem_reply(struct stubd *s, const struct dect_mail *m)
 	     | ((uint32_t)m->param[3] << 16) | ((uint32_t)m->param[4] << 24);
 	if (s->park_check_at && m->param_len > 7u)
 		park_check_reply(s, addr, m->param[7]);
+	mem_probe_log(s, m, addr);
 	dect_base_mem_reply(&s->base, m);
 	fflush(stdout);
 }
