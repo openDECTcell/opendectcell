@@ -252,3 +252,15 @@ logging question for the library, not a failure. Together with run 2
 (keyless admission, keyless ciphered calls both ways) this answers the
 design question: a standby handset needs no chip slot at all. The six slots
 cache only what an active link needs; the host holds the rest.
+
+**The room's A-0140 (static side of run 3, same evening):** the page `0x0300
+{0c 11 43}` is sent by the chip verbatim from the mail: with a TPUI whose
+high byte is `0x11` the chip short-circuits its full-TPUI builder and never
+consults the identity table or the key table to build a page; the low byte
+(7 or more) is not range-checked. Same structure on 07.56. So paging a
+slotless handset is the normal assigned-TPUI path, not an edge case. **Rule
+that follows for the controller's TPUI pool: keep the high byte `0x11`** (form
+`{00, 11, N}`, N of 7 or more, per `notes-for-the-controller.md`, API 141). A
+TPUI with another high byte needs the full form (20-bit TPUI in the mail's
+bytes 5 to 8); the room read that path statically only, not on air. The chip
+patch is closed; its notes stay on file in the room.
