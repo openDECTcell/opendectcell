@@ -44,6 +44,64 @@ int dect_base_switch(struct dect_base *b, unsigned i)
 	return 1;
 }
 
+int dect_base_quiet(const struct dect_base *b)
+{
+	unsigned k;
+
+	if (b->main_link.active)
+		return 0;
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].active)
+			return 0;
+	for (k = 0; k < DECT_BASE_CALLS; k++)
+		if (b->calls[k].id)
+			return 0;
+	return b->ring.state == DECT_BASE_RING_IDLE &&
+	       b->ic.st == DECT_BASE_IC_IDLE &&
+	       b->dereg.st == DECT_BASE_DEREG_IDLE &&
+	       b->tu.st == DECT_BASE_TIME_IDLE;
+}
+
+int dect_base_record_drop(struct dect_base *b, unsigned i)
+{
+	unsigned j, k;
+
+	if (i >= b->n_hs || !b->loaded[i] || b->absent[i] || !dect_base_quiet(b))
+		return -1;
+	if (i == b->cur) {
+		/* the working copy goes to another record first */
+		for (j = 0; j < b->n_hs; j++)
+			if (j != i && (b->loaded[j] || b->absent[j]))
+				break;
+		if (j == b->n_hs)
+			return -1;
+		(void)dect_base_switch(b, j);
+	}
+	if (b->main_link.link.mm.adopted == (int)i)
+		b->main_link.link.mm.adopted = -1;
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].adopted == (int)i)
+			b->side[k].adopted = -1;
+	memset(&b->hs[i], 0, sizeof(b->hs[i]));
+	b->loaded[i] = 0;
+	b->absent[i] = 0;
+	b->remote[i] = 0;
+	b->fetched[i] = 0;
+	b->last_seen_ms[i] = 0;
+	memset(&b->note[i], 0, sizeof(b->note[i]));
+	b->page_want &= ~(1u << i);
+	b->name[i][0] = '\0';
+	b->line2[i] = 0;
+	memset(b->line_name[i], 0, sizeof(b->line_name[i]));
+	memset(&b->cap[i], 0, sizeof(b->cap[i]));
+	dect_profile_defaults(&b->prof[i]);
+	/* the table ends at the last record in use, but never before the current one */
+	while (b->n_hs > b->cur + 1u && !b->loaded[b->n_hs - 1u] &&
+	       !b->absent[b->n_hs - 1u])
+		b->n_hs--;
+	return 0;
+}
+
 int dect_base_send(struct dect_base *b, const struct dect_mail *m)
 {
 	return b->ops && b->ops->send ? b->ops->send(b->ctx, m) : -1;
@@ -73,6 +131,17 @@ void dect_base_log(struct dect_base *b, const char *fmt, ...)
 /* One mail to the STUB's contact task. */
 static void tpui_cfg_for_slot(const struct dect_base *b, unsigned slot,
 			      uint8_t tpui[3]);
+
+/*
+ * What a record's TPUI is for the MM: its own (API 141) or the one off the
+ * slot (tpuioffset=), else NULL and the MM derives {0x00, 0x11, slot}. It was
+ * only handed over with tpuioffset set, which made a pool TPUI ineffective in
+ * a host that does not use that option (found 2026-11-01).
+ */
+static const uint8_t *own_tpui(const uint8_t tp[3])
+{
+	return (tp[0] | tp[1] | tp[2]) ? tp : NULL;
+}
 
 static void chip_mail(struct dect_base *b, uint16_t prim, const uint8_t *p,
 		      size_t n)
@@ -468,7 +537,7 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 			continue;
 		tpui_cfg_for_slot(b, r->slot, tp);
 		if (dect_mm_hold(mm, r->port_id, r->port_id_len,
-				 (uint8_t)r->slot, b->cfg.tpui_offset ? tp : NULL,
+				 (uint8_t)r->slot, own_tpui(tp),
 				 (int)i) < 0)
 			dect_base_log(b, "sub: could not hold record %u on "
 				      "this link", i);
@@ -477,7 +546,7 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 		tpui_cfg_for_slot(b, cfg->sub_slot, tp);
 		(void)dect_mm_hold(mm, b->rec.port_id, b->rec.port_id_len,
 				   (uint8_t)cfg->sub_slot,
-				   b->cfg.tpui_offset ? tp : NULL, (int)b->cur);
+				   own_tpui(tp), (int)b->cur);
 	}
 }
 
@@ -587,7 +656,7 @@ void dect_base_side_open(struct dect_base *b, struct dect_base_link *bl,
 		tpui_cfg_for_slot(b, dect_base_slot(b, i), tp);
 		(void)dect_mm_hold(&bl->link.mm, r->port_id, r->port_id_len,
 				   (uint8_t)dect_base_slot(b, i),
-				   b->cfg.tpui_offset ? tp : NULL, (int)i);
+				   own_tpui(tp), (int)i);
 	}
 }
 

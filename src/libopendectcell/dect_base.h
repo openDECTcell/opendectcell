@@ -628,6 +628,23 @@ void dect_base_load(struct dect_base *b, unsigned i);
  */
 int dect_base_switch(struct dect_base *b, unsigned i);
 
+/*
+ * No link, call, ring, internal call, deregistration or time round is going:
+ * nothing refers to a record by its table index.
+ */
+int dect_base_quiet(const struct dect_base *b);
+
+/*
+ * Take record i out of the table (a roamer that stopped renewing, API 146): its
+ * subscription, name, profile and notices are gone and the index is free for
+ * another record (dect_base_load() and the host's own AddRecord). The record
+ * must hold a subscription (not a free store). 0, or -1 when it is not a
+ * record, or the base is not quiet (try again later). The current record
+ * is moved off first to another one; with none to move to it stays. The host
+ * has the record's data in its own store: nothing is saved.
+ */
+int dect_base_record_drop(struct dect_base *b, unsigned i);
+
 /* The current record changed: the host's save(). */
 void dect_base_changed(struct dect_base *b);
 

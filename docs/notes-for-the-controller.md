@@ -1107,3 +1107,10 @@ numbered 8 or more shows in neither. `cdect.h` needs `144` when you take it.
 `DECT_HS_MAX` is 32 (openDECTcell `docs/api-versions.md` #145): record numbers 1 to 32, the
 chip's slots still 1 to 6. A stack is 63 kB instead of 55 kB. Not a bit per record number
 in an `unsigned`: 32 does not fit. `cdect.h` needs `145` when you take it.
+
+## API 146: dropping a record, and the pool TPUI fix `[2026-11-01]`
+
+`dect_base_record_drop()` takes a record out of a quiet base (openDECTcell `docs/api-versions.md`
+#146); the controller uses it to expire roamers from a cell's table. If you kept per-record
+TPUIs (API 141) and saw `{00, 11, slot}` in LOCATE-ACCEPT anyway, that was a bug here and is
+fixed. `cdect.h` needs `146` when you take it.

@@ -1021,3 +1021,19 @@ entries and the call lists at terminal ids 1 to 7, so a record numbered 8 or mor
 neither. Layout change of `struct dect_base` and `struct dect_mm`; `dect-stubd` stays
 at six stores. A host that keeps a bit per record in an `unsigned` must not shift by
 the record number (32 is out of range); `hold_mask` is per record index, 0 to 31.
+
+**146.** dect_base.h, 2026-11-01: **a record can leave the table.** New:
+`dect_base_quiet()` (no link, call, ring, internal call, deregistration or time
+round is going, so nothing refers to a record by its index) and
+`dect_base_record_drop(b, i)`: the record's subscription, name, profile, notices and
+Line 2 are wiped and the index is free for the host's next `dect_base_load()`/store;
+the current record is moved to another one first; -1 for a free store, a record
+that is not there, or a base that is not quiet (try again later). The host has the
+data in its own store: nothing is saved. The table's `n_hs` shrinks to the last
+record in use. **Behaviour fix:** a record's own TPUI (API 141) was handed to the
+MM at link setup only when `tpuioffset=` was set, so a host using per-record TPUIs
+without that option got `{00, 11, slot}` in its LOCATE-ACCEPT; it now gets the
+record's own. No layout change. For a roamer fetched from the host: `defer_unknown`
+(API 18/19) holds the unknown identity, the host adds the record, `dect_mm_hold()`s
+it on the live link and resumes (`dect_mm_locate_resume()`,
+`dect_link_setup_resume()`).

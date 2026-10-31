@@ -385,6 +385,17 @@ int main(void)
 		CHECK_EQ(bl.link.mm.port_id_len, 7u);
 		CHECK_EQ(bl.link.mm.port_id[6], 0x44);
 		CHECK_EQ(bl.link.mm.n_held, 2u);	/* hs[1], then hs[0] */
+		/*
+		 * A record's own TPUI reaches the MM without tpuioffset= (API
+		 * 141: the pool); a record without one is derived from its slot.
+		 */
+		memcpy(b.hs[1].tpui, "\x00\x11\x9a", 3);
+		memset(&bl, 0, sizeof(bl));
+		dect_base_link_open(&b, &bl, 4, &cfg, 1u << 1);
+		CHECK_EQ(bl.link.mm.held[0].tpui[1], 0x11);
+		CHECK_EQ(bl.link.mm.held[0].tpui[2], 0x9a);
+		CHECK_EQ(bl.link.mm.held[1].tpui[2], 0x00);	/* hs[0]: derived */
+		memset(b.hs[1].tpui, 0, 3);
 	}
 
 	/* chip slots and a side link (S2.4) */
@@ -1080,6 +1091,78 @@ int main(void)
 		/* the chip is not touched for a record above its slots */
 		n_sent = 0;
 		CHECK_EQ(dect_base_slot_install(&b, DECT_MM_MAX_SLOT + 1u, b.hs[11].uak), -1);
+	}
+
+	/*
+	 * Dropping a record (API 146): a roamer that stopped renewing leaves
+	 * the table, and its index is free again.
+	 */
+	{
+		unsigned k;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 5;
+		for (k = 0; k < 4; k++) {
+			b.hs[k].slot = k + 1u;
+			b.loaded[k] = 1;
+			b.hs[k].uak_valid = 1;
+			b.hs[k].port_id[0] = (uint8_t)(0x10 + k);
+			b.hs[k].port_id_len = 1;
+		}
+		b.absent[4] = 1;	/* a free store: not a record to drop */
+		b.cur = 0;
+		b.rec = b.hs[0];
+		CHECK_EQ(dect_base_quiet(&b), 1);
+		strcpy(b.name[2], "Roamer");
+		b.page_want = 1u << 2;
+		CHECK_EQ(dect_base_record_drop(&b, 2), 0);
+		CHECK_EQ(b.loaded[2], 0);
+		CHECK_EQ(b.hs[2].port_id_len, 0u);
+		CHECK_EQ(b.name[2][0], 0);
+		CHECK_EQ(b.page_want, 0u);
+		CHECK_EQ(dect_base_listed(&b, 2), 0);
+		CHECK_EQ(dect_base_listed(&b, 3), 1);
+		CHECK_EQ(b.n_hs, 5u);	/* the free store at 4 keeps the table's end */
+		CHECK_EQ(dect_base_record_drop(&b, 2), -1);	/* already gone */
+		CHECK_EQ(dect_base_record_drop(&b, 4), -1);	/* a free store */
+		CHECK_EQ(dect_base_record_drop(&b, 9), -1);
+
+		/* not while anything uses the table's indices */
+		b.main_link.active = 1;
+		CHECK_EQ(dect_base_quiet(&b), 0);
+		CHECK_EQ(dect_base_record_drop(&b, 3), -1);
+		CHECK_EQ(b.loaded[3], 1);
+		b.main_link.active = 0;
+		b.side[0].active = 1;
+		CHECK_EQ(dect_base_record_drop(&b, 3), -1);
+		b.side[0].active = 0;
+		b.calls[0].id = 7;
+		CHECK_EQ(dect_base_record_drop(&b, 3), -1);
+		b.calls[0].id = 0;
+		b.ring.state = DECT_BASE_RING_PAGING;
+		CHECK_EQ(dect_base_record_drop(&b, 3), -1);
+		b.ring.state = DECT_BASE_RING_IDLE;
+		b.dereg.st = DECT_BASE_DEREG_PAGING;
+		CHECK_EQ(dect_base_record_drop(&b, 3), -1);
+		b.dereg.st = DECT_BASE_DEREG_IDLE;
+
+		/* the current record moves off first, its working copy is not lost for the others */
+		b.cur = 3;
+		b.rec = b.hs[3];
+		b.main_link.link.mm.adopted = 3;
+		CHECK_EQ(dect_base_record_drop(&b, 3), 0);
+		CHECK(b.cur != 3u && b.loaded[b.cur]);
+		CHECK_EQ(b.main_link.link.mm.adopted, -1);
+		CHECK_EQ(b.rec.port_id[0], b.hs[b.cur].port_id[0]);
+
+		/* the table shrinks to the last record in use, never below the current one */
+		b.absent[4] = 0;
+		b.cur = 0;
+		b.rec = b.hs[0];
+		CHECK_EQ(dect_base_record_drop(&b, 1), 0);
+		CHECK_EQ(b.n_hs, 1u);
+		CHECK_EQ(dect_base_record_drop(&b, 0), -1);	/* the only record */
 	}
 
 	/* parallel calls (S3s) */
