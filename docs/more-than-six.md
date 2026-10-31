@@ -237,3 +237,18 @@ incoming one (ringing DECT 3, audio both ways) per the maintainer.
 treats as slot 3 (A-0133 §1 item 4), so this page went by that shortcut, not
 by an entry for the handset. A handset with no slot and a pool TPUI of 7 or
 more has still not been paged; that is the remaining test for the host cache.
+
+**TPUI test, run 3: lab 7520 on 08.25, 2026-10-31 19:15 (A540 with no key, no slot and no install in
+the chip, `tpuioffset=0x40`).** After a power cycle the A540's TPUI was
+`11 43` (diag `001143`, not a slot shortcut). Two calls to it: the page
+`0x0300 {0c 11 43}` was answered at the first attempt both times, the link
+came up, the call ringed, ciphered (`0x0209`, link 2) and had audio
+(maintainer). **Pass: the chip pages a handset it holds no slot for by a pool
+TPUI of 7 or more.** One log line to note: "WARNING: TPUI never acknowledged"
+and `tpui_confirmed:false` in the diag, although the handset answered the
+page by the new TPUI; that flag is not set on this path (the location
+session where the assignment was acknowledged is a different link) and is a
+logging question for the library, not a failure. Together with run 2
+(keyless admission, keyless ciphered calls both ways) this answers the
+design question: a standby handset needs no chip slot at all. The six slots
+cache only what an active link needs; the host holds the rest.
