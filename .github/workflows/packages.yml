@@ -15,15 +15,22 @@ permissions:
   contents: read
 
 env:
-  OPENWRT: 25.12.5
+  # for the release notes; each target builds against the release its box runs
+  OPENWRT: 25.12.5 (FRITZ!Box 7520) and 25.12.6 (FRITZ!Box 7412)
 
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        target: [ipq40xx/generic, lantiq/xrx200]
+        # The kernel module must match the kernel on the box: the 7520 runs
+        # OpenWrt 25.12.5 (kernel 6.12.94), the 7412 25.12.6 (6.12.112).
+        include:
+          - { target: ipq40xx/generic, openwrt: "25.12.5" }
+          - { target: lantiq/xrx200, openwrt: "25.12.6" }
     runs-on: ubuntu-24.04
+    env:
+      OPENWRT: ${{ matrix.openwrt }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -42,7 +49,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: build/release/*.tar.zst
-          key: sdk-${{ env.OPENWRT }}-${{ steps.slug.outputs.name }}
+          key: sdk-${{ matrix.openwrt }}-${{ steps.slug.outputs.name }}
 
       - name: Build
         env:
