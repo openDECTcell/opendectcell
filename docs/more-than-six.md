@@ -194,3 +194,20 @@ in the table so chip admission (open on 08.25) is not the variable. Fail
 (call refused, no cipher, or a cipher failure): the stored key is used in a
 way the trace missed, and the chip patch is back on the table. Consequence if
 it passes: the host cache is sufficient and the patch stays parked.
+
+**Block E, run 1: lab 7520 on 07.56, 2026-10-31 18:46-18:50 (A540, no key in the chip).** The chip was given
+one key only (the C430A, store `.1`, slot 1; `holdback=3600000` kept the other
+two stores' keys out, and the daemon's own line says it cleared every slot
+but 1). 07.56 cannot read its table back, so "no key in the chip for the
+A540" rests on that code path. The A540 (slot 3, held back) connected within
+seconds of the daemon coming up, and over four link sessions (two list
+sessions, a refused-then-repeated one, then a dialled call) each one went:
+authenticate, call key to the chip (`0x0208`), CIPHER-REQUEST, "the chip
+reports link N ciphered (`0x0209`)". The dialled call stayed up 28 s with the
+audio bound and no error counters moving. **Pass for the prediction:** a
+ciphered call on a handset whose key the chip does not hold. No dial tone and
+no ring on the called mobile were seen; the cause is not the chip: the init
+wrote no `lines` file and started no baresip (the handsets' profile side files
+`/etc/opendectcell-sub.N.profile` are gone since today's re-registrations), so
+nothing was dialled. Not yet shown: the same with the table read back (08.25,
+where the slot audit exists), and a call to such a handset (paging by TPUI).
