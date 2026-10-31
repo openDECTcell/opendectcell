@@ -13,7 +13,7 @@ in what order, what to watch, and how to get back. The controller side is
 | Controller image | Builds with `LIBOPENDECTCELL=1` in Docker (first time, 2026-10-31 night: `docker compose build --build-arg LIBOPENDECTCELL=1`, exit 0) and starts: migrations applied, SIP, web on 8080, cells on 7300. The stack was torn down again (`down -v`); nothing is left running or stored |
 | Library in the controller | Submodule at openDECTcell `e0c38f0` (API 142), `cdect.h` requires 142 (controller `28d04ed`). Not compiled with Go on the machine I worked on (no Go toolchain); the controller's CI builds it with the submodule |
 | 7412 | Running as a standalone base with a test setup from 2026-10-31 (see "Before you start"). It must be put back to a clean state and given the cell packages |
-| Cell packages | Built by the "Packages" workflow on `main` (lantiq/xrx200 for the 7412), dispatched 2026-10-31 night; see below for where they are |
+| Cell packages | Built by the "Packages" workflow (run 41233540685, `main` at the L6 fix `e0c38f0`, both targets, success). Downloaded to the scratchpad `pkgs-e0c38f0/packages-lantiq-xrx200/` on the maintainer's PC: `opendectcell`, `opendectcell-cell`, `opendectcell-baresip`, `opendectcell-carddav`, `luci-app-opendectcell`, `kmod-opendectcell-lantiq`, `ucode-mod-opendectcell-uclient`. **Not installed on the 7412 yet**: that needs you at the bench (the module and init script of the box have test changes, and apk keeps an init script that was changed by hand) |
 | What the chip allows | A standby handset needs no chip slot (more-than-six.md section 6): the controller may keep every key and give the chip only what a call needs, with one key always in the chip's table |
 
 ## Before you start (the 7412)
