@@ -14,15 +14,8 @@ mail 0247 03 00 00
 mail 0247 04 00 00
 mail 0247 05 00 00
 mail 0247 06 00 00
-mail fff1 07 18 95 00 00 11 00
-mail fff1 07 29 95 00 00 11 00
-mail fff1 07 3a 95 00 00 11 00
-mail fff1 07 4b 95 00 00 11 00
-mail fff1 07 5c 95 00 00 11 00
-mail fff1 07 6d 95 00 00 11 00
 mail 0247 01 01 00
 mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
-mail fff1 07 18 95 00 00 11 00
 mail 017c 00 01
 
 up 1
@@ -35,5 +28,13 @@ pp 85 41 0d 04 99 cf 32 52
 fp 85 55 05 05 a0 94 00 11 01 07 01 64 7c 07 90 03 00 01 02 00 84
 fp 64 62 23 08 c0 26 10 30 09 00 00 00
 tick 3000
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 18 95 00 00 11 00
 down
 tick 1000

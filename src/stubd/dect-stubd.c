@@ -1143,7 +1143,7 @@ static uint32_t sub_uak_base = SUB_UAK_BASE_0825;
  * On the 7412's 06.88 STUB the read-back and the slot audit wait this long
  * after the writes (observed 2026-10-29; see dect_base_uak_verify()).
  */
-#define SUB_CHECK_DELAY_0688_MS	1000u
+#define SUB_CHECK_DELAY_0688_MS	50u	/* a write lands within 20 ms (T-A, 2026-10-31) */
 
 /*
  * The daemon's files live in a directory only root can enter, not in the
@@ -3154,6 +3154,7 @@ static void lapc_failed_note(struct stubd *s, struct dect_link *l,
 /* -a nlr: the release after a call is the library's (dect_base.h, S3u). */
 static void nlr_tick(struct stubd *s, uint64_t now)
 {
+	dect_base_registration_tick(&s->base, now);
 	dect_base_nlr_tick(&s->base, now);
 	fflush(stdout);
 }
@@ -8566,7 +8567,7 @@ int main(int argc, char **argv)
 	if (s.stub_build != STUB_OTHER || s.uak_0688)
 		s.base.chip.uak_table = sub_uak_base;
 	s.base.chip.uak_guess = s.stub_build == STUB_UNKNOWN;
-	s.base.chip.check_delay_ms = s.uak_0688 ? SUB_CHECK_DELAY_0688_MS : 0u;
+	s.base.chip.check_delay_ms = SUB_CHECK_DELAY_0688_MS;
 	if (s.audio.keycheck_set)	/* key-write delay sweep */
 		s.base.chip.check_delay_ms = s.audio.keycheck_ms;
 	s.base.chip.stub = s.stub_build == STUB_UNKNOWN ? NULL : s.stub_name;

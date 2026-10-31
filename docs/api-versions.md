@@ -945,3 +945,21 @@ layout): the TPUI `{0x00, 0x11, slot + N}`, 0 = off. For the controller's
 registration flow: one PIN per user's window, all live PINs on every cell
 where registration is open.
 
+**140.** dect_base.h, 2026-10-31: a registration is persisted even when the
+handset does not do a location registration on the same link, a new
+handset takes the free record with the lowest chip slot, and the key
+read-back is asked again once when nothing answers. `dect_base_link` gains
+`reg_done_ms` and `persist_force`; `dect_base_sub_check` gains `uak_tries`
+and `uak_asked`; new `dect_base_registration_tick(b, now)` (called from
+`dect_base_tick()`; a host that drives its own ticks must call it every
+tick, as `dect_base_sub_check_tick()`) and the constants
+`DECT_BASE_LOCATE_GRACE_MS` (2000) and `DECT_BASE_UAK_RETRY_MS` (500).
+Behaviour: a handset that already counts itself located at the base, and
+re-registers over its own record, skips the location registration, and its
+new key was never stored while the handset held it (C430A on the 7412,
+2026-10-31): after the grace the library persists the key anyway.
+`dect_base_free_record()` returns the free record with the lowest slot,
+not the first in list order. In `dect-stubd` the read-back and slot audit
+wait 50 ms on every build (they waited 1000 ms on 06.88 and 0 elsewhere):
+a key write is effective within 20 ms (bench T-A on 08.25 and 06.88).
+

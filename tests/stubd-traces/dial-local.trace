@@ -19,15 +19,8 @@ mail 0247 03 00 00
 mail 0247 04 00 00
 mail 0247 05 00 00
 mail 0247 06 00 00
-mail fff1 07 18 95 00 00 11 00
-mail fff1 07 29 95 00 00 11 00
-mail fff1 07 3a 95 00 00 11 00
-mail fff1 07 4b 95 00 00 11 00
-mail fff1 07 5c 95 00 00 11 00
-mail fff1 07 6d 95 00 00 11 00
 mail 0247 01 01 00
 mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
-mail fff1 07 18 95 00 00 11 00
 mail 017c 00 01
 
 up 1
@@ -36,9 +29,17 @@ up 1
 pp 03 05 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 e0 80
 fp 83 0d 7e 06 01 00 81 02 01 82
 tick 200
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail fff1 07 18 95 00 00 11 00
 # {CC-INFO} <<MULTI-KEYPAD>> "030", then "12" a second later.
 pp 03 7b 2c 03 30 33 30
 tick 1000
+mail fff1 07 18 95 00 00 11 00
 pp 03 7b 2c 02 31 32
 tick 1500
 # Quiet for 2000 ms: the number is complete.

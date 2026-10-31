@@ -18,15 +18,8 @@ mail 0247 03 00 00
 mail 0247 04 00 00
 mail 0247 05 00 00
 mail 0247 06 00 00
-mail fff1 07 18 95 00 00 11 00
-mail fff1 07 29 95 00 00 11 00
-mail fff1 07 3a 95 00 00 11 00
-mail fff1 07 4b 95 00 00 11 00
-mail fff1 07 5c 95 00 00 11 00
-mail fff1 07 6d 95 00 00 11 00
 mail 0247 01 01 00
 mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
-mail fff1 07 18 95 00 00 11 00
 mail 017c 00 01
 ctl bridge
 ev ok verb=bridge
@@ -37,6 +30,13 @@ pp 03 05 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 e0 80 2c 07 30 33
 ev call-out call=1 hs=1 line=1 codec=nb number=0301234
 fp 83 02 7e 06 01 00 81 02 01 83
 tick 200
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail fff1 07 18 95 00 00 11 00
 ctl remote-answered call=1
 ev ok verb=remote-answered call=1
 fp 83 07 7e 06 01 00 81 02 01 85
@@ -44,6 +44,7 @@ ev audio call=1 path=build/stubd-test-run/audio.sock
 mail 0251 01 01 2b
 mail 0230 01 01 00 00 00 00
 tick 500
+mail fff1 07 18 95 00 00 11 00
 mail 022d 01 00
 # A second call for DECT 1: call waiting in {CC-INFO}.
 ctl call-in line=1 hs=1 number=0307654321 name="Second" sip=t2

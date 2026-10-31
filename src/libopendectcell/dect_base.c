@@ -245,6 +245,8 @@ void dect_base_uak_verify(struct dect_base *b, uint8_t slot, uint64_t now)
 	addr = b->chip.uak_table + (uint32_t)(slot - 1u) * DECT_BASE_UAK_STRIDE;
 	b->check.uak_addr = addr;
 	b->check.uak_slot = slot;
+	b->check.uak_asked = now ? now : 1u;
+	b->check.uak_tries = 1;
 	/* 16 key bytes + the flag */
 	dect_base_mem_read(b, addr, DECT_BASE_UAK_STRIDE);
 }
@@ -301,6 +303,28 @@ void dect_base_slot_audit(struct dect_base *b, uint8_t mine, uint8_t kept,
 
 void dect_base_sub_check_tick(struct dect_base *b, uint64_t now)
 {
+	/*
+	 * A read-back can get no answer at all (2 of 36 on 06.88, 2026-10-31):
+	 * ask once more before reporting nothing.
+	 */
+	if (b->check.uak_addr && b->check.uak_asked &&
+	    now - b->check.uak_asked >= DECT_BASE_UAK_RETRY_MS) {
+		if (b->check.uak_tries < 2) {
+			dect_base_log(b, "sub: no answer to the key read-back "
+				      "for slot %u after %u ms -- asking once "
+				      "more", b->check.uak_slot,
+				      (unsigned)DECT_BASE_UAK_RETRY_MS);
+			b->check.uak_tries++;
+			b->check.uak_asked = now;
+			dect_base_mem_read(b, b->check.uak_addr,
+					   DECT_BASE_UAK_STRIDE);
+		} else {
+			dect_base_log(b, "sub: no answer to the key read-back "
+				      "for slot %u after two reads",
+				      b->check.uak_slot);
+			b->check.uak_asked = 0;
+		}
+	}
 	if (!b->check.at || now < b->check.at)
 		return;
 	b->check.at = 0;
@@ -387,6 +411,7 @@ void dect_base_mem_reply(struct dect_base *b, const struct dect_mail *m)
 	if (!b->check.uak_addr || addr != b->check.uak_addr)
 		return;			/* some other read */
 	b->check.uak_addr = 0;
+	b->check.uak_asked = 0;
 
 	if (m->param_len < 7u + DECT_MM_UAK_LEN) {
 		dect_base_log(b, "sub: UAK read-back for slot %u came back "
@@ -426,6 +451,8 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 
 	bl->active = 1;
 	bl->persisted = 0;
+	bl->reg_done_ms = 0;
+	bl->persist_force = 0;
 	bl->enrol_routed = 0;
 	bl->enrol_switched = 0;
 	bl->handle = handle;
@@ -474,7 +501,8 @@ int dect_base_main_registered(struct dect_base *b)
 	struct dect_base_link *bl = &b->main_link;
 	const struct dect_mm *mm = &bl->link.mm;
 
-	if (bl->persisted || !mm->subscribed || !mm->stats.located)
+	if (bl->persisted || !mm->subscribed ||
+	    (!mm->stats.located && !bl->persist_force))
 		return 0;
 	/* the key for later calls' ciphering, and across restarts */
 	memcpy(b->rec.uak, mm->uak, DECT_MM_UAK_LEN);
@@ -499,6 +527,30 @@ int dect_base_main_registered(struct dect_base *b)
 	return 1;
 }
 
+void dect_base_registration_tick(struct dect_base *b, uint64_t now)
+{
+	struct dect_base_link *bl = &b->main_link;
+	const struct dect_mm *mm = &bl->link.mm;
+
+	if (!bl->active || bl->persisted || !mm->subscribed ||
+	    mm->stats.located) {
+		bl->reg_done_ms = 0;
+		return;
+	}
+	if (!bl->reg_done_ms) {
+		bl->reg_done_ms = now ? now : 1u;
+		return;
+	}
+	if (now - bl->reg_done_ms < DECT_BASE_LOCATE_GRACE_MS)
+		return;
+	dect_base_log(b, "reg: the handset registered but did not do a location "
+		      "registration within %u ms -- persisting its key anyway",
+		      DECT_BASE_LOCATE_GRACE_MS);
+	bl->persist_force = 1;
+	if (dect_base_main_registered(b) && b->ops && b->ops->registered)
+		b->ops->registered(b->ctx, now);
+}
+
 unsigned dect_base_slot(const struct dect_base *b, unsigned i)
 {
 	if (i == b->cur) {
@@ -520,6 +572,8 @@ void dect_base_side_open(struct dect_base *b, struct dect_base_link *bl,
 
 	bl->active = 1;
 	bl->persisted = 0;
+	bl->reg_done_ms = 0;
+	bl->persist_force = 0;
 	bl->enrol_routed = 0;
 	bl->enrol_switched = 0;
 	bl->handle = handle;
@@ -4239,11 +4293,24 @@ const uint8_t *dect_base_ring_port_id(const struct dect_base *b, size_t *len)
 int dect_base_free_record(const struct dect_base *b)
 {
 	unsigned i;
+	int best = -1;
 
-	for (i = 0; i < b->n_hs; i++)
-		if (!b->loaded[i] && !b->remote[i] && b->absent[i])
-			return (int)i;
-	return -1;
+	/*
+	 * The free record with the lowest chip slot, not the first in list
+	 * order: after handsets were deleted one by one the list order and the
+	 * slot order differ, and the first new handset landed in slot 3
+	 * (2026-10-31). Ties and unset slots keep the list order.
+	 */
+	for (i = 0; i < b->n_hs; i++) {
+		unsigned slot = b->hs[i].slot ? b->hs[i].slot : 0xffffu;
+
+		if (b->loaded[i] || b->remote[i] || !b->absent[i])
+			continue;
+		if (best < 0 ||
+		    slot < (b->hs[best].slot ? b->hs[best].slot : 0xffffu))
+			best = (int)i;
+	}
+	return best;
 }
 
 void dect_base_main_page_response(struct dect_base *b,
@@ -4765,6 +4832,8 @@ int dect_base_side_promote(struct dect_base *b, unsigned k,
 	ml->enrol_switched = 0;
 	/* what a new connection resets (review, finding 8) */
 	ml->persisted = 0;
+	ml->reg_done_ms = 0;
+	ml->persist_force = 0;
 	/* a side link's cipher came along with it */
 	ml->cipher_started = ml->link.mm.cipher_state != DECT_MM_CIPHER_NONE;
 	ml->cipher_done = ml->link.mm.cipher_state == DECT_MM_CIPHER_READY ||
@@ -5273,6 +5342,7 @@ void dect_base_tick(struct dect_base *b, uint64_t now, int radio_on)
 	dect_base_main_dial_tick(b, now);
 	dect_base_info_tick(b, now);
 	dect_base_cs_connect_tick(b, now);
+	dect_base_registration_tick(b, now);
 	dect_base_nlr_tick(b, now);
 	dect_base_connect_tick(b, now);
 	dect_base_missed_changed_tick(b);

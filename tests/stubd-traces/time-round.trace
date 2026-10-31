@@ -18,17 +18,18 @@ mail 0247 03 00 00
 mail 0247 04 00 00
 mail 0247 05 00 00
 mail 0247 06 00 00
+mail 0247 01 01 00
+mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
+mail 017c 00 01
+tick 30000
 mail fff1 07 18 95 00 00 11 00
 mail fff1 07 29 95 00 00 11 00
 mail fff1 07 3a 95 00 00 11 00
 mail fff1 07 4b 95 00 00 11 00
 mail fff1 07 5c 95 00 00 11 00
 mail fff1 07 6d 95 00 00 11 00
-mail 0247 01 01 00
-mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
 mail fff1 07 18 95 00 00 11 00
-mail 017c 00 01
-tick 30000
+mail fff1 07 18 95 00 00 11 00
 tick 30500
 mail 0300 08 11 01
 mail f600

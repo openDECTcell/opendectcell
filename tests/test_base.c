@@ -109,6 +109,14 @@ static void install(void *ctx)
 }
 
 static unsigned pumps;
+static unsigned registered_calls;
+
+static void registered_cb(void *ctx, uint64_t now)
+{
+	(void)ctx;
+	(void)now;
+	registered_calls++;
+}
 
 static void pump(void *ctx, struct dect_base_link *bl)
 {
@@ -555,6 +563,128 @@ int main(void)
 		CHECK_EQ(b.main_link.persisted, 1);
 		CHECK_EQ(dect_base_main_registered(&b), 0);	/* once */
 		CHECK_EQ(installs, 1u);
+	}
+
+	/*
+	 * A handset that registers and does not locate on the same link (it
+	 * counts itself located already, a re-registration over its own record):
+	 * its key is persisted after the grace, not lost (API 140).
+	 */
+	{
+		struct dect_mm *mm = &b.main_link.link.mm;
+		static struct dect_base_ops rops;
+		const uint64_t t0 = 100000;
+
+		rops = ops;
+		rops.registered = registered_cb;
+		b.ops = &rops;
+		b.ctx = &saved_i;
+		b.rec.uak_valid = 0;
+		b.rec.port_id_len = 0;
+		b.main_link.active = 1;
+		b.main_link.persisted = 0;
+		b.main_link.reg_done_ms = 0;
+		b.main_link.persist_force = 0;
+		mm->subscribed = 1;
+		mm->stats.located = 0;
+		memset(mm->uak, 0x55, DECT_MM_UAK_LEN);
+		memcpy(mm->port_id, "\x80\xa8\x03\x01\x02\x03\x05", 7);
+		mm->port_id_len = 7;
+		installs = 0;
+		registered_calls = 0;
+
+		dect_base_registration_tick(&b, t0);		/* starts the grace */
+		CHECK_EQ(dect_base_main_registered(&b), 0);	/* not located */
+		dect_base_registration_tick(&b, t0 + DECT_BASE_LOCATE_GRACE_MS - 1);
+		CHECK_EQ(b.main_link.persisted, 0);
+		dect_base_registration_tick(&b, t0 + DECT_BASE_LOCATE_GRACE_MS);
+		CHECK_EQ(b.main_link.persisted, 1);
+		CHECK_EQ(installs, 1u);
+		CHECK_EQ(registered_calls, 1u);
+		CHECK_EQ(b.rec.uak[0], 0x55);
+		dect_base_registration_tick(&b, t0 + 10 * DECT_BASE_LOCATE_GRACE_MS);
+		CHECK_EQ(installs, 1u);				/* once */
+
+		/* a handset that does locate is persisted by the mail path, and the
+		 * tick does nothing for it */
+		b.main_link.persisted = 0;
+		b.main_link.reg_done_ms = 0;
+		b.main_link.persist_force = 0;
+		mm->stats.located = 1;
+		installs = 0;
+		registered_calls = 0;
+		dect_base_registration_tick(&b, t0);
+		dect_base_registration_tick(&b, t0 + 10 * DECT_BASE_LOCATE_GRACE_MS);
+		CHECK_EQ(b.main_link.persisted, 0);
+		CHECK_EQ(installs, 0u);
+		mm->stats.located = 0;
+		mm->subscribed = 0;
+		b.main_link.active = 0;
+		b.ops = &ops;
+	}
+
+	/* a new handset takes the free record with the lowest slot (API 140) */
+	{
+		const unsigned n0 = b.n_hs;
+		uint8_t sl[3], ld[3], rm[3], ab[3];
+		unsigned i;
+
+		for (i = 0; i < 3; i++) {
+			sl[i] = (uint8_t)b.hs[i].slot;
+			ld[i] = (uint8_t)b.loaded[i];
+			rm[i] = (uint8_t)b.remote[i];
+			ab[i] = (uint8_t)b.absent[i];
+			b.loaded[i] = 0;
+			b.remote[i] = 0;
+			b.absent[i] = 1;
+		}
+		b.n_hs = 3;
+		b.hs[0].slot = 3;	/* list order 0, 1, 2 = slots 3, 2, 1 */
+		b.hs[1].slot = 2;
+		b.hs[2].slot = 1;
+		CHECK_EQ(dect_base_free_record(&b), 2);		/* slot 1 */
+		b.loaded[2] = 1;
+		CHECK_EQ(dect_base_free_record(&b), 1);		/* slot 2 */
+		b.remote[1] = 1;
+		CHECK_EQ(dect_base_free_record(&b), 0);		/* slot 3 */
+		b.loaded[0] = 1;
+		CHECK_EQ(dect_base_free_record(&b), -1);
+		b.n_hs = n0;
+		for (i = 0; i < 3; i++) {
+			b.hs[i].slot = sl[i];
+			b.loaded[i] = ld[i];
+			b.remote[i] = rm[i];
+			b.absent[i] = ab[i];
+		}
+	}
+
+	/* the key read-back is asked once more when nothing answers (API 140) */
+	{
+		const uint64_t t0 = 5000;
+		const uint32_t table0 = b.chip.uak_table;
+		const uint32_t delay0 = b.chip.check_delay_ms;
+		unsigned n0;
+
+		b.ops = &ops;
+		b.chip.uak_table = 0x9518;
+		b.chip.check_delay_ms = 0;
+		memset(&b.check, 0, sizeof(b.check));
+		n_sent = 0;
+		dect_base_uak_verify(&b, 1, t0);
+		n0 = n_sent;
+		CHECK_EQ(n0, 1u);				/* the read */
+		dect_base_sub_check_tick(&b, t0 + DECT_BASE_UAK_RETRY_MS - 1);
+		CHECK_EQ(n_sent, n0);				/* not yet */
+		log_all[0] = '\0';
+		dect_base_sub_check_tick(&b, t0 + DECT_BASE_UAK_RETRY_MS);
+		CHECK_EQ(n_sent, n0 + 1u);			/* once more */
+		CHECK(strstr(log_all, "asking once more") != NULL);
+		dect_base_sub_check_tick(&b, t0 + 2 * DECT_BASE_UAK_RETRY_MS);
+		CHECK_EQ(n_sent, n0 + 1u);			/* not a third */
+		CHECK(strstr(log_all, "after two reads") != NULL);
+		memset(&b.check, 0, sizeof(b.check));
+		b.chip.uak_table = table0;
+		b.chip.check_delay_ms = delay0;
 	}
 
 	/* the ring's sequencing (S3n) */

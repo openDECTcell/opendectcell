@@ -202,9 +202,13 @@ struct dect_base_chip {
  * S2.2b: the chip's subscription table read back. The writes have no reply
  * and no error path, so a memory read is the only way to see them land.
  */
+#define DECT_BASE_UAK_RETRY_MS	500u	/* ask the read-back again after this long */
+
 struct dect_base_sub_check {
 	uint32_t uak_addr;	/* the outstanding UAK read-back, 0 = none */
 	uint8_t  uak_slot;
+	uint8_t  uak_tries;	/* the read-back was asked this often (max 2) */
+	uint64_t uak_asked;	/* when it was last asked, 0 = answered or none */
 	uint8_t  pending;	/* audit: reads still out, bit n-1 for slot n */
 	uint8_t  occupied;	/* audit: slots that came back holding a key */
 	uint8_t  mine;		/* audit: the slot we believe is ours */
@@ -228,6 +232,8 @@ struct dect_base_link {
 	 */
 	struct dect_link link;
 	int      persisted;		/* the subscription went into the chip */
+	uint64_t reg_done_ms;		/* the key allocation completed (0 = not yet) */
+	int      persist_force;		/* persist without a location registration */
 	enum dect_mm_state reported_state;	/* MM's state last logged */
 	int      enrol_routed;		/* this enrolment's record is chosen */
 	int      enrol_switched;	/* ... and it moved off record 0 */
@@ -716,6 +722,18 @@ int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
  * that happened now, else 0.
  */
 int dect_base_main_registered(struct dect_base *b);
+
+/*
+ * A handset that registers does a location registration on the same link,
+ * and the subscription is persisted after it (above). A handset that already
+ * counts itself located at this base (a re-registration over its own record)
+ * may skip that step, and the new key was then never stored while the handset
+ * held it (2026-10-31, C430A on the 7412). Called with the time every tick:
+ * DECT_BASE_LOCATE_GRACE_MS after the key allocation completed without a
+ * location registration, the subscription is persisted anyway (API 140).
+ */
+#define DECT_BASE_LOCATE_GRACE_MS	2000u
+void dect_base_registration_tick(struct dect_base *b, uint64_t now);
 
 /*
  * Stage S3a, a call's ciphering. Record i's key (the working copy for the

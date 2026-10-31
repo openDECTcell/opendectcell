@@ -17,17 +17,10 @@ mail 0247 03 00 00
 mail 0247 04 00 00
 mail 0247 05 00 00
 mail 0247 06 00 00
-mail fff1 07 18 95 00 00 11 00
-mail fff1 07 29 95 00 00 11 00
-mail fff1 07 3a 95 00 00 11 00
-mail fff1 07 4b 95 00 00 11 00
-mail fff1 07 5c 95 00 00 11 00
-mail fff1 07 6d 95 00 00 11 00
 mail 0247 02 01 00
 mail 020a 02 c0 c1 c2 c3 c4 c5 c6 c7 c8 c9 ca cb cc cd ce cf 00
 mail 0247 01 01 00
 mail 020a 01 b0 b1 b2 b3 b4 b5 b6 b7 b8 b9 ba bb bc bd be bf 00
-mail fff1 07 18 95 00 00 11 00
 mail 017c 00 03
 
 up 1
@@ -37,6 +30,13 @@ pp 03 05 05 07 80 a8 03 11 22 33 44 06 07 a0 a5 00 01 23 45 60 e0 90 2c 01 32 a1
 fp 83 02 7e 0c 00 00 81 00 05 81 01 00 81 02 01 83
 fp 05 40 0a 03 01 18 18 0c 08 53 78 9d c2 e7 0c 31 56 0e 08 7b a0 c5 ea 0f 34 59 7e
 tick 200
+mail fff1 07 18 95 00 00 11 00
+mail fff1 07 29 95 00 00 11 00
+mail fff1 07 3a 95 00 00 11 00
+mail fff1 07 4b 95 00 00 11 00
+mail fff1 07 5c 95 00 00 11 00
+mail fff1 07 6d 95 00 00 11 00
+mail fff1 07 18 95 00 00 11 00
 # DECT 1 authenticates (UAK b0..bf): RES1 for the RAND_F and RS above;
 # the chip reports its link ciphered.
 pp 85 41 0d 04 24 41 aa 1a
@@ -46,6 +46,7 @@ mail 0300 2c 11 02
 tick 200
 chip 0209 01
 tick 500
+mail fff1 07 18 95 00 00 11 00
 # DECT 2 answers the page: link on handle 2, {LCE-PAGE-RESPONSE}.
 up 2
 pp 00 71 05 07 80 a8 03 55 66 77 88

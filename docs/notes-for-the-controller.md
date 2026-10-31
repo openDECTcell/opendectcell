@@ -1015,3 +1015,28 @@ user's window, registration open on many cells at once).
   will be API 140, after the maintainer's T-C test.
 - **The pin of the submodule** stays where you want it; at API 139 your
   `cdect.h` check needs `139`.
+
+## API 140: a registration is always saved; the lowest slot; the read-back asked twice `[2026-10-31, evening]`
+
+Three fixes found at the bench on 2026-10-31, one struct change, hence 140
+(openDECTcell `docs/api-versions.md`):
+
+- **A handset that registers and does not locate on that link is now
+  persisted anyway**, 2 s after the key allocation (`DECT_BASE_LOCATE_GRACE_MS`).
+  Before, the `save()` callback fired only after the handset's location
+  registration on the same link, so a handset re-registering over its own
+  record (it counts itself located) kept its new key while the base kept the
+  old one. The call is `dect_base_registration_tick(b, now)`, made by
+  `dect_base_tick()`; a host that calls its own ticks (as `dect-stubd` does)
+  must call it too. Your `host.c` copy of the glue needs the same call.
+- **A new handset takes the free record with the lowest slot**
+  (`dect_base_free_record()`), not the first in list order. If your stack
+  chooses the record itself, nothing changes for you.
+- **The key read-back is asked once more after 500 ms** when nothing answers,
+  and `dect-stubd` waits 50 ms before the first read on every build. Your 50 ms
+  (§0j) stays right; the library now does the repeat itself.
+
+Bench results of the same day (T-B, T-C, registration during a call) are in
+the maintainers' notes and §0m of your repo. **The pin of the submodule** needs
+`140` in `cdect.h` when you take it.
+
