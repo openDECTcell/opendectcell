@@ -580,6 +580,8 @@ struct stubd {
 		uint8_t  flow;		/* §9.3 FLOW state last sent */
 		int      active;	/* CELL_STATE active: mails may go down */
 		uint32_t epoch;		/* chip sessions since start */
+		uint8_t  rfpi[5];	/* the RFPI the chip reports (0xF601) */
+		int      have_rfpi;
 		uint8_t  handles;	/* links up, bit per handle 0..7 */
 		uint8_t  tag[8][3];	/* each one's handset tag (0x0203) */
 		uint32_t up, down, rejected, lost_up;
@@ -6444,6 +6446,8 @@ static void cell_status(struct stubd *s, uint64_t now)
 	dect_cell_tlv_u32(&t, 3, s->cell.epoch);
 	dect_cell_tlv_u32(&t, 4, (uint32_t)((now - g_start) / 1000u));
 	dect_cell_tlv_str(&t, 5, detail);
+	if (s->cell.have_rfpi)
+		dect_cell_tlv_put(&t, 6, s->cell.rfpi, sizeof(s->cell.rfpi));
 	if (!t.err)
 		(void)cell_send(s, DECT_CELL_STATUS, 0, b, t.len);
 }
@@ -6971,6 +6975,22 @@ static void cell_tick(struct stubd *s, uint64_t now)
  * and are not printed; the verdict names the octets that differ (the 5th
  * holds the RPN's low bits).
  */
+/*
+ * The RFPI the chip broadcasts, from its contact answer, kept for the
+ * controller (STATUS tag 6, HELLO tag 17): it compares it with the identity
+ * it wants this cell to have. Returns 1 when it is new or changed.
+ */
+static int cell_rfpi_note(struct stubd *s, const struct dect_mail *m)
+{
+	if (m->prim != DECT_PRIM_CONTACT_ACK1 || m->param_len < 5u)
+		return 0;
+	if (s->cell.have_rfpi && !memcmp(s->cell.rfpi, m->param, 5))
+		return 0;
+	memcpy(s->cell.rfpi, m->param, 5);
+	s->cell.have_rfpi = 1;
+	return 1;
+}
+
 static void rfpi_check(const struct stubd *s, const struct dect_mail *m)
 {
 	char diff[32] = "";
@@ -7289,6 +7309,8 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 						log_mail(&m, "rx  ", s->show_params);
 					dect_session_rx(&s->sess, &m, now);
 					rfpi_check(s, &m);
+					if (s->cell_mode && cell_rfpi_note(s, &m))
+						cell_status(s, now);
 					if (s->do_register)
 						handle_reg_mail(s, &m, now);
 					else if (s->cell_mode) {

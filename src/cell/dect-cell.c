@@ -27,6 +27,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/un.h>
@@ -63,6 +64,8 @@
 #define RX_BUF		(2u * DECT_CELL_FRAME_MAX)
 
 static const char *dir = CELL_DIR;
+/* what a new RFPI sets going: the init script, which uploads the chip afresh */
+static const char *restart_cmd = "/etc/init.d/opendectcell";
 static const char *stubd_path = STUBD_SOCK;
 static const char *audio_path = AUDIO_SOCK;
 static int allow_plain;		/* -P: the admin allows plain RTP (§8.1) */
@@ -740,7 +743,7 @@ static int forget(void)
 {
 	static const char *const names[] = { "key.pem", "cert.der", "ca.der",
 					     "enrollment", "key.pem.new",
-					     "cert.der.new" };
+					     "cert.der.new", "rfpi", "rfpi.tried" };
 	unsigned i;
 	char p[256];
 
@@ -896,6 +899,8 @@ struct link {
 	uint8_t radio, chip;
 	uint32_t epoch;
 	char stub[64];
+	uint8_t rfpi[5];		/* STATUS tag 6: the RFPI the chip broadcasts */
+	int have_rfpi;
 	/* the session */
 	uint8_t cell_state;
 	uint16_t heartbeat_ms, dead_ms;
@@ -1091,6 +1096,10 @@ static int hello(struct link *l)
 	dect_cell_tlv_u64(&t, 15, (uint64_t)ts.tv_sec * 1000u +
 			  (uint64_t)ts.tv_nsec / 1000000u);
 	dect_cell_tlv_put(&t, 16, formats, sizeof(formats));
+	/* tag 17: the RFPI the chip broadcasts, so the controller can tell
+	 * whether this cell has the identity it wants */
+	if (l->have_rfpi)
+		dect_cell_tlv_put(&t, 17, l->rfpi, sizeof(l->rfpi));
 	if (t.err)
 		return -1;
 	return tls_send(&l->tls, DECT_CELL_HELLO, 1, b, t.len);
@@ -1776,6 +1785,107 @@ static void stats_send(struct link *l, uint16_t corr, const uint8_t *body,
 	ctl_send(l, DECT_CELL_STATS, corr, b, len + t.len, now);
 }
 
+/* ---- the DECT identity (CONFIG_SET tag 6) ----------------------------- */
+
+static void hex_put(char *out, const uint8_t *b, size_t n)
+{
+	static const char d[] = "0123456789abcdef";
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		out[2 * i] = d[b[i] >> 4];
+		out[2 * i + 1] = d[b[i] & 15u];
+	}
+	out[2 * n] = '\0';
+}
+
+/* The init script reads this file at every start (rfpi_test) and uploads
+ * the chip with it as tag 1. */
+static int identity_file(const char *name, const char *hex)
+{
+	unsigned char cur[16];
+	long n = file_get(name, cur, sizeof(cur));
+
+	if (n >= 10 && !memcmp(cur, hex, 10))
+		return 0;
+	return file_put(name, hex, 10, 0600);
+}
+
+/*
+ * The controller wants this cell to broadcast rfpi. Class A or B only (ARC 000
+ * or 001, E bit 0). The wish goes into the file the init script reads. If the
+ * chip reports another RFPI the service restarts, which uploads the chip
+ * again, once per value asked for: a chip that still reports another after the
+ * reload does not get a loop. 0 accepted, -1 refused.
+ */
+static int identity_apply(struct link *l, const uint8_t rfpi[5], int *restart)
+{
+	char want[11];
+	unsigned char tried[16];
+	long n;
+
+	hex_put(want, rfpi, 5);
+	if ((rfpi[0] & 0x80u) || ((rfpi[0] >> 4) & 7u) > 1u) {
+		logf_("identity refused: %s is not a class A or B RFPI", want);
+		return -1;
+	}
+	if (identity_file("rfpi", want)) {
+		logf_("identity: cannot write %s/rfpi", dir);
+		return -1;
+	}
+	if (!l->have_rfpi) {
+		logf_("identity %s stored; the chip's RFPI is not known yet, "
+		      "it takes effect at the next chip load", want);
+		return 0;
+	}
+	if (!memcmp(l->rfpi, rfpi, 5)) {
+		logf_("identity: the chip already broadcasts %s", want);
+		return 0;
+	}
+	n = file_get("rfpi.tried", tried, sizeof(tried));
+	if (n >= 10 && !memcmp(tried, want, 10)) {
+		logf_("identity: the chip still reports another RFPI after a "
+		      "reload with %s; not reloading again", want);
+		return -1;
+	}
+	if (file_put("rfpi.tried", want, 10, 0600)) {
+		logf_("identity: cannot write %s/rfpi.tried", dir);
+		return -1;
+	}
+	logf_("identity: a new RFPI %s: the chip is reloaded", want);
+	*restart = 1;
+	return 0;
+}
+
+/*
+ * Restart the service from outside it: the restart stops this process too,
+ * so it runs in a session of its own and waits a second for the ack to leave.
+ */
+static void restart_service(void)
+{
+	pid_t p = fork();
+	int fd;
+
+	if (p < 0)
+		return;
+	if (p > 0) {
+		(void)waitpid(p, NULL, 0);
+		return;
+	}
+	if (setsid() < 0 || fork() != 0)
+		_exit(0);
+	signal(SIGINT, SIG_DFL);
+	signal(SIGTERM, SIG_DFL);
+	for (fd = 0; fd < 1024; fd++)
+		(void)close(fd);
+	(void)open("/dev/null", O_RDWR);
+	(void)dup(0);
+	(void)dup(0);
+	(void)sleep(1);
+	execl(restart_cmd, restart_cmd, "restart", (char *)NULL);
+	_exit(127);
+}
+
 /* A frame from the controller. */
 static void from_controller(struct link *l, const struct dect_cell_frame *f,
 			    uint64_t now)
@@ -1862,13 +1972,30 @@ static void from_controller(struct link *l, const struct dect_cell_frame *f,
 		break;
 	}
 	case DECT_CELL_CONFIG_SET: {
-		/* nothing of §10 is applied yet: "partially applied" */
+		/*
+		 * Of §10 only tag 6, the DECT identity, is applied (the rest is
+		 * "partially applied", status 1). The identity is not a runtime
+		 * setting of the chip: it is patched into the firmware at upload
+		 * (room A-0131), so a new one means a reload.
+		 */
 		uint8_t b[8];
 		struct dect_cell_tlv t;
+		size_t rn = 0;
+		const uint8_t *r = dect_cell_tlv_check(f->body, f->len) ? NULL :
+				   dect_cell_tlv_get(f->body, f->len, 6, &rn);
+		int restart = 0;
+		uint16_t status = 1;
 
+		/* status 0 only if the identity was all the message held
+		 * (one TLV: 3 octets of header and 5 of RFPI) */
+		if (r && rn == 5u && identity_apply(l, r, &restart) == 0 &&
+		    f->len == 8u)
+			status = 0;
 		dect_cell_tlv_init(&t, b, sizeof(b));
-		dect_cell_tlv_u16(&t, 1, 1);
+		dect_cell_tlv_u16(&t, 1, status);
 		ctl_send(l, DECT_CELL_CONFIG_ACK, f->corr, b, t.len, now);
+		if (restart)
+			restart_service();
 		break;
 	}
 	case DECT_CELL_GOODBYE: {
@@ -1929,6 +2056,15 @@ static void from_stubd(struct link *l, const uint8_t *buf, size_t n,
 		(void)dect_cell_tlv_get_u8(f.body, f.len, 1, &l->radio);
 		(void)dect_cell_tlv_get_u8(f.body, f.len, 2, &l->chip);
 		(void)dect_cell_tlv_get_u32(f.body, f.len, 3, &l->epoch);
+		{
+			size_t rn = 0;
+			const uint8_t *r = dect_cell_tlv_get(f.body, f.len, 6, &rn);
+
+			if (r && rn == sizeof(l->rfpi)) {
+				memcpy(l->rfpi, r, sizeof(l->rfpi));
+				l->have_rfpi = 1;
+			}
+		}
 		if (d && dn < sizeof(l->stub)) {
 			memcpy(l->stub, d, dn);
 			l->stub[dn] = 0;
@@ -2197,6 +2333,8 @@ static void usage(void)
 		"  -d DIR     credentials (default " CELL_DIR ")\n"
 		"  -s SOCKET  dect-stubd's socket (default " STUBD_SOCK ")\n"
 		"  -a SOCKET  dect-stubd's audio socket (default " AUDIO_SOCK ")\n"
+		"  -R CMD     what restarts the service when the controller sets a\n"
+		"             new DECT identity: CMD restart (default /etc/init.d/opendectcell)\n"
 		"  -P         allow plain RTP, unencrypted, for media sessions\n"
 		"             (an admin's choice: trusted networks only)\n");
 }
@@ -2205,11 +2343,12 @@ int main(int argc, char **argv)
 {
 	int c;
 
-	while ((c = getopt(argc, argv, "d:s:a:Pvh")) != -1) {
+	while ((c = getopt(argc, argv, "d:s:a:R:Pvh")) != -1) {
 		switch (c) {
 		case 'd': dir = optarg; break;
 		case 's': stubd_path = optarg; break;
 		case 'a': audio_path = optarg; break;
+		case 'R': restart_cmd = optarg; break;
 		case 'P': allow_plain = 1; break;
 		case 'v': verbose = 1; break;
 		default: usage(); return c == 'h' ? 0 : 2;

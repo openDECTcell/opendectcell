@@ -30,7 +30,11 @@ and is then put through cases from the security review of 2026-10-30
      life, the cell asks for a new one at once, stores it with its new key
      and presents it on the next connection; a renewal cut short between
      the two renames is completed at the next start; an expired
-     certificate stops the cell before it dials.
+     certificate stops the cell before it dials;
+  9. identity (CONFIG_SET tag 6): the chip's RFPI from dect-stubd's STATUS
+     goes into HELLO (tag 17); a new RFPI is stored for the init script and
+     restarts the service once, a repeat does not loop, the chip's own RFPI
+     only stores, a class that is not A or B is refused (status 1).
 
     python3 -I tests/test_cell_link.py build/dect-cell-test
 """
@@ -61,6 +65,7 @@ spec.loader.exec_module(tp)
 HELLO, HELLO_ACK, HEARTBEAT, ECHO, GOODBYE, ERROR = 1, 2, 3, 4, 5, 6
 RENEW_REQUEST, RENEW_RESPONSE = 0x210, 0x211
 MAIL_DOWN, CELL_STATE, STATUS = 0x101, 0x200, 0x203
+CONFIG_SET, CONFIG_ACK = 0x201, 0x202
 MEDIA_OPEN, MEDIA_OPEN_ACK, MEDIA_CLOSE, MEDIA_CLOSED = 0x300, 0x301, 0x302, \
     0x303
 # HELLO_ACK tag 10: mail, media, SRTP, stats, flow, resume (not plain RTP)
@@ -93,7 +98,8 @@ class Stubd:
     what it sends down is kept per session.
     """
 
-    def __init__(self, path, audio=None):
+    def __init__(self, path, audio=None, rfpi=None):
+        self.rfpi = rfpi           # STATUS tag 6, the RFPI the chip reports
         self.frames = []
         self.audio = {}            # media id -> connection
         self.hello = {}            # media id -> its hello
@@ -113,7 +119,8 @@ class Stubd:
             c, _ = self.ls.accept()
             c.send(tp.frame(STATUS, 0, tp.tlv([
                 (1, b"\0"), (2, b"\2"), (3, struct.pack(">I", 1)),
-                (4, struct.pack(">I", 5)), (5, b"test")])))
+                (4, struct.pack(">I", 5)), (5, b"test")] +
+                ([(6, self.rfpi)] if self.rfpi else []))))
             while True:
                 try:
                     m = c.recv(8192)
@@ -172,6 +179,7 @@ class Controller:
         self.peer = tp.Peer(a)
         self.scripts = []
         self.hellos = 0
+        self.hello_body = b""
         self.certs = []            # each connection's cell certificate
         threading.Thread(target=self.serve, daemon=True).start()
 
@@ -195,6 +203,7 @@ class Controller:
             if t != HELLO:
                 return
             self.hellos += 1
+            self.hello_body = body
             self.certs.append(s.getpeercert(binary_form=True))
             script = self.scripts.pop(0) if self.scripts else None
             if script:
@@ -526,6 +535,63 @@ def expired(exe, ctl, d, env):
     return out
 
 
+def identity(exe, ctl, d, env):
+    """Case 9: the controller sets the cell's DECT identity."""
+    cell = os.path.join(d, "cell-identity")
+    os.mkdir(cell, 0o700)
+    r = enrol_dated(exe, ctl, cell, env, -1, 89)
+    sock = os.path.join(d, "stubd4.sock")
+    chip = bytes.fromhex("0102030405")
+    other = bytes.fromhex("10f4201101")          # class B, RPN 1
+    class_c = bytes.fromhex("20f4201101")        # ARC 010: refused
+    Stubd(sock, rfpi=chip)
+    marker = os.path.join(d, "restarted")
+    fake = os.path.join(d, "restart.sh")
+    with open(fake, "w") as f:
+        f.write("#!/bin/sh\necho \"$1\" >> %s\n" % marker)
+    os.chmod(fake, 0o755)
+    acks = []
+
+    def script(s, corr):
+        reader(s, acks)
+        s.sendall(hello_ack(corr, 1))
+        for want in (other, other, chip, class_c):
+            time.sleep(1.5)
+            s.sendall(tp.frame(CONFIG_SET, 0x40 + len(acks),
+                               tp.tlv([(6, want)])))
+        time.sleep(3)
+
+    ctl.scripts.append(script)
+    p = subprocess.Popen([exe, "-d", cell, "-s", sock, "-R", fake, "run"],
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         text=True, env=env)
+    out = []
+    threading.Thread(target=lambda: out.extend(p.stdout), daemon=True).start()
+    check(r.returncode == 0 and wait_for(lambda: len(ctl.hello_body or b"") >
+                                         0, 10), "identity: connected")
+    hello = tp.parse_tlv(ctl.hello_body)
+    check(hello.get(17) == chip, "HELLO tag 17 is the RFPI the chip reports")
+    check(wait_for(lambda: len([a for a in acks if a[0] == CONFIG_ACK]) >= 4,
+                   14), "four CONFIG_ACKs")
+    st = [tp.parse_tlv(b).get(1) for t, c, b in acks if t == CONFIG_ACK]
+    check(st == [b"\0\0", b"\0\1", b"\0\0", b"\0\1"],
+          "ack status: new identity ok, repeat refused (no loop), the chip's "
+          "own ok, class C refused: %r" % st)
+    f = os.path.join(cell, "rfpi")
+    check(os.path.exists(f) and open(f).read() == chip.hex(),
+          "the file the init script reads holds the last accepted RFPI")
+    time.sleep(2.5)         # the restart waits a second before it runs
+    check(os.path.exists(marker) and open(marker).read() == "restart\n",
+          "the service was restarted exactly once")
+    p.send_signal(signal.SIGTERM)
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        p.kill()
+    time.sleep(0.2)
+    return "".join(out)
+
+
 def silent(exe, cell, env):
     """Case 6: the enrolment pointed at a listener that never speaks."""
     ls = socket.create_server(("127.0.0.1", 0))
@@ -690,6 +756,8 @@ def main():
           not os.path.exists(os.path.join(cell, "key.pem.new")),
           "a renewal cut short is completed at the next start")
     out += expired(exe, ctl, d, env)
+    ctl.hello_body = b""
+    out += identity(exe, ctl, d, env)
     if "Sanitizer" in out or failed:
         print(out)
     check("Sanitizer" not in out, "no sanitizer report")

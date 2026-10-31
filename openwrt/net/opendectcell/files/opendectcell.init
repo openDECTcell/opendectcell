@@ -125,9 +125,17 @@ uci_get() {
 # the chip reports it back (rfpicheck=). Empty: the factory RFPI as always.
 # Remove it after the test; the upload only runs when the chip is booted
 # afresh (no /var/run/opendectcell/stub.second).
+#
+# A cell whose controller set a DECT identity (CONFIG_SET, dect-cell writes
+# /etc/opendectcell/cell/rfpi) takes that when rfpi_test is not set.
 rfpi_test() {
-	local v
+	local v role
 	uci_get v rfpi_test '' '0-9A-Fa-f'
+	if [ ${#v} -ne 10 ]; then
+		config_get role main role base
+		[ "$role" = cell ] &&
+			v=$(tr -cd '0-9A-Fa-f' < /etc/opendectcell/cell/rfpi 2>/dev/null)
+	fi
 	[ ${#v} -eq 10 ] && echo "$v"
 }
 
@@ -805,5 +813,7 @@ cell_leave() {
 	[ -x "$CELL" ] && "$CELL" forget
 	uci -q set opendectcell.main.role=base && uci -q commit opendectcell
 	log "cell mode left: the base runs with the handsets it had"
+	# a chip patched with the system's identity goes back to the factory one
+	rm -f /var/run/opendectcell/stub.second
 	restart
 }
