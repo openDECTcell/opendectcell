@@ -479,6 +479,7 @@ int dect_base_main_registered(struct dect_base *b)
 	/* the key for later calls' ciphering, and across restarts */
 	memcpy(b->rec.uak, mm->uak, DECT_MM_UAK_LEN);
 	b->rec.uak_valid = 1;
+	b->rec.reg_pin1 = mm->reg_pin >= 0 ? (unsigned)mm->reg_pin + 1u : 0u;
 	/*
 	 * The identity gate for every later link, as a stored record arms it:
 	 * a {LOCATE-REQUEST} is rejected when nothing is armed, and a handset
@@ -4513,6 +4514,15 @@ static void link_mm_cfg(const struct dect_base *b, struct dect_mm_cfg *mcfg)
 	memset(mcfg, 0, sizeof(*mcfg));
 	if (b->cfg.pin)
 		snprintf(mcfg->pin, sizeof(mcfg->pin), "%s", b->cfg.pin);
+	if (b->cfg.reg_pins && b->cfg.n_reg_pins) {
+		unsigned i, n = b->cfg.n_reg_pins < DECT_MM_REG_PINS_MAX
+				? b->cfg.n_reg_pins : DECT_MM_REG_PINS_MAX;
+
+		for (i = 0; i < n; i++)
+			snprintf(mcfg->reg_pins[i], sizeof(mcfg->reg_pins[i]),
+				 "%s", b->cfg.reg_pins[i] ? b->cfg.reg_pins[i] : "");
+		mcfg->n_reg_pins = n;
+	}
 	mcfg->authenticate = 1;
 	mcfg->narrowband_only = (uint8_t)b->cfg.narrowband;
 	if (b->have_rfpi)

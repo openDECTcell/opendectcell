@@ -984,3 +984,34 @@ MEDIA_OPEN no longer answers status 4. What the cell does (cell-protocol.md
   one-time token was readable in `/proc` for up to a minute before. An
   older init or a CLI user passing the string itself still works. Nothing
   changes on the wire.
+
+## Several registration PINs at once, API 139 `[2026-10-31, evening]`
+
+For the registration flow in the controller maintainers' notes (one PIN per
+user's window, registration open on many cells at once).
+
+- **What a handset does:** it connects to a base first, and only then asks
+  its user for the PIN; the base checks the handset's reply (RES1) against
+  the key derived from a PIN. So the PIN is not needed to *find* the base,
+  and the base can try several PINs against one reply. Which one matched
+  tells you the user.
+- **The API (139):** `dect_base_cfg.reg_pins` (an array of decimal strings,
+  4 to 8 digits, owned by you) and `n_reg_pins` (at most 32,
+  `DECT_MM_REG_PINS_MAX`). A handset that proves one of them registers; the
+  record `save()` sees has **`reg_pin1` = 1 + the index** of the PIN it
+  proved (0 for a stored or loaded record). With `n_reg_pins` 0 the single
+  `cfg.pin` is the only candidate, as before. `cfg.pin` stays the PIN of the
+  list access service (deleting a handset from a handset's list); keep it
+  apart from the registration PINs.
+- **Cost:** a few DSAA computations per handset attempt (every candidate is
+  computed so the time does not leak which matched); nothing on the air. A
+  PIN list change takes effect for the next link, not one already in its
+  registration.
+- **Equal PINs:** the first wins; the controller must not issue two live
+  PINs that are equal.
+- **Correction of an earlier note:** `dect_base_cfg.tpui_offset` (openDECTcell
+  `148daa7`, the TPUI test knob) changed a public struct and should have
+  bumped the API; it is part of 139 now. The per-record TPUI for your pool
+  will be API 140, after the maintainer's T-C test.
+- **The pin of the submodule** stays where you want it; at API 139 your
+  `cdect.h` check needs `139`.

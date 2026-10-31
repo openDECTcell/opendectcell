@@ -50,6 +50,13 @@ struct dect_hs_rec {
 	 * may overwrite it.
 	 */
 	int      cc_id_learned;
+	/*
+	 * 1 + the index of the registration PIN the handset proved when this
+	 * record was created by a registration in this run (cfg.reg_pins, or 1
+	 * for cfg.pin); 0 for a record that was stored or loaded. The host maps
+	 * it to the user whose window issued that PIN. API 139.
+	 */
+	unsigned reg_pin1;
 };
 
 /*
@@ -366,6 +373,15 @@ struct dect_base_cfg {
 	unsigned ring_attach_ms;	/* ringattach= test timing */
 	unsigned time_every_min;	/* the periodic date and time */
 	const char *pin;	/* the base PIN, decimal; NULL: none (S4d) */
+	/*
+	 * Registration PINs, several at once (API 139): each a decimal string of
+	 * 4 to 8 digits, the array owned by the host and valid while the base
+	 * runs. A handset proves one of them; the record's reg_pin1 says which.
+	 * n_reg_pins 0: `pin` alone, as before. `pin` stays the PIN of the list
+	 * access service (deleting a handset) either way.
+	 */
+	const char *const *reg_pins;
+	unsigned n_reg_pins;
 	const char *line_name;	/* Line 1's default name, NULL: "Line 1" (S3x) */
 	/* codeclist=: a <<CODEC-LIST>> for FP-originated SETUPs (S3z) */
 	uint8_t  codeclist[31];

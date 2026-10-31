@@ -927,3 +927,21 @@ visible, renaming allowed). The filter runs where a link's view is set up
 (`dect_base_iwu_lines()`, after every change of the link's own handset)
 and in `dect_base_names_spread()`; after a change of the answers call
 `dect_base_names_refresh()`. For the controller (list-access.md §1.1).
+
+**139.** dect_mm.h, dect_base.h, 2026-10-31: several registration PINs at
+once, and the TPUI test knob. `dect_mm_cfg` gains `n_reg_pins` and
+`reg_pins[DECT_MM_REG_PINS_MAX = 32][DECT_MM_PIN_MAX]`; `dect_mm` gains
+`reg_pin` (the index of the PIN the handset proved, -1 none);
+`dect_base_cfg` gains `reg_pins` (an array of strings owned by the host)
+and `n_reg_pins`; `dect_hs_rec` gains `reg_pin1` (1 + that index for a
+record created by a registration in this run, 0 otherwise), which the
+`save()` callback sees. With `n_reg_pins` 0 `cfg.pin` is the only
+candidate, as before; `cfg.pin` stays the list access service's PIN. The
+handset's reply is checked against every candidate (the work does not
+depend on which matches), the first match wins, and a candidate that is
+not 4 to 8 digits is skipped. Also `dect_base_cfg.tpui_offset` (openDECTcell
+148daa7, which should have bumped the version: it changed the struct
+layout): the TPUI `{0x00, 0x11, slot + N}`, 0 = off. For the controller's
+registration flow: one PIN per user's window, all live PINs on every cell
+where registration is open.
+

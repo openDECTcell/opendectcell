@@ -623,6 +623,63 @@ static void test_register_8_digit_pin(void)
 }
 
 /*
+ * Several registration PINs at once (API 139): the handset proves the second
+ * of three, registration completes and reg_pin names it; a PIN that is none
+ * of them is refused; a candidate that is not 4 to 8 digits is skipped.
+ */
+static void test_register_with_several_pins(void)
+{
+	struct dect_mm_cfg cfg = { .authenticate = 1, .n_reg_pins = 4 };
+	struct dect_mm mm;
+	uint8_t rand_f[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+	uint8_t rand_p[8] = { 9, 9, 9, 9, 9, 9, 9, 9 };
+	uint8_t rs[8] = { 0 };
+	uint8_t rs16[16] = { 0 };
+	uint8_t buf[256], out[256];
+	size_t n;
+
+	snprintf(cfg.reg_pins[0], sizeof(cfg.reg_pins[0]), "12");	/* too short */
+	snprintf(cfg.reg_pins[1], sizeof(cfg.reg_pins[1]), "27182818");
+	snprintf(cfg.reg_pins[2], sizeof(cfg.reg_pins[2]), "314159");
+	snprintf(cfg.reg_pins[3], sizeof(cfg.reg_pins[3]), "55555555");
+
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(mm.reg_pin, -1);
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_KEY_ALLOCATE);
+	n = pp_auth_request(buf, sizeof(buf), 0, "314159", rand_f, rs, rand_p, 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	CHECK_EQ(mm.stats.auth_ok, 1);
+	CHECK_EQ(mm.subscribed, 1);
+	CHECK_EQ(mm.reg_pin, 2);
+
+	/* a PIN that none of the candidates is */
+	dect_mm_init(&mm, &cfg);
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	n = pp_auth_request(buf, sizeof(buf), 0, "99999999", rand_f, rs, rand_p, 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	CHECK_EQ(mm.stats.auth_ok, 0);
+	CHECK_EQ(mm.stats.auth_fail, 1);
+	CHECK_EQ(mm.reg_pin, -1);
+	CHECK_EQ(mm.subscribed, 0);
+
+	/* with only unusable candidates nothing registers at all */
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.authenticate = 1;
+	cfg.n_reg_pins = 1;
+	snprintf(cfg.reg_pins[0], sizeof(cfg.reg_pins[0]), "12");
+	dect_mm_init(&mm, &cfg);
+	n = pp_access_request(buf, sizeof(buf), 0);
+	dect_mm_rx(&mm, buf, n, rand_f, rs16);
+	n = dect_mm_poll(&mm, out, sizeof(out));
+	CHECK(n == 0 || msg_type_of(out, n) != DECT_MM_KEY_ALLOCATE);
+}
+
+/*
  * No usable PIN, no registration: refused before KEY-ALLOCATE, so not even
  * "0000" (the old default for "") gets a challenge. Three digits and a
  * PIN filling cfg.pin without a terminator count as unusable too.
@@ -1882,6 +1939,7 @@ int main(void)
 	test_register_assigns_an_identity();
 	test_register_bad_pin();
 	test_register_8_digit_pin();
+	test_register_with_several_pins();
 	test_register_without_a_usable_pin();
 	test_locate();
 	test_cipher();

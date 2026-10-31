@@ -43,16 +43,35 @@
 #define ARC_A_LEN		36u	/* class-A ARI length in bits */
 #define AC_LEN			4u
 
-/* NUL-terminated within cfg.pin and DECT_PIN_DIGITS_MIN..MAX digits */
-static int pin_usable(const struct dect_mm *mm)
+/* NUL-terminated within its field and DECT_PIN_DIGITS_MIN..MAX digits */
+static int pin_str_usable(const char *pin)
 {
-	return memchr(mm->cfg.pin, 0, sizeof(mm->cfg.pin)) &&
-	       !dect_dsaa_pin_check(mm->cfg.pin, DECT_PIN_DIGITS_MIN);
+	return memchr(pin, 0, DECT_MM_PIN_MAX) &&
+	       !dect_dsaa_pin_check(pin, DECT_PIN_DIGITS_MIN);
 }
 
-static void pin_ac(const struct dect_mm *mm, uint8_t ac[AC_LEN])
+/* The registration PINs a handset may prove: cfg.reg_pins, else cfg.pin. */
+static unsigned reg_pin_count(const struct dect_mm *mm)
 {
-	dect_dsaa_pin_to_ac(mm->cfg.pin, ac, AC_LEN);
+	if (!mm->cfg.n_reg_pins)
+		return 1u;
+	return mm->cfg.n_reg_pins < DECT_MM_REG_PINS_MAX
+		? mm->cfg.n_reg_pins : DECT_MM_REG_PINS_MAX;
+}
+
+static const char *reg_pin_at(const struct dect_mm *mm, unsigned i)
+{
+	return mm->cfg.n_reg_pins ? mm->cfg.reg_pins[i] : mm->cfg.pin;
+}
+
+static int pin_usable(const struct dect_mm *mm)
+{
+	unsigned i;
+
+	for (i = 0; i < reg_pin_count(mm); i++)
+		if (pin_str_usable(reg_pin_at(mm, i)))
+			return 1;
+	return 0;
 }
 
 void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg)
@@ -62,6 +81,7 @@ void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg)
 	mm->cfg.authenticate = cfg->authenticate ? 1u : 0u;
 	mm->state = DECT_MM_IDLE;
 	mm->adopted = -1;
+	mm->reg_pin = -1;
 }
 
 int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
@@ -1035,9 +1055,11 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 {
 	const uint8_t *res1, *rand_p;
 	size_t res1_len, rand_p_len;
-	uint8_t ac[AC_LEN], k[DECT_AUTH_KEY_LEN];
+	uint8_t ac[AC_LEN], k[DECT_AUTH_KEY_LEN], kc[DECT_AUTH_KEY_LEN];
 	uint8_t ks[DECT_AUTH_KEY_LEN], uak[DECT_AUTH_KEY_LEN];
 	uint8_t dck[DECT_CIPHER_KEY_LEN], xres1[4], res2[4];
+	int matched = -1;
+	unsigned i;
 
 	mm->stats.auth_req++;
 	res1 = dect_nwk_find_ie(ies, ies_len, DECT_IE_RES, &res1_len);
@@ -1048,11 +1070,26 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 		return;
 	}
 
-	pin_ac(mm, ac);
-	dect_dsaa_b1(ac, AC_LEN, k);
-	dect_dsaa_a11(k, mm->rs, ks);
-	dect_dsaa_a12(ks, mm->rand_f, dck, xres1);	/* expected RES1 */
-	if (memcmp(res1, xres1, 4) != 0) {
+	/*
+	 * Every candidate is computed, the first match wins: the work does not
+	 * depend on which PIN (if any) the handset proved.
+	 */
+	memset(k, 0, sizeof(k));
+	for (i = 0; i < reg_pin_count(mm); i++) {
+		const char *pin = reg_pin_at(mm, i);
+
+		if (!pin_str_usable(pin))
+			continue;
+		dect_dsaa_pin_to_ac(pin, ac, AC_LEN);
+		dect_dsaa_b1(ac, AC_LEN, kc);
+		dect_dsaa_a11(kc, mm->rs, ks);
+		dect_dsaa_a12(ks, mm->rand_f, dck, xres1);	/* expected RES1 */
+		if (matched < 0 && memcmp(res1, xres1, 4) == 0) {
+			matched = (int)i;
+			memcpy(k, kc, sizeof(k));
+		}
+	}
+	if (matched < 0) {
 		mm->stats.auth_fail++;
 		/*
 		 * The key allocation failed: AUTHENTICATION-REJECT, as the
@@ -1064,6 +1101,7 @@ static void on_auth_request(struct dect_mm *mm, const uint8_t *ies, size_t ies_l
 		return;
 	}
 	mm->stats.auth_ok++;
+	mm->reg_pin = matched;
 
 	/* Answer the PP's challenge: RES2 = A22(A21(K,RS), RAND_P). */
 	dect_dsaa_a21(k, mm->rs, uak);

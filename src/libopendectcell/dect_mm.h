@@ -47,6 +47,7 @@ enum dect_mm_registration {
 };
 
 #define DECT_MM_PIN_MAX		16u
+#define DECT_MM_REG_PINS_MAX	32u	/* concurrent registration PINs */
 #define DECT_MM_RFPI_LEN	5u
 #define DECT_MM_PORTID_MAX	20u	/* saved PORTABLE-IDENTITY contents */
 #define DECT_MM_UAK_LEN		16u	/* allocated long-term key (128-bit) */
@@ -101,6 +102,15 @@ struct dect_mm_cfg {
 	 * (including "") refuses every registration: there is no default.
 	 */
 	char    pin[DECT_MM_PIN_MAX];
+	/*
+	 * Registration PINs, several at once (API 139): a handset proves the PIN
+	 * its user typed, and the one that matches is reported (reg_pin). With
+	 * n_reg_pins 0 the single pin above is the only candidate, as before.
+	 * A candidate that is not 4 to 8 digits is skipped. Two equal candidates
+	 * match as the first.
+	 */
+	unsigned n_reg_pins;
+	char    reg_pins[DECT_MM_REG_PINS_MAX][DECT_MM_PIN_MAX];
 	uint8_t rfpi[DECT_MM_RFPI_LEN];		/* base identity for FIXED-IDENTITY */
 	uint8_t authenticate;			/* 1 = challenge the PP (default) */
 	/*
@@ -327,6 +337,7 @@ struct dect_mm {
 	 */
 	uint8_t uak[DECT_MM_UAK_LEN];
 	uint8_t subscribed;			/* 1 = authenticated, uak valid */
+	int      reg_pin;		/* index of the registration PIN the PP proved, -1: none */
 	/* the identity that registration allocated uak for */
 	uint8_t uak_id[DECT_MM_PORTID_MAX];
 	size_t  uak_id_len;
