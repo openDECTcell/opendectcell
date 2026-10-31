@@ -264,3 +264,13 @@ that follows for the controller's TPUI pool: keep the high byte `0x11`** (form
 TPUI with another high byte needs the full form (20-bit TPUI in the mail's
 bytes 5 to 8); the room read that path statically only, not on air. The chip
 patch is closed; its notes stay on file in the room.
+
+**Registration over an existing record, seen on air (7412, API 139 daemon, 2026-10-31 19:19):** the
+maintainer registered the AS690H while the entry of an old A540 still held
+record 0 ("enrolment into record 0 (slot 1)", "handset registered"), and no
+"subscription saved" followed. Every session after it failed authentication
+("WRONG RES", three times in a row) because the handset had the new key and
+the store the old one. Deleting the entry and registering again saved it.
+This is the defect fixed in API 140 (the registration persists after a 2 s
+grace), which the 7412's daemon does not have yet; the registration itself
+was therefore lost, and the AS690H must be registered again.
