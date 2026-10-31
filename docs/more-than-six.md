@@ -318,3 +318,16 @@ switched off can stop other handsets ringing for the same external call.
   coincides with 07.56. **Five speech calls on 08.25 needs host work only**: PCM
   audio lanes 4 and 5, a bearer each, and `0x0230`/`0x0242` driven for channels
   4 and 5 as for 1 to 3. Six is beyond every build. Not tried.
+
+**The room's addendum to A-0141: the 7412 (06.88) has three channel chains.**
+Capacity table: 06.88 = 3, 07.56 = 3, 08.25 = 5. The 06.88 configurator has
+cases for channels 1 to 3 only and rejects 4 or more, so a fourth and fifth
+call on the 7412 would need a DSP-microcode change (the parked chip-patch
+category), not host work. Two routes if the controller needs more than three
+calls per cell on the 7412: (1) run the 08.25 STUB on the 7412 (A-0003: same
+SC14441, can boot the 7520's 08.25 STUB; caveats: the `dectmode` tag value, and
+the 7412's own factory RFPI and calibration, not the 7520's), which gives
+five calls with host work only; (2) edit the 06.88 microcode, hard and
+parked. If a blob is ever swapped for more channels, the keyless-admission,
+cipher and slotless-paging results above must be taken again on that blob
+(they were measured on the native builds).
