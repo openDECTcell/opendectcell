@@ -40,6 +40,8 @@ Other table sizes that are easy to misread as a handset count, but are not:
 | Pending paging list | `0x0300` | 40 entries | Simultaneous paging operations, not registrations |
 | Bearer-slot mask | `0x017C` | 8 candidates, default `0x3F` | Allowable slots; still only six connection contexts |
 
+**Update 2026-10-31:** do not probe a seventh slot (`stub-api.md`: the code cites an unchecked writer into adjacent storage). The way past six is `more-than-six.md` (slots as a cache), which needs no seventh slot.
+
 ## Empirical test (cheap, do it once G6 passes)
 
 Before any engineering effort: register a **seventh** handset and watch the STUB.
