@@ -284,6 +284,23 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
     on this box before (A14, 2026-10-28), so that path alone does not
     explain a hang.
 
+    **U8f results (2026-10-31, 09:25-09:33 CET, 7412, maintainer at the box;
+    run files `u8f/run-U8f-1*.txt`, `u8f/run-U8f-2*.txt` in the session scratch
+    folder, log in the sink file):**
+
+    | run | result |
+    |---|---|
+    | U8f-1 (`2 4 8`, then `2 3 2 4 3`) | **8 stops, the box answered after every one.** The parked marker was absent after every one (the stop came while the chip was being brought up; the daemon logged "the park was not confirmed: the DECT chip is held in reset (GPIO 545)"). My table expected `parked` present; that expectation was wrong for a stop before the radio is up, and is by design (the next start uploads the firmware again) |
+    | U8f-2 (`RADIO_ON=1`: `2 5`, then `2 2 5`) | **5 stops, answered after every one, `parked` present after every one** |
+    | falsifier | both reached five passes: a plain stop (before the radio, or with it up) is **not** the trigger of U8e. U8f-3 (cell_leave, then a stop) stays open |
+
+    **Weak point of the instrument:** the script counts the delay from the
+    return of `/etc/init.d/opendectcell start`. After an unparked stop that call
+    takes 13-17 s (firmware upload), so only the first stop of each U8f-1
+    batch (marker present before, start returned at once) landed 3-4 s after
+    the start began, in the slot search. The other six landed about 3-4 s
+    after the chip was up. Two early stops are not a series.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
