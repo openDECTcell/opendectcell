@@ -274,3 +274,26 @@ the store the old one. Deleting the entry and registering again saved it.
 This is the defect fixed in API 140 (the registration persists after a 2 s
 grace), which the 7412's daemon does not have yet; the registration itself
 was therefore lost, and the AS690H must be registered again.
+
+**Block E on 06.88: the 7412, 2026-10-31 19:33-19:42 (AS690H, no key in the chip, `tpuioffset=0x40`, API 139 daemon).**
+The chip was reloaded and warm; the audit read `1=OURS 2=held 3=- 4=- 5=- 6=-`
+(slot 1 the A540's key, slot 3 the AS690H's: empty; slot 2 an old key of
+another handset). The AS690H, registered afresh into record 3 / slot 3 and
+power-cycled, connected, authenticated and ciphered (`0x0209`), placed a call
+with audio both ways, and, with DECT 1's line removed so that it was the only
+ring target, was paged by `0x0300 {0c 11 43}` at the first attempt, rang and
+had audio both ways (maintainer; log `run7`). **Pass on 06.88: a standby
+handset needs no chip slot on any of the three builds.**
+
+**A defect found on the way (task L6).** With both handsets on the line and
+the A540 switched off, the AS690H did not ring: the main ring machine waited
+for DECT 1's page response, the AS690H answered its own (side) page, and
+`dect_base_main_page_response` rejected that answer with LCE-PAGE-REJECT
+because its identity differs from the main ring target ("page response from a
+handset we did not page (identity differs) ... still waiting", three times).
+The side-ring page for DECT 3 went out correctly (its TPUI is built from its
+own slot); it was the answer that was thrown away. The code is unchanged at
+HEAD (`dect_base.c`, `dect_base_main_page_response`): it handles an internal
+call's target and the deregistration and time pages, but not the target of a
+bridge side ring. Effect on a cell: one handset that is out of range or
+switched off can stop other handsets ringing for the same external call.
