@@ -2399,6 +2399,18 @@ static int find_control_slot(struct stubd *s, unsigned int fpb)
 			s->rx_slot = (int)rx;
 			printf("control slot found: tx %u, rx %u (answer prim %04x)\n",
 			       tx, rx, ans.prim);
+			/*
+			 * This answer carries the RFPI the chip broadcasts, and
+			 * the run loop never sees it again: keep it for the
+			 * controller (STATUS tag 6, HELLO tag 17).
+			 */
+			if (ans.prim == DECT_PRIM_CONTACT_ACK1 && ans.param_len >= 5u) {
+				memcpy(s->cell.rfpi, ans.param, sizeof(s->cell.rfpi));
+				s->cell.have_rfpi = 1;
+				printf("chip: broadcasts RFPI %02x%02x%02x%02x%02x\n",
+				       s->cell.rfpi[0], s->cell.rfpi[1], s->cell.rfpi[2],
+				       s->cell.rfpi[3], s->cell.rfpi[4]);
+			}
 			ret = 0;
 			goto out;
 		}

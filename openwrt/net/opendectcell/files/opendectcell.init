@@ -133,7 +133,7 @@ rfpi_test() {
 	uci_get v rfpi_test '' '0-9A-Fa-f'
 	if [ ${#v} -ne 10 ]; then
 		config_get role main role base
-		[ "$role" = cell ] &&
+		[ "$role" = cell ] && [ -r /etc/opendectcell/cell/rfpi ] &&
 			v=$(tr -cd '0-9A-Fa-f' < /etc/opendectcell/cell/rfpi 2>/dev/null)
 	fi
 	[ ${#v} -eq 10 ] && echo "$v"
