@@ -359,6 +359,42 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
     - The box was parked after the hang (stop from radio up, marker present),
       log forwarding to the PC left on.
 
+    **U8f-1d: the hang is after the park mails, not in the module's stop
+    (2026-10-31, 11:38-12:16 CET, unattended, the 7412 power-cycled through
+    the Tasmota socket).** Outcomes written before the runs: last line
+    inside a `dma_stop:` marker = the death is in `ssc_dma_stop`; at
+    `teardown: done` / `release done` = after the module; silence before
+    `engine_stop: enter` = not the module's stop at all.
+
+    | what | result |
+    |---|---|
+    | the instrument | `kmod-lantiq-ssc-pcm` with `u8f:` printks in start, stop, DMA stop, teardown and release (built with the lantiq SDK in the kmod repo, not committed; the box's original module is `/root/lantiq_ssc_pcm.ko.e3c898d.orig`) |
+    | a second hang, on the original module, an ordinary stop from radio up (11:38:52) | the last daemon line is `reg: radio parked -- park mails on the wire 1 ms after queueing`; no `park verified`; the box silent, no power cycle for 3 minutes |
+    | campaign, 15 cycles, 30 stops (A: stop from radio up, B: quick start and a stop 2-4 s later) | A 15 pass; B 14 pass, **1 hang** (10:59:36.76 UTC). In the hang the last daemon line is again `radio parked`, and **no kernel marker follows** (no `release enter`, no `teardown`, no `engine_stop`): the module's teardown was never reached. A passing stop logs `park verified on the chip` 65 ms after `radio parked` and the teardown 20 ms after that |
+    | ping (`-i 0.5`, PC) | last reply 36.44, the `radio parked` line still reached the sink at 36.76, unanswered from about 36.94: the network died within 180 ms of the park mails, while the SSC engine was still running |
+    | `radio parked ... N ms after queueing` | not the discriminator: 1 ms in seven stops (six passed), 2 ms in four (three passed); the hang is only the missing `park verified` |
+    | **W-1, the hardware watchdog** (`ubus call system watchdog '{"stop":true}'`, service stopped) | **works**: the box vanished after 30 s and was back by itself after 106 s (uptime 58 s) |
+
+    **Reading.** The watchdog works, so in the hangs procd kept feeding it
+    for six minutes: the kernel and userspace ran on and **the network path
+    was dead**, as the U8e analysis said. The earlier "H1, a freeze inside
+    `ssc_engine_stop()`" is **out**: the teardown was never reached. The
+    start of the death is between the park mails and the first chip read
+    after them, with the engine running. What is not known is what in that
+    window takes the Ethernet down (`xrx200_net` on IRQ 72/73 and the same
+    DMA controller as the SSC rings).
+
+    The first hang (09:36, a stop 3 s after a quick start) died before the
+    radio was parked, so there may be more than one entry into the same
+    state; one sample each.
+
+    **Next, running (2026-10-31 12:17):** campaign v2 with `netguard.sh` on
+    the box (every 1 s a ping to the gateway; after 8 failures it saves
+    `dmesg`, `/proc/interrupts` twice, `/proc/net/dev`, link state and `top`
+    to `/tmp/hang-N`, then tries `ip link set eth0 down/up`, then
+    `network restart`, and says which one recovered the network). A box that
+    recovers on its own is not power-cycled, so its RAM can be read.
+
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
 The maintainer's word (2026-10-30): test the 7520 and keep the new build
