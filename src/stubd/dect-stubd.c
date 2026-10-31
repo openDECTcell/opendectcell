@@ -3999,7 +3999,9 @@ static void led_tick(struct stubd *s, uint64_t now, int radio_on)
 		led_write(s, 0);
 		return;
 	}
-	if (s->led_traffic != s->led_traffic_seen || s->base.main_link.bound) {
+	/* a cell has no main link of its own: a handset's link is a handle */
+	if (s->led_traffic != s->led_traffic_seen || s->base.main_link.bound ||
+	    (s->cell_mode && s->cell.handles)) {
 		s->led_traffic_seen = s->led_traffic;
 		s->led_blink_ticks++;
 		led_write(s, s->led_state != 1);	/* toggle */
@@ -6685,6 +6687,9 @@ static void cell_mail_up(struct stubd *s, const struct dect_mail *m,
 	size_t n = dect_cell_mail_up(b, sizeof(b), &cm);
 	uint8_t h = m->param_len ? m->param[0] : 0xFFu;
 
+	if (h < 8u && (m->prim == DECT_PRIM_CONN_UP ||
+		       m->prim == DECT_PRIM_CONN_DOWN))
+		s->led_traffic++;	/* a handset came or went: one blink */
 	if (h < 8u && m->prim == DECT_PRIM_CONN_UP) {
 		s->cell.handles |= (uint8_t)(1u << h);
 		memset(s->cell.tag[h], 0, 3);

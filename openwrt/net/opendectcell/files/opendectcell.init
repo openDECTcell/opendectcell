@@ -604,9 +604,14 @@ start_service() {
 		return 0
 	fi
 
+	config_get role main role base
+	# A cell never inherits the chip's key table: the chip keeps it across
+	# daemon runs, so a box that served handsets on its own would still
+	# admit them. Booting the chip afresh empties it (L8); the cell's host
+	# stack then writes one dummy key, so the radio has a key to run on.
+	[ "$role" = cell ] && rm -f /var/run/opendectcell/stub.second
 	load_chip || return 1
 	rm -f /var/run/opendectcell/parked
-	config_get role main role base
 	if [ "$role" = cell ]; then
 		start_cell
 		return
