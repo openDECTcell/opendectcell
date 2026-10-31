@@ -180,6 +180,16 @@ struct dect_base_ops {
 	 * dect_base_tick()): the host releases its audio path.
 	 */
 	void (*call_down)(void *ctx);
+	/*
+	 * An enrolment on the main link was rejected (optional, API 142):
+	 * `pin` is 1 when the handset's reply matched no registration PIN (the
+	 * number the host counts for a per-cell attempt limit), 0 for another
+	 * failure (a malformed request, an identity not accepted); `expected`
+	 * is 1 when the handset's profile says this model tries PIN 0000 by
+	 * itself first, so the failure is not a guess at the PIN. Once per
+	 * rejected attempt; the `reg: registration rejected` log line stays.
+	 */
+	void (*registration_rejected)(void *ctx, int pin, int expected);
 };
 
 /*

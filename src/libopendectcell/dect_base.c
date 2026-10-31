@@ -4462,13 +4462,19 @@ void dect_base_main_enrolment(struct dect_base *b)
 		dect_base_names_notify(b);	/* §7.4.10.2.2: one added */
 	} else if (mm->state != bl->reported_state &&
 		   mm->state == DECT_MM_FAILED) {
+		const int expected = b->n_hs && b->cur < b->n_hs &&
+				     b->prof[b->cur].reg_tries_0000_first &&
+				     mm->stats.auth_fail;
+
 		dect_base_log(b, "reg: registration rejected%s",
-			      b->n_hs && b->cur < b->n_hs &&
-			      b->prof[b->cur].reg_tries_0000_first &&
-			      mm->stats.auth_fail
+			      expected
 			      ? " (expected: this model tries PIN 0000 by "
 				"itself first, profile reg.tries_0000_first)"
 			      : "");
+		if (b->ops && b->ops->registration_rejected)
+			b->ops->registration_rejected(b->ctx,
+						      mm->stats.auth_fail != 0,
+						      expected);
 		/* back to the ring target's store (review, finding 13) */
 		if (bl->enrol_switched) {
 			bl->enrol_switched = 0;

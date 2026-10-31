@@ -976,3 +976,14 @@ gives the same value unless `tpuioffset=` changed. A handset takes a new
 TPUI only at its next location registration (bench T-C, 2026-10-31): do not
 change one that is in use. Tested on air for the form `{00, 11, N}` only.
 
+**142.** dect_base.h, 2026-10-31: `dect_base_ops` gains the optional
+`registration_rejected(ctx, pin, expected)` (NULL = not told). It is called
+once per rejected enrolment on the main link: `pin` is 1 when the handset's
+reply matched no registration PIN (the count for a per-cell attempt limit),
+0 for another failure; `expected` is 1 when the handset's profile says this
+model tries PIN 0000 by itself first (`reg.tries_0000_first`), so that
+failure is not a guess. The `reg: registration rejected` log line stays and
+no longer needs to be parsed (the controller's #83). New field at the end of
+the struct, so older hosts that zero-initialise it keep working once
+rebuilt.
+

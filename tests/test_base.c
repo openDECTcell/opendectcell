@@ -110,6 +110,16 @@ static void install(void *ctx)
 
 static unsigned pumps;
 static unsigned registered_calls;
+static unsigned rejected_calls;
+static int rejected_pin, rejected_expected;
+
+static void rejected_cb(void *ctx, int pin, int expected)
+{
+	(void)ctx;
+	rejected_calls++;
+	rejected_pin = pin;
+	rejected_expected = expected;
+}
 
 static void registered_cb(void *ctx, uint64_t now)
 {
@@ -716,6 +726,50 @@ int main(void)
 		memset(&b.check, 0, sizeof(b.check));
 		b.chip.uak_table = table0;
 		b.chip.check_delay_ms = delay0;
+	}
+
+	/* a rejected enrolment is told to the host, once per attempt (API 142) */
+	{
+		struct dect_base_link *bl = &b.main_link;
+		struct dect_mm *mm = &bl->link.mm;
+		static struct dect_base_ops rops;
+		const enum dect_mm_state st0 = mm->state;
+		const uint32_t af0 = mm->stats.auth_fail;
+		const uint8_t tries0 = b.prof[b.cur].reg_tries_0000_first;
+
+		rops = ops;
+		rops.registration_rejected = rejected_cb;
+		b.ops = &rops;
+		rejected_calls = 0;
+		bl->reported_state = DECT_MM_IDLE;
+		mm->state = DECT_MM_FAILED;
+		mm->stats.auth_fail = 1;
+		b.prof[b.cur].reg_tries_0000_first = 0;
+		dect_base_main_enrolment(&b);
+		CHECK_EQ(rejected_calls, 1u);
+		CHECK_EQ(rejected_pin, 1);		/* a wrong PIN */
+		CHECK_EQ(rejected_expected, 0);
+		dect_base_main_enrolment(&b);
+		CHECK_EQ(rejected_calls, 1u);		/* once per outcome */
+		/* the model that tries 0000 first: expected */
+		bl->reported_state = DECT_MM_IDLE;
+		b.prof[b.cur].reg_tries_0000_first = 1;
+		dect_base_main_enrolment(&b);
+		CHECK_EQ(rejected_calls, 2u);
+		CHECK_EQ(rejected_pin, 1);
+		CHECK_EQ(rejected_expected, 1);
+		/* a failure that was not the PIN */
+		bl->reported_state = DECT_MM_IDLE;
+		mm->stats.auth_fail = 0;
+		dect_base_main_enrolment(&b);
+		CHECK_EQ(rejected_calls, 3u);
+		CHECK_EQ(rejected_pin, 0);
+		CHECK_EQ(rejected_expected, 0);
+		mm->state = st0;
+		mm->stats.auth_fail = af0;
+		b.prof[b.cur].reg_tries_0000_first = tries0;
+		bl->reported_state = st0;
+		b.ops = &ops;
 	}
 
 	/* the ring's sequencing (S3n) */

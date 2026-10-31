@@ -1060,3 +1060,14 @@ above 6 take the normal path. Keep pool values at N of 7 or more, as the
 bench did, until it is shown otherwise. That is also why your pool must not
 hand out `11 01`..`11 06`.
 
+## API 142: a callback for a rejected registration attempt (your #83) `[2026-10-31, evening]`
+
+`dect_base_ops.registration_rejected(ctx, pin, expected)` (optional; openDECTcell
+`docs/api-versions.md` #142): once per rejected enrolment, `pin` = 1 when the
+handset's reply matched no PIN, `expected` = 1 when its profile says it tries
+PIN 0000 first. Count `pin && !expected` for the per-cell limit; the log line
+can stay as your fallback and its wording is unchanged. On the read-back
+repeat in the same issue: done in the library at API 140 (asked again once
+after 500 ms; the daemon waits 50 ms on every build). `cdect.h` needs `142`
+when you take it; 140 to 142 together are in the three notes above this one.
+
