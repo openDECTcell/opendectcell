@@ -836,6 +836,7 @@ struct stubd {
 		unsigned fetch_delay_ms;	/* fetchdelay=MS, test M4 */
 		unsigned keycheck_ms;	/* keycheckms=MS: read-back delay */
 		unsigned tpui_offset;	/* tpuioffset=N: TPUI off the slot */
+		unsigned install_dummy;	/* installdummy=N: 0x0247 installs slot N with no key */
 		int      keycheck_set;
 		unsigned locate_validity;	/* locvalid=N x 40.96 s, M4 */
 		int      no_led;	/* noled */
@@ -3292,6 +3293,15 @@ static void send_subscription(struct stubd *s)
 		install_subscription(s, slot, s->base.rec.uak);
 		/* [CR A-0085] the only check */
 		dect_base_uak_verify(&s->base, slot, mono_ms());
+	}
+	if (s->audio.install_dummy) {	/* A-0134 bench test: the install mask without a key */
+		char spec[40];
+
+		snprintf(spec, sizeof(spec), "0x22:0x02:0x0247:%02x0100",
+			 s->audio.install_dummy);
+		if (!send_mail_spec(s, spec))
+			printf("sub: slot %u installed with 0x0247 and NO key "
+			       "(installdummy)\n", s->audio.install_dummy);
 	}
 	send_subscription_tail(s);
 }
@@ -7661,6 +7671,10 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->remote_path = path;
 		} else if (klen == 10 && !memcmp(key, "fetchdelay", 10)) {
 			a->fetch_delay_ms = (unsigned)v;
+		} else if (klen == 12 && !memcmp(key, "installdummy", 12)) {
+			if (v < 1 || v > DECT_MM_MAX_SLOT)
+				return -1;
+			a->install_dummy = (unsigned)v;
 		} else if (klen == 10 && !memcmp(key, "tpuioffset", 10)) {
 			if (v > 200)
 				return -1;
@@ -7929,6 +7943,8 @@ static void usage(void)
 		"           holdback=MS nochipkeys remote=PATH fetchdelay=MS\n"
 		"           locvalid=N: the multi-cell tests M2 and M4\n"
 		"           (docs/multicell-experiments.md)\n"
+		"           installdummy=N send 0x0247 {N, 1, 0} after the slot\n"
+		"                     clears, no key written (bench test, A-0134)\n"
 		"           tpuioffset=N assign TPUI {0x00,0x11,slot+N} instead of the\n"
 		"           slot's own (a TPUI that is not slot-derived, docs/more-than-six.md T-C)\n"
 		"           keycheckms=MS how long the UAK read-back and slot audit\n"
