@@ -4669,6 +4669,7 @@ static void link_mm_cfg(const struct dect_base *b, struct dect_mm_cfg *mcfg)
 	if (b->have_rfpi)
 		memcpy(mcfg->rfpi, b->rfpi, DECT_MM_RFPI_LEN);
 	mcfg->auth_locate = (uint8_t)b->cfg.locauth;
+	mcfg->park_pli = (uint8_t)b->cfg.park_pli;
 }
 
 /* CC's call settings both kinds of link share. */

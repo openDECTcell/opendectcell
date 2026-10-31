@@ -1071,3 +1071,22 @@ repeat in the same issue: done in the library at API 140 (asked again once
 after 500 ms; the daemon waits 50 ms on every build). `cdect.h` needs `142`
 when you take it; 140 to 142 together are in the three notes above this one.
 
+
+## API 143: the PARK of a system, and the cell's identity `[2026-11-01]`
+
+**The PARK leaves the RPN out; class B has its own PLI and LAL** (openDECTcell
+`docs/api-versions.md` #143). `dect_base_cfg.park_pli` (0: the class's whole ARI,
+36 or 31) is what the controller sets to 19 for class B (`(vendor-internal name)`: ARC and
+EIC, so one subscription covers every site of the EIC). The RFPI the library
+builds the PARK from is the one the chip reports (`0xF601`), so a cell given an
+identity needs nothing more in the stack; every cell of one system then sends
+identical PARK bytes whatever its RPN.
+
+**The cell side of the identity** (no API change): the cell reports the RFPI its
+chip broadcasts in HELLO (tag 17) and STATUS (tag 6); `CONFIG_SET` tag 6 sets one.
+The chip has no runtime mail for it (room A-0131), so the cell stores it in
+`/etc/opendectcell/cell/rfpi`, which the init script uploads the chip with, and restarts
+the service once per value asked for; a chip that still reports another RFPI after
+that reload is not reloaded again, and the CONFIG_ACK says status 1. Leaving cell
+mode erases the file and reloads the chip with the factory RFPI. `cdect.h` needs
+`143` when you take it.

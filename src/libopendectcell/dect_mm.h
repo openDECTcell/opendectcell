@@ -181,6 +181,15 @@ struct dect_mm_cfg {
 	 */
 	uint8_t assign_id[DECT_MM_PORTID_MAX];
 	uint8_t assign_id_len;
+	/*
+	 * PARK length (PLI) in {ACCESS-RIGHTS-ACCEPT}, EN 300 175-6 §6.0: how
+	 * many ARI bits a handset's access rights cover. 0: the whole ARI of
+	 * the RFPI's class (36 for class A, 31 for class B). A shorter one
+	 * for class B (19: ARC and EIC) lets one subscription cover every
+	 * system of one EIC; values above the class's ARI length count as 0.
+	 * The bits of the RFPI after the PARK are zero in it.
+	 */
+	uint8_t park_pli;
 };
 
 struct dect_mm_stats {

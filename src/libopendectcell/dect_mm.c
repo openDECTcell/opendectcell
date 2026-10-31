@@ -557,6 +557,8 @@ size_t dect_mm_fixed_identity(const struct dect_mm *mm, uint8_t *out,
 	if (!mm || !out || cap < 2u + DECT_MM_RFPI_LEN)
 		return 0;
 	pli = ari_len(mm->cfg.rfpi);
+	if (mm->cfg.park_pli && mm->cfg.park_pli <= pli)
+		pli = mm->cfg.park_pli;
 	bits = pli + 1u;			/* the E bit leads the ARI */
 	out[0] = OCTET_GROUP_END | FIXED_ID_TYPE_PARK;
 	out[1] = (uint8_t)(OCTET_GROUP_END | bits);

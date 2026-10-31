@@ -987,3 +987,14 @@ no longer needs to be parsed (the controller's #83). New field at the end of
 the struct, so older hosts that zero-initialise it keep working once
 rebuilt.
 
+
+**143.** dect_mm.h and dect_base.h, 2026-11-01: `dect_mm_cfg.park_pli` and
+`dect_base_cfg.park_pli`, the PARK length in `{ACCESS-RIGHTS-ACCEPT}` (and in the
+`<<FIXED-IDENTITY>>` of an FP-originated `{CC-SETUP}`); 0 keeps the class's whole
+ARI (36 for class A, 31 for class B). Behaviour changed with it, without a layout
+change of its own: **the PARK no longer carries the RPN** (the bits of the RFPI
+after the PARK are zero in it, so every cell of one system sends the same bytes;
+a factory RFPI has RPN 0 and is unchanged), a **class B RFPI (ARC 001)** gets PLI
+31 (or `park_pli`, 19 for ARC and EIC: one subscription for every system of one
+EIC, `multicell-identities.md` §7.7) and its LOCATE-ACCEPT names the 31-bit PARI as
+the location area. Class A is as before. New field at the end of both structs.

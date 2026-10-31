@@ -786,6 +786,31 @@ static void test_class_b_identity(void)
 	CHECK_EQ(memcmp(fid1, want, sizeof(want)), 0);
 	CHECK_EQ(memcmp(fid1, fid2, sizeof(fid1)), 0);
 
+	/* PLI 19 (ARC and EIC): E + 19 bits = 20 bits; the rest zero, all
+	 * sites of the EIC give the same PARK */
+	{
+		struct dect_mm mm19;
+		uint8_t fid19[7];
+
+		memcpy(cfg.rfpi, rfpi1, sizeof(rfpi1));
+		cfg.park_pli = 19;
+		dect_mm_init(&mm19, &cfg);
+		CHECK_EQ(dect_mm_fixed_identity(&mm19, fid19, sizeof(fid19)), sizeof(fid19));
+		/* length octet: ext + 20 bits */
+		CHECK_EQ(fid19[1], 0x80 | 20);
+		CHECK_EQ(fid19[2], 0x10);
+		CHECK_EQ(fid19[3], 0xf4);
+		CHECK_EQ(fid19[4], 0x20);	/* 4 more bits of the 20: the high nibble of 0x20 */
+		CHECK_EQ(fid19[5], 0x00);
+		CHECK_EQ(fid19[6], 0x00);
+		/* above the class's ARI length: the class's own */
+		cfg.park_pli = 40;
+		dect_mm_init(&mm19, &cfg);
+		CHECK_EQ(dect_mm_fixed_identity(&mm19, fid19, sizeof(fid19)), sizeof(fid19));
+		CHECK_EQ(fid19[1], 0x80 | 32);
+		cfg.park_pli = 0;
+	}
+
 	memcpy(mm1.port_id, ours, sizeof(ours));
 	mm1.port_id_len = sizeof(ours);
 	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR, 0,

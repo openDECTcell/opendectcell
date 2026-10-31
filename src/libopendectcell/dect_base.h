@@ -417,6 +417,7 @@ struct dect_base_cfg {
 	int      defer_unknown;	/* hold an unknown LOCATE-REQUEST (the host fetches) */
 	int      ipuio_set;	/* ipuio=N: assign IPUI O N at registration */
 	uint32_t ipuio;
+	unsigned park_pli;	/* the PARK length in the access-rights accept, 0: the class's */
 	/* callinfo keys: a fixed <<CALL-INFORMATION>> for every SETUP (S3k) */
 	struct dect_callinfo callinfo;
 	/* infoie=: IEs in a {CC-INFO} on ALERTING, a lab option (S3r) */
