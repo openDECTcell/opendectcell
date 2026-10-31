@@ -176,3 +176,21 @@ only if block E of the bench sheet shows the chip needs its key for ciphering.
 The room's A-0138 (a write sibling of the memory read, `0xFFF1` sub `0x0D`,
 for a write test of the free windows) is kept for that case; nothing was
 written to chip memory.
+
+**The room's A-0139 (2026-10-31 evening): the chip does not derive a cipher or
+auth key from the stored key `[static trace, 08.25]`.** The key table is read
+at run time in one place only: the copy made at link setup (plus the write and
+the boot clear). No cipher, auth or paging routine reads it. The operative
+cipher key is the host's per-call `0x0208` (A-0126), written into the
+per-connection record before the over-air cipher request; the link-setup copy
+puts the stored key into the same field as a default, which `0x0208` replaces
+before any ciphered traffic. Paging is by TPUI (A-0131); authentication is
+host-side. Caveats the room names: the on-air cipher engine's read of that
+field was not single-stepped, and it did not prove that both writes go to the
+identical record. **Prediction for bench block E (written before the run):** a
+ciphered call to a handset the chip holds no key for works, authenticates and
+ciphers normally, while the host sends the right `0x0208`; keep one other key
+in the table so chip admission (open on 08.25) is not the variable. Fail
+(call refused, no cipher, or a cipher failure): the stored key is used in a
+way the trace missed, and the chip patch is back on the table. Consequence if
+it passes: the host cache is sufficient and the patch stays parked.
