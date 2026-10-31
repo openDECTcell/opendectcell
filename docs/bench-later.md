@@ -292,7 +292,7 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
     |---|---|
     | U8f-1 (`2 4 8`, then `2 3 2 4 3`) | **8 stops, the box answered after every one.** The parked marker was absent after every one (the stop came while the chip was being brought up; the daemon logged "the park was not confirmed: the DECT chip is held in reset (GPIO 545)"). My table expected `parked` present; that expectation was wrong for a stop before the radio is up, and is by design (the next start uploads the firmware again) |
     | U8f-2 (`RADIO_ON=1`: `2 5`, then `2 2 5`) | **5 stops, answered after every one, `parked` present after every one** |
-    | falsifier | both reached five passes: a plain stop (before the radio, or with it up) is **not** the trigger of U8e. U8f-3 (cell_leave, then a stop) stays open |
+    | falsifier | **superseded by U8f-1c below**: both reached five passes, but only three of those stops were early; the early series then hung |
 
     **Weak point of the instrument:** the script counts the delay from the
     return of `/etc/init.d/opendectcell start`. After an unparked stop that call
@@ -300,6 +300,56 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
     batch (marker present before, start returned at once) landed 3-4 s after
     the start began, in the slot search. The other six landed about 3-4 s
     after the chip was up. Two early stops are not a series.
+
+    **U8f-1c: HANG reproduced (2026-10-31, 09:36:14 CET, 7412).** Outcomes
+    written before the run: pass = the box answers after each early stop;
+    hang = a stop 2 s after a quick start (parked marker present before the
+    start, so `start` returns at once and the stop lands in the slot search)
+    is the trigger. Run file `u8f/run-U8f-1c-20261031-093431.txt`.
+
+    | quick-start stops (marker present before) | result |
+    |---|---|
+    | U8f-1 delay 2 (09:25:50), U8f-1b delay 2 (09:29:21), U8f-1c cycle 1 (09:34:43) | answered; "control slot not found", then "park not confirmed" 2-3 s after the stop |
+    | U8f-1c cycle 2 (start 09:36:09, stop 09:36:13) | **hang: 1 of 4 quick-start stops** |
+
+    What the sink shows for the hang (pid 19062): the last daemon line is
+    `ssc: lane bit offset 14` (09:36:11); baresip logged "terminated by signal
+    15 / ua: stop all" at 09:36:14.73, the last line of any kind. Missing, which
+    every passing early stop logged within 1-3 s: `control slot not found`, the
+    kernel's `DMA: longest gap between ring runs ...` (printed by
+    `ssc_engine_stop()` after `hrtimer_cancel()` and before `ssc_dma_stop()`),
+    and the init's `park was not confirmed`. The box then did not answer ping
+    (`No route to host`, i.e. no ARP answer) for six minutes, until the
+    maintainer's power cycle (first boot line 09:42:20 by the PC's clock). **The
+    procd watchdog (`ubus call system watchdog`: running, timeout 30 s,
+    frequency 5) did not reset it.**
+
+    Not the discriminator: the lane offset. Of the 18 starts in the log, offset
+    14 also occurred in two passing ones (09:30:19, 09:30:59); the offsets are
+    scattered over 0-15.
+
+    Open readings (one hang, so none is established):
+    - **H1, a freeze inside the stop** (`hrtimer_cancel()` on the per-CPU ring
+      timers, or `ltq_dma_close()` / `ssc_dma_free()` with a burst still in
+      flight): the missing kernel line puts it before `ssc_dma_stop()`, unless
+      the UDP line was lost with the box. Paper check of
+      `kmod-lantiq-ssc-pcm/src/ssc_pcm_hw.c`: `ssc_engine_stop()` is not called
+      under `engine_lock`, so the plain two-CPU deadlock is not there.
+    - **H2, the box alive but its network dead.** The watchdog not firing fits
+      this (procd would still kick it) and fits a dead CPU only if the
+      watchdog cannot reset this board.
+    - Discriminator for both: **W-1**, a deliberate watchdog test with the
+      service stopped and parked (`ubus call system watchdog '{"stop":true}'`,
+      expect a reboot by itself within about 60 s). It reboots, so the
+      maintainer should be at the box in case it does not. If it reboots: the
+      watchdog works, so procd was alive in the hang (H2). If not: H1 with a
+      useless watchdog stays open.
+    - Next series (maintainer present): the same cycles with `ping -D`
+      running on the PC and a step marker in the module's stop (a printk
+      before and after each of `hrtimer_cancel`, `ssc_dma_stop`, the register
+      write), so the last line names the step.
+    - The box was parked after the hang (stop from radio up, marker present),
+      log forwarding to the PC left on.
 
 ### T13 on the lab 7520 (written 2026-10-30, before the run)
 
