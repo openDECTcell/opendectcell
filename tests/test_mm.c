@@ -536,9 +536,12 @@ static void test_register_ok(void)
 		 * 36-bit class-A ARI. Measured on hardware against the A540,
 		 * where our accept carries a0 a5 de ad 00 00 b8 for RFPI
 		 * de ad 00 00 b8, and the {CC-SETUP} the handset itself places
-		 * carries the same seven octets.
+		 * carries the same seven octets. The test RFPI 01 02 03 04 05
+		 * has RPN 5 in its last octet: the PARK leaves the RPN out (it
+		 * is not part of the ARI), so the last octet is 00 here; the
+		 * hardware case has RPN 0 and is unchanged.
 		 */
-		static const uint8_t want[] = { 0xA0u, 0xA5u, 1, 2, 3, 4, 5 };
+		static const uint8_t want[] = { 0xA0u, 0xA5u, 1, 2, 3, 4, 0 };
 		uint8_t fid[2 + DECT_MM_RFPI_LEN];
 		const uint8_t *wire;
 		size_t wire_len, got;
@@ -751,6 +754,52 @@ static void test_locate_accept_names_our_area(void)
 		if (la && la_len == 1u)
 			CHECK_EQ(la[0], 0x64);
 	}
+}
+
+/*
+ * A class B system (ARC 001, EIC 16 + FPN 8 + FPS 4 = 31 bits) has PLI 31 and
+ * its RPN (8 bits) is no part of the PARK; the LOCATE-ACCEPT names the 31-bit
+ * PARI as the location area. The same ARI at RPN 1 and RPN 2 gives the same
+ * PARK bytes: that is what lets a handset treat the cells as one system.
+ */
+static void test_class_b_identity(void)
+{
+	/* E 0, ARC 001, EIC 0x0f42, FPN 0x01, FPS 0x1, RPN: byte 4 */
+	static const uint8_t rfpi1[] = { 0x10, 0xf4, 0x20, 0x11, 0x01 };
+	static const uint8_t rfpi2[] = { 0x10, 0xf4, 0x20, 0x11, 0x02 };
+	/* PLI 31 + the E bit = 32 bits: the first four octets, then zeros */
+	static const uint8_t want[] = { 0xA0u, 0xA0u, 0x10, 0xf4, 0x20, 0x11, 0x00 };
+	struct dect_mm_cfg cfg = { .pin = "1234", .authenticate = 1 };
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	uint8_t fid1[7], fid2[7], buf[64], out[64];
+	struct dect_mm mm1, mm2;
+	struct dect_nwk_hdr h;
+	const uint8_t *ies, *la;
+	size_t n, ies_len, la_len;
+
+	memcpy(cfg.rfpi, rfpi1, sizeof(rfpi1));
+	dect_mm_init(&mm1, &cfg);
+	memcpy(cfg.rfpi, rfpi2, sizeof(rfpi2));
+	dect_mm_init(&mm2, &cfg);
+	CHECK_EQ(dect_mm_fixed_identity(&mm1, fid1, sizeof(fid1)), sizeof(fid1));
+	CHECK_EQ(dect_mm_fixed_identity(&mm2, fid2, sizeof(fid2)), sizeof(fid2));
+	CHECK_EQ(memcmp(fid1, want, sizeof(want)), 0);
+	CHECK_EQ(memcmp(fid1, fid2, sizeof(fid1)), 0);
+
+	memcpy(mm1.port_id, ours, sizeof(ours));
+	mm1.port_id_len = sizeof(ours);
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR, 0,
+			       DECT_MM_LOCATE_REQUEST);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY, ours,
+			    sizeof(ours));
+	dect_mm_rx(&mm1, buf, n, NULL, NULL);
+	n = dect_mm_poll(&mm1, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_MM_LOCATE_ACCEPT);
+	dect_nwk_parse(out, n, &h, &ies, &ies_len);
+	la = dect_nwk_find_ie(ies, ies_len, DECT_IE_LOCATION_AREA, &la_len);
+	CHECK(la != NULL && la_len == 1u);
+	if (la && la_len == 1u)
+		CHECK_EQ(la[0], 0x40 | 31);
 }
 
 static void test_locate(void)
@@ -1946,6 +1995,7 @@ int main(void)
 	test_cipher_timer_and_rejects();
 	test_term_cap();
 	test_locate_accept_names_our_area();
+	test_class_b_identity();
 	test_tpui_assignment_is_confirmed_by_the_ack();
 	test_tpui_assignment_times_out_at_ten_seconds();
 	test_a_late_ack_is_visible_as_late();

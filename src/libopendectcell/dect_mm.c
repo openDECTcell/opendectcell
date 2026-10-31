@@ -41,6 +41,7 @@
 #define FIXED_ID_TYPE_PARK	0x20u
 #define OCTET_GROUP_END		0x80u
 #define ARC_A_LEN		36u	/* class-A ARI length in bits */
+#define ARC_B_LEN		31u	/* class-B ARI length in bits */
 #define AC_LEN			4u
 
 /* NUL-terminated within its field and DECT_PIN_DIGITS_MIN..MAX digits */
@@ -530,14 +531,41 @@ static size_t put_codec_list(const struct dect_mm *mm, uint8_t *b, size_t off)
  * {CC-SETUP} names the FP with them, so ringing a handset does not depend
  * on the handset having called us first.
  */
+/*
+ * The ARI length of the RFPI's class, in bits (EN 300 175-6 table 4.1): class
+ * A (ARC 000) EMC 16 + FPN 17 behind the 3-bit ARC = 36; class B (ARC 001)
+ * EIC 16 + FPN 8 + FPS 4 = 31. Any other class keeps 36, as before: it was
+ * never built for.
+ */
+static unsigned ari_len(const uint8_t rfpi[DECT_MM_RFPI_LEN])
+{
+	return ((rfpi[0] >> 4) & 7u) == 1u ? ARC_B_LEN : ARC_A_LEN;
+}
+
+/*
+ * The PARK is the whole ARI, and what follows it in the RFPI (the RPN, up to 8
+ * bits) is not part of it: every cell of one system must send the same PARK
+ * bytes (GAP tables 10, 21, 51: "the whole PARK including the non-significant
+ * bits"), so those bits are zero. For a cell with RPN 0, the factory case, that
+ * changes nothing.
+ */
 size_t dect_mm_fixed_identity(const struct dect_mm *mm, uint8_t *out,
 			      size_t cap)
 {
+	unsigned pli, bits;
+
 	if (!mm || !out || cap < 2u + DECT_MM_RFPI_LEN)
 		return 0;
+	pli = ari_len(mm->cfg.rfpi);
+	bits = pli + 1u;			/* the E bit leads the ARI */
 	out[0] = OCTET_GROUP_END | FIXED_ID_TYPE_PARK;
-	out[1] = (uint8_t)(OCTET_GROUP_END | (ARC_A_LEN + 1));
+	out[1] = (uint8_t)(OCTET_GROUP_END | bits);
 	memcpy(&out[2], mm->cfg.rfpi, DECT_MM_RFPI_LEN);
+	if (bits % 8u)
+		out[2 + bits / 8u] &= (uint8_t)(0xFFu << (8u - bits % 8u));
+	if (bits / 8u + (bits % 8u ? 1u : 0u) < DECT_MM_RFPI_LEN)
+		memset(&out[2 + bits / 8u + (bits % 8u ? 1u : 0u)], 0,
+		       DECT_MM_RFPI_LEN - (bits / 8u + (bits % 8u ? 1u : 0u)));
 	return 2u + DECT_MM_RFPI_LEN;
 }
 
@@ -653,6 +681,7 @@ void dect_mm_tpui(const struct dect_mm *mm, uint8_t out[3])
 
 static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_len)
 {
+	uint8_t own[1];
 	uint8_t id[3];
 	uint8_t tpui[5] = { TPUI_ID_TYPE, TPUI_ID_LEN, 0, 0, 0 };
 	unsigned idx;
@@ -675,9 +704,13 @@ static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_
 	 * sweep, finding 14). Another ARI class keeps the echo until its
 	 * level is known.
 	 */
-	if (!(mm->cfg.rfpi[0] & 0x70u)) {		/* ARC 000: class A */
-		static const uint8_t own[1] = { 0x40u | 36u };
-
+	if (!(mm->cfg.rfpi[0] & 0x70u) || ari_len(mm->cfg.rfpi) == ARC_B_LEN) {
+		/*
+		 * Class A: its 36 bits (stock). Class B: its 31 bits, the whole
+		 * PARI, so all cells of a site are one location area; a smaller
+		 * area would count RPN bits too (EN 300 175-5 §7.7.25).
+		 */
+		own[0] = (uint8_t)(0x40u | ari_len(mm->cfg.rfpi));
 		la = own;
 		la_len = sizeof(own);
 	}
