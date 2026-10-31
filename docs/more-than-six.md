@@ -168,3 +168,11 @@ Open: all-zero cannot tell free RAM from memory that reads as zero but is not
 RAM (0xC001 in particular: it answered all-zero like the others); the same
 windows during a call are not read yet (needs a call, the user at the bench).
 Both go to the room.
+
+**Decision, 2026-10-31 (maintainer):** the host cache is the route (the
+controller is a large computer; 16 or more handsets on standby cost it
+nothing). The chip patch is parked, not dropped: it is worth taking up again
+only if block E of the bench sheet shows the chip needs its key for ciphering.
+The room's A-0138 (a write sibling of the memory read, `0xFFF1` sub `0x0D`,
+for a write test of the free windows) is kept for that case; nothing was
+written to chip memory.

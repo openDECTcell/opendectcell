@@ -557,6 +557,8 @@ struct stubd {
 	char     reg_profile[DECT_PROFILE_ID_MAX];
 	unsigned int n_xmail;
 	unsigned int xmail_idx;	/* next extra mail to send (one per loop tick) */
+	uint64_t late_t0;	/* latemail: when the subscriptions were reloaded */
+	unsigned late_idx;	/* latemail: next one to send */
 	struct dect_rx rx;
 	struct dect_session sess;
 
@@ -837,6 +839,11 @@ struct stubd {
 		unsigned keycheck_ms;	/* keycheckms=MS: read-back delay */
 		unsigned tpui_offset;	/* tpuioffset=N: TPUI off the slot */
 		unsigned install_dummy;	/* installdummy=N: 0x0247 installs slot N with no key */
+		struct {		/* latemail=MS:SRC:DST:PRIM[:HEX], repeatable */
+			unsigned ms;
+			char     spec[80];
+		} latemail[8];
+		unsigned n_latemail;
 		int      keycheck_set;
 		unsigned locate_validity;	/* locvalid=N x 40.96 s, M4 */
 		int      no_led;	/* noled */
@@ -7043,6 +7050,30 @@ static void loop_tick(struct stubd *s, uint64_t now)
 			printf("all %u extra mails sent\n", s->n_xmail);
 	}
 	/*
+	 * latemail=MS:...: raw mails sent MS ms after the stored subscriptions
+	 * were reloaded (-M sends before the radio is on), in list order.
+	 */
+	if (s->sess.state == DECT_SESS_UP && s->audio.n_latemail &&
+	    s->xmail_idx >= s->n_xmail && (s->sub_restored || !any_uak(s))) {
+		if (!s->late_t0)
+			s->late_t0 = now ? now : 1u;
+		while (s->late_idx < s->audio.n_latemail &&
+		       now - s->late_t0 >= s->audio.latemail[s->late_idx].ms) {
+			const char *ls = s->audio.latemail[s->late_idx].spec;
+
+			if (send_mail_spec(s, ls))
+				fprintf(stderr, "latemail %u (%s) failed\n",
+					s->late_idx, ls);
+			else
+				printf("late: mail %u sent %llu ms after the "
+				       "subscriptions (%s)\n", s->late_idx,
+				       (unsigned long long)(now - s->late_t0),
+				       ls);
+			fflush(stdout);
+			s->late_idx++;
+		}
+	}
+	/*
 	 * Reload the stored subscriptions into the chip once the radio is
 	 * up, the way AVM restores saved handsets at boot [CR A-0026], so
 	 * the handsets stay known across daemon restarts. After the extra
@@ -7346,7 +7377,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
 static const char *const audio_word_keys[] = {
 	"seqstep", "play", "playpcm", "playraw", "led",
 	"statefile", "profiles", "ctl", "linename", "remote",
-	"clip", "memdump", "timesync", "codeclist", "infoie",
+	"clip", "memdump", "latemail", "timesync", "codeclist", "infoie",
 	"lane2", "lane3", "cnip", "rfpicheck",
 };
 
@@ -7694,6 +7725,22 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			a->remote_path = path;
 		} else if (klen == 10 && !memcmp(key, "fetchdelay", 10)) {
 			a->fetch_delay_ms = (unsigned)v;
+		} else if (klen == 8 && !memcmp(key, "latemail", 8)) {
+			const char *rest = end + 1;
+			size_t rl = (size_t)(spec - rest);
+			struct dect_mail chk;
+
+			if (*end != ':' || !rl || a->n_latemail >=
+			    sizeof(a->latemail) / sizeof(a->latemail[0]) ||
+			    rl >= sizeof(a->latemail[0].spec))
+				return -1;
+			memcpy(a->latemail[a->n_latemail].spec, rest, rl);
+			a->latemail[a->n_latemail].spec[rl] = 0;
+			if (parse_mail_spec(a->latemail[a->n_latemail].spec,
+					    &chk))
+				return -1;
+			a->latemail[a->n_latemail].ms = (unsigned)v;
+			a->n_latemail++;
 		} else if (klen == 12 && !memcmp(key, "installdummy", 12)) {
 			if (v < 1 || v > DECT_MM_MAX_SLOT)
 				return -1;
@@ -7966,6 +8013,9 @@ static void usage(void)
 		"           holdback=MS nochipkeys remote=PATH fetchdelay=MS\n"
 		"           locvalid=N: the multi-cell tests M2 and M4\n"
 		"           (docs/multicell-experiments.md)\n"
+		"           latemail=MS:SRC:DST:PRIM[:HEX] send this raw mail MS ms\n"
+		"           after the subscriptions were reloaded (repeatable, up\n"
+		"           to 8, in list order); -M sends before the radio is on\n"
 		"           installdummy=N send 0x0247 {N, 1, 0} after the slot\n"
 		"                     clears, no key written (bench test, A-0134)\n"
 		"           tpuioffset=N assign TPUI {0x00,0x11,slot+N} instead of the\n"
