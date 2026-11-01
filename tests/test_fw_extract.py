@@ -53,6 +53,10 @@ def main():
             f.write(SECOND)
         with open(os.path.join(root, 'other.bin'), 'wb') as f:
             f.write(b'x' * 5000)
+        # AVM's factory-test STUB, as in the 7362 SL image: skipped
+        with open(os.path.join(root, 'dectfw_secondlevel_441p2test.hex'),
+                  'wb') as f:
+            f.write(b':10000000PRODUCTIONTESTSTUB0000000000\n')
         sq = os.path.join(t, 'fs.sqfs')
         subprocess.run(['mksquashfs', os.path.join(t, 'root'), sq, '-comp',
                         'xz', '-noappend', '-quiet'], check=True,
@@ -88,6 +92,11 @@ def main():
         out_dir = os.path.join(t, 'out2')
         rc, text = run(image, '-o', out_dir)
         check(rc == 0, 'known builds exit 0, got %d' % rc)
+        check('SKIPPED' in text and 'p2test' in text,
+              'production-test STUB reported as skipped')
+        check(not os.path.exists(os.path.join(
+            out_dir, 'dectfw_secondlevel_441p2test.hex')),
+              'production-test STUB not saved')
         check(os.path.exists(os.path.join(out_dir,
                                           'dectfw_secondlevel_441-test.hex')),
               'second stage saved under its build name')

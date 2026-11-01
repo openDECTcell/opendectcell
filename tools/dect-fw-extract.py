@@ -59,6 +59,12 @@ def is_firmware(name):
     return base.startswith('dectfw_') and base.endswith('.hex')
 
 
+def is_production_test(name):
+    """AVM's factory-test STUB (e.g. dectfw_secondlevel_441p2test.hex in the
+    7362 SL image), which opendectcell never uses."""
+    return 'test' in os.path.basename(name)
+
+
 def squashfs_offsets(data):
     """Offsets in data that start a plausible SquashFS 4 superblock."""
     limit = min(len(data), SCAN_LIMIT)
@@ -168,6 +174,11 @@ def main(argv=None):
     os.makedirs(args.out, exist_ok=True)
     known = 0
     second = None
+    skipped = [p for p, _ in found if is_production_test(p)]
+    found = [(p, d) for p, d in found if not is_production_test(p)]
+    for path in skipped:
+        print('SKIPPED  %-34s production-test firmware, not needed'
+              % os.path.basename(path))
     for path, data in found:
         digest = hashlib.sha256(data).hexdigest()
         info = KNOWN.get(digest)
