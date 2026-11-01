@@ -110,9 +110,8 @@ def main():
     spec = importlib.util.spec_from_file_location('fwx', TOOL)
     fwx = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fwx)
-    # the extractor also knows the 7362 SL's build, which has no board profile
-    check(set(ours) <= set(fwx.KNOWN),
-          'KNOWN_FW has a build dect-fw-extract.py lacks')
+    check(set(ours) == set(fwx.KNOWN),
+          'KNOWN_FW and dect-fw-extract.py know different builds')
     for h, n in ours.items():
         check(n == fwx.KNOWN[h][3], 'name of %s: %s, the extractor says %s'
               % (h[:8], n, fwx.KNOWN[h][3]))

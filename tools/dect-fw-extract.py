@@ -38,14 +38,16 @@ KNOWN = {
     '7cac33c72b2222468f34033a15c35487aa35062265ab0013bb480068ebab7b31':
         ('7520/7530', '08.25', 'second stage',
          'dectfw_secondlevel_441.hex'),
+    # the 7362 SL's first stage is the same file; it keeps the 7412's name
     '72f8e27a0d01c301a05a8b373a71887af882a6cebcb1a30bd4a435580e1045f2':
-        ('7412', '137.06.88', 'first stage',
+        ('7412 and 7362 SL', '137.06.88 and 07.18', 'first stage',
          'dectfw_firstlevel_441-06.88-7412.hex'),
     '4fabee65d07a3214f9083de81ae54089f01bbfccb4cdbb672f37487a09cdfaa6':
         ('7412', '137.06.88', 'second stage',
          'dectfw_secondlevel_441-06.88-7412.hex'),
     '8aae3b5e3450fd2c9999e003068e786096c11d8ef53f7d47c25cebd057a797d3':
-        ('7362 SL', '07.18', 'second stage', None),
+        ('7362 SL', '07.18', 'second stage',
+         'dectfw_secondlevel_441-07.18-7362sl.hex'),
 }
 
 SQFS_MAGICS = (b'hsqs', b'sqsh')     # little- and big-endian SquashFS 4

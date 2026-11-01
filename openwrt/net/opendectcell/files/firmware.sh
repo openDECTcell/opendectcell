@@ -39,6 +39,7 @@ KNOWN_FW="
 7cac33c72b2222468f34033a15c35487aa35062265ab0013bb480068ebab7b31 dectfw_secondlevel_441.hex
 72f8e27a0d01c301a05a8b373a71887af882a6cebcb1a30bd4a435580e1045f2 dectfw_firstlevel_441-06.88-7412.hex
 4fabee65d07a3214f9083de81ae54089f01bbfccb4cdbb672f37487a09cdfaa6 dectfw_secondlevel_441-06.88-7412.hex
+8aae3b5e3450fd2c9999e003068e786096c11d8ef53f7d47c25cebd057a797d3 dectfw_secondlevel_441-07.18-7362sl.hex
 "
 
 # the 7520 defaults of the init script, where no board profile is found
