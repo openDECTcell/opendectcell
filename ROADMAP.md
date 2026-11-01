@@ -216,5 +216,6 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
 ## Later
 - [~] Port to the 7412 (VR9 SSC in SPI-slave mode, `kmod-opendectcell-lantiq`) and the 7362 SL (VR9 TDM)
   - 2026-10-29: the 7412 runs the base over the generic `kmod-lantiq-ssc-pcm` transport (its own repository, not `kmod-opendectcell-lantiq`): handsets register, SIP calls in and out with HD voice, internal calls (`docs/bench-7412.md`). Open: the release packaging of the transport, a chip reset when a park cannot be verified, the 7362 SL
+  - 2026-11-01: a 7362 SL runs OpenWrt 25.12.6 (`avm,fritz7362sl`). Checked against that release's sources (`docs/models/7362SL-DECT-analysis.md` §7): OpenWrt has **no USIF UART driver** (the firmware-load UART, GPIO11/12) and **no TDM pin group** in pinctrl; the PCM pins cannot reach the SSC, which drives the box's SPI NOR flash. Both kernel pieces are new drivers. The factory DECT block is in the urlader (`mtd2`) at 0x1985 (one box)
 - [ ] 7412 PCB check: what hangs off GPIO10/12 ("PCM-link flash" lines)
 - [ ] ULE, SUOTA: out of scope for now
