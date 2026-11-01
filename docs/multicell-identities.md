@@ -532,6 +532,17 @@ were read on the 7520 host driver and matched against the 06.88 build):
    `cell.rpn` becomes 0-255. The cell is told its RFPI (§7.4); dect-stubd's
    MM sends the assigned IPUI and the class B PARK.
 
+**Bench 2026-11-01: the RPN stays 0 (07.x/08.25 boxes).** One class B PARI with
+the cell number in the RPN did not work on the lab 7520 (08.25): the A540 never
+reached the chip under RPN 1 or 2 (10 of 10 power cycles, no mail, no LED;
+room: A-0143, a refusal at bearer admission before any mail), and attached 5
+of 5 under RPN 0; the 7412 (06.88) attaches under RPN 2. The controller
+therefore gives every cell an ARI of its own and RPN 0: cell 1 is the identity
+(EIC, FPN, FPS), cell n has the FPN counted up by n-1 (wrapping at 256, 255
+cells), and the handsets' PARK stays PLI 19 (ARC + EIC), so one registration
+covers every cell. Moving from one cell to the next, a handset sees another
+PARI and locates again. Not benched yet with two boxes.
+
 ---
 
 ## 8. Handover and synchronisation
