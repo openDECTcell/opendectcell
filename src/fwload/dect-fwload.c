@@ -451,6 +451,13 @@ int main(int argc, char **argv)
 		fprintf(stderr, "cannot open %s: %s\n", uart, strerror(errno));
 		return 1;
 	}
+	/*
+	 * Raw before /dev/dect0 is opened: openDECTcell's Lantiq module releases
+	 * the chip from reset on open, and until the first tcsetattr() the
+	 * tty echoes whatever it receives back to the chip [CR 7362SL/A-0003].
+	 */
+	if (dev_set_baud(&d, 9600))
+		return 1;
 	if (dect_fd_arg >= 0 && fcntl(dect_fd_arg, F_GETFD) < 0) {
 		fprintf(stderr, "--dect-fd %d: %s\n", dect_fd_arg, strerror(errno));
 		return 1;
