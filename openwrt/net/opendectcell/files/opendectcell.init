@@ -165,9 +165,22 @@ load_chip() {
 			return 1
 		fi
 	done
-	# No firmware-load UART, no start: the 7362 SL's (USIF) has no driver
-	# yet, so its profile names none. Checked before anything is loaded or
-	# a getty frozen; an empty name would match every getty.
+	# No PCM transport for this board yet (pcm_dev=none, the 7362 SL): the
+	# base cannot run, so nothing is loaded and the chip is not booted.
+	[ "${pcm_dev:-}" = none ] && {
+		log "this board's PCM link has no driver yet; not starting (the chip firmware upload alone is a bench test, docs/hardware-abstraction.md)"
+		return 1
+	}
+	# The firmware-load UART's own module (uart_kmod, the 7362 SL's USIF),
+	# where the board's UART is not the console's.
+	if [ -n "${uart_kmod:-}" ]; then
+		grep -q "^$uart_kmod " /proc/modules || insmod "$uart_kmod" || {
+			log "insmod $uart_kmod failed"
+			return 1
+		}
+	fi
+	# No firmware-load UART, no start. Checked before the chip is touched
+	# or a getty frozen; an empty name would match every getty.
 	[ -n "$tty" ] && [ -c "$tty" ] || {
 		log "the DECT chip's UART '${tty:-none}' does not exist on this box; not starting (docs/hardware-abstraction.md)"
 		return 1

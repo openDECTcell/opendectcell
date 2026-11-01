@@ -3,8 +3,9 @@
 # Read by /etc/init.d/opendectcell; UCI options in /etc/config/opendectcell override.
 # Keys: see docs/hardware-abstraction.md section 4.
 #
-# Not working yet: the loader UART (USIF) and the PCM link (VR9 TDM) have
-# no driver, so the service refuses to start here and says so
+# Not working yet: the PCM link (VR9 TDM) has no driver, so the service
+# refuses to start here and says so (pcm_dev=none). The firmware-load UART
+# works through kmod-lantiq-usif-uart [CR 7362SL/A-0002, A-0003]
 # (docs/models/7362SL-DECT-analysis.md section 7).
 
 name="FRITZ!Box 7362 SL"
@@ -22,22 +23,25 @@ fw_secondlevel_sha256=8aae3b5e3450fd2c9999e003068e786096c11d8ef53f7d47c25cebd057
 # 06.88 STUB 0x101 clocks 4 words of 32 bit per frame; assumed the same.
 dect_mode=0x101
 
-# The PCM bus: no transport yet. Left empty, the daemon would open the
-# openDECTcell module's /dev/dect0, which carries no PCM on lantiq.
+# The PCM bus: no transport yet. "none" keeps the service from starting;
+# left empty, the daemon would open the openDECTcell module's /dev/dect0, which
+# carries no PCM on lantiq.
 pcm_kmod=
-pcm_dev=
+pcm_dev=none
 pcm_slots=
 
-# The DECT UART is the VR9 USIF on GPIO11/12, not the console. No driver
-# yet, so no device: empty keeps the service from starting.
-uart=
+# The DECT UART is the VR9 USIF on GPIO11/12, not the console:
+# kmod-lantiq-usif-uart's /dev/ttyUSIF0, loaded by the service before the
+# upload (tested on a 7362 SL in loopback, 9600 to 460800 Bd).
+uart=/dev/ttyUSIF0
+uart_kmod=lantiq_usif_uart
 uart_is_console=0
 
 # No boot strap line is known on this box: the uploader leaves it alone.
 strap=0
 
-# The chip's reset line, as the openDECTcell module claims it (GPIO30; low is
-# assumed to hold the chip in reset, as on the 7412 and 7520).
+# The chip's reset line, as the openDECTcell module claims it (GPIO30; low holds
+# the chip in reset, as in the stock board table [CR 7362SL/A-0001]).
 reset_chip=gpio-xway
 reset_line=30
 
