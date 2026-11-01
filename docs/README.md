@@ -88,6 +88,7 @@ says at the top what it was for.
 | [bench-2026-10-25.md](bench-2026-10-25.md), [bench-next.md](bench-next.md), [bench-7412.md](bench-7412.md) | Older bench test cards and their results; `bench-7412.md` the first handset on a 7412 |
 | [bench-7362sl.md](bench-7362sl.md) | Gate G1 on a 7362 SL: the first STUB upload over the USIF UART, and whether the PCM clocks start |
 | [bench-7362sl-g2.md](bench-7362sl-g2.md) | Gate G2 on a 7362 SL: the control channel over the VR9 TDM transport, radio off |
+| [bench-7362sl-g3-g4.md](bench-7362sl-g3-g4.md) | Gates G3 and G4 on a 7362 SL: request and answer, and the STUB loop-back over the TDM transport, radio off |
 
 The project-wide history and hand-over notes are in
 the maintainers' notes; the plan is in [ROADMAP.md](../ROADMAP.md).
