@@ -1052,3 +1052,16 @@ a text with 16 (an older daemon's) still loads, its terminal ids 8 to 32 empty. 
 written now is not read back by an older daemon (its lines are skipped; the file lives
 in RAM, a reboot empties it). `dect-stubd`'s text buffer grows to 230 octets an entry
 (27.6 kB). Layout change of `struct dect_iwu`, `struct dect_calls` and `struct dect_call`.
+
+**148.** dect_base.h, 2026-11-01: **a chip-slot record can be recycled.** New:
+`dect_base_record_recycle(b, i, tpui)` turns a record that holds a subscription in one of
+the chip's slots (1 to 6) into a free store again, in place: the chip slot is cleared the way
+a deregistration clears it (`0x0247` clear, `0x020A` with zeros), the key and everything the
+base kept for the record is wiped, the record keeps its slot and gets `tpui` as the TPUI of
+the next handset enrolling there, and the host's `mask()` runs. Nothing goes to the host's
+`forget()` or `save()`: a host with its own store (the controller's pooled handsets) uses it
+to take a handset out of the chip after it enrolled. 0; 1 when the base is not quiet (try
+again); -1 for a free store, a record without a chip slot or no record. The current record
+stays current. No layout change. A host whose `save()` does not mark the record
+(`loaded[cur] = 1`, `absent[cur] = 0`, as `dect-stubd` does) must do so, or the record is not
+one to recycle and a second enrolment picks the same free store.

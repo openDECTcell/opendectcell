@@ -1125,3 +1125,11 @@ fits one reply, the entries asked for up to fifteen data packets, and the handse
 for the rest. The call-list text (`dect_calls_save()`) writes 66 hex digits per entry for
 the lines; the older 16 digits still load. Not tried on air: the names list with more
 than eight entries on a real handset (the AS690H, A540 and C430A show it differently).
+
+## API 148: recycling a chip-slot record `[2026-11-01]`
+
+`dect_base_record_recycle()` (openDECTcell `docs/api-versions.md` #148): after a pooled handset enrolled
+into a chip slot, the controller frees the slot in place instead of rebuilding the stack, so an
+enrolment never ends a call. Your `save()` must set `loaded[cur] = 1` and `absent[cur] = 0` the way
+`dect-stubd`'s does; `cdect.h` needs `148` when you take it. Not tried on air yet: the clear of a slot on a
+running radio is the deregistration's own mail pair, the rest is host bookkeeping.

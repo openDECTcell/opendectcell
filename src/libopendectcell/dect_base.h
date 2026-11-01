@@ -645,6 +645,19 @@ int dect_base_quiet(const struct dect_base *b);
  */
 int dect_base_record_drop(struct dect_base *b, unsigned i);
 
+/*
+ * Turn a record that holds a subscription in one of the chip's slots (1 to 6)
+ * into a free store again, with the same chip slot and `tpui` as the TPUI the
+ * next handset enrolling there gets (API 148): the slot is cleared in the chip
+ * like a deregistration does, the key and everything else the base kept for the
+ * record is wiped, and the mask goes out without it. Nothing is saved or
+ * forgotten towards the host: it keeps the handset in its own store (a pooled
+ * handset enrols into a chip slot and then leaves it). 0; 1 when the base is
+ * not quiet (try again later); -1 when it is not a record with a chip slot.
+ */
+int dect_base_record_recycle(struct dect_base *b, unsigned i,
+			     const uint8_t tpui[3]);
+
 /* The current record changed: the host's save(). */
 void dect_base_changed(struct dect_base *b);
 

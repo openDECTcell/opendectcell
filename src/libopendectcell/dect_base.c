@@ -62,6 +62,27 @@ int dect_base_quiet(const struct dect_base *b)
 	       b->tu.st == DECT_BASE_TIME_IDLE;
 }
 
+static void chip_mail(struct dect_base *b, uint16_t prim, const uint8_t *p,
+		      size_t n);
+
+/* Everything the base keeps for record i, key material included. */
+static void record_wipe(struct dect_base *b, unsigned i)
+{
+	memset(&b->hs[i], 0, sizeof(b->hs[i]));
+	b->loaded[i] = 0;
+	b->absent[i] = 0;
+	b->remote[i] = 0;
+	b->fetched[i] = 0;
+	b->last_seen_ms[i] = 0;
+	memset(&b->note[i], 0, sizeof(b->note[i]));
+	b->page_want &= ~(1u << i);
+	b->name[i][0] = '\0';
+	b->line2[i] = 0;
+	memset(b->line_name[i], 0, sizeof(b->line_name[i]));
+	memset(&b->cap[i], 0, sizeof(b->cap[i]));
+	dect_profile_defaults(&b->prof[i]);
+}
+
 int dect_base_record_drop(struct dect_base *b, unsigned i)
 {
 	unsigned j, k;
@@ -82,23 +103,48 @@ int dect_base_record_drop(struct dect_base *b, unsigned i)
 	for (k = 0; k < DECT_BASE_SIDES; k++)
 		if (b->side[k].adopted == (int)i)
 			b->side[k].adopted = -1;
-	memset(&b->hs[i], 0, sizeof(b->hs[i]));
-	b->loaded[i] = 0;
-	b->absent[i] = 0;
-	b->remote[i] = 0;
-	b->fetched[i] = 0;
-	b->last_seen_ms[i] = 0;
-	memset(&b->note[i], 0, sizeof(b->note[i]));
-	b->page_want &= ~(1u << i);
-	b->name[i][0] = '\0';
-	b->line2[i] = 0;
-	memset(b->line_name[i], 0, sizeof(b->line_name[i]));
-	memset(&b->cap[i], 0, sizeof(b->cap[i]));
-	dect_profile_defaults(&b->prof[i]);
+	record_wipe(b, i);
 	/* the table ends at the last record in use, but never before the current one */
 	while (b->n_hs > b->cur + 1u && !b->loaded[b->n_hs - 1u] &&
 	       !b->absent[b->n_hs - 1u])
 		b->n_hs--;
+	return 0;
+}
+
+int dect_base_record_recycle(struct dect_base *b, unsigned i,
+			     const uint8_t tpui[3])
+{
+	unsigned slot, k;
+	uint8_t p[1 + DECT_MM_UAK_LEN + 1];
+
+	if (i >= b->n_hs || !b->loaded[i] || b->absent[i])
+		return -1;
+	slot = dect_base_slot(b, i);
+	if (slot < 1u || slot > DECT_MM_MAX_SLOT)
+		return -1;		/* only a record with a key in the chip */
+	if (!dect_base_quiet(b))
+		return 1;
+	/* the chip's slot as a deregistration leaves it (dect_base_dereg_erase) */
+	memset(p, 0, sizeof(p));
+	p[0] = (uint8_t)slot;
+	chip_mail(b, 0x0247u, p, 3);		/* slot, 00, 00 */
+	chip_mail(b, 0x020Au, p, sizeof(p));	/* slot, 17 zeros */
+	dect_base_log(b, "sub: record %u recycled: chip slot %u cleared "
+		      "(0x0247, 0x020A zeros), free for a new enrolment",
+		      i, slot);
+	if (b->main_link.link.mm.adopted == (int)i)
+		b->main_link.link.mm.adopted = -1;
+	for (k = 0; k < DECT_BASE_SIDES; k++)
+		if (b->side[k].adopted == (int)i)
+			b->side[k].adopted = -1;
+	record_wipe(b, i);
+	b->hs[i].slot = slot;
+	memcpy(b->hs[i].tpui, tpui, sizeof(b->hs[i].tpui));
+	b->absent[i] = 1;			/* free for a new enrolment */
+	if (i == b->cur)
+		dect_base_load(b, i);		/* the working copy goes with it */
+	if (b->ops && b->ops->mask)
+		b->ops->mask(b->ctx);		/* the mask without it */
 	return 0;
 }
 

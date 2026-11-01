@@ -152,6 +152,14 @@ static int same_account(void *ctx, unsigned viewer, unsigned slot)
 	return (viewer == 3u) == (slot == 3u);
 }
 
+static unsigned mask_calls;
+
+static void count_mask(void *ctx)
+{
+	(void)ctx;
+	mask_calls++;
+}
+
 int main(void)
 {
 	struct dect_base b;
@@ -1163,6 +1171,94 @@ int main(void)
 		CHECK_EQ(dect_base_record_drop(&b, 1), 0);
 		CHECK_EQ(b.n_hs, 1u);
 		CHECK_EQ(dect_base_record_drop(&b, 0), -1);	/* the only record */
+	}
+
+	/*
+	 * Recycling a record (API 148): a pooled handset enrolled into a chip
+	 * slot and leaves it; the slot is cleared, the record is a free store again.
+	 */
+	{
+		static struct dect_base_ops rops;
+		static const uint8_t newtp[3] = { 0x00, 0x11, 0x2A };
+		unsigned k;
+
+		rops = ops;
+		rops.mask = count_mask;
+		dect_base_init(&b);
+		b.ops = &rops;
+		b.n_hs = 4;
+		for (k = 0; k < 3; k++) {
+			b.hs[k].slot = k + 1u;
+			b.loaded[k] = 1;
+			b.hs[k].uak_valid = 1;
+			b.hs[k].uak[0] = (uint8_t)(0x40 + k);
+			b.hs[k].port_id[0] = (uint8_t)(0x10 + k);
+			b.hs[k].port_id_len = 1;
+		}
+		b.hs[3].slot = 4;
+		b.hs[3].tpui[2] = 7;
+		b.absent[3] = 1;		/* a free store */
+		b.hs[8].slot = 9;		/* a host-only record: nothing in the chip */
+		b.cur = 0;
+		b.rec = b.hs[0];
+		strcpy(b.name[1], "Pooled");
+		b.page_want = 1u << 1;
+
+		/* not a record, a free store, a record without a chip slot */
+		CHECK_EQ(dect_base_record_recycle(&b, 3, newtp), -1);
+		CHECK_EQ(dect_base_record_recycle(&b, 9, newtp), -1);
+		b.n_hs = 9;
+		b.loaded[8] = 1;
+		CHECK_EQ(dect_base_record_recycle(&b, 8, newtp), -1);
+		b.loaded[8] = 0;
+		b.n_hs = 4;
+
+		/* not while anything uses the table's indices */
+		b.main_link.active = 1;
+		n_sent = 0;
+		CHECK_EQ(dect_base_record_recycle(&b, 1, newtp), 1);
+		CHECK_EQ(n_sent, 0u);
+		CHECK_EQ(b.loaded[1], 1);
+		b.main_link.active = 0;
+
+		/* a quiet base: chip slot 2 cleared, the record free with its slot and the new TPUI */
+		mask_calls = 0;
+		CHECK_EQ(dect_base_record_recycle(&b, 1, newtp), 0);
+		CHECK_EQ(n_sent, 2u);
+		CHECK_EQ(sent[0].prim, 0x0247u);
+		CHECK_EQ(sent[0].param[0], 2);
+		CHECK_EQ(sent[0].param[1], 0);
+		CHECK_EQ(sent[1].prim, 0x020Au);
+		CHECK_EQ(sent[1].param[0], 2);
+		CHECK_EQ(sent[1].param[1], 0);		/* the key written as zeros */
+		CHECK_EQ(mask_calls, 1u);
+		CHECK_EQ(b.loaded[1], 0);
+		CHECK_EQ(b.absent[1], 1);
+		CHECK_EQ(b.hs[1].slot, 2u);
+		CHECK_EQ(b.hs[1].tpui[2], 0x2Au);
+		CHECK_EQ(b.hs[1].uak_valid, 0);
+		CHECK_EQ(b.hs[1].port_id_len, 0u);
+		CHECK_EQ(b.name[1][0], 0);
+		CHECK_EQ(b.page_want, 0u);
+		CHECK_EQ(b.n_hs, 4u);
+		CHECK_EQ(b.loaded[2], 1);		/* the others are as they were */
+		CHECK_EQ(b.hs[2].uak[0], 0x42);
+		/* the free store with the lowest chip slot takes the next enrolment: it is this one */
+		CHECK_EQ(dect_base_record_recycle(&b, 1, newtp), -1);	/* now a free store */
+
+		/* the current record: it stays current, as a free store with the working copy cleared */
+		b.cur = 2;
+		b.rec = b.hs[2];
+		b.main_link.link.mm.adopted = 2;
+		n_sent = 0;
+		CHECK_EQ(dect_base_record_recycle(&b, 2, newtp), 0);
+		CHECK_EQ(b.cur, 2u);
+		CHECK_EQ(b.rec.uak_valid, 0);
+		CHECK_EQ(b.rec.slot, 3u);
+		CHECK_EQ(b.rec.tpui[2], 0x2Au);
+		CHECK_EQ(b.rec.port_id_len, 0u);
+		CHECK_EQ(b.main_link.link.mm.adopted, -1);
+		CHECK_EQ(sent[0].param[0], 3);
 	}
 
 	/* parallel calls (S3s) */
