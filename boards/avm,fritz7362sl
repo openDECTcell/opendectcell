@@ -1,0 +1,55 @@
+# openDECTcell board profile: AVM FRITZ!Box 7362 SL (Lantiq VR9, VR9 TDM).
+# Installed as /usr/share/opendectcell/boards/avm,fritz7362sl.
+# Read by /etc/init.d/opendectcell; UCI options in /etc/config/opendectcell override.
+# Keys: see docs/hardware-abstraction.md section 4.
+#
+# Not working yet: the loader UART (USIF) and the PCM link (VR9 TDM) have
+# no driver, so the service refuses to start here and says so
+# (docs/models/7362SL-DECT-analysis.md section 7).
+
+name="FRITZ!Box 7362 SL"
+transport=lantiq-tdm
+
+fw_family=441
+# The 7362 SL's own 07.18 build. Its first stage is the 7412's file,
+# byte for byte, so it keeps the 7412's name.
+fw_firstlevel=dectfw_firstlevel_441-06.88-7412.hex
+fw_secondlevel=dectfw_secondlevel_441-07.18-7362sl.hex
+fw_firstlevel_sha256=72f8e27a0d01c301a05a8b373a71887af882a6cebcb1a30bd4a435580e1045f2
+fw_secondlevel_sha256=8aae3b5e3450fd2c9999e003068e786096c11d8ef53f7d47c25cebd057a797d3
+
+# Stock mode word (derived statically, FRITZ!OS 07.18). On the 7412's
+# 06.88 STUB 0x101 clocks 4 words of 32 bit per frame; assumed the same.
+dect_mode=0x101
+
+# The PCM bus: no transport yet. Left empty, the daemon would open the
+# openDECTcell module's /dev/dect0, which carries no PCM on lantiq.
+pcm_kmod=
+pcm_dev=
+pcm_slots=
+
+# The DECT UART is the VR9 USIF on GPIO11/12, not the console. No driver
+# yet, so no device: empty keeps the service from starting.
+uart=
+uart_is_console=0
+
+# No boot strap line is known on this box: the uploader leaves it alone.
+strap=0
+
+# The chip's reset line, as the openDECTcell module claims it (GPIO30; low is
+# assumed to hold the chip in reset, as on the 7412 and 7520).
+reset_chip=gpio-xway
+reset_line=30
+
+# The DECT LED (OpenWrt 7362 SL device tree: green, function "dect", GPIO35).
+led_path=/sys/class/leds/green:dect/brightness
+
+# Factory DECT config block: urlader partition on the SPI NOR (mtd2), header
+# 02 01 at 0x1985 (observed on one box, 2026-11-01).
+factory_cfg=
+factory_mtd=/dev/mtd2
+factory_offset=0x1985
+rfpi_fallback=maca
+
+# Three on the 7520 and 7412; not measured for this build or mode.
+max_calls=3

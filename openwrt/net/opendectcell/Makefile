@@ -175,6 +175,7 @@ define Package/opendectcell/install
 	$(INSTALL_BIN) ./files/firmware.sh $(1)/usr/share/opendectcell/firmware.sh
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/boards/avm,fritzbox-7530 \
 		$(PKG_BUILD_DIR)/boards/avm,fritz7412 \
+		$(PKG_BUILD_DIR)/boards/avm,fritz7362sl \
 		$(1)/usr/share/opendectcell/boards/
 	$(INSTALL_DIR) $(1)/etc/opendectcell/profiles
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/profiles/*.profile \
