@@ -5,8 +5,8 @@
 #
 # The firmware-load UART is kmod-lantiq-usif-uart [CR 7362SL/A-0002, A-0003],
 # the PCM link kmod-lantiq-tdm-pcm [CR 7362SL/A-0004, A-0005]
-# (docs/models/7362SL-DECT-analysis.md section 7). Gate G2 (the control
-# channel over the TDM transport) is untested.
+# (docs/models/7362SL-DECT-analysis.md section 7). Gates G1-G7 passed with
+# hand-loaded modules (docs/bench-7362sl*.md); the service is untested.
 
 name="FRITZ!Box 7362 SL"
 transport=lantiq-tdm
