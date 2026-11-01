@@ -15,6 +15,7 @@
 #include <linux/fs.h>
 #include <linux/gpio/consumer.h>
 #include <linux/gpio/machine.h>
+#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
@@ -39,22 +40,42 @@ static struct gpiod_lookup_table fritz7412_gpio_lookup = {
 	},
 };
 
-/* The 7362 SL: reset GPIO 30 only. Its chip has no strap or clock-enable
- * line in the stock GPIO table; its loader UART (USIF) and PCM link (VR9
- * TDM) have no driver yet. Low holds the chip in reset, as on the 7412 and
- * 7520 (assumed, not yet seen on this box). */
+/* The 7362 SL: reset GPIO 30, low holds the chip in reset (stock board
+ * table, [CR 7362SL/A-0001]); no clock-enable line. The boot strap is the
+ * chip's TX line, GPIO 11, which is the USIF's RX pin: the ROM answers only
+ * if it is held low while reset is released, as on the 7520 (observed on a
+ * 7362 SL, 2026-11-01, docs/bench-7362sl.md). */
 static struct gpiod_lookup_table fritz7362sl_gpio_lookup = {
 	.dev_id = "dect0",
 	.table = {
 		GPIO_LOOKUP("gpio-xway", 30, "reset", GPIO_ACTIVE_HIGH),
+		GPIO_LOOKUP("gpio-xway", 11, "strap", GPIO_ACTIVE_HIGH),
 		{},
 	},
 };
+
+/*
+ * VR9 GPIO port 0 registers, as mainline pinctrl-xway.c lays them out:
+ * direction at +0x08, alternate-function selects ALT0 at +0x0C and ALT1 at
+ * +0x10, one bit per pin. Requesting a pin as a GPIO switches it to the GPIO
+ * function and pinctrl-lantiq never switches it back, so a strap on a UART
+ * pin must be handed back to the UART by hand.
+ */
+#define XWAY_GPIO_BASE		0x1e100b10
+#define XWAY_P0_DIR		0x08
+#define XWAY_P0_ALT0		0x0c
+#define XWAY_P0_ALT1		0x10
 
 struct dect_board {
 	const char *compatible;
 	const char *transport;
 	struct gpiod_lookup_table *gpio_lookup;
+	/*
+	 * Port-0 pin the strap borrows from a peripheral, and that
+	 * peripheral's function (bit 0 = ALT0, bit 1 = ALT1); -1: none.
+	 */
+	int strap_pin;
+	unsigned int strap_alt;
 };
 
 static const struct dect_board dect_boards[] = {
@@ -62,11 +83,14 @@ static const struct dect_board dect_boards[] = {
 		.compatible = "avm,fritz7412",
 		.transport = "none",	/* PCM: kmod-lantiq-ssc-pcm */
 		.gpio_lookup = &fritz7412_gpio_lookup,
+		.strap_pin = -1,
 	},
 	{
 		.compatible = "avm,fritz7362sl",
 		.transport = "none",	/* PCM: VR9 TDM, no driver yet */
 		.gpio_lookup = &fritz7362sl_gpio_lookup,
+		.strap_pin = 11,	/* USIF uart_rx: function 1, ALT0 */
+		.strap_alt = 1,
 	},
 };
 
@@ -78,6 +102,7 @@ struct opendectcell {
 	bool opened;
 	struct gpio_desc *strap;
 	struct gpio_desc *clk_en;
+	void __iomem *gpio_base;	/* port 0, map only: pinctrl owns it */
 };
 
 static struct opendectcell dect;
@@ -118,13 +143,39 @@ out:
 	return ret;
 }
 
+/*
+ * Let go of the strap: the line becomes an input again (never left driven),
+ * and where it is borrowed from a peripheral (the 7362 SL's USIF RX) that
+ * peripheral gets its pin function back. The read-modify-write cannot
+ * serialize against pinctrl-xway; nothing else changes port 0's mux while
+ * the chip is being loaded.
+ */
+static void dect_unstrap_locked(struct opendectcell *dw)
+{
+	const struct dect_board *b = dw->board;
+	u32 bit, v;
+
+	if (!dw->strap)
+		return;
+	gpiod_direction_input(dw->strap);
+	gpiod_put(dw->strap);
+	dw->strap = NULL;
+	if (b->strap_pin < 0 || !dw->gpio_base)
+		return;
+	bit = BIT(b->strap_pin);
+	v = __raw_readl(dw->gpio_base + XWAY_P0_DIR);
+	__raw_writel(v & ~bit, dw->gpio_base + XWAY_P0_DIR);
+	v = __raw_readl(dw->gpio_base + XWAY_P0_ALT0);
+	v = (b->strap_alt & 1) ? v | bit : v & ~bit;
+	__raw_writel(v, dw->gpio_base + XWAY_P0_ALT0);
+	v = __raw_readl(dw->gpio_base + XWAY_P0_ALT1);
+	v = (b->strap_alt & 2) ? v | bit : v & ~bit;
+	__raw_writel(v, dw->gpio_base + XWAY_P0_ALT1);
+}
+
 static void dect_close_locked(struct opendectcell *dw)
 {
-	if (dw->strap) {
-		gpiod_set_value(dw->strap, 0);
-		gpiod_put(dw->strap);
-		dw->strap = NULL;
-	}
+	dect_unstrap_locked(dw);
 	if (dw->reset) {
 		/* Raw high releases this active-low reset before release. */
 		gpiod_set_value(dw->reset, 1);
@@ -190,13 +241,9 @@ static long dect_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			} else {
 				gpiod_set_value(dw->strap, 0);
 			}
-		} else if (dw->strap) {
-			/*
-			 * fwload's "strap release": release GPIO ownership so pinmux
-			 * returns this line to UART RX.
-			 */
-			gpiod_put(dw->strap);
-			dw->strap = NULL;
+		} else {
+			/* fwload's "strap release" */
+			dect_unstrap_locked(dw);
 		}
 		mutex_unlock(&dw->lock);
 		return 0;
@@ -277,6 +324,18 @@ static int __init dect_init(void)
 		dect.clk_en = NULL;
 	}
 
+	/* Do not request the region: pinctrl-xway owns it. */
+	if (board->strap_pin >= 0) {
+		dect.gpio_base = ioremap(XWAY_GPIO_BASE, XWAY_P0_ALT1 + 4);
+		if (!dect.gpio_base) {
+			if (dect.clk_en)
+				gpiod_put(dect.clk_en);
+			misc_deregister(&dect.misc);
+			gpiod_remove_lookup_table(board->gpio_lookup);
+			return -ENOMEM;
+		}
+	}
+
 	pr_info("openDECTcell: chip control loaded for %s\n", board->compatible);
 	return 0;
 }
@@ -287,6 +346,8 @@ static void __exit dect_exit(void)
 	mutex_lock(&dect.lock);
 	dect_close_locked(&dect);
 	mutex_unlock(&dect.lock);
+	if (dect.gpio_base)
+		iounmap(dect.gpio_base);
 	if (dect.clk_en)
 		gpiod_put(dect.clk_en);
 	gpiod_remove_lookup_table(dect.board->gpio_lookup);
