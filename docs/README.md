@@ -89,6 +89,7 @@ says at the top what it was for.
 | [bench-7362sl.md](bench-7362sl.md) | Gate G1 on a 7362 SL: the first STUB upload over the USIF UART, and whether the PCM clocks start |
 | [bench-7362sl-g2.md](bench-7362sl-g2.md) | Gate G2 on a 7362 SL: the control channel over the VR9 TDM transport, radio off |
 | [bench-7362sl-g3-g4.md](bench-7362sl-g3-g4.md) | Gates G3 and G4 on a 7362 SL: request and answer, and the STUB loop-back over the TDM transport, radio off |
+| [bench-7362sl-g5.md](bench-7362sl-g5.md) | Gate G5 on a 7362 SL: a handset finds the base; the 07.18 STUB needs stock's configuration mails before the radio |
 
 The project-wide history and hand-over notes are in
 the maintainers' notes; the plan is in [ROADMAP.md](../ROADMAP.md).
