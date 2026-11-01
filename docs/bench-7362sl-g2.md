@@ -86,3 +86,38 @@ bit offset other than 0, or "control slot not found" after twenty passes.
 
 `/tmp/g2-fwload.log`, `/tmp/g2-stubd.log`, `dmesg | tail -n 30`, and
 anything unexpected.
+
+## Results, 2026-11-01: **G2 passed**
+
+*Observed on hardware:* FRITZ!Box 7362 SL, OpenWrt 25.12.6, the 07.18
+STUB, `ubihealthd` running, console log level 4. `kmod-lantiq-tdm-pcm`
+from `ae40553` (the room's packaged `lantiq_tdm_pcm.ko`),
+`kmod-lantiq-usif-uart` `f359106`, `dect-fwload` and `kmod-opendectcell-lantiq`
+as installed for G1; `dect-stubd` as installed, then built from `main`
+with the fix below. Radio off throughout (no `-g`); every run ended with
+the park, the chip held in reset and all three modules unloaded.
+
+| Run | Started | Result |
+|---|---|---|
+| A, installed `dect-stubd` | right after the upload | "control slot not found" after 20 passes (43 s); all 1536 lanes idle at bit offset 0 (1024 at offset 8) |
+| B, installed | right after run A | contact at once: **control slot tx 0, rx 1** (`f601`), RFPI broadcast, `f602`, then `fff1`/`f618`/`f623` every 5 s; 60 s, 38 mails, 0 sequence gaps, 0 checksum errors, 0 dropped frames |
+| C1, installed | 50 s after the upload | as A: not found |
+| C2, installed, `-T 0 -R 1` | right after the upload | contact at once; the first answer after the upload is `fff2` (build stamp) then `f601`, `f602` |
+| C3, fixed `dect-stubd` | right after the upload | **found on the first pass** (tx 0, rx 1), as B; 30 s, 20 mails, 0 gaps, 0 errors |
+
+The transport lost no frame in any run (`stopped: … about 0 lost`; 482,000
+frames in the longest). Bit offset 0 as expected from the FSC-aligned
+transport [CR 7362SL/A-0004]; the daemon delays receive by 7 lanes, since
+the chip answers one lane after the one it reads (control lane 0 both
+ways, speech lane 1).
+
+**The fault was ours:** the control-slot search looked only at the first
+mail in each lane and wanted a contact answer there; a freshly booted
+chip sends its `0xFFF2` build stamp first
+([stub-pcm-control-channel.md](stub-pcm-control-channel.md)). The search
+also dropped what did not fit the 1024-byte receive buffer. Fixed in
+`d697936`, with a test.
+
+Not yet run: the service itself (`/etc/init.d/opendectcell start` with the
+new profile and packages); the box still has the G1-era `opendectcell`
+packages and no `kmod-lantiq-tdm-pcm` package.

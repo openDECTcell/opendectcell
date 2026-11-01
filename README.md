@@ -48,7 +48,7 @@ in the [roadmap](ROADMAP.md).
 | **FRITZ!Box 7520** | ✅ works: the development box |
 | **FRITZ!Box 7530** | 🟡 same hardware as the 7520, not yet tested |
 | FRITZ!Box 7412 | 🟡 handsets register and SIP calls work (needs `kmod-lantiq-ssc-pcm`); not released yet |
-| FRITZ!Box 7362 SL | ❌ not yet: the chip firmware uploads (needs `kmod-lantiq-usif-uart`); the base over its PCM link (`kmod-lantiq-tdm-pcm`) is untested |
+| FRITZ!Box 7362 SL | ❌ not yet: the chip boots and its control channel runs (needs `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm`); no handset tested |
 
 **Tested handsets:** Gigaset A540 CAT, Gigaset C430A, Gigaset AS690H and AVM
 FRITZ!Fon C4. openDECTcell follows the DECT standards, so other GAP or CAT-iq
