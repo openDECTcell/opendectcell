@@ -165,7 +165,7 @@ load_chip() {
 			return 1
 		fi
 	done
-	# No PCM transport for this board yet (pcm_dev=none, the 7362 SL): the
+	# No PCM transport for this board yet (pcm_dev=none): the
 	# base cannot run, so nothing is loaded and the chip is not booted.
 	[ "${pcm_dev:-}" = none ] && {
 		log "this board's PCM link has no driver yet; not starting (the chip firmware upload alone is a bench test, docs/hardware-abstraction.md)"
@@ -185,14 +185,19 @@ load_chip() {
 		log "the DECT chip's UART '${tty:-none}' does not exist on this box; not starting (docs/hardware-abstraction.md)"
 		return 1
 	}
-	# A bus carried by another transport module (pcm_kmod, the 7412's SSC)
-	# needs it loaded first: it holds the PCM clock enable, which must be
-	# high before the chip leaves reset.
+	# A bus carried by another transport module (pcm_kmod, the 7412's SSC,
+	# the 7362 SL's TDM) needs it loaded first: it holds the PCM clock
+	# enable, which must be high before the chip leaves reset.
 	if [ -n "${pcm_kmod:-}" ]; then
 		grep -q "^$pcm_kmod " /proc/modules || insmod "$pcm_kmod" || {
 			log "insmod $pcm_kmod failed"
 			return 1
 		}
+		# A kernel console line stalls both CPUs, ~6.4 ms at 115200 Bd,
+		# and the 7362 SL's TDM transport loses those frames
+		# [CR 7362SL/A-0007]. The upload quiets the console too, but a
+		# start on a chip already booted skips it.
+		echo 1 > /proc/sys/kernel/printk
 	fi
 	# the daemon's files: root only, not the world-writable /tmp
 	mkdir -p /var/run/opendectcell && chmod 700 /var/run/opendectcell
