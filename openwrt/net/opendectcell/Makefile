@@ -33,7 +33,8 @@ define Package/opendectcell
   DEPENDS:=@(TARGET_ipq40xx||TARGET_lantiq_xrx200) \
 	+TARGET_ipq40xx:kmod-opendectcell-ipq40xx \
 	+TARGET_lantiq_xrx200:kmod-opendectcell-lantiq \
-	+TARGET_lantiq_xrx200:kmod-lantiq-ssc-pcm
+	+TARGET_lantiq_xrx200:kmod-lantiq-ssc-pcm \
+	+TARGET_lantiq_xrx200:kmod-lantiq-usif-uart
 endef
 
 define Package/opendectcell/description

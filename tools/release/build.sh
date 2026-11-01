@@ -19,8 +19,9 @@
 # the checkout put where the download would land, its hash written into the
 # copy's PKG_HASH. Tracked files only, with their uncommitted changes
 # (git stash create); a new file needs a `git add` first.
-# kmod-lantiq-ssc-pcm downloads from its own repository; where that is not
-# reachable (a private repository in CI) the 7412 build goes without it.
+# kmod-lantiq-ssc-pcm and kmod-lantiq-usif-uart download from their own
+# repositories; where one is not reachable (a private repository in CI) the
+# lantiq build goes without it.
 set -eu
 
 target=${1:?usage: build.sh TARGET/SUBTARGET OUTDIR}
@@ -44,19 +45,23 @@ ipq40xx/*) packages="$packages kmod-opendectcell-ipq40xx" ;;
 lantiq/*) packages="$packages kmod-opendectcell-lantiq" ;;
 *) echo "no openDECTcell kernel module for $target" >&2; exit 1 ;;
 esac
-ssc_url=$(sed -n 's/^PKG_SOURCE_URL:=//p' \
-	"$root/openwrt/kernel/lantiq-ssc-pcm/Makefile")
-ssc=0
+# The Lantiq transports live in their own repositories: lantiq-ssc-pcm
+# (7412's PCM bus) and lantiq-usif-uart (7362 SL's firmware-load UART).
+dropped=""
 case $target in
 lantiq/*)
-	if GIT_TERMINAL_PROMPT=0 git ls-remote "$ssc_url" >/dev/null 2>&1; then
-		ssc=1
-		sources="$sources lantiq-ssc-pcm"
-		packages="$packages kmod-lantiq-ssc-pcm"
-	else
-		echo "warning: $ssc_url not reachable: no kmod-lantiq-ssc-pcm," \
-			"and opendectcell's dependency on it is dropped" >&2
-	fi
+	for t in lantiq-ssc-pcm lantiq-usif-uart; do
+		url=$(sed -n 's/^PKG_SOURCE_URL:=//p' \
+			"$root/openwrt/kernel/$t/Makefile")
+		if GIT_TERMINAL_PROMPT=0 git ls-remote "$url" >/dev/null 2>&1; then
+			sources="$sources $t"
+			packages="$packages kmod-$t"
+		else
+			echo "warning: $url not reachable: no kmod-$t," \
+				"and opendectcell's dependency on it is dropped" >&2
+			dropped="$dropped $t"
+		fi
+	done
 	;;
 esac
 
@@ -68,7 +73,7 @@ tree=$(cd "$root" && git stash create)
 tree=${tree:-HEAD}
 (cd "$root" && git archive "$tree" openwrt) | tar -x -C "$stage"
 case $target in
-lantiq/*) [ "$ssc" = 1 ] || rm -rf "$stage/openwrt/kernel/lantiq-ssc-pcm" ;;
+lantiq/*) for t in $dropped; do rm -rf "$stage/openwrt/kernel/$t"; done ;;
 esac
 (cd "$root" && git archive --format=tar --prefix="opendectcell-$version/" "$tree") |
 	gzip -n > "$stage/opendectcell-$version.tar.gz"
