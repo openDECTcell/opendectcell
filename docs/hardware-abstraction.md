@@ -112,5 +112,6 @@ New keys are added when a model needs them, with a default that keeps existing p
 ## 7. Open questions
 
 - Is the frame layout fixed per transport, or does it depend on the STUB mode word? (Decides whether it stays in the profile or moves into the board table.)
-- Can the 7362 SL also use SPI-TDM over the SSC, like the 7412? `PCM-link` on the 7362 SL contains both links, but its GPIO table lists only the TDM pins.
+- ~~Can the 7362 SL also use SPI-TDM over the SSC, like the 7412?~~ **No** (2026-11-01, `models/7362SL-DECT-analysis.md` §7): its PCM pins (GPIO0/25/40/41) have no SSC function, and the SSC drives the SPI NOR flash with the urlader and tffs. The 7362 SL needs a VR9 TDM transport and a USIF UART driver, neither of which OpenWrt has.
+- The factory block's partition and offset differ per model (7412: urlader `mtd0`, 0x1E800; 7362 SL: urlader `mtd2`, 0x1985, one box). Profiles name the device and offset; finding the partition by name (`urlader` in `/proc/mtd`), and perhaps the block by its header, would be sturdier.
 - Device-tree binding name and properties for the later upstream patch.
