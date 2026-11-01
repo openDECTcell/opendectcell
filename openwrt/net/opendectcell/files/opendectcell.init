@@ -193,12 +193,12 @@ load_chip() {
 			log "insmod $pcm_kmod failed"
 			return 1
 		}
-		# A kernel console line stalls both CPUs, ~6.4 ms at 115200 Bd,
-		# and the 7362 SL's TDM transport loses those frames
-		# [CR 7362SL/A-0007]. The upload quiets the console too, but a
-		# start on a chip already booted skips it.
-		echo 1 > /proc/sys/kernel/printk
 	fi
+	# Boards whose transport loses frames to kernel console lines
+	# (quiet_console=1, the 7362 SL: ~6.4 ms of both CPUs per line at
+	# 115200 Bd [CR 7362SL/A-0007]). The upload quiets the console too,
+	# but a start on a chip already booted skips it.
+	[ "${quiet_console:-0}" = 1 ] && echo 1 > /proc/sys/kernel/printk
 	# the daemon's files: root only, not the world-writable /tmp
 	mkdir -p /var/run/opendectcell && chmod 700 /var/run/opendectcell
 	# a reset park_guard holds: let go, so the module can claim the line

@@ -64,7 +64,7 @@ Two facts drive the design:
 
 What the init script reads today: `fw_firstlevel`, `fw_secondlevel`,
 `dect_mode`, `uart`, `uart_kmod`, `strap`, `factory_mtd`, `factory_offset`,
-`led_path`, `pcm_kmod`, `pcm_dev` and `pcm_slots`. The other keys below are recorded
+`led_path`, `pcm_kmod`, `pcm_dev`, `pcm_slots` and `quiet_console`. The other keys below are recorded
 for the model but **read by nothing yet**; some are in no profile file yet.
 
 | Key | Meaning | 7412 value |
@@ -79,9 +79,10 @@ for the model but **read by nothing yet**; some are in no profile file yet.
 | `uart` | Firmware-load UART device; empty or missing: the service does not start | `/dev/ttyLTQ0` (*observed* 2026-10-29, [bench-7412.md](bench-7412.md)) |
 | `uart_is_console` | The UART is also the serial console (console must be released). Not read: the init script and the uci-defaults script release whatever getty runs on `uart` | `1` |
 | `uart_baud_rom`, `uart_baud_stub` | Baud rates for the ROM and the first-level stage | *open* |
-| `pcm_kmod` | Transport module loaded before the chip boots, where another module than openDECTcell's carries the bus (it holds the PCM clock enable); empty: none. While one is loaded the service keeps the kernel console at level 1 [CR 7362SL/A-0007]. The 7362 SL: `lantiq_tdm_pcm` | `lantiq_ssc_pcm` |
+| `pcm_kmod` | Transport module loaded before the chip boots, where another module than openDECTcell's carries the bus (it holds the PCM clock enable); empty: none. The 7362 SL: `lantiq_tdm_pcm` | `lantiq_ssc_pcm` |
 | `pcm_dev` | PCM device `dect-stubd` opens (`-d`); empty: `/dev/dect0`; `none`: the board has no PCM transport yet and the service does not start. The 7362 SL: `/dev/tdm-pcm0` (`kmod-lantiq-tdm-pcm`) | `/dev/ssc-pcm0` |
 | `uart_kmod` | Module the service loads before checking `uart`, where the firmware-load UART is not the console's; empty: none. The 7362 SL: `lantiq_usif_uart` (`kmod-lantiq-usif-uart`, `/dev/ttyUSIF0`) | (empty) |
+| `quiet_console` | `1`: the service sets the kernel console to level 1 before it starts the base, for a transport that loses frames to console lines; empty or `0`: the console is left alone (the upload still quiets it). The 7362 SL: `1` [CR 7362SL/A-0007] | (empty) |
 | `pcm_slots` | 16-bit slots per frame (`-c`); empty: the module's default. The 7362 SL: `8` (mode 0x101, [CR 7362SL/A-0004]) | `36` (mode 0x119, *observed* 2026-10-28) |
 | `pcm_words_per_frame`, `pcm_ctrl_slot`, `pcm_voice_slots` | Frame layout | 36 lanes (`pcm_slots`); control lane found by probing, every run elsewhere (no frame sync); speech of call *n* in control lane + *n*, same lane both ways [CR A-0015], set by the daemon (2026-10-29, `d1d2c8f`) |
 | `strap` | `0`: the uploader leaves the chip's boot strap alone (`dect-fwload --no-strap`) | `0` |

@@ -32,6 +32,11 @@ pcm_kmod=lantiq_tdm_pcm
 pcm_dev=/dev/tdm-pcm0
 pcm_slots=8
 
+# Kernel console lines stall both CPUs ~6.4 ms each at 115200 Bd, and the
+# TDM transport loses those frames [CR 7362SL/A-0007]: the service keeps
+# the console at level 1 while it starts the base.
+quiet_console=1
+
 # The DECT UART is the VR9 USIF on GPIO11/12, not the console:
 # kmod-lantiq-usif-uart's /dev/ttyUSIF0, loaded by the service before the
 # upload (tested on a 7362 SL in loopback, 9600 to 460800 Bd).
