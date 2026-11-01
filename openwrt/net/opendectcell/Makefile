@@ -33,9 +33,7 @@ define Package/opendectcell
   DEPENDS:=@(TARGET_ipq40xx||TARGET_lantiq_xrx200) \
 	+TARGET_ipq40xx:kmod-opendectcell-ipq40xx \
 	+TARGET_lantiq_xrx200:kmod-opendectcell-lantiq \
-	+TARGET_lantiq_xrx200:kmod-lantiq-ssc-pcm \
-	+TARGET_lantiq_xrx200:kmod-lantiq-tdm-pcm \
-	+TARGET_lantiq_xrx200:kmod-lantiq-usif-uart
+	+TARGET_lantiq_xrx200:kmod-lantiq-ssc-pcm
 endef
 
 define Package/opendectcell/description
@@ -43,6 +41,25 @@ define Package/opendectcell/description
   chip from user-supplied AVM firmware, dect-stubd runs registration, the
   NWK protocol stack and calls. Disabled after installation: nothing is
   loaded and nothing transmits until /etc/config/opendectcell says enabled.
+endef
+
+# The FRITZ!Box 7362 SL's own transports, kept out of openDECTcell's DEPENDS so
+# that a 7412 (the same target) never installs them. The 7412 keeps
+# getting kmod-lantiq-ssc-pcm through openDECTcell as it has since 2026-10-29:
+# moving that into a package of its own could have apk drop the module
+# from a 7412 that upgrades openDECTcell alone.
+define Package/opendectcell-fritz7362sl
+  $(call Package/opendectcell/Default)
+  TITLE:=opendectcell for the FRITZ!Box 7362 SL (its transport modules)
+  DEPENDS:=@TARGET_lantiq_xrx200 +opendectcell \
+	+kmod-lantiq-tdm-pcm +kmod-lantiq-usif-uart
+endef
+
+define Package/opendectcell-fritz7362sl/description
+  Installs opendectcell with the kernel modules the FRITZ!Box 7362 SL needs:
+  kmod-lantiq-usif-uart for the chip's firmware upload and
+  kmod-lantiq-tdm-pcm for its PCM link. Install this one, not opendectcell
+  alone, on a 7362 SL.
 endef
 
 define Package/opendectcell/conffiles
@@ -196,6 +213,12 @@ define Package/opendectcell-cell/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/build/dect-cell $(1)/usr/sbin/
 endef
 
+# Nothing of its own: the dependencies are the point. A package without an
+# install section is skipped, so it gets the directory openDECTcell makes too.
+define Package/opendectcell-fritz7362sl/install
+	$(INSTALL_DIR) $(1)/usr/share/opendectcell
+endef
+
 define Package/opendectcell-carddav/install
 	$(INSTALL_DIR) $(1)/usr/share/opendectcell
 	$(INSTALL_BIN) ./files/carddav.uc $(1)/usr/share/opendectcell/carddav.uc
@@ -204,5 +227,6 @@ endef
 $(eval $(call BuildPackage,opendectcell-baresip))
 $(eval $(call BuildPackage,opendectcell-cell))
 $(eval $(call BuildPackage,opendectcell-carddav))
+$(eval $(call BuildPackage,opendectcell-fritz7362sl))
 $(eval $(call KernelPackage,opendectcell-ipq40xx))
 $(eval $(call KernelPackage,opendectcell-lantiq))

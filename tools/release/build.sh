@@ -63,6 +63,11 @@ lantiq/*)
 			dropped="$dropped $t"
 		fi
 	done
+	# the 7362 SL's meta package, where both of its transports build
+	case " $dropped " in
+	*" lantiq-tdm-pcm "*|*" lantiq-usif-uart "*) ;;
+	*) packages="$packages opendectcell-fritz7362sl" ;;
+	esac
 	;;
 esac
 
@@ -76,11 +81,17 @@ tree=${tree:-HEAD}
 case $target in
 lantiq/*)
 	# A dropped transport goes from the feed and from openDECTcell's DEPENDS,
-	# or the package would require one that does not exist
+	# or the package would require one that does not exist; the 7362 SL's
+	# meta package goes with either of its two
 	for t in $dropped; do
 		rm -rf "$stage/openwrt/kernel/$t"
 		sed -i "s/+TARGET_lantiq_xrx200:kmod-$t//" \
 			"$stage/openwrt/net/opendectcell/Makefile"
+		case $t in
+		lantiq-tdm-pcm|lantiq-usif-uart)
+			sed -i '/call BuildPackage,opendectcell-fritz7362sl/d' \
+				"$stage/openwrt/net/opendectcell/Makefile" ;;
+		esac
 	done
 	;;
 esac
