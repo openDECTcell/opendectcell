@@ -34,6 +34,7 @@ define Package/opendectcell
 	+TARGET_ipq40xx:kmod-opendectcell-ipq40xx \
 	+TARGET_lantiq_xrx200:kmod-opendectcell-lantiq \
 	+TARGET_lantiq_xrx200:kmod-lantiq-ssc-pcm \
+	+TARGET_lantiq_xrx200:kmod-lantiq-tdm-pcm \
 	+TARGET_lantiq_xrx200:kmod-lantiq-usif-uart
 endef
 
@@ -118,7 +119,7 @@ endef
 define KernelPackage/opendectcell-lantiq/description
   Kernel module for opendectcell on the FRITZ!Box 7412 and 7362 SL: the DECT
   chip's reset (/dev/dect0). On the 7412 the PCM/TDM link is
-  kmod-lantiq-ssc-pcm; the 7362 SL's has no driver yet. Not loaded at
+  kmod-lantiq-ssc-pcm, on the 7362 SL kmod-lantiq-tdm-pcm. Not loaded at
   boot; the opendectcell service loads it.
 endef
 
