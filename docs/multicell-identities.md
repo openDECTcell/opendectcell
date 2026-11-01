@@ -539,9 +539,14 @@ room: A-0143, a refusal at bearer admission before any mail), and attached 5
 of 5 under RPN 0; the 7412 (06.88) attaches under RPN 2. The controller
 therefore gives every cell an ARI of its own and RPN 0: cell 1 is the identity
 (EIC, FPN, FPS), cell n has the FPN counted up by n-1 (wrapping at 256, 255
-cells), and the handsets' PARK stays PLI 19 (ARC + EIC), so one registration
-covers every cell. Moving from one cell to the next, a handset sees another
-PARI and locates again. Not benched yet with two boxes.
+cells) and the FPS going round 1-15, and the handsets' PARK stays PLI 19
+(ARC + EIC), so one registration covers every cell. Moving from one cell to the
+next, a handset sees another PARI and locates again (benched with two boxes,
+5 of 5; pulling one box's plug moved the A540 to the other within seconds).
+The FPS goes round because the FMID, the low 12 bits of the RFPI (RPN 8 + FPS
+4, the FPN is above them), is a MAC identity that both builds check in every
+burst (A-0145): with RPN 0 only the FPS tells cells apart, so it is a 15-colour
+reuse plan, cells that overlap on air need different ones.
 
 ---
 
