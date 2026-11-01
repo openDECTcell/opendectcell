@@ -64,7 +64,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 | FRITZ!Box 7520 | ✅ | The development box |
 | FRITZ!Box 7530 | 🟡 | Same hardware as the 7520 and the same OpenWrt image, but not tested on one yet |
 | FRITZ!Box 7412 | 🟡 | With the `kmod-lantiq-ssc-pcm` transport (2026-10-29): two handsets registered, SIP calls in and out with HD voice, a call between handsets; unattended start, restore and key read-back on the current code (2026-10-30). The transport module is not released yet ([bench-7412.md](bench-7412.md)) |
-| FRITZ!Box 7362 SL | ❌ | Analysed only |
+| FRITZ!Box 7362 SL | ❌ | Board profile and firmware extraction in place; the DECT chip's UART (USIF) and PCM link (VR9 TDM) need new drivers ([analysis](models/7362SL-DECT-analysis.md) §7) |
 | Other FRITZ!Boxes | ❌ | Many use the same DECT chip; see [hardware-abstraction.md](hardware-abstraction.md) for what a new model needs |
 
 Only **OpenWrt 25.12.5** is supported: the kernel module must be built for the

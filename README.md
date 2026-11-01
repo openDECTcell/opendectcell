@@ -48,7 +48,7 @@ in the [roadmap](ROADMAP.md).
 | **FRITZ!Box 7520** | ✅ works: the development box |
 | **FRITZ!Box 7530** | 🟡 same hardware as the 7520, not yet tested |
 | FRITZ!Box 7412 | 🟡 handsets register and SIP calls work (needs `kmod-lantiq-ssc-pcm`); not released yet |
-| FRITZ!Box 7362 SL | analysed only |
+| FRITZ!Box 7362 SL | ❌ not yet: board profile and firmware support are in, but its loader UART and PCM link have no driver |
 
 **Tested handsets:** Gigaset A540 CAT, Gigaset C430A, Gigaset AS690H and AVM
 FRITZ!Fon C4. openDECTcell follows the DECT standards, so other GAP or CAT-iq
