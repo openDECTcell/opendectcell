@@ -548,7 +548,8 @@ says what to include.
 
 Everything on Network > DECT is stored in `/etc/config/opendectcell` (OpenWrt's
 UCI), except the handsets' names and models, which the base keeps next to
-each handset's registration (`/etc/opendectcell-sub.*`). For the command line:
+each handset's registration (`/etc/opendectcell-sub.*`). Both survive a
+reboot and a firmware upgrade (sysupgrade keeps them). For the command line:
 
 | Page field | UCI option |
 |---|---|

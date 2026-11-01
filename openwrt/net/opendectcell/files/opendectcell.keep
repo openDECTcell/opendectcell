@@ -1,2 +1,3 @@
 /etc/opendectcell/firmware/
 /etc/opendectcell/profiles/
+/etc/opendectcell-sub.*
