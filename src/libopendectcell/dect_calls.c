@@ -338,7 +338,7 @@ int dect_calls_load(struct dect_calls *c, const char *text, size_t len)
 		return -1;
 	dect_calls_init(c);
 	for (p = text + 17; p < end; p = nl + 1) {
-		char f[8][DECT_CALL_NAME_MAX + 4];
+		char f[8][2u * DECT_CALLS_TERMINALS + 4u];
 		struct dect_call e;
 		unsigned v[4], k, dt[6];
 		int ok = 1;
@@ -355,7 +355,8 @@ int dect_calls_load(struct dect_calls *c, const char *text, size_t len)
 		    sscanf(f[4], "%2u%2u%2u%2u%2u%2u", &dt[0], &dt[1], &dt[2],
 			   &dt[3], &dt[4], &dt[5]) != 6 ||
 		    v[0] < DECT_CALLS_MISSED || v[0] > DECT_CALLS_ACCEPTED ||
-		    !v[1] || v[1] > 16383u || strlen(f[6]) != 2u * DECT_CALLS_TERMINALS ||
+		    !v[1] || v[1] > 16383u ||
+		    (strlen(f[6]) != 16u && strlen(f[6]) != 2u * DECT_CALLS_TERMINALS) ||
 		    c->n[v[0] - 1u] >= DECT_CALLS_MAX)
 			continue;
 		memset(&e, 0, sizeof(e));
@@ -372,7 +373,7 @@ int dect_calls_load(struct dect_calls *c, const char *text, size_t len)
 			e.when.tz_quarters = (int16_t)atoi(f[5]);
 			e.when.tz_valid = 1;
 		}
-		for (k = 0; k < DECT_CALLS_TERMINALS; k++) {
+		for (k = 0; k < strlen(f[6]) / 2u; k++) {
 			unsigned b;
 
 			if (sscanf(f[6] + 2u * k, "%2x", &b) != 1)

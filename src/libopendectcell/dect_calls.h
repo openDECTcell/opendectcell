@@ -29,7 +29,7 @@
 #include "dect_time.h"
 
 #define DECT_CALLS_MAX		40u	/* entries per list */
-#define DECT_CALLS_TERMINALS	8u	/* terminal ids 1..7 */
+#define DECT_CALLS_TERMINALS	33u	/* terminal ids 1..32 (API 147) */
 #define DECT_CALL_NUMBER_MAX	33u	/* digits with the NUL */
 #define DECT_CALL_NAME_MAX	33u	/* UTF-8 bytes with the NUL */
 
@@ -107,8 +107,9 @@ unsigned dect_calls_missed_total(const struct dect_calls *c, unsigned tid,
  *   #opendectcell-calls 1
  *   LIST<TAB>ID<TAB>UNREAD<TAB>COUNT<TAB>YYMMDDhhmmss<TAB>TZ<TAB>LINES<TAB>NUMBER<TAB>NAME
  *
- * TZ the quarter-hours from GMT, or '-' when unknown; LINES 16 hex digits,
- * the line per terminal id 0..7. dect_calls_save() returns the length, 0
+ * TZ the quarter-hours from GMT, or '-' when unknown; LINES 66 hex digits,
+ * the line per terminal id 0..32 (an older text has 16, terminal ids 0..7, and
+ * loads too). dect_calls_save() returns the length, 0
  * if it does not fit; dect_calls_load() replaces the store, 0 or -1 if the
  * header is not ours (nothing changed then); lines that do not parse are
  * skipped.

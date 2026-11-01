@@ -1625,5 +1625,23 @@ int main(void)
 		CHECK_EQ(b.main_link.link.cc.iwu.n_handsets, 2u);
 		CHECK(vis_calls > 0);
 	}
+	/* Records 8 to 32 are in the Internal Names List too (API 147). */
+	{
+		unsigned i;
+
+		dect_base_init(&b);
+		b.n_hs = DECT_BASE_HS_MAX;
+		for (i = 0; i < DECT_BASE_HS_MAX; i++) {
+			b.hs[i].slot = i + 1u;
+			b.loaded[i] = 1;
+		}
+		b.main_link.active = 1;
+		dect_iwu_init(&b.main_link.link.cc.iwu);
+		for (i = 0; i < DECT_BASE_HS_MAX; i++)
+			dect_base_names_spread(&b, i);
+		CHECK_EQ(b.main_link.link.cc.iwu.n_handsets, DECT_BASE_HS_MAX);
+		CHECK_EQ(b.main_link.link.cc.iwu.handsets[31].terminal_id, 32u);
+		CHECK_EQ(strcmp(b.main_link.link.cc.iwu.handsets[31].name, "DECT 32"), 0);
+	}
 	return CHECK_DONE();
 }

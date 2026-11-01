@@ -4413,7 +4413,7 @@ static void contacts_tick(struct stubd *s, uint64_t now)
  * dect_calls.h; numbers and names, so only root reads it.
  */
 #define CALLS_PATH	DECT_RUN_DIR "/calls"
-#define CALLS_TEXT_MAX	(3u * DECT_CALLS_MAX * 160u + 32u)
+#define CALLS_TEXT_MAX	(3u * DECT_CALLS_MAX * 230u + 32u)
 
 static char calls_text[CALLS_TEXT_MAX];
 static uint64_t calls_at, calls_hash;

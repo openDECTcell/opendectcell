@@ -402,8 +402,45 @@ static void test_save_and_load(void)
 	}
 }
 
+/* Terminal ids up to 32 (API 147): kept, saved, loaded; an older text loads too. */
+static void test_terminal_ids_to_32(void)
+{
+	static struct dect_calls back;
+	uint8_t high[DECT_CALLS_TERMINALS] = { 0 };
+	char text[8192];
+	size_t n;
+	unsigned id;
+
+	high[20] = 1;
+	high[32] = 2;
+	dect_calls_init(&store);
+	id = dect_calls_add(&store, DECT_CALLS_MISSED, "0301234", "", &t1, high);
+	CHECK(id != 0u);
+	CHECK_EQ(dect_calls_count(&store, 1, 20), 1u);
+	CHECK_EQ(dect_calls_count(&store, 1, 32), 1u);
+	CHECK_EQ(dect_calls_count(&store, 1, 8), 0u);
+	CHECK_EQ(dect_calls_missed_unread(&store, 20, 1), 1u);
+	CHECK_EQ(dect_calls_missed_unread(&store, 33, 1), 0u);	/* no such terminal */
+	n = dect_calls_save(&store, text, sizeof(text));
+	CHECK(n > 17u);
+	CHECK_EQ(dect_calls_load(&back, text, n), 0);
+	CHECK_EQ(dect_calls_count(&back, 1, 20), 1u);
+	CHECK_EQ(dect_calls_count(&back, 1, 32), 1u);
+	CHECK_EQ(dect_calls_at(&back, 1, 32, 1)->line[32], 2u);
+	/* the older text: 16 hex digits, terminal ids 0..7 */
+	{
+		static const char old[] = "#opendectcell-calls 1\n"
+			"1\t5\t1\t1\t261030091500\t4\t0001000000000000\t0555\tBob\n";
+
+		CHECK_EQ(dect_calls_load(&back, old, sizeof(old) - 1u), 0);
+		CHECK_EQ(dect_calls_count(&back, 1, 1), 1u);
+		CHECK_EQ(dect_calls_count(&back, 1, 20), 0u);
+	}
+}
+
 int main(void)
 {
+	test_terminal_ids_to_32();
 	test_save_and_load();
 	test_all_calls();
 	test_all_incoming();

@@ -119,7 +119,7 @@
 #define DECT_IWU_NAME_MAX	16u	/* UTF-8 bytes, NUL-terminated */
 #define DECT_IWU_PIN_TRIES	3u	/* wrong PIN entries per call */
 #define DECT_IWU_SAVE_MAX	256u	/* the data of one 'save entry' */
-#define DECT_IWU_HANDSETS	8u	/* Internal Names List capacity */
+#define DECT_IWU_HANDSETS	32u	/* Internal Names List capacity (a record each, API 147) */
 #define DECT_IWU_SESSIONS	2u	/* "at least two sessions at a time" */
 
 struct dect_iwu_out {

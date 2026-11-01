@@ -1007,9 +1007,9 @@ a record's number (`dect_hs_rec.slot`, `cfg.sub_slot`) is 1 to 16, and the chip
 slots stay 1 to `DECT_MM_MAX_SLOT` = 6. Only a record numbered 1 to 6 has a key in
 the chip; a record numbered 7 to 16 is host-only (keyless admission, its own TPUI,
 the per-call key: `more-than-six.md` §6), and `dect_base_slot_install()` and the
-audit leave it alone. Not widened: the Internal Names List (8 entries, the first
+audit leave it alone. Not widened here: the Internal Names List (8 entries, the first
 eight handsets) and the call lists (terminal ids 1 to 7, a persisted format), so a
-record numbered 8 or more has neither. Layout change of `struct dect_base`; `dect-stubd`
+record numbered 8 or more had neither (until API 147). Layout change of `struct dect_base`; `dect-stubd`
 stays at six stores.
 
 **145.** dect_mm.h, 2026-11-01: **`DECT_HS_MAX` is 32** (was 16). The maintainer's call:
@@ -1037,3 +1037,18 @@ record's own. No layout change. For a roamer fetched from the host: `defer_unkno
 (API 18/19) holds the unknown identity, the host adds the record, `dect_mm_hold()`s
 it on the live link and resumes (`dect_mm_locate_resume()`,
 `dect_link_setup_resume()`).
+
+**147.** dect_iwu.h, dect_calls.h, 2026-11-01: **a record numbered 8 to 32 has an
+Internal Names entry and a call list.** The maintainer's call (decision 21). The
+terminal identity number is the record number (EN 300 175 / TS 102 527-3 7.4.10.5.1.2.1
+allows 8 bits, coded as IA5 digits, "14" is 31H 34H). `DECT_IWU_HANDSETS` is 32 (was 8)
+and `DECT_CALLS_TERMINALS` 33 (terminal ids 1 to 32, was 1 to 7): the Internal Names
+List holds up to 32 entries, a call is kept per terminal id up to 32, and the lines
+bitmap (`attached`, terminal t in bit t-1) and `names_changed` already were 32 bits.
+One read still delivers what fits a reply (the entries asked for, 15 data packets at
+most), the handset reads on. **Persisted format:** the call-list text keeps header
+`#opendectcell-calls 1`; the LINES field is 66 hex digits now (terminal ids 0 to 32), and
+a text with 16 (an older daemon's) still loads, its terminal ids 8 to 32 empty. A text
+written now is not read back by an older daemon (its lines are skipped; the file lives
+in RAM, a reboot empties it). `dect-stubd`'s text buffer grows to 230 octets an entry
+(27.6 kB). Layout change of `struct dect_iwu`, `struct dect_calls` and `struct dect_call`.

@@ -1114,3 +1114,14 @@ in an `unsigned`: 32 does not fit. `cdect.h` needs `145` when you take it.
 #146); the controller uses it to expire roamers from a cell's table. If you kept per-record
 TPUIs (API 141) and saw `{00, 11, slot}` in LOCATE-ACCEPT anyway, that was a bug here and is
 fixed. `cdect.h` needs `146` when you take it.
+
+## API 147: names and call lists for records 8 to 32 `[2026-11-01]`
+
+The terminal identity number is the record number, so every record now has its
+Internal Names entry (`DECT n`, and a name the handset saves) and a call list of its
+own. `DECT_IWU_HANDSETS` 32, `DECT_CALLS_TERMINALS` 33. A host that kept records 8 and up
+out of the lists as a workaround can stop. A read of the names list still delivers what
+fits one reply, the entries asked for up to fifteen data packets, and the handset asks
+for the rest. The call-list text (`dect_calls_save()`) writes 66 hex digits per entry for
+the lines; the older 16 digits still load. Not tried on air: the names list with more
+than eight entries on a real handset (the AS690H, A540 and C430A show it differently).

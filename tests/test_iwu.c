@@ -788,7 +788,7 @@ static void test_reset_sessions(void)
 	CHECK_EQ(out.msg[0][3], DECT_LIA_NACK_INVALID_SESSION);
 }
 
-/* Every message we build fits a LAPC frame, even with eight long names. */
+/* Every message we build fits a LAPC frame, even with 32 long names. */
 static void test_long_lists_are_segmented_into_packets(void)
 {
 	static const uint8_t s6[] = { 0xC3, 0x00, 0x06, 0x00 };
@@ -801,7 +801,7 @@ static void test_long_lists_are_segmented_into_packets(void)
 	dect_iwu_init(&iwu);
 	for (i = 1; i <= DECT_IWU_HANDSETS; i++)
 		CHECK_EQ(dect_iwu_add_handset(&iwu, (uint8_t)i, "Fifteen chars!!"), 0);
-	CHECK_EQ(dect_iwu_add_handset(&iwu, 9, "one too many"), -1);
+	CHECK_EQ(dect_iwu_add_handset(&iwu, 33, "one too many"), -1);
 	handle(&iwu, s6, sizeof(s6));
 	handle(&iwu, read, sizeof(read));
 	CHECK(out.count >= 3u);			/* confirm + at least two packets */
@@ -813,9 +813,23 @@ static void test_long_lists_are_segmented_into_packets(void)
 		if (i > 0)
 			total += out.len[i] - 3u;
 	}
-	/* 8 entries x (2 + (4 + 18 + 4)) octets of content */
+	/* 8 entries x (2 + (4 + 18 + 4)) octets of content: the 8 asked for */
 	CHECK_EQ(total, 8u * 28u);
 	CHECK_EQ(iwu.stats.entries_sent, 8u);
+	/* the list holds 32 (a record each, API 147): the last eight read as well */
+	{
+		static const uint8_t last8[] = { 0xC3, 0x06, 0x81, 0x99, 0x08, 0x00,
+						 0x01, 0x02, 0x03 };
+
+		handle(&iwu, last8, sizeof(last8));
+		total = 0;
+		for (i = 1; i < out.count; i++)
+			total += out.len[i] - 3u;
+		CHECK_EQ(total, 8u * 29u);		/* one digit more in each Number */
+		CHECK_EQ(iwu.stats.entries_sent, 16u);
+		/* its first field: Number 25, as IA5 digits "25" */
+		CHECK(memchr(out.msg[1], '2', out.len[1]) != NULL);
+	}
 }
 
 int main(void)
