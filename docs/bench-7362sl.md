@@ -65,7 +65,7 @@ in reset anyway.
         --first /etc/opendectcell/firmware/dectfw_firstlevel_441-06.88-7412.hex \
         --second /etc/opendectcell/firmware/dectfw_secondlevel_441-07.18-7362sl.hex \
         --mode 0x101 --factory-mtd /dev/mtd2 --factory-offset 0x1985 \
-        --no-strap --listen 5 -v 2>&1 | tee /tmp/g1-fwload.log
+        --listen 5 -v 2>&1 | tee /tmp/g1-fwload.log
     /etc/init.d/ubihealthd start
 
 **Pass:** `upload OK`, with the stage-1 answer on a slow attempt and the
@@ -100,3 +100,58 @@ The chip stays in reset (GPIO 542 low through sysfs) until the next boot or
 
 `/tmp/g1-fwload.log`, every `gpio-activity` output, the `dmesg` lines, the
 USIF `state` file if the upload failed, and anything unexpected.
+
+## Results, 2026-11-01: **G1 passed**
+
+*Observed on hardware:* FRITZ!Box 7362 SL, OpenWrt 25.12.6, firmware from
+`FRITZ.Box_7362_SL-07.18.image` (extracted with `tools/dect-fw-extract.py`,
+which found both stages by hash; it also lists the image's production-test
+STUB, `…p2test.hex`, as unknown). `kmod-lantiq-usif-uart` `50bd2e5`,
+`dect-fwload` and `kmod-opendectcell-lantiq` from openDECTcell `e30640b`, installed
+by hand (the `opendectcell` package itself would not install: it still required
+`kmod-lantiq-ssc-pcm`, see the release script's dependency handling).
+
+**First run, without the strap** (`--no-strap`, as the 7412): 3 rounds of 16
+stage-1 attempts at 9600 and 115200 Bd, **no byte at all** from the chip
+(USIF `rx 0`). The 7520 showed exactly this without its strap
+([stub-loader-protocol.md](stub-loader-protocol.md) §7).
+
+**Strap probe:** with the USIF module unloaded, GPIO 11 (the chip's TX, the
+USIF's RX pin) was held low or left as an input while reset (GPIO 30) was
+released, and then sampled every 6.3 µs for 1 s:
+
+| GPIO 11 during reset release | Changes on GPIO 11 afterwards |
+|---|---|
+| input (no strap), three runs | 0 |
+| **held low (strap)**, two runs | 16, the first about 0.22 s after the strap was released; about 3.4 ms low in all, consistent with about four STX bytes at 9600 Bd |
+
+So the 7362 SL's ROM needs the same strap as the 7520's, on the chip's TX
+line. The openDECTcell module drives it since `e30640b` and gives the pin back
+to the USIF afterwards.
+
+**Second run, with the strap:**
+
+| Step | Result |
+|---|---|
+| Factory block | 17 bytes at urlader `0x1985`, 5 TLVs patched |
+| Stage 1 | STX on the **first** attempt (slow mode, 9600 Bd); 615-byte image, the chip's XOR `0x3A` acknowledged |
+| Stage 2 | STX at **230400 Bd**; the 48,329-byte STUB in about 4 s, XOR `0xF4` acknowledged |
+| Summary | `upload OK (rounds 1, stage 1 attempts 1, stage 2 attempts 1)` |
+| USIF counters | 8 bytes received, 0 overruns, 1 framing error (the strap holds the RX pin low while it is a GPIO) |
+| STUB on the UART | nothing in 5 s (as on the 7520) |
+
+**The PCM clocks** (`gpio-activity 512 0,40,41`):
+
+| Pin | Before the upload | After |
+|---|---|---|
+| GPIO 40, DCL | static high | toggling, 47.8 % high (a fast clock, aliased) |
+| GPIO 0, FSC | static high | toggling, 0.8 % high (short frame pulses) |
+| GPIO 41, DI | static high | toggling (the chip sends on the bus) |
+| GPIO 0 and 40, chip held in reset again | | static high |
+
+The chip drives DCL and FSC: **it is the PCM clock master**, as the stock
+board table suggested [CR 7362SL/A-0001]. The bit clock's rate is not
+measured (sysfs sampling only shows that it runs).
+
+Afterwards the chip was held in reset (GPIO 542 low through sysfs), both
+modules unloaded, the pins released.
