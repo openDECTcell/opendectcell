@@ -73,7 +73,15 @@ tree=$(cd "$root" && git stash create)
 tree=${tree:-HEAD}
 (cd "$root" && git archive "$tree" openwrt) | tar -x -C "$stage"
 case $target in
-lantiq/*) for t in $dropped; do rm -rf "$stage/openwrt/kernel/$t"; done ;;
+lantiq/*)
+	# A dropped transport goes from the feed and from openDECTcell's DEPENDS,
+	# or the package would require one that does not exist
+	for t in $dropped; do
+		rm -rf "$stage/openwrt/kernel/$t"
+		sed -i "s/+TARGET_lantiq_xrx200:kmod-$t//" \
+			"$stage/openwrt/net/opendectcell/Makefile"
+	done
+	;;
 esac
 (cd "$root" && git archive --format=tar --prefix="opendectcell-$version/" "$tree") |
 	gzip -n > "$stage/opendectcell-$version.tar.gz"
