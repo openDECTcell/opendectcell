@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * openDECTcell - DECT chip control for the AVM 7412.
+ * openDECTcell - DECT chip control for the AVM 7412 and 7362 SL.
  *
- * Lantiq VR9 board: reset and boot control for the DECT chip, through the
+ * Lantiq VR9 boards: reset and boot control for the DECT chip, through the
  * same /dev/dect0 ioctls as the ipq40xx module. The PCM/TDM link is not
  * ours here: kmod-lantiq-ssc-pcm runs the VR9 SSC (/dev/ssc-pcm0), and
  * dect-stubd talks to it directly. This module's own SSC engine
  * (opendectcell_ssc.c) went when nothing used it any more (2026-10-29).
  *
- * Facts: docs/models/7412-DECT-analysis.md, docs/7412-spi-tdm-and-loader.md.
+ * Facts: docs/models/7412-DECT-analysis.md, docs/7412-spi-tdm-and-loader.md,
+ * docs/models/7362SL-DECT-analysis.md.
  */
 #include <linux/err.h>
 #include <linux/fs.h>
@@ -38,6 +39,18 @@ static struct gpiod_lookup_table fritz7412_gpio_lookup = {
 	},
 };
 
+/* The 7362 SL: reset GPIO 30 only. Its chip has no strap or clock-enable
+ * line in the stock GPIO table; its loader UART (USIF) and PCM link (VR9
+ * TDM) have no driver yet. Low holds the chip in reset, as on the 7412 and
+ * 7520 (assumed, not yet seen on this box). */
+static struct gpiod_lookup_table fritz7362sl_gpio_lookup = {
+	.dev_id = "dect0",
+	.table = {
+		GPIO_LOOKUP("gpio-xway", 30, "reset", GPIO_ACTIVE_HIGH),
+		{},
+	},
+};
+
 struct dect_board {
 	const char *compatible;
 	const char *transport;
@@ -49,6 +62,11 @@ static const struct dect_board dect_boards[] = {
 		.compatible = "avm,fritz7412",
 		.transport = "none",	/* PCM: kmod-lantiq-ssc-pcm */
 		.gpio_lookup = &fritz7412_gpio_lookup,
+	},
+	{
+		.compatible = "avm,fritz7362sl",
+		.transport = "none",	/* PCM: VR9 TDM, no driver yet */
+		.gpio_lookup = &fritz7362sl_gpio_lookup,
 	},
 };
 
@@ -79,7 +97,7 @@ static int dect_open(struct inode *inode, struct file *file)
 		goto out;
 	}
 
-	/* Request and start with reset released (GPIO33 high). */
+	/* Request and start with reset released (the line high). */
 	dw->reset = gpiod_get(dw->misc.this_device, "reset", GPIOD_OUT_HIGH);
 	if (IS_ERR(dw->reset)) {
 		ret = PTR_ERR(dw->reset);
@@ -150,7 +168,7 @@ static long dect_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			return -EINVAL;
 		mutex_lock(&dw->lock);
 		if (dw->reset)
-			/* RESET(1) -> GPIO33 low; RESET(0) -> GPIO33 high. */
+			/* RESET(1) -> the line low; RESET(0) -> high. */
 			gpiod_set_value(dw->reset, !value);
 		mutex_unlock(&dw->lock);
 		return 0;
@@ -280,4 +298,4 @@ module_exit(dect_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("openDECTcell contributors");
-MODULE_DESCRIPTION("DECT chip control for the AVM 7412");
+MODULE_DESCRIPTION("DECT chip control for the AVM 7412 and 7362 SL");

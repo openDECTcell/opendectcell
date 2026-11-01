@@ -108,15 +108,16 @@ endef
 
 define KernelPackage/opendectcell-lantiq
   SUBMENU:=Voice over IP
-  TITLE:=FRITZ!Box 7412 DECT chip control
+  TITLE:=FRITZ!Box 7412 and 7362 SL DECT chip control
   URL:=https://github.com/openDECTcell/opendectcell
   DEPENDS:=@TARGET_lantiq_xrx200
   FILES:=$(PKG_BUILD_DIR)/kernel/opendectcell.ko
 endef
 
 define KernelPackage/opendectcell-lantiq/description
-  Kernel module for opendectcell on the FRITZ!Box 7412: the DECT chip's reset
-  (/dev/dect0). The PCM/TDM link is kmod-lantiq-ssc-pcm. Not loaded at
+  Kernel module for opendectcell on the FRITZ!Box 7412 and 7362 SL: the DECT
+  chip's reset (/dev/dect0). On the 7412 the PCM/TDM link is
+  kmod-lantiq-ssc-pcm; the 7362 SL's has no driver yet. Not loaded at
   boot; the opendectcell service loads it.
 endef
 
