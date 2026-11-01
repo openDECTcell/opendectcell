@@ -79,7 +79,7 @@ alter their behaviour.**
    and clean-room answers and changes only with that source, by its
    owner. A model's transport belongs in the kernel module and
    `dect-stubd`. If a chip answers differently at the mail level, open an
-   issue in openDECTcell/opendectcell with the evidence (§2.9); the maintainer or
+   issue in openDECTcell/opendectcell with the evidence; the maintainer or
    their agent decides.
 4. **Run-time switch over build flag.** One lantiq binary serves the 7412
    and the 7362 SL, so `-DBOARD_…` cannot separate them; pass a board key
