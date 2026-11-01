@@ -2325,9 +2325,18 @@ done:
 	return (ssize_t)got;
 }
 
-/* Does the byte stream of one slot in frame data hold a valid 0xAA mail? */
-static int slot_has_mail(const uint8_t *data, size_t frames, unsigned int slots,
-			 unsigned int slot, struct dect_mail *out)
+/*
+ * Does the byte stream of one slot in frame data hold a contact answer?
+ * Every mail in the window counts, not just the first: on a freshly booted
+ * chip the answer comes right after the 0xFFF2 build stamp
+ * (docs/stub-pcm-control-channel.md), and a search that looked at the
+ * first mail only never found the 7362 SL's control slot after an upload
+ * (2026-11-01, docs/bench-7362sl-g2.md). Pulling as we push keeps a window
+ * longer than the receive buffer (DECT_RX_BUF) whole.
+ */
+static int slot_has_contact_ack(const uint8_t *data, size_t frames,
+				unsigned int slots, unsigned int slot,
+				struct dect_mail *out)
 {
 	struct dect_rx rx;
 	uint8_t pair[2];
@@ -2337,8 +2346,12 @@ static int slot_has_mail(const uint8_t *data, size_t frames, unsigned int slots,
 	for (f = 0; f < frames; f++) {
 		memcpy(pair, data + (f * slots + slot) * 2u, 2);
 		dect_rx_push(&rx, pair, 2);
+		while (dect_rx_pull(&rx, out))
+			if (out->prim == DECT_PRIM_CONTACT_ACK1 ||
+			    out->prim == DECT_PRIM_CONTACT_ACK2)
+				return 1;
 	}
-	return dect_rx_pull(&rx, out);
+	return 0;
 }
 
 /*
@@ -2373,8 +2386,6 @@ static int find_control_slot(struct stubd *s, unsigned int fpb)
 			continue;
 		frames = (size_t)n / (s->slots * 2u);
 		for (rx = 0; rx < s->slots; rx++) {
-			if (!slot_has_mail(data, frames, s->slots, rx, &ans))
-				continue;
 			/*
 			 * Only a contact ACK proves the chip read our mail on
 			 * THIS tx slot. The chip also emits unsolicited
@@ -2392,8 +2403,8 @@ static int find_control_slot(struct stubd *s, unsigned int fpb)
 			 * answers 0 -- against the working "tx 1, rx 1
 			 * (answer prim f601)" of the day before.
 			 */
-			if (ans.prim != DECT_PRIM_CONTACT_ACK1 &&
-			    ans.prim != DECT_PRIM_CONTACT_ACK2)
+			if (!slot_has_contact_ack(data, frames, s->slots, rx,
+						  &ans))
 				continue;
 			s->tx_slot = (int)tx;
 			s->rx_slot = (int)rx;

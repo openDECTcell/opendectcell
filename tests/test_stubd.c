@@ -620,6 +620,62 @@ static void run_trace(const char *file)
 	}
 }
 
+/*
+ * One STUB -> host mail into lane `slot` of frame data from frame f on,
+ * two bytes per frame: 0xAA, seq, L(LE), src dst prim(LE) params,
+ * sum16(LE) of the L field and body. Returns the frame after it.
+ */
+static size_t probe_put(uint8_t *data, unsigned int slots, unsigned int slot,
+			size_t f, uint8_t seq, uint16_t prim, size_t plen)
+{
+	uint8_t b[64];
+	unsigned int L = (unsigned int)(2u + plen), sum = 0, i, total;
+
+	memset(b, 0x11, sizeof(b));
+	b[0] = 0xaa;
+	b[1] = seq;
+	b[2] = (uint8_t)L;
+	b[3] = (uint8_t)(L >> 8);
+	b[4] = 0x02;
+	b[5] = 0x14;
+	b[6] = (uint8_t)prim;
+	b[7] = (uint8_t)(prim >> 8);
+	total = 4u + L + 2u + 2u;
+	for (i = 2; i < total - 2u; i++)
+		sum += b[i];
+	b[total - 2] = (uint8_t)sum;
+	b[total - 1] = (uint8_t)(sum >> 8);
+	if (total & 1u)
+		b[total++] = 0xfe;
+	for (i = 0; i < total; i += 2, f++)
+		memcpy(data + (f * slots + slot) * 2u, b + i, 2);
+	return f;
+}
+
+/*
+ * The control-slot search on a freshly booted chip: the contact answer
+ * comes right after the 0xFFF2 build stamp, late in a probe window longer
+ * than the receive buffer (the 7362 SL, 2026-11-01). It is found there;
+ * the stamp alone, and the other lanes, are no answer.
+ */
+static void test_probe_window(void)
+{
+	enum { SLOTS = 8, FRAMES = 1280 };	/* 40 blocks of 32 frames */
+	static uint8_t data[FRAMES * SLOTS * 2];
+	struct dect_mail m;
+	size_t f;
+
+	memset(data, 0xfe, sizeof(data));
+	f = probe_put(data, SLOTS, 1, 700, 0, 0xfff2, 24);
+	CHECK_EQ(slot_has_contact_ack(data, FRAMES, SLOTS, 1, &m), 0);
+	probe_put(data, SLOTS, 1, f + 3, 1, DECT_PRIM_CONTACT_ACK1, 5);
+	CHECK_EQ(slot_has_contact_ack(data, FRAMES, SLOTS, 1, &m), 1);
+	CHECK_EQ(m.prim, DECT_PRIM_CONTACT_ACK1);
+	CHECK_EQ(m.param_len, 5);
+	CHECK_EQ(slot_has_contact_ack(data, FRAMES, SLOTS, 0, &m), 0);
+	CHECK_EQ(slot_has_contact_ack(data, FRAMES, SLOTS, 2, &m), 0);
+}
+
 #define TRACE_DIR	"tests/stubd-traces"
 
 int main(int argc, char **argv)
@@ -631,6 +687,7 @@ int main(int argc, char **argv)
 	setenv("TZ", "UTC", 1);
 	tzset();
 	unlink("build/test_stubd.log");
+	test_probe_window();
 	for (i = 1; i < argc; i++, ran++)
 		run_trace(argv[i]);
 	if (argc < 2) {
