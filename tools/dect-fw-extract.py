@@ -13,7 +13,8 @@ them on the box. Python 3 standard library only, so it runs unchanged on
 Linux, macOS and Windows. See docs/firmware-sourcing.md.
 
 Accepted input: a FRITZ!OS .image file (a tar archive), a bare SquashFS
-image, or a folder that already holds the extracted files.
+image, the NAND filesystem.image of older boxes (7362 SL, 7412), or a folder
+that already holds the extracted files.
 """
 import argparse
 import hashlib
@@ -23,6 +24,7 @@ import tarfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from sqfs_be import Sqfs  # noqa: E402  (the reader next to this file)
+from avm_nand_sqfs import AvmNandFs, plausible  # noqa: E402
 
 # SHA-256 of each .hex file openDECTcell knows: (model, FRITZ!OS build, stage,
 # the name to save it under). docs/firmware-sourcing.md section 4.
@@ -84,6 +86,24 @@ def from_squashfs(data):
     return found
 
 
+def from_avm_nand(data):
+    """(path, bytes) of every dectfw_*.hex in an AVM NAND filesystem.image
+    (7362 SL, 7412): a SquashFS cut up by sector index headers, which
+    from_squashfs cannot read. Slow, so only tried where that found none."""
+    try:
+        fs = AvmNandFs(data)
+    except Exception:          # not this format either
+        return []
+    found = []
+    for path, ino in fs.walk():
+        if ino.get('type') in (2, 9) and is_firmware(path):
+            try:
+                found.append((path, fs.read(path, check=plausible)))
+            except Exception as e:
+                print('Could not read %s from the image: %s' % (path, e))
+    return found
+
+
 def from_tar(path):
     found = []
     with tarfile.open(path) as tar:
@@ -93,8 +113,11 @@ def from_tar(path):
             data = tar.extractfile(m).read()
             if is_firmware(m.name):
                 found.append((m.name, data))
-            else:
-                found.extend(from_squashfs(data))
+                continue
+            files = from_squashfs(data)
+            if not files and os.path.basename(m.name) == 'filesystem.image':
+                files = from_avm_nand(data)
+            found.extend(files)
     return found
 
 
@@ -114,7 +137,8 @@ def find(path):
     if tarfile.is_tarfile(path):
         return from_tar(path)
     with open(path, 'rb') as f:
-        return from_squashfs(f.read())
+        data = f.read()
+    return from_squashfs(data) or from_avm_nand(data)
 
 
 def main(argv=None):

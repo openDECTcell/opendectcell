@@ -100,6 +100,45 @@ def main():
         rc, _ = run(os.path.join(t, 'root'), '-o', os.path.join(t, 'out4'))
         check(rc == 0, 'folder, got %d' % rc)
 
+        # the NAND filesystem.image of the 7362 SL and 7412: no plain
+        # SquashFS in it, so the AVM NAND reader is tried. A stand-in reader,
+        # since a real image would need AVM bytes: this checks the wiring.
+        class FakeNand:
+            def __init__(self, data):
+                if not data.startswith(b'FAKENAND'):
+                    raise ValueError('not a NAND image')
+
+            def walk(self):
+                yield '/lib/modules', {'type': 1}
+                yield '/lib/modules/dectfw_secondlevel_441.hex', {'type': 2}
+                yield '/lib/modules/other.ko', {'type': 2}
+
+            def read(self, path, check=None):
+                return SECOND
+        real = fwx.AvmNandFs
+        fwx.AvmNandFs = FakeNand
+        try:
+            nand = os.path.join(t, 'nand', 'filesystem.image')
+            os.makedirs(os.path.dirname(nand))
+            with open(nand, 'wb') as f:
+                f.write(b'FAKENAND' + b'\0' * 2000)
+            nimage = os.path.join(t, 'FRITZ.Box_nand.image')
+            with tarfile.open(nimage, 'w') as tar:
+                tar.add(nand, arcname='./var/tmp/filesystem.image')
+            rc, text = run(nimage, '-o', os.path.join(t, 'out6'))
+            check(rc == 0 and 'dectfw_secondlevel_441-test.hex' in text,
+                  'NAND image in a tar read through the NAND reader: %d' % rc)
+            rc, _ = run(nand, '-o', os.path.join(t, 'out7'))
+            check(rc == 0, 'bare NAND filesystem.image, got %d' % rc)
+            # only a member named filesystem.image is worth the slow reader
+            other = os.path.join(t, 'FRITZ.Box_other.image')
+            with tarfile.open(other, 'w') as tar:
+                tar.add(nand, arcname='./var/tmp/kernel.image')
+            rc, _ = run(other, '-o', os.path.join(t, 'out8'))
+            check(rc == 1, 'the NAND reader skips other members, got %d' % rc)
+        finally:
+            fwx.AvmNandFs = real
+
         # nothing to find
         empty = os.path.join(t, 'empty.bin')
         with open(empty, 'wb') as f:

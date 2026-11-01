@@ -40,7 +40,7 @@ that `dect-stubd` writes during experiments (`-w FILE`, `-a memdump`, …).
 | [make-lane-g722.py](make-lane-g722.py), [make-lane-probe.py](make-lane-probe.py), [make-lane-matrix.py](make-lane-matrix.py) | Build test audio for `dect-stubd -a playraw=` |
 | [decode-beacon.py](decode-beacon.py), [dect_qh7.py](dect_qh7.py) | Decode the base's broadcast capabilities from a memory dump |
 | [dect_memdump.py](dect_memdump.py), [dect_memcmp.py](dect_memcmp.py) | Reassemble and compare chip memory snapshots |
-| [avm_nand_sqfs.py](avm_nand_sqfs.py) | Reads the NAND filesystem image of older FRITZ!Boxes (7362 SL, 7412) |
+| [avm_nand_sqfs.py](avm_nand_sqfs.py) | Reads the NAND filesystem image of older FRITZ!Boxes (7362 SL, 7412); `dect-fw-extract.py` uses it for those images |
 | [elfrel.py](elfrel.py) | Lists pointer tables in relocatable ELF files |
 
 More development tools are in [src/tools/](../src/tools/): `dect-pcmcap`

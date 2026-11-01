@@ -12,7 +12,7 @@ guide takes you from a FRITZ!Box running OpenWrt to a handset making calls.
 - **Internet access on the box** while installing.
 - **A PC with Python 3** ([python.org](https://www.python.org/downloads/);
   Linux usually has it) and this repository, or at least the files
-  `tools/dect-fw-extract.py` and `tools/sqfs_be.py`.
+  `tools/dect-fw-extract.py`, `tools/sqfs_be.py` and `tools/avm_nand_sqfs.py`.
 - **The official FRITZ!OS image for your box** from AVM (step 3).
 - **Your DECT handsets.** If a handset is still registered with another
   base, it can usually register with a second one; otherwise reset it as

@@ -1,6 +1,6 @@
 # Firmware sourcing: how users get the STUB onto their box
 
-Status: **decided** 2026-10-17. **Upload page built** 2026-10-31 (§2a). **Built** 2026-10-25: `tools/dect-fw-extract.py` (tar, SquashFS or folder; synthetic tests in `tests/test_fw_extract.py`; not yet run on a real image), the package's `/etc/opendectcell/firmware/` with `keep.d`. The on-box SHA-256 check in the init script is built too (refuses unknown builds unless `fw_allow_unverified`; tested on the box).
+Status: **decided** 2026-10-17. **Upload page built** 2026-10-31 (§2a). **Built** 2026-10-25: `tools/dect-fw-extract.py` (tar, SquashFS, the 7412/7362 SL NAND `filesystem.image` since 2026-11-01, or folder; synthetic tests in `tests/test_fw_extract.py`; not yet run on a real image), the package's `/etc/opendectcell/firmware/` with `keep.d`. The on-box SHA-256 check in the init script is built too (refuses unknown builds unless `fw_allow_unverified`; tested on the box).
 
 ## 1. Why every user needs it
 
