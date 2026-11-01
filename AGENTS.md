@@ -54,6 +54,44 @@ specification we already hold? Then read it. Does it concern a mail number, a
 chip register, a chip event, or a divergence from the standard? Then ask the
 room.
 
+## 1b. Work on one model must not change the others (maintainer, 2026-11-01)
+
+The 7412 and 7520 are bench boxes of another maintainer, used with the Go
+controller. An agent working on another model (the 7362 SL first) cannot
+test on them, and neither can anyone reading its commits, so a regression
+there lands unnoticed. **A change to anything those boxes share must not
+alter their behaviour.**
+
+1. **Packaging.** Several models share one OpenWrt target (lantiq/xrx200
+   is the 7412 and the 7362 SL). A model's own kernel modules come in a
+   per-board meta package (`opendectcell-fritz7362sl`), never as target-wide
+   `DEPENDS` of `opendectcell`: a 7412 must not install the 7362 SL's modules.
+2. **Run-time differences belong in `boards/<model>`.** The init script
+   reads board keys (`transport`, `pcm_kmod`, `pcm_dev`, `uart`,
+   `uart_kmod`, `fw_*`, `quiet_console`, …). Key new behaviour on a
+   board setting of its own, not on one other boards share (the
+   console quieting first keyed on `pcm_kmod` would have run on the
+   7412).
+3. **Do not change `libopendectcell`.** `dect-stubd` links it on every box,
+   and the Go controller vendors a copy (`third_party/opendectcell`, through
+   cgo) with real-library traces, golden files and the API versions of
+   `docs/api-versions.md`. Its behaviour comes from the specifications
+   and clean-room answers and changes only with that source, by its
+   owner. A model's transport belongs in the kernel module and
+   `dect-stubd`. If a chip answers differently at the mail level, open an
+   issue in openDECTcell/opendectcell with the evidence (§2.9); the maintainer or
+   their agent decides.
+4. **Run-time switch over build flag.** One lantiq binary serves the 7412
+   and the 7362 SL, so `-DBOARD_…` cannot separate them; pass a board key
+   to `dect-stubd` as an option. Where a compile-time switch is truly
+   needed: only in `dect-stubd` or the kernel module, never in
+   `libopendectcell` or its headers; off by default, so a build without it
+   behaves exactly as the 7412 and 7520 run today; `make check` and
+   `make cross` green with it on and off.
+5. **Record every change to shared code** (`dect-stubd`, the init script,
+   packaging, keep lists) in the maintainers' notes: what it does on the other
+   boxes and how to bench it there, so their owner can check it.
+
 ## 2. Clean-room and blob rules (non-negotiable)
 
 1. **Never commit AVM material:** no binaries, `.ko` modules, `.hex` firmware, images, device-tree source, calibration data or analysed code. All of that lives in `work/`, which is git-ignored, and stays local.
