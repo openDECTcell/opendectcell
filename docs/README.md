@@ -86,6 +86,7 @@ says at the top what it was for.
 | [tasks-2026-10-28.md](tasks-2026-10-28.md), [tasks-2026-10-30.md](tasks-2026-10-30.md) | Task lists, still current for some open details |
 | [bench-later.md](bench-later.md) | Every open bench test on one card, with the outcomes written before the run, and the unattended runs' results |
 | [bench-2026-10-25.md](bench-2026-10-25.md), [bench-next.md](bench-next.md), [bench-7412.md](bench-7412.md) | Older bench test cards and their results; `bench-7412.md` the first handset on a 7412 |
+| [bench-7362sl.md](bench-7362sl.md) | Gate G1 on a 7362 SL: the first STUB upload over the USIF UART, and whether the PCM clocks start |
 
 The project-wide history and hand-over notes are in
 the maintainers' notes; the plan is in [ROADMAP.md](../ROADMAP.md).
