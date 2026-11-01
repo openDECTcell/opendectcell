@@ -3,10 +3,10 @@
 # Read by /etc/init.d/opendectcell; UCI options in /etc/config/opendectcell override.
 # Keys: see docs/hardware-abstraction.md section 4.
 #
-# Not working yet: the PCM link (VR9 TDM) has no driver, so the service
-# refuses to start here and says so (pcm_dev=none). The firmware-load UART
-# works through kmod-lantiq-usif-uart [CR 7362SL/A-0002, A-0003]
-# (docs/models/7362SL-DECT-analysis.md section 7).
+# The firmware-load UART is kmod-lantiq-usif-uart [CR 7362SL/A-0002, A-0003],
+# the PCM link kmod-lantiq-tdm-pcm [CR 7362SL/A-0004, A-0005]
+# (docs/models/7362SL-DECT-analysis.md section 7). Gate G2 (the control
+# channel over the TDM transport) is untested.
 
 name="FRITZ!Box 7362 SL"
 transport=lantiq-tdm
@@ -19,16 +19,18 @@ fw_secondlevel=dectfw_secondlevel_441-07.18-7362sl.hex
 fw_firstlevel_sha256=72f8e27a0d01c301a05a8b373a71887af882a6cebcb1a30bd4a435580e1045f2
 fw_secondlevel_sha256=8aae3b5e3450fd2c9999e003068e786096c11d8ef53f7d47c25cebd057a797d3
 
-# Stock mode word (derived statically, FRITZ!OS 07.18). On the 7412's
-# 06.88 STUB 0x101 clocks 4 words of 32 bit per frame; assumed the same.
+# Stock mode word (derived statically, FRITZ!OS 07.18): 8 slots of 16 bit
+# per frame on this box [CR 7362SL/A-0004].
 dect_mode=0x101
 
-# The PCM bus: no transport yet. "none" keeps the service from starting;
-# left empty, the daemon would open the openDECTcell module's /dev/dect0, which
-# carries no PCM on lantiq.
-pcm_kmod=
-pcm_dev=none
-pcm_slots=
+# The PCM bus: the VR9 TDM transport (kmod-lantiq-tdm-pcm), the same uapi
+# as the 7412's SSC transport. The hardware aligns its frames to FSC, so
+# there is no bit offset to find; a lost frame is lost whole, and the
+# transmitter repeats its last frame [CR 7362SL/A-0004]. Loaded before the
+# chip boots, as on the 7412.
+pcm_kmod=lantiq_tdm_pcm
+pcm_dev=/dev/tdm-pcm0
+pcm_slots=8
 
 # The DECT UART is the VR9 USIF on GPIO11/12, not the console:
 # kmod-lantiq-usif-uart's /dev/ttyUSIF0, loaded by the service before the

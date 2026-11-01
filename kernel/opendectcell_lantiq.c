@@ -4,8 +4,9 @@
  *
  * Lantiq VR9 boards: reset and boot control for the DECT chip, through the
  * same /dev/dect0 ioctls as the ipq40xx module. The PCM/TDM link is not
- * ours here: kmod-lantiq-ssc-pcm runs the VR9 SSC (/dev/ssc-pcm0), and
- * dect-stubd talks to it directly. This module's own SSC engine
+ * ours here: kmod-lantiq-ssc-pcm runs the VR9 SSC (/dev/ssc-pcm0, 7412),
+ * kmod-lantiq-tdm-pcm the VR9 TDM block (/dev/tdm-pcm0, 7362 SL), and
+ * dect-stubd talks to them directly. This module's own SSC engine
  * (opendectcell_ssc.c) went when nothing used it any more (2026-10-29).
  *
  * Facts: docs/models/7412-DECT-analysis.md, docs/7412-spi-tdm-and-loader.md,
@@ -87,7 +88,7 @@ static const struct dect_board dect_boards[] = {
 	},
 	{
 		.compatible = "avm,fritz7362sl",
-		.transport = "none",	/* PCM: VR9 TDM, no driver yet */
+		.transport = "none",	/* PCM: kmod-lantiq-tdm-pcm */
 		.gpio_lookup = &fritz7362sl_gpio_lookup,
 		.strap_pin = 11,	/* USIF uart_rx: function 1, ALT0 */
 		.strap_alt = 1,
@@ -253,7 +254,7 @@ static long dect_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case DECT_IOC_PCM_STATS:
 	case DECT_IOC_PCM_TX_FRAME:
 	case DECT_IOC_CAPTURE:
-		/* PCM is kmod-lantiq-ssc-pcm's (/dev/ssc-pcm0) */
+		/* PCM is kmod-lantiq-ssc-pcm's or kmod-lantiq-tdm-pcm's */
 		return -EOPNOTSUPP;
 	default:
 		return -ENOTTY;
