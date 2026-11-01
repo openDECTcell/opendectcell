@@ -28,7 +28,9 @@ in reset anyway.
   §2-§3).
 - `ubihealthd` reads NAND every 120 s with interrupts off for about 27 ms,
   longer than the USIF's receive FIFO lasts at 230400 Bd [CR 7362SL/A-0002
-  §5]. It is stopped for the upload.
+  §5]. It is stopped for the upload. (Since `kmod-lantiq-usif-uart`
+  `f359106` the upload also passed with it running; see the results of
+  that build below [CR 7362SL/A-0006].)
 
 ## 0. Prepare (workstation)
 
@@ -155,3 +157,22 @@ measured (sysfs sampling only shows that it runs).
 
 Afterwards the chip was held in reset (GPIO 542 low through sysfs), both
 modules unloaded, the pins released.
+
+## Results, 2026-11-01: `kmod-lantiq-usif-uart` `f359106`
+
+*Observed on hardware*, same box and release [CR 7362SL/A-0006]. From
+`f359106` on, the module drives the UART's TX pad (GPIO 12) **push-pull**,
+as the stock board does; `50bd2e5`, the build of the G1 run above, drove
+it open drain. The feed pins `f359106`.
+
+- The same upload (`/root/dect-chip-boot.sh`, `ubihealthd` stopped): both
+  stages on the first attempt, USIF `rx 8 tx 48946 overrun 0 frame 1`, as
+  with the open-drain pad.
+- The same upload with **`ubihealthd` running** and, on top, 128 KiB NAND
+  reads looping on both CPUs for the whole upload (each holds its CPU's
+  interrupts off about 27 ms): upload OK, both stages on the first
+  attempt, `overrun 0`, `frame 1`. So stopping `ubihealthd` is no longer
+  needed for the upload itself (observed once). The limit: the chip sends
+  only 8 bytes during an upload, so this shows that transmit survives the
+  blackouts, not that a long receive burst would (the receive FIFO lasts
+  1.4 ms at 230400 Bd).
