@@ -73,7 +73,7 @@ room.
 - **Never rewrite published history:** no force-push and no rebasing of pushed commits. Fix mistakes with a follow-up commit or `git revert`.
 - **Commit message format:** an imperative summary of 72 characters or less, a blank line, then the *why*. Reference issues (`Refs #12`, `Fixes #12`). End with the attribution line your tool requires.
 - **Before committing:** `git status` and `git diff --staged`. Check that nothing from `work/` and no AVM material is staged.
-- **Author identity** for this repo: `ctandi <ctandi@users.noreply.github.com>` (set repo-locally).
+- **Author identity** for this repo: `ctandi <ctandi@users.noreply.github.com>` (set repo-locally), or the git user configured in the repository's local config (`git config --local user.name`/`user.email`). Don't change the git config to switch between them.
 
 ## 4. Repository layout
 
