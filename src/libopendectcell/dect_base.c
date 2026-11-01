@@ -4323,6 +4323,31 @@ void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
 					? b->line_name[i][1] : "Line 2", att);
 }
 
+void dect_base_iwu_adopted(const struct dect_base *b, struct dect_iwu *iwu,
+			   unsigned slot)
+{
+	unsigned i;
+
+	/*
+	 * The list was built when the link came up, for the record that was
+	 * current then; a record that was fetched or loaded after that has no
+	 * entry in it, and the handset it serves would find its own name
+	 * missing. Rebuilt from the table as it is now, then filtered for the
+	 * handset's account as at link-up.
+	 */
+	iwu->n_handsets = 0;
+	for (i = 0; i < b->n_hs; i++) {
+		char name[DECT_IWU_NAME_MAX];
+
+		if (!dect_base_listed(b, i))
+			continue;
+		dect_base_hs_name(b, i, name, sizeof(name));
+		(void)dect_iwu_add_handset(iwu, (uint8_t)dect_base_slot(b, i), name);
+	}
+	dect_iwu_set_own(iwu, (uint8_t)slot);
+	dect_base_iwu_lines(b, iwu, slot);
+}
+
 int dect_base_page_adopt(struct dect_base *b, int p,
 			 const struct dect_link_ind *ind, int i,
 			 const char *why)
@@ -4341,10 +4366,8 @@ int dect_base_page_adopt(struct dect_base *b, int p,
 		b->side[p].adopted = i;
 	} else if ((unsigned)i != b->cur) {
 		(void)dect_base_serve(b, (unsigned)i, why);
-		dect_iwu_set_own(&b->main_link.link.cc.iwu,
-				 (uint8_t)dect_base_slot(b, b->cur));
-		dect_base_iwu_lines(b, &b->main_link.link.cc.iwu,
-				    dect_base_slot(b, b->cur));
+		dect_base_iwu_adopted(b, &b->main_link.link.cc.iwu,
+				      dect_base_slot(b, b->cur));
 	}
 	return 1;
 }
@@ -5279,8 +5302,7 @@ static void main_mail(struct dect_base *b, const struct dect_mail *m,
 		b->cc_id_unarmed_warned = 0;
 		if (b->ops && b->ops->switched)
 			b->ops->switched(b->ctx, "");
-		dect_iwu_set_own(&ml->link.cc.iwu, (uint8_t)slot);
-		dect_base_iwu_lines(b, &ml->link.cc.iwu, slot);
+		dect_base_iwu_adopted(b, &ml->link.cc.iwu, slot);
 	}
 
 	if (!b->first_contact_ms) {
@@ -5383,8 +5405,7 @@ static void side_mail(struct dect_base *b, unsigned k,
 		unsigned slot = dect_base_slot(b, (unsigned)a);
 
 		sl->adopted = a;
-		dect_iwu_set_own(&sl->link.cc.iwu, (uint8_t)slot);
-		dect_base_iwu_lines(b, &sl->link.cc.iwu, slot);
+		dect_base_iwu_adopted(b, &sl->link.cc.iwu, slot);
 		dect_base_log(b, "side: handle %u serves record %d (slot %u)",
 			      sl->handle, a, slot);
 	}

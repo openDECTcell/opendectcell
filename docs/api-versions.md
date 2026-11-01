@@ -1065,3 +1065,14 @@ again); -1 for a free store, a record without a chip slot or no record. The curr
 stays current. No layout change. A host whose `save()` does not mark the record
 (`loaded[cur] = 1`, `absent[cur] = 0`, as `dect-stubd` does) must do so, or the record is not
 one to recycle and a second enrolment picks the same free store.
+
+**149.** dect_base.h, 2026-11-01: **an adopted record gets its own entry in the link's Internal
+Names List.** New `dect_base_iwu_adopted(b, iwu, slot)`, used where a link takes on a record other
+than the one it was built for (a LOCATE-REQUEST or call of another handset, a page adoption, a side
+link): the list is rebuilt from the table as it is now (`dect_base_listed()` records, their names),
+the handset is the list's own terminal, and the lines and the account's filter apply as before.
+Until now the list kept what the link-up built, so a record that was fetched or loaded after the link
+came up (a roaming handset of a controller with `defer_unknown`) had no entry, its handset found its
+own name missing, and the list still held the free store that was current at link-up. A host that
+set the own terminal itself after an adoption (`dect_iwu_set_own` then `dect_base_iwu_lines`) should
+call this instead. No layout change.

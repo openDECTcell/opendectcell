@@ -1305,6 +1305,15 @@ void dect_base_main_located(struct dect_base *b);
 void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
 			 unsigned slot);
 /*
+ * A link adopted the record in `slot` (a LOCATE-REQUEST or a call of a handset
+ * other than the one the link was built for, one fetched after it came up
+ * included): its Internal Names List is rebuilt from the table as it is now,
+ * the handset is its own terminal, and the lines and the account's filter apply
+ * (API 149).
+ */
+void dect_base_iwu_adopted(const struct dect_base *b, struct dect_iwu *iwu,
+			   unsigned slot);
+/*
  * The Internal Names Lists after name_visible() changed its answers (API
  * 138): every link's list gains the entries its handset may now see, loses
  * the others, and the handsets are told.

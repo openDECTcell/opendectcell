@@ -1721,6 +1721,45 @@ int main(void)
 		CHECK_EQ(b.main_link.link.cc.iwu.n_handsets, 2u);
 		CHECK(vis_calls > 0);
 	}
+	/*
+	 * A link that adopts a record fetched after it came up gets that
+	 * record's own entry (API 149): the list built at link-up held the
+	 * free store that was current then.
+	 */
+	{
+		static struct dect_base_ops vops;
+		struct dect_iwu iwu;
+
+		dect_base_init(&b);
+		b.n_hs = 3;
+		b.hs[0].slot = 1;	/* a free store: nobody's entry */
+		b.absent[0] = 1;
+		b.hs[1].slot = 2;
+		b.loaded[1] = 1;
+		snprintf(b.name[1], sizeof(b.name[1]), "Hall");
+		b.hs[2].slot = 7;	/* the roamer, added after the link came up */
+		b.loaded[2] = 1;
+		snprintf(b.name[2], sizeof(b.name[2]), "A540");
+		b.cur = 2;
+		b.rec.slot = 7;		/* the current record's slot is the working copy's */
+		dect_iwu_init(&iwu);
+		CHECK_EQ(dect_iwu_add_handset(&iwu, 1, "DECT 1"), 0);	/* link-up's */
+		dect_iwu_set_own(&iwu, 1);
+		dect_base_iwu_adopted(&b, &iwu, 7);
+		CHECK_EQ(iwu.own_terminal_id, 7u);
+		CHECK_EQ(iwu.n_handsets, 2u);
+		CHECK_EQ(iwu.handsets[0].terminal_id, 2u);
+		CHECK_EQ(strcmp(iwu.handsets[0].name, "Hall"), 0);
+		CHECK_EQ(iwu.handsets[1].terminal_id, 7u);
+		CHECK_EQ(strcmp(iwu.handsets[1].name, "A540"), 0);
+		/* and its account's filter: slot 7 is alone */
+		vops.name_visible = same_account;
+		b.ops = &vops;
+		b.rec.slot = 3;
+		dect_base_iwu_adopted(&b, &iwu, 3);
+		CHECK_EQ(iwu.n_handsets, 1u);
+		CHECK_EQ(iwu.handsets[0].terminal_id, 3u);
+	}
 	/* Records 8 to 32 are in the Internal Names List too (API 147). */
 	{
 		unsigned i;
