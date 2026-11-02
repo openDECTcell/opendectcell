@@ -16,6 +16,9 @@ behaviour it replaces (a `dect-stubd -a` lab option or a built-in default).
 Decisions behind it: ROADMAP M8b, "Decided 2026-10-28", points 1-7, and
 AGENTS.md §1a and §2.9.
 
+> Handsets that need more than values (vendor-specific messages, a different
+> call sequence): [vendor-specific-support.md](vendor-specific-support.md).
+
 ## 1. What a profile is for
 
 openDECTcell implements the standards (EN 300 444 GAP, TS 102 527 CAT-iq). A

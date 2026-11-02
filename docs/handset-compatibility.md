@@ -6,6 +6,9 @@
 > standard. The short user-level list of tested handsets is in
 > [status.md](status.md#handsets).
 
+> A plan for handsets that are not plain GAP/CAT-iq (the Motorola O201 is the first
+> candidate): [vendor-specific-support.md](vendor-specific-support.md).
+
 One table, kept current, of what each handset has actually been observed to do
 against **our** base. It exists to answer a question that keeps coming up --
 "should `libopendectcell` grow per-handset support?" -- with evidence instead of
