@@ -1096,6 +1096,16 @@ int main(void)
 		ind.page_id_len = sizeof(id1);
 		dect_base_main_page_response(&b, &ind, 300);
 		CHECK_EQ(ind.page_response, 1);		/* a side ring may want it */
+
+		/* the ring of the call that paged it has ended (DONE), not idle */
+		c->id = 0;
+		b.ring.state = DECT_BASE_RING_DONE;
+		memset(&ind, 0, sizeof(ind));
+		ind.page_response = 1;
+		memcpy(ind.page_id, id1, sizeof(id1));
+		ind.page_id_len = sizeof(id1);
+		dect_base_main_page_response(&b, &ind, 400);
+		CHECK_EQ(ind.page_response, 0);
 	}
 
 	/*

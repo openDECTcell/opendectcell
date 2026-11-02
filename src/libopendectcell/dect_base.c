@@ -4596,7 +4596,7 @@ void dect_base_main_page_response(struct dect_base *b,
 	 * two minutes, and the 06.88 chip has one lane per slot class, so the
 	 * handsets of its class are deaf meanwhile. Reject it and release.
 	 */
-	if (ind->page_response && b->ring.state == DECT_BASE_RING_IDLE &&
+	if (ind->page_response && dect_base_main_free(b) &&
 	    b->ic.st == DECT_BASE_IC_IDLE && !any_call_paging(b)) {
 		int rejected = dect_link_page_reject(&bl->link, ind->page_id,
 						     ind->page_id_len,
