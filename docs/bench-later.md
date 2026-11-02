@@ -7,7 +7,7 @@ or here for the tests written here.
 
 ## Before any run
 
-- **Which box:** the 7412 (192.168.1.124) unless a test says the 7520.
+- **Which box:** the 7412 (192.0.2.124) unless a test says the 7520.
   The 7412 is parked with its service stopped since 2026-10-30 09:37 UTC.
 - **Packages:** build from the newest commit for the box
   (`OPENWRT=25.12.6 tools/release/build.sh lantiq/xrx200 build/release/out-<name>-lantiq-25126`),
@@ -248,7 +248,7 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
 | U8a. Install openDECTcell, opendectcell-baresip, opendectcell-cell, opendectcell-carddav, luci-app-opendectcell; `ls /etc/init.d/*.apk-new` | installed; no `opendectcell.apk-new` for the init script (the box's init is the packaged one) | an init `.apk-new`: the kept script is not the packaged one; move it over before U8b |
 | U8b. The first start after the install (the slow case `ed07be3` is for) | `control slot found` within the search; the seconds from start to slot written down (57-68 s expected after an install) | `gave up after 20 passes`: the chip took longer than ~140 s, or the offset moved after all |
 | U8c. Five minutes in base mode, then stop | no resync storm, no `***` line; `parked` says `verified` | a resync storm: the SSC collectors (kmod `e3c898d`) are not loaded; park not verified: the hold message instead |
-| U8d. Cell mode against `tools/cell-testpeer.py` on the PC (192.168.1.146:7300), `--mail-test`, two minutes | enrolled; the peer logs `HELLO` with caps `0x77` (MAIL, MEDIA, SRTP, STATS, FLOW, RESUME) and formats `[6, 1]`; heartbeats with no reconnect; the memory read answered (`MAIL_UP 0xFFF1`); `cell-link.json` has `cert_expires` about 90 days ahead; `cell.json` has `"radio":"parked"` and `"media":0` | no link: the connect path of `8aa6685` (own TCP connect, handshake reads) fails on the box: then the old binary's behaviour is the comparison; caps without MEDIA: the old dect-cell is still installed; a reconnect within the two minutes: the heartbeat path |
+| U8d. Cell mode against `tools/cell-testpeer.py` on the PC (192.0.2.146:7300), `--mail-test`, two minutes | enrolled; the peer logs `HELLO` with caps `0x77` (MAIL, MEDIA, SRTP, STATS, FLOW, RESUME) and formats `[6, 1]`; heartbeats with no reconnect; the memory read answered (`MAIL_UP 0xFFF1`); `cell-link.json` has `cert_expires` about 90 days ahead; `cell.json` has `"radio":"parked"` and `"media":0` | no link: the connect path of `8aa6685` (own TCP connect, handshake reads) fails on the box: then the old binary's behaviour is the comparison; caps without MEDIA: the old dect-cell is still installed; a reconnect within the two minutes: the heartbeat path |
 | U8e. Leave cell mode (`/etc/init.d/opendectcell cell_leave`, role base), stop | the credentials gone, role `base`, service stopped, `parked` `verified` | anything else: put the box back by hand and say so |
 
 **U8 results, 2026-10-30 19:59-20:09 CET (box time).**
@@ -274,7 +274,7 @@ cell fixes (`8aa6685`), the cell's media (`6c910b1`) and renewal
   - **To investigate later (U8f, attended or not):** first point the box's log at the PC (`uci set system.@system[0].log_ip=<PC>; uci set system.@system[0].log_proto=udp; uci commit system; /etc/init.d/log restart`, a listener on the PC writing to a file with the run's time in its name), so the log outlives a hang. Then, outcomes written before each: (1) `cell_leave` and a stop 4 s later, as U8e; (2) a plain base start and a stop at 2, 4 and 8 s, without cell mode; (3) the same with the radio already on. Hang in (1) only: the cell-to-base path; in (2): a stop during the slot search; the last lines before the silence name the step. Restore `log_ip` afterwards.
 
   - **U8f prepared (2026-10-31, nothing run yet).** The 7412's log goes to
-    the PC since 2026-10-31 00:07 CET (`log_ip` 192.168.1.146, `log_port`
+    the PC since 2026-10-31 00:07 CET (`log_ip` 192.0.2.146, `log_port`
     5514, udp), collected by `tools/syslog-sink.py` into
     `u8f/7412-syslog-<start time>.log` in the session's scratch folder
     (a new file per start, never reopened). The script is

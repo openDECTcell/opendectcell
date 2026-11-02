@@ -20,7 +20,7 @@ Contents:
    - [Handsets](#22-handsets)
    - [VoIP Profiles](#23-voip-profiles)
    - [Phonebook](#24-phonebook)
-   - [Advanced](#25-advanced)
+   - [Advanced](#26-advanced)
 3. [Status > DECT: the DECT Monitor](#3-status--dect-the-dect-monitor)
 4. [Cell mode: the box as a controller's cell](#4-cell-mode-the-box-as-a-controllers-cell)
 5. [When something doesn't work](#5-when-something-doesnt-work)

@@ -3735,7 +3735,7 @@ static void send_conn_status_req(struct stubd *s, uint64_t now)
  * 0x0300 carries {page info, 0x11, slot}. Our LOCATE-ACCEPT packs the TPUI as
  * {0, 0x11, slot}, so the last two octets are also its low 16 bits -- but note
  * that in stock the 0x11 is a **hardcoded constant** in the stock paging routine
- * (`mov r3,#17`), not a byte taken from the identity [CR A-StockTrace-5 §21].
+ *, not a byte taken from the identity [CR A-StockTrace-5 §21].
  * The two agree today because our TPUI is built with the same prefix. We take
  * them from dect_mm_tpui() anyway, so that a pool-assigned TPUI (#68) is paged
  * with the value it was actually given rather than with a constant. The page info byte is

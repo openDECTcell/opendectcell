@@ -1,6 +1,6 @@
 # STUB upload images: format and patching
 
-Status: *derived statically* from `the first-stage loader.ko` of FRITZ!OS 08.25 on the FRITZ!Box 7520 (ARM build; functions `the HEX reader`, `(vendor-internal name)`, `replace_tag`, `the loader patch routine`, `the loader routine`), 2026-10-17. Checked against the 7520 STUB file (`dectfw_secondlevel_441.hex`, SHA-256 `7cac33c7…7b31`) and against the loader's log on a running 7520 (`7520-DECT-analysis.md` §8). These notes describe behaviour in our own words; they contain no AVM code.
+Status: *derived statically* from `the first-stage loader.ko` of FRITZ!OS 08.25 on the FRITZ!Box 7520 (ARM build; functions `the HEX reader`, the address mapper, `replace_tag`, `the loader patch routine`, `the loader routine`), 2026-10-17. Checked against the 7520 STUB file (`dectfw_secondlevel_441.hex`, SHA-256 `7cac33c7…7b31`) and against the loader's log on a running 7520 (`7520-DECT-analysis.md` §8). These notes describe behaviour in our own words; they contain no AVM code.
 
 The firmware files are Intel HEX. Before upload, the host turns each file into a binary **upload image**. The first-level loader and the STUB use two different image layouts.
 

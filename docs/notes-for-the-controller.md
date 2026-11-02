@@ -1089,7 +1089,7 @@ when you take it; 140 to 142 together are in the three notes above this one.
 
 **The PARK leaves the RPN out; class B has its own PLI and LAL** (openDECTcell
 `docs/api-versions.md` #143). `dect_base_cfg.park_pli` (0: the class's whole ARI,
-36 or 31) is what the controller sets to 19 for class B (`(vendor-internal name)`: ARC and
+36 or 31) is what the controller sets to 19 for class B (the PLI setting: ARC and
 EIC, so one subscription covers every site of the EIC). The RFPI the library
 builds the PARK from is the one the chip reports (`0xF601`), so a cell given an
 identity needs nothing more in the stack; every cell of one system then sends
