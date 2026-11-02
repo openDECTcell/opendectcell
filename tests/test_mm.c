@@ -1266,6 +1266,36 @@ static void test_locate_request_from_our_handset_is_accepted(void)
 }
 
 /*
+ * {DETACH} (EN 300 175-5 13.4.2) from a handset we hold is counted and not answered; from one
+ * we do not hold, it is ignored.
+ */
+static void test_detach_from_our_handset_is_counted(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t other[] = { 0x80, 0xa8, 0x02, 0x44, 0x55, 0x66 };
+	struct dect_mm mm;
+	struct dect_mm_cfg cfg;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+	memcpy(mm.port_id, ours, sizeof(ours));
+	mm.port_id_len = sizeof(ours);
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR, 0, DECT_MM_DETACH);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY, other, sizeof(other));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	CHECK_EQ(mm.stats.detached, 0u);		/* not ours */
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR, 0, DECT_MM_DETACH);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY, ours, sizeof(ours));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	CHECK_EQ(mm.stats.detached, 1u);
+	CHECK_EQ((int)dect_mm_poll(&mm, out, sizeof(out)), 0);	/* nothing goes back */
+}
+
+/*
  * Drive MM to the point where a {LOCATE-ACCEPT} has gone out carrying a TPUI
  * -- which is what starts the temporary-identity assignment procedure.
  */
@@ -2048,6 +2078,7 @@ int main(void)
 	test_key_allocation_fails_on_timeout_or_refusal();
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
+	test_detach_from_our_handset_is_counted();
 	test_a_held_handset_is_accepted_and_adopted();
 	test_a_stranger_is_still_rejected_with_handsets_held();
 	test_held_handsets_need_no_port_id();

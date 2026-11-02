@@ -1291,6 +1291,21 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 		mm->ti_value = h.ti_value;	/* new PP-initiated transaction */
 		on_locate_request(mm, ies, ies_len, rand_f, rs);
 		break;
+	case DECT_MM_DETACH:
+		/*
+		 * The PT says it is off (EN 300 175-5 13.4.2); no answer. Only a handset we hold counts:
+		 * the message is not authenticated, so the host takes it as a hint for what it shows,
+		 * never as a reason to refuse a call.
+		 */
+		{
+			const uint8_t *pid;
+			size_t pid_len;
+
+			pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
+			if (pid && dect_mm_adopt(mm, pid, pid_len))
+				mm->stats.detached++;
+		}
+		break;
 	case DECT_MM_TEMP_IDENTITY_ASSIGN_ACK:
 		/*
 		 * The PT has taken the TPUI we assigned. Stop <MM_ident.1>.

@@ -74,6 +74,7 @@ static void record_wipe(struct dect_base *b, unsigned i)
 	b->remote[i] = 0;
 	b->fetched[i] = 0;
 	b->last_seen_ms[i] = 0;
+	b->detached_ms[i] = 0;
 	memset(&b->note[i], 0, sizeof(b->note[i]));
 	b->page_want &= ~(1u << i);
 	b->rec_contacts[i] = NULL;
@@ -1007,6 +1008,25 @@ uint8_t dect_base_call_id(const struct dect_base *b,
 	return 0;
 }
 
+/* The call rung on the main link is an internal one (API 153). */
+static int ring_intern(const struct dect_base *b)
+{
+	unsigned i;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == -1)
+			return b->calls[i].intern;
+	return 0;
+}
+
+/* The SETUP's basic service for a call: an internal one says so (wideband unless narrow). */
+static uint8_t ring_svc_for(const struct dect_base *b, unsigned t, int narrow, int intern)
+{
+	if (!intern)
+		return dect_base_ring_svc(b, t, narrow);
+	return dect_base_basic_svc(b, (int)t, narrow || b->cfg.narrowband ? 0x90u : DECT_BASE_IC_SVC);
+}
+
 int dect_base_ring_part3(const struct dect_base *b)
 {
 	const struct dect_callinfo *o = &b->cfg.callinfo;
@@ -1029,13 +1049,15 @@ void dect_base_ring_callinfo(struct dect_base *b, int on)
 		return;
 	}
 	dect_callinfo_init(&ci);
-	ci.has_line = 1;
-	ci.line_id = DECT_BASE_LINE_ID;
-	for (i = 0; i < DECT_BASE_CALLS; i++)
-		if (b->calls[i].id && b->calls[i].party == -1)
-			ci.line_id = (uint8_t)b->calls[i].line;	/* the called one */
-	ci.has_line_type = 1;
-	ci.line_type = DECT_CALLINFO_NDT_DELAY;
+	if (!ring_intern(b)) {		/* an internal call has no line */
+		ci.has_line = 1;
+		ci.line_id = DECT_BASE_LINE_ID;
+		for (i = 0; i < DECT_BASE_CALLS; i++)
+			if (b->calls[i].id && b->calls[i].party == -1)
+				ci.line_id = (uint8_t)b->calls[i].line;	/* the called one */
+		ci.has_line_type = 1;
+		ci.line_type = DECT_CALLINFO_NDT_DELAY;
+	}
 	ci.has_call_id = 1;
 	ci.call_id = b->main_link.link.cc.status_call_id;
 	ci.has_call_status = 1;
@@ -1130,11 +1152,13 @@ void dect_base_ring_setup(struct dect_base *b, uint64_t now, const char *why)
 		if (hp->cc_name_method == 1 || hp->cc_name_method == 3)
 			clip.name[0] = '\0';	/* display or none */
 	}
+	if (ring_intern(b))		/* EN 300 444 table 23: the internal ring pattern */
+		dect_cc_set_signal(&bl->link.cc, b->cfg.signal_on, DECT_SIGNAL_ALERT_PATTERN0);
 	if (!dect_cc_setup_id(&bl->link.cc, b->rec.cc_port_id,
 			      b->rec.cc_port_id_len, b->rec.cc_fixed_id,
 			      b->rec.cc_fixed_id_len,
-			      dect_base_ring_svc(b, b->ring.hs,
-						 dect_base_ring_narrow(b)),
+			      ring_svc_for(b, b->ring.hs, dect_base_ring_narrow(b),
+					   ring_intern(b)),
 			      &clip)) {
 		dect_base_ring_callinfo(b, 0);
 		b->ring.state = DECT_BASE_RING_DONE;
@@ -1525,6 +1549,7 @@ int dect_base_call_out(struct dect_base *b, int p, uint64_t now)
 	c->party = p;
 	c->out = 1;
 	c->since = now;
+	c->intern = (cc->peer_basic_service >> 4) == 0x9u;
 	/* the line the handset chose (§7.4.5.2), if it has it; else Line 1 */
 	c->line = dect_cc_line(cc);
 	if (c->line != DECT_BASE_LINE_ID + 1u || !dect_base_party_line2(b, p))
@@ -1536,6 +1561,8 @@ int dect_base_call_out(struct dect_base *b, int p, uint64_t now)
 	/* nb: the handset's call is narrowband, so the INVITE offers G.711 */
 	dect_ctl_add(&o, "codec", dect_cc_codec(cc) == DECT_CC_CODEC_G722 ?
 		     "wb" : "nb");
+	if (c->intern)
+		dect_ctl_add(&o, "class", "int");
 	dect_ctl_add(&o, "number", num);
 	if (b->ops && b->ops->event)
 		b->ops->event(b->ctx, &o);
@@ -2099,10 +2126,12 @@ void dect_base_side_ring_setup(struct dect_base *b, struct dect_base_call *c,
 		dect_cc_set_call_status(&l->cc, l->cc.call_status, id);
 	dect_callinfo_init(&ci);
 	if (side_ring_part3(b, t)) {
-		ci.has_line = 1;
-		ci.line_id = (uint8_t)c->line;
-		ci.has_line_type = 1;
-		ci.line_type = DECT_CALLINFO_NDT_DELAY;
+		if (!c->intern) {
+			ci.has_line = 1;
+			ci.line_id = (uint8_t)c->line;
+			ci.has_line_type = 1;
+			ci.line_type = DECT_CALLINFO_NDT_DELAY;
+		}
 		ci.has_call_id = 1;
 		ci.call_id = l->cc.status_call_id;
 		ci.has_call_status = 1;
@@ -2114,8 +2143,10 @@ void dect_base_side_ring_setup(struct dect_base *b, struct dect_base_call *c,
 		dect_cc_set_signal(&l->cc, 1, hp->cc_signal_external);
 	if (hp->cc_name_method == 1 || hp->cc_name_method == 3)
 		clip.name[0] = '\0';		/* display text or none */
+	if (c->intern)
+		dect_cc_set_signal(&l->cc, b->cfg.signal_on, DECT_SIGNAL_ALERT_PATTERN0);
 	r = dect_cc_setup_id(&l->cc, port, plen, fixed, flen,
-			     dect_base_ring_svc(b, t, c->narrow), &clip);
+			     ring_svc_for(b, t, c->narrow, c->intern), &clip);
 	dect_cc_set_callinfo(&l->cc, &prev);
 	dect_cc_set_signal(&l->cc, b->cfg.signal_on, b->cfg.signal_value);
 	if (r) {
@@ -2774,7 +2805,7 @@ static void call_in(struct dect_base *b, const struct dect_ctl_msg *m,
 	struct dect_ctl_out o;
 	struct dect_base_call *c;
 	struct dect_clip clip;
-	int wp;
+	int wp, intern = dect_ctl_get(m, "int") && !strcmp(dect_ctl_get(m, "int"), "1");
 	unsigned want = 0, t = 0, line = DECT_BASE_LINE_ID;
 
 	/* hs=N: the handset whose line was called (its own account) */
@@ -2807,7 +2838,8 @@ static void call_in(struct dect_base *b, const struct dect_ctl_msg *m,
 	/* a Part 3 handset in a bridged call: call waiting */
 	wp = DECT_BASE_PARTY_NONE;
 	if (b->n_hs && dect_base_hs_in_call(b, t)) {
-		wp = c ? dect_base_waiting_party(b, t) : DECT_BASE_PARTY_NONE;
+		/* an internal call does not wait: it is busy */
+		wp = c && !intern ? dect_base_waiting_party(b, t) : DECT_BASE_PARTY_NONE;
 		if (wp == DECT_BASE_PARTY_NONE)
 			why = "in-call";
 	} else if (!c || (!dect_base_main_free(b) &&
@@ -2824,7 +2856,17 @@ static void call_in(struct dect_base *b, const struct dect_ctl_msg *m,
 	 * vouched for it (security audit 2026-10-29, S1).
 	 */
 	dect_clip_init(&clip);
-	if (num && *num)
+	if (intern && num && *num) {
+		/* the caller's internal number: the controller vouches for it (as ic_setup does) */
+		(void)dect_clip_set_number(&clip, num, DECT_CLIP_TON_NETWORK_SPECIFIC,
+					   DECT_CLIP_NPI_PRIVATE, DECT_CLIP_PRES_ALLOWED,
+					   DECT_CLIP_SCR_USER_PASSED);
+		if (name && *name)
+			(void)dect_clip_set_name(&clip, name, DECT_CLIP_ALPHABET_UTF8,
+						 DECT_CLIP_PRES_ALLOWED,
+						 DECT_CLIP_SCR_USER_PASSED);
+		book = 1;			/* no phonebook lookup: it is an internal number */
+	} else if (num && *num)
 		(void)dect_clip_set_number(&clip, num, DECT_CLIP_TON_UNKNOWN,
 					   DECT_CLIP_NPI_UNKNOWN,
 					   DECT_CLIP_PRES_ALLOWED,
@@ -2835,16 +2877,17 @@ static void call_in(struct dect_base *b, const struct dect_ctl_msg *m,
 	 * verified and passed" as EN 300 175-5 7.7.53 note 1 asks for a name
 	 * from the FP's contact list.
 	 */
-	if ((!name || !*name) &&
+	if (!intern && (!name || !*name) &&
 	    dect_base_contact_name(b, num, book_name, sizeof(book_name))) {
 		name = book_name;
 		book = 1;
 	}
-	if (name && *name)
+	if (!intern && name && *name)
 		(void)dect_clip_set_name(&clip, name, DECT_CLIP_ALPHABET_UTF8,
 					 DECT_CLIP_PRES_ALLOWED,
 					 book ? DECT_CLIP_SCR_USER_PASSED
 					      : DECT_CLIP_SCR_USER_UNSCREENED);
+	c->intern = intern;
 	c->id = dect_base_call_new_id(b);
 	c->line = line;
 	c->narrow = codec && !strcmp(codec, "nb");
@@ -5409,8 +5452,12 @@ static void main_mail(struct dect_base *b, const struct dect_mail *m,
 	}
 	pump(b, ml);			/* at least the LAPC ack */
 	a = ml->link.mm.adopted;
-	if (a >= 0 && (unsigned)a < b->n_hs)
+	if (a >= 0 && (unsigned)a < b->n_hs) {
 		b->last_seen_ms[a] = now;
+		if (ml->link.mm.stats.detached > ml->detach_seen)
+			b->detached_ms[a] = now;
+	}
+	ml->detach_seen = ml->link.mm.stats.detached;
 
 	/*
 	 * MM took on one of the other handsets we hold (its LOCATE-REQUEST,
@@ -5522,8 +5569,12 @@ static void side_mail(struct dect_base *b, unsigned k,
 	}
 	side_call(b, k, now);
 	a = sl->link.mm.adopted;
-	if (a >= 0 && (unsigned)a < b->n_hs)
+	if (a >= 0 && (unsigned)a < b->n_hs) {
 		b->last_seen_ms[a] = now;
+		if (sl->link.mm.stats.detached > sl->detach_seen)
+			b->detached_ms[a] = now;
+	}
+	sl->detach_seen = sl->link.mm.stats.detached;
 	if (a >= 0 && a != sl->adopted && (unsigned)a < b->n_hs) {
 		unsigned slot = dect_base_slot(b, (unsigned)a);
 
@@ -5665,7 +5716,7 @@ void dect_base_main_dial_tick(struct dect_base *b, uint64_t now)
 			      "without a digit, connecting", (int)len,
 			      (const char *)k, b->cfg.dial_wait_ms);
 	ml->ic_tried = 1;
-	if (dect_base_ic_start(b, -1, now)) {
+	if (!(b->bridge && b->cfg.bridge_internal) && dect_base_ic_start(b, -1, now)) {
 		dect_base_drain(b, -1, now);
 		return;
 	}

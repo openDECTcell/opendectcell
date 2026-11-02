@@ -1102,3 +1102,16 @@ handsets on another. The host now gives each such handset a number 64..127 (neve
 on every link's list as any local entry, filtered by `name_visible(viewer, id)`, and `dect_base_names_refresh()` re-spreads
 and tells the handsets. The entry is a name only: a call to it is the host's to route (the library has no peer for it).
 Layout change; no change for a host that sets none.
+
+**153.** dect_base.h, dect_mm.h, dect_nwk.h, dect_proto.h, 2026-11-02: **internal calls through the bridge, and {DETACH}.**
+`dect_base_cfg` gains `bridge_internal`; `dect_base_call` gains `intern`; `dect_base` gains `detached_ms[]`; `dect_mm_stats`
+gains `detached`; `DECT_MM_DETACH` (0x56). With `bridge_internal` and a bridge client, a handset's internal call (call class 9)
+is not run inside the base: the number it dialled goes out as `call-out class=int number=...` (bridge-interface.md §2.1) and the
+host routes it, to a handset on another base too. The target is rung by `call-in int=1 number=<caller's internal number>
+name=<caller's name>`: the SETUP says internal (basic service 9x), the ring pattern is the internal one (SIGNAL 40H), a Part 3
+handset gets no line, and the number is shown as network-specific, screened as passed. An internal call to a handset that is in
+a call is busy, never call waiting. A {DETACH} from a handset we hold (EN 300 175-5 13.4.2) is counted in the link's MM stats
+and stamps `detached_ms[i]`; being a segment it also counts in `last_seen_ms[i]`, so a record is detached while
+`detached_ms[i] >= last_seen_ms[i]`. The message is not authenticated: use it for what is shown, never to refuse a call.
+Layout change; no change for a host that sets none.
+

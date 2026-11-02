@@ -50,6 +50,7 @@
 #define DECT_MM_CIPHER_REJECT		0x4Fu
 #define DECT_MM_LOCATE_REQUEST		0x54u
 #define DECT_MM_LOCATE_ACCEPT		0x55u
+#define DECT_MM_DETACH			0x56u	/* PT -> FT: the PT is off (EN 300 175-5 6.3.6.13) */
 #define DECT_MM_LOCATE_REJECT		0x57u
 /*
  * {TEMPORARY-IDENTITY-ASSIGN-ACK}: the PT confirming a TPUI we assigned.

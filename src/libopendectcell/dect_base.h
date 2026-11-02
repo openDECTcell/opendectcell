@@ -271,6 +271,7 @@ struct dect_base_link {
 	int      cipher_timeout_seen;	/* ... <MM_cipher.1> reported */
 	uint32_t time_sent_for;		/* main link: mm.stats.located answered (S3w) */
 	uint32_t located_seen;		/* side link: mm.stats.located answered (S3z) */
+	uint32_t detach_seen;		/* mm.stats.detached reported (API 153) */
 	uint32_t rejected_seen;		/* cc.stats.rejected_identity reported (S3z) */
 	int      lane;			/* side link: the host's audio lane, -1 none (S6a) */
 	/* Stage S3p, the main link's call: */
@@ -308,6 +309,7 @@ struct dect_base_call {
 	 */
 	int      narrow;
 	int      out;		/* 1: the handset called out, 0: call-in */
+	int      intern;	/* an internal call (API 153): its SETUP says so, no line */
 	int      busy_seen;	/* the CC call existed */
 	int      rang, answered;	/* events sent */
 	uint64_t since;
@@ -378,6 +380,12 @@ struct dect_base_ring {
 struct dect_base_cfg {
 	int      narrowband;	/* the speech is narrowband: G.726, no G.722 */
 	int      two_calls;	/* up to three calls (twocalls) */
+	/*
+	 * An internal call (call class 0x9) goes to the bridge as `call-out class=int` and the
+	 * target is rung with `call-in int=1`, instead of being run inside the base (API 153): a
+	 * controller routes it, to a handset on another base too. Needs a bridge client.
+	 */
+	int      bridge_internal;
 	int      names_readonly; /* no handset may rename an entry (API 138) */
 	int      auth_first;	/* a handset proves its key before its call goes anywhere */
 	int      no_cipher;	/* -C, a lab option: no ciphering, no proof */
@@ -589,6 +597,12 @@ struct dect_base {
 	uint32_t foreign_seg;	/* segments for another handle than the main link's */
 	uint8_t  foreign_seg_handle;	/* ... the last one */
 	uint64_t last_seen_ms[DECT_BASE_HS_MAX];	/* record i's last segment */
+	/*
+	 * When record i's handset last sent {DETACH} (API 153), 0: never. The detach is a segment
+	 * too, so it counts in last_seen_ms: the handset is detached while detached_ms[i] >=
+	 * last_seen_ms[i], and attached again by anything it sends later.
+	 */
+	uint64_t detached_ms[DECT_BASE_HS_MAX];
 	/* the registration window (S3z) */
 	int      reg_open;
 	uint64_t reg_open_until;	/* 0: until closed */

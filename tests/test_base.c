@@ -1416,6 +1416,35 @@ int main(void)
 		CHECK_EQ(b.ring.now, 1);		/* the main link rings */
 	}
 
+	/* an internal call-in (API 153): its number is the caller's internal one, vouched for */
+	{
+		struct dect_ctl_msg m;
+		struct dect_base_reply r;
+		const char *line = "call-in hs=1 number=201 name=Buero int=1 sip=y";
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.loaded[0] = 1;
+		CHECK_EQ(dect_ctl_parse(line, strlen(line), &m), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 1);
+		CHECK_EQ(r.sent, 1);
+		CHECK_EQ(b.calls[0].intern, 1);
+		CHECK_EQ(strcmp(b.calls[0].clip.number, "201"), 0);
+		CHECK_EQ(b.calls[0].clip.number_ton, (unsigned)DECT_CLIP_TON_NETWORK_SPECIFIC);
+		CHECK_EQ(strcmp(b.calls[0].clip.name, "Buero"), 0);
+		/* a second one for the handset that is rung is busy, never "waiting" */
+		b.cur = 0;
+		CHECK_EQ(dect_base_hs_in_call(&b, 0), 1);
+		event_line[0] = '\0';
+		line = "call-in hs=1 number=202 int=1 sip=z";
+		CHECK_EQ(dect_ctl_parse(line, strlen(line), &m), 0);
+		CHECK_EQ(dect_base_ctl_call(&b, &m, 1, 0, &r), 1);
+		CHECK(strstr(event_line, "busy") != NULL);
+		CHECK(strstr(event_line, "in-call") != NULL);
+	}
+
 	/* notifications (S4a) */
 	{
 		dect_base_init(&b);
