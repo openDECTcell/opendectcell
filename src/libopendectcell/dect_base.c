@@ -76,6 +76,7 @@ static void record_wipe(struct dect_base *b, unsigned i)
 	b->last_seen_ms[i] = 0;
 	memset(&b->note[i], 0, sizeof(b->note[i]));
 	b->page_want &= ~(1u << i);
+	b->rec_contacts[i] = NULL;
 	b->name[i][0] = '\0';
 	b->line2[i] = 0;
 	memset(b->line_name[i], 0, sizeof(b->line_name[i]));
@@ -4299,6 +4300,13 @@ void dect_base_main_located(struct dect_base *b)
 	dect_base_missed_locate(b, &bl->link);
 }
 
+void dect_base_record_contacts(struct dect_base *b, unsigned i,
+			       struct dect_contacts *c)
+{
+	if (i < DECT_BASE_HS_MAX)
+		b->rec_contacts[i] = c;
+}
+
 void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
 			 unsigned slot)
 {
@@ -4306,12 +4314,14 @@ void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
 	uint32_t att = slot >= 1u && slot <= 32u ? 1u << (slot - 1u) : 0u;
 	unsigned i;
 
-	iwu->contacts = b->contacts;
-	iwu->calls = b->call_lists;
-	names_filter(b, iwu, slot);
 	for (i = 0; i < b->n_hs; i++)
 		if (dect_base_slot(b, i) == slot)
 			break;
+	/* the record's own Contact List, else the base's */
+	iwu->contacts = slot && i < b->n_hs && b->rec_contacts[i]
+			? b->rec_contacts[i] : b->contacts;
+	iwu->calls = b->call_lists;
+	names_filter(b, iwu, slot);
 	if (!slot || i == b->n_hs)
 		return;
 	dect_iwu_clear_lines(iwu);

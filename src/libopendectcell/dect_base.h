@@ -593,6 +593,8 @@ struct dect_base {
 	struct dect_contacts *contacts;
 	/* the call lists the host keeps, NULL: none (S4a) */
 	struct dect_calls *call_lists;
+	/* record i's own Contact List (a controller: each handset reads its owner's), NULL: contacts above */
+	struct dect_contacts *rec_contacts[DECT_BASE_HS_MAX];
 	/* what each record is due to hear, and what it heard (S4a) */
 	struct dect_base_notice note[DECT_BASE_HS_MAX];
 	/* records with a notice due and no link: to page (bit i) */
@@ -1473,5 +1475,19 @@ void dect_base_tick(struct dect_base *b, uint64_t now, int radio_on);
 /* A log line, printf-style, cut at 1023 octets; nothing without log(). */
 void dect_base_log(struct dect_base *b, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
+
+/*
+ * Give record i a Contact List of its own: the handset that record serves reads
+ * it instead of the base's (dect_base.contacts, which stays for the records that
+ * have none). The host owns c, loads it (dect_contacts_load) and takes what the
+ * handset changes (dect_contacts_take_change); c must outlive the attachment.
+ * c NULL takes it off. A record that is dropped, recycled or wiped lets go of it
+ * by itself, so the host can free c after that. A link that is up keeps what it
+ * had until it adopts a record again or the handset's next link; the handset is
+ * told of a changed list by the list change notice at its next location
+ * registration. No effect on a record that does not exist (i >= DECT_BASE_HS_MAX).
+ */
+void dect_base_record_contacts(struct dect_base *b, unsigned i,
+			       struct dect_contacts *c);
 
 #endif

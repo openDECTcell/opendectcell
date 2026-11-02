@@ -1060,6 +1060,37 @@ int main(void)
 	}
 
 	/*
+	 * A record can have a Contact List of its own: the handset it serves reads
+	 * that one, the others the base's (a controller keeps one per owner).
+	 */
+	{
+		static struct dect_contacts base_list, own_list;
+		struct dect_iwu iwu;
+
+		dect_contacts_init(&base_list);
+		dect_contacts_init(&own_list);
+		dect_base_init(&b);
+		b.n_hs = 2;
+		b.hs[0].slot = 1;
+		b.hs[1].slot = 3;
+		b.cur = 0;
+		b.rec.slot = 1;
+		b.contacts = &base_list;
+		memset(&iwu, 0, sizeof(iwu));
+		dect_base_iwu_lines(&b, &iwu, 3);
+		CHECK(iwu.contacts == &base_list);
+		dect_base_record_contacts(&b, 1, &own_list);
+		dect_base_iwu_lines(&b, &iwu, 3);
+		CHECK(iwu.contacts == &own_list);		/* the record's own */
+		dect_base_iwu_lines(&b, &iwu, 1);
+		CHECK(iwu.contacts == &base_list);		/* another record: the base's */
+		dect_base_record_contacts(&b, 1, NULL);
+		dect_base_iwu_lines(&b, &iwu, 3);
+		CHECK(iwu.contacts == &base_list);
+		dect_base_record_contacts(&b, DECT_BASE_HS_MAX, &own_list);	/* out of range: ignored */
+	}
+
+	/*
 	 * A page response nobody waits for (the call that paged the handset was
 	 * released a moment before; 7412, 2026-11-02) is rejected and its link
 	 * released, not left for the handset's own timers (about two minutes,

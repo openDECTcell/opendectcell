@@ -1086,3 +1086,11 @@ host sets none was `{00, 11, slot}`, which for the record numbers 7 to 32 is a v
 does not hear; it is now `{00, 11, dect_tpui_slot_byte(slot)}`: unchanged for slots 1 to 6, then 0x11
 to 0x16, 0x21 to 0x26, and so on. A host that sets every record's TPUI (a pool) is not affected; its
 pool must pass `dect_tpui_hearable()`. No layout change.
+
+**151.** dect_base.h, 2026-11-02: **a Contact List per record.** `struct dect_base` gains `rec_contacts[]`; new
+`dect_base_record_contacts(b, i, c)`. A controller keeps one phonebook per owner (the user's own contacts and the shared
+ones), not one per base: the handset a record serves now reads the record's list when it has one, else `b->contacts`
+as before (`dect_base_iwu_lines()` picks it, so every link that takes on a record does). The host owns the store, loads it
+with `dect_contacts_load()` and takes what a handset changes with `dect_contacts_take_change()`. A record that is dropped,
+recycled or wiped lets go of the pointer. Layout change; no change for a host that sets none.
+
