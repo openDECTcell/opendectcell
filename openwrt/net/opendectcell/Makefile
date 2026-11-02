@@ -144,6 +144,15 @@ ifdef CONFIG_TARGET_lantiq_xrx200
   OPENDECTCELL_KMOD_ARGS:=OPENDECTCELL_LANTIQ=1
 endif
 
+# A board profile ships with the target it runs on, so a 7520 does not carry the
+# 7412's and the other way round. The 7362 SL's rides in its own package, below.
+ifdef CONFIG_TARGET_ipq40xx
+  OPENDECTCELL_BOARDS:=avm,fritzbox-7530
+endif
+ifdef CONFIG_TARGET_lantiq_xrx200
+  OPENDECTCELL_BOARDS:=avm,fritz7412
+endif
+
 define Build/Compile/baresip
 	$(TARGET_CC) $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) $(TARGET_LDFLAGS) \
 		-std=gnu11 -Wall -Wextra -fPIC -shared -DHAVE_INTTYPES_H \
@@ -192,9 +201,7 @@ define Package/opendectcell/install
 		$(1)/etc/uci-defaults/91-opendectcell-voip
 	$(INSTALL_DIR) $(1)/usr/share/opendectcell/boards
 	$(INSTALL_BIN) ./files/firmware.sh $(1)/usr/share/opendectcell/firmware.sh
-	$(INSTALL_DATA) $(PKG_BUILD_DIR)/boards/avm,fritzbox-7530 \
-		$(PKG_BUILD_DIR)/boards/avm,fritz7412 \
-		$(PKG_BUILD_DIR)/boards/avm,fritz7362sl \
+	$(INSTALL_DATA) $(addprefix $(PKG_BUILD_DIR)/boards/,$(OPENDECTCELL_BOARDS)) \
 		$(1)/usr/share/opendectcell/boards/
 	$(INSTALL_DIR) $(1)/etc/opendectcell/profiles
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/profiles/*.profile \
@@ -218,10 +225,10 @@ define Package/opendectcell-cell/install
 	$(INSTALL_DATA) ./files/opendectcell-cell.keep $(1)/lib/upgrade/keep.d/opendectcell-cell
 endef
 
-# Nothing of its own: the dependencies are the point. A package without an
-# install section is skipped, so it gets the directory openDECTcell makes too.
+# Its board profile, and the dependencies (the point of the package).
 define Package/opendectcell-fritz7362sl/install
-	$(INSTALL_DIR) $(1)/usr/share/opendectcell
+	$(INSTALL_DIR) $(1)/usr/share/opendectcell/boards
+	$(INSTALL_DATA) $(PKG_BUILD_DIR)/boards/avm,fritz7362sl $(1)/usr/share/opendectcell/boards/
 endef
 
 define Package/opendectcell-carddav/install
