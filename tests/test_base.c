@@ -1804,6 +1804,46 @@ int main(void)
 		CHECK(vis_calls > 0);
 	}
 	/*
+	 * The remote directory (API 152): handsets on other bases are entries
+	 * of a link's Internal Names List, filtered like local ones, and they
+	 * come and go on the links that are up.
+	 */
+	{
+		static struct dect_base_ops vops;
+		struct dect_iwu iwu;
+
+		dect_base_init(&b);
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		dect_iwu_init(&iwu);
+		(void)dect_iwu_add_handset(&iwu, 1, "x");
+		dect_iwu_set_own(&iwu, 1);
+		CHECK_EQ(dect_base_remote_set(&b, 5, "low"), -1);	/* not a remote number */
+		CHECK_EQ(dect_base_remote_set(&b, 128, "high"), -1);
+		CHECK_EQ(dect_base_remote_set(&b, 64, "AS690H"), 0);
+		CHECK_EQ(dect_base_remote_set(&b, 65, "Other"), 0);
+		CHECK(dect_base_remote_name(&b, 64) && !strcmp(dect_base_remote_name(&b, 64), "AS690H"));
+		CHECK(dect_base_remote_name(&b, 66) == NULL);
+		dect_base_iwu_lines(&b, &iwu, 1);	/* no name_visible(): all */
+		CHECK_EQ(iwu.n_handsets, 3u);
+		CHECK_EQ(iwu.handsets[1].terminal_id, 64u);
+		vops.name_visible = same_account;	/* viewer 1 sees every remote number */
+		b.ops = &vops;
+		CHECK_EQ(dect_base_remote_set(&b, 3, "x"), -1);
+		b.main_link.active = 1;
+		dect_iwu_init(&b.main_link.link.cc.iwu);
+		dect_iwu_set_own(&b.main_link.link.cc.iwu, 1);
+		CHECK_EQ(dect_base_remote_set(&b, 66, "New"), 0);
+		CHECK_EQ(b.main_link.link.cc.iwu.n_handsets, 1u);	/* reached the live link */
+		CHECK_EQ(b.main_link.link.cc.iwu.handsets[0].terminal_id, 66u);
+		CHECK_EQ(dect_base_remote_set(&b, 66, ""), 0);		/* removed again */
+		CHECK_EQ(b.main_link.link.cc.iwu.n_handsets, 0u);
+		CHECK_EQ(dect_base_remote_set(&b, 64, NULL), 0);
+		CHECK_EQ(b.n_remote, 1u);
+		CHECK_EQ(dect_base_remote_set(&b, 99, NULL), 0);	/* unknown: no-op */
+		CHECK_EQ(b.n_remote, 1u);
+	}
+	/*
 	 * A link that adopts a record fetched after it came up gets that
 	 * record's own entry (API 149): the list built at link-up held the
 	 * free store that was current then.

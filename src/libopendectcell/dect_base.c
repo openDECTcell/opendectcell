@@ -3765,6 +3765,64 @@ static void names_filter(const struct dect_base *b, struct dect_iwu *iwu,
 				iwu, iwu->handsets[i].terminal_id);
 }
 
+/* One remote entry on every active link whose handset may see it, or off the others. */
+static void remote_spread(struct dect_base *b, unsigned id, const char *name)
+{
+	unsigned k;
+
+	for (k = 0; k < 1 + DECT_BASE_SIDES; k++) {
+		struct dect_iwu *iwu;
+
+		if (k ? !b->side[k - 1u].active : !b->main_link.active)
+			continue;
+		iwu = k ? &b->side[k - 1u].link.cc.iwu : &b->main_link.link.cc.iwu;
+		if (name && names_visible(b, iwu->own_terminal_id, id))
+			(void)dect_iwu_add_handset(iwu, (uint8_t)id, name);
+		else
+			(void)dect_iwu_remove_handset(iwu, (uint8_t)id);
+	}
+}
+
+int dect_base_remote_set(struct dect_base *b, unsigned id, const char *name)
+{
+	unsigned r;
+
+	if (id < DECT_BASE_REMOTE_FIRST || id > 127u)
+		return -1;
+	for (r = 0; r < b->n_remote; r++)
+		if (b->remote_id[r] == id)
+			break;
+	if (!name || !*name) {
+		if (r == b->n_remote)
+			return 0;
+		memmove(&b->remote_id[r], &b->remote_id[r + 1u], b->n_remote - r - 1u);
+		memmove(&b->remote_name[r], &b->remote_name[r + 1u],
+			(b->n_remote - r - 1u) * sizeof(b->remote_name[0]));
+		b->n_remote--;
+		remote_spread(b, id, NULL);
+		return 0;
+	}
+	if (r == b->n_remote) {
+		if (b->n_remote >= DECT_BASE_REMOTE_MAX)
+			return -1;
+		b->n_remote++;
+	}
+	b->remote_id[r] = (uint8_t)id;
+	snprintf(b->remote_name[r], sizeof(b->remote_name[r]), "%s", name);
+	remote_spread(b, id, b->remote_name[r]);
+	return 0;
+}
+
+const char *dect_base_remote_name(const struct dect_base *b, unsigned id)
+{
+	unsigned r;
+
+	for (r = 0; r < b->n_remote; r++)
+		if (b->remote_id[r] == id)
+			return b->remote_name[r];
+	return NULL;
+}
+
 void dect_base_names_spread(struct dect_base *b, unsigned i)
 {
 	char name[DECT_IWU_NAME_MAX];
@@ -3787,11 +3845,13 @@ void dect_base_names_spread(struct dect_base *b, unsigned i)
 
 void dect_base_names_refresh(struct dect_base *b)
 {
-	unsigned i;
+	unsigned i, r;
 
 	for (i = 0; i < b->n_hs; i++)
 		if (i == b->cur || b->loaded[i])
 			dect_base_names_spread(b, i);
+	for (r = 0; r < b->n_remote; r++)
+		remote_spread(b, b->remote_id[r], b->remote_name[r]);
 	dect_base_names_notify(b);
 }
 
@@ -4312,7 +4372,7 @@ void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
 {
 	const char *def = b->cfg.line_name ? b->cfg.line_name : "Line 1";
 	uint32_t att = slot >= 1u && slot <= 32u ? 1u << (slot - 1u) : 0u;
-	unsigned i;
+	unsigned i, r;
 
 	for (i = 0; i < b->n_hs; i++)
 		if (dect_base_slot(b, i) == slot)
@@ -4321,6 +4381,8 @@ void dect_base_iwu_lines(const struct dect_base *b, struct dect_iwu *iwu,
 	iwu->contacts = slot && i < b->n_hs && b->rec_contacts[i]
 			? b->rec_contacts[i] : b->contacts;
 	iwu->calls = b->call_lists;
+	for (r = 0; r < b->n_remote; r++)
+		(void)dect_iwu_add_handset(iwu, b->remote_id[r], b->remote_name[r]);
 	names_filter(b, iwu, slot);
 	if (!slot || i == b->n_hs)
 		return;

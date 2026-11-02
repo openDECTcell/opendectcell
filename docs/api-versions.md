@@ -1094,3 +1094,11 @@ as before (`dect_base_iwu_lines()` picks it, so every link that takes on a recor
 with `dect_contacts_load()` and takes what a handset changes with `dect_contacts_take_change()`. A record that is dropped,
 recycled or wiped lets go of the pointer. Layout change; no change for a host that sets none.
 
+**152.** dect_base.h, 2026-11-02: **a remote directory.** `struct dect_base` gains `remote_id[]`, `remote_name[][]`, `n_remote`;
+new `dect_base_remote_set(b, id, name)`, `dect_base_remote_name(b, id)`, `DECT_BASE_REMOTE_MAX` (32) and
+`DECT_BASE_REMOTE_FIRST` (64). In a multi-cell controller a handset's account has handsets on other bases; the Internal
+Names List (INT key) was built from this base's records only, so a handset on one cell did not see its account's other
+handsets on another. The host now gives each such handset a number 64..127 (never a record's slot) and a name; the entry is
+on every link's list as any local entry, filtered by `name_visible(viewer, id)`, and `dect_base_names_refresh()` re-spreads
+and tells the handsets. The entry is a name only: a call to it is the host's to route (the library has no peer for it).
+Layout change; no change for a host that sets none.

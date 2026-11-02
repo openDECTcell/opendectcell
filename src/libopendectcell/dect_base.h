@@ -76,6 +76,9 @@ struct dect_hs_rec {
  * current record when the stack says it changed.
  */
 #define DECT_BASE_HS_MAX	DECT_HS_MAX
+/* remote directory entries (API 152): numbers DECT_BASE_REMOTE_FIRST..127 */
+#define DECT_BASE_REMOTE_MAX	32u
+#define DECT_BASE_REMOTE_FIRST	64u
 /*
  * The base's one line, as the line list (TS 102 527-3 7.4.11) names it; a
  * <<CALL-INFORMATION>> line identifier must name the same line (bench 21c:
@@ -595,6 +598,10 @@ struct dect_base {
 	struct dect_calls *call_lists;
 	/* record i's own Contact List (a controller: each handset reads its owner's), NULL: contacts above */
 	struct dect_contacts *rec_contacts[DECT_BASE_HS_MAX];
+	/* handsets of this account that are on other bases: Internal Names entries only (API 152) */
+	uint8_t  remote_id[DECT_BASE_REMOTE_MAX];
+	char     remote_name[DECT_BASE_REMOTE_MAX][DECT_IWU_NAME_MAX];
+	unsigned n_remote;
 	/* what each record is due to hear, and what it heard (S4a) */
 	struct dect_base_notice note[DECT_BASE_HS_MAX];
 	/* records with a notice due and no link: to page (bit i) */
@@ -1321,6 +1328,18 @@ void dect_base_iwu_adopted(const struct dect_base *b, struct dect_iwu *iwu,
  * the others, and the handsets are told.
  */
 void dect_base_names_refresh(struct dect_base *b);
+/*
+ * The remote directory (API 152): a handset of the same account that is on
+ * another base still belongs in a handset's Internal Names List. The host
+ * gives it a number `id` (DECT_BASE_REMOTE_FIRST..127, never a record's slot)
+ * and a name; name_visible(viewer, id) filters it like a local entry. An
+ * empty or NULL name removes the entry. Returns 0, or -1 for a bad number or
+ * a full directory. The links' lists change at once; tell the handsets with
+ * dect_base_names_refresh() after the last change. dect_base_remote_name()
+ * returns the name for a number, NULL if none.
+ */
+int dect_base_remote_set(struct dect_base *b, unsigned id, const char *name);
+const char *dect_base_remote_name(const struct dect_base *b, unsigned id);
 /*
  * A page response on link p (-1 the main link) from record i, which we
  * paged without a call: if it carries that handset's identity, the link
