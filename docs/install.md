@@ -204,7 +204,9 @@ uci set opendectcell.main.sip_any_source=1; uci commit opendectcell
 ## Upgrading and removing
 
 A newer release installs the same way, over the old one; your settings in
-`/etc/config/opendectcell` stay. `apk del opendectcell-baresip luci-app-opendectcell openDECTcell
+`/etc/config/opendectcell` stay. A sysupgrade (a new OpenWrt image) keeps the chip firmware, the handset stores
+and, on a cell, its enrolment (`/etc/opendectcell/cell/`), because the packages list them in
+`/lib/upgrade/keep.d/`. `apk del opendectcell-baresip luci-app-opendectcell openDECTcell
 kmod-opendectcell-ipq40xx` removes everything again.
 
 ## When something doesn't work

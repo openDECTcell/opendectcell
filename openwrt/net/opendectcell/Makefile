@@ -208,9 +208,14 @@ define Package/opendectcell-baresip/install
 endef
 
 $(eval $(call BuildPackage,opendectcell))
+# The cell's key, certificate, CA and enrolment live in /etc/opendectcell/cell/: a
+# sysupgrade has to keep them, or every cell needs a new enrolment (a site
+# visit) after a firmware upgrade.
 define Package/opendectcell-cell/install
 	$(INSTALL_DIR) $(1)/usr/sbin
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/build/dect-cell $(1)/usr/sbin/
+	$(INSTALL_DIR) $(1)/lib/upgrade/keep.d
+	$(INSTALL_DATA) ./files/opendectcell-cell.keep $(1)/lib/upgrade/keep.d/opendectcell-cell
 endef
 
 # Nothing of its own: the dependencies are the point. A package without an

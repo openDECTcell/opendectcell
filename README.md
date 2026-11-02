@@ -79,6 +79,16 @@ Python 3, and an official FRITZ!OS image for your box from AVM.
 
 The step-by-step guide, including the command line: **[docs/install.md](docs/install.md)**.
 
+### More than one box, or more than six handsets: a controller
+
+A box can also be a **cell** of a [openDECTcell controller](https://github.com/openDECTcell/opendectcell-controller): a
+server (Docker) that runs the DECT stack, the SIP accounts and a web interface for many boxes, so that handsets
+**roam** between them and you can have many handsets. Install the `opendectcell-cell` package, enrol the box with a
+one-time string from the controller (Network > DECT, *Make this box a cell…*), and register handsets at the
+controller. The full guide, from the controller's Docker setup to the first call and from roaming to
+troubleshooting, is the controller's wiki:
+**[docs/wiki/Quick-start.md](https://github.com/openDECTcell/opendectcell-controller/blob/main/docs/wiki/Quick-start.md)**.
+
 ## How it works
 
 ```mermaid
@@ -114,7 +124,8 @@ AVM's closed kernel module. openDECTcell replaces that part:
   [baresip](https://github.com/baresip/baresip).
 - **`luci-app-opendectcell`** is the web interface.
 
-More: [the documentation](docs/README.md).
+More: [the documentation](docs/README.md), and for cells and a controller
+[the wiki](https://github.com/openDECTcell/opendectcell-controller/blob/main/docs/wiki/Home.md).
 
 ## Building from source
 
