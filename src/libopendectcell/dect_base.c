@@ -4997,6 +4997,13 @@ int dect_base_side_start(struct dect_base *b, uint8_t handle)
 	 */
 	mcfg.registration = DECT_MM_REG_CLOSED;
 	/*
+	 * A handset that locates here while a call holds the main link still
+	 * has to be told when to register again; without the duration it
+	 * never did (7412, 2026-11-02: the AS690H's one locate during a call
+	 * was its last).
+	 */
+	mcfg.locate_validity = (uint8_t)b->cfg.locate_validity;
+	/*
 	 * Every handset we hold, the current one included; strangers meet
 	 * the gates as usual. A roamer only once fetched.
 	 */

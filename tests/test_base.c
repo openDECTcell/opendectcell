@@ -1601,8 +1601,10 @@ int main(void)
 		CHECK_EQ(sent[1].prim, 0x022C);
 		b.main_link.active = 1;
 		b.main_link.handle = 1;
+		b.cfg.locate_validity = 6;
 		CHECK_EQ(dect_base_side_start(&b, 2), 0);
 		CHECK_EQ(b.side[0].active, 1);
+		CHECK_EQ(b.side[0].link.mm.cfg.locate_validity, 6);	/* told to register again */
 		CHECK_EQ(b.side[0].adopted, -1);
 		CHECK_EQ(dect_base_side_start(&b, 2), 0);	/* repeated */
 		CHECK_EQ(dect_base_side_start(&b, 3), 1);
