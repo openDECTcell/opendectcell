@@ -1,20 +1,19 @@
 # More than six handsets on stand-by in one base
 
-> **Correction, 2026-11-02 (bench with the controller, the A540 on the 7412 and the
-> lab 7520).** "A standby handset needs nothing from the chip" holds for **08.25**
-> only. On the 7412's **06.88** a handset's own accesses (a call, the answer to a
-> page) reach the host only when the handset sits in a chip slot **and** has the
-> slot's own TPUI `{00 11 n}`: slotless, or in a slot under a pool TPUI, the
-> handset locates fine and is then deaf (pages unanswered at +3 s to +7 min, no
-> `0x0200` for a dial); in a slot under `{00 11 02}` every page was answered, also
-> 10 minutes after the last contact. The 7520 (08.25) answered a slotless handset
-> under a pool TPUI 600 s after its last contact. No decay on either up to 10
-> minutes (the room's A-0146 to A-0149 said otherwise and were retracted in A-0154,
-> A-0155). The T-B and block E passes on 06.88 above had handsets that enrolled on
-> that chip; why they answered under `11 42`/`11 43` is not explained. So the
-> "host cache over six slots" is a 08.25 design; a 06.88 cell holds at most six
-> reachable handsets, in slots. The controller's cell is "resident" for 06.88
-> (`opendectcell-controller` `chipNeedsSlots`, worklog 2026-11-02).
+> **Correction, 2026-11-02 (second, supersedes the first of the same day).** On the
+> 7412's **06.88** a handset's own accesses (a call, the answer to a page) are routed by
+> the **low three bits of its TPUI's last byte** and heard only for 1 to 6; the chip
+> needs **no slot** for a stand-by handset and compares no identity (room A-0157, static;
+> bench with the controller: the A540 slotless answered pages with nothing installed
+> in the chip). A byte with bit 3 set is not heard either (`3d`, `0d`, `19` never; `11`,
+> `16`, `25`, `35`, `f1`, `42`, `43` answered), slot 7 is not heard, the high nibble is free.
+> The A540's old pool TPUI `11 3d` was the whole 7412 problem (the first correction of the
+> day blamed a missing slot, wrongly). So the host cache works on 06.88 too, with TPUIs
+> `{00, 11, N}` of N >= 0x10 and a low nibble 1 to 6: 90 in all. Open: the chip keeps one
+> record and one lane per class (low three bits), so two handsets of one class cannot hold
+> links at the same time; a locate by one while the other is in a call is untested. On
+> 08.25 (the 7520) any TPUI works (FMID fallback; its stored identity compare is the
+> opposite design). No decay on either build up to 60 minutes.
 
 Status: design and test plan, 2026-10-31. Nothing here is built. Written
 from our own notes (`capacity.md`, `multicell-experiments.md`,
