@@ -4512,6 +4512,28 @@ static int main_ring_swap(struct dect_base *b, const struct dect_link_ind *ind,
 	return 1;
 }
 
+/*
+ * Answer a page response nobody wants with {LCE-PAGE-REJECT} and release the
+ * link; the handset waits for a CC-SETUP and would otherwise hold the link
+ * for about two minutes. Returns 1 when the reject and the release went out.
+ */
+static int page_response_reject(struct dect_base *b, struct dect_base_link *bl,
+				const struct dect_link_ind *ind, uint64_t now)
+{
+	int rejected = dect_link_page_reject(&bl->link, ind->page_id,
+					     ind->page_id_len,
+					     ind->page_ti) == 0;
+
+	if (rejected) {
+		dect_link_drain(&bl->link, now);
+		rejected = !bl->link.lce_len;
+	}
+	if (rejected)
+		dect_lapc_disconnect(&bl->link.lapc);
+	pump(b, bl);
+	return rejected;
+}
+
 /* A call of the bridge still pages its handset (a side ring). */
 static int any_call_paging(const struct dect_base *b)
 {
@@ -4556,17 +4578,8 @@ void dect_base_main_page_response(struct dect_base *b,
 	if (ind->page_response && b->ring.state == DECT_BASE_RING_WAIT_PAGE_RESP &&
 	    tgt_len && (ind->page_id_len != tgt_len ||
 			memcmp(ind->page_id, tgt, tgt_len) != 0)) {
-		int rejected = dect_link_page_reject(&bl->link, ind->page_id,
-						     ind->page_id_len,
-						     ind->page_ti) == 0;
+		int rejected = page_response_reject(b, bl, ind, now);
 
-		if (rejected) {
-			dect_link_drain(&bl->link, now);
-			rejected = !bl->link.lce_len;
-		}
-		if (rejected)
-			dect_lapc_disconnect(&bl->link.lapc);
-		pump(b, bl);
 		dect_base_log(b, "ring: page response from a handset we did not "
 			      "page (identity differs) -- %s, still waiting",
 			      rejected ? "LCE-PAGE-REJECT sent, link released"
@@ -4598,17 +4611,8 @@ void dect_base_main_page_response(struct dect_base *b,
 	 */
 	if (ind->page_response && dect_base_main_free(b) &&
 	    b->ic.st == DECT_BASE_IC_IDLE && !any_call_paging(b)) {
-		int rejected = dect_link_page_reject(&bl->link, ind->page_id,
-						     ind->page_id_len,
-						     ind->page_ti) == 0;
+		int rejected = page_response_reject(b, bl, ind, now);
 
-		if (rejected) {
-			dect_link_drain(&bl->link, now);
-			rejected = !bl->link.lce_len;
-		}
-		if (rejected)
-			dect_lapc_disconnect(&bl->link.lapc);
-		pump(b, bl);
 		dect_base_log(b, "ring: page response and no ring waiting for "
 			      "it -- %s",
 			      rejected ? "LCE-PAGE-REJECT sent, link released"
@@ -5488,10 +5492,16 @@ static void side_mail(struct dect_base *b, unsigned k,
 		return;
 	if (ind.page_response && dect_base_side_promote(b, k, &ind, now))
 		return;
-	if (ind.page_response)
+	if (ind.page_response) {
+		/* nobody waits for it: the handset would hold the link */
+		int rejected = page_response_reject(b, sl, &ind, now);
+
 		dect_base_log(b, "side: page response on handle %u while the main "
-			      "link is busy -- not ours to ring here, ignored",
-			      sl->handle);
+			      "link is busy -- not ours to ring here, %s",
+			      sl->handle, rejected ? "rejected and the link "
+			      "released" : "could not reject it, ignored");
+		return;
+	}
 	pump(b, sl);
 }
 

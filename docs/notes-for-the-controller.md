@@ -1060,6 +1060,19 @@ above 6 take the normal path. Keep pool values at N of 7 or more, as the
 bench did, until it is shown otherwise. That is also why your pool must not
 hand out `11 01`..`11 06`.
 
+**Superseded 2026-11-02 (API 150): which TPUIs a 06.88 chip hears.** The 7412's chip finds
+a handset's own access (a call, the answer to a page) by the low nibble of the TPUI's last
+byte N and hears only 1 to 6; it needs no chip slot and compares no identity. `dect_tpui_hearable()`
+says it. A pool for a controller with 7412 cells is therefore `{00, 11, N}` with N from 0x10 and a
+low nibble of 1 to 6 (90 values; `11 01`..`11 06` stay the chip's own). The bench saw 11, 16, 25,
+35, f1 answered and 3d, 0d, 17, 19 never. The 7520's chip hears any TPUI. The pool must be unique
+among the handsets in one cell's table, not across the host: a handset that locates on a cell
+where another holds its TPUI is given a new one in the location accept (it takes it at once). Two
+handsets whose TPUIs share the low nibble (a slot class) are both heard but share one lane on
+the 06.88 chip: only one can hold a link at a time, and a page response that nobody waits for is
+rejected and its link released (API 150 build). The default TPUI of a record the host sets none
+for is now hearable for every record number.
+
 ## API 142: a callback for a rejected registration attempt (your #83) `[2026-10-31, evening]`
 
 `dect_base_ops.registration_rejected(ctx, pin, expected)` (optional; openDECTcell

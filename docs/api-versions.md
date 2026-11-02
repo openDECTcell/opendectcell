@@ -1076,3 +1076,13 @@ came up (a roaming handset of a controller with `defer_unknown`) had no entry, i
 own name missing, and the list still held the free store that was current at link-up. A host that
 set the own terminal itself after an adoption (`dect_iwu_set_own` then `dect_base_iwu_lines`) should
 call this instead. No layout change.
+
+**150.** dect_mm.h, 2026-11-02: **the TPUI a 06.88 chip hears.** New `dect_tpui_hearable(tpui[3])` and
+`dect_tpui_slot_byte(slot)`. The 7412's chip routes a handset's own access (a call, the answer to a
+page) by the low nibble of the TPUI's last byte and hears only 1 to 6 (bench 2026-11-02, clean-room
+A-0158; 02, 11, 16, 25, 35, 42, 43, f1 answered, 0d, 17, 19, 3d never; it needs no chip slot and
+compares no identity); the 7520's chip hears any. **Behaviour change:** the TPUI a record gets when the
+host sets none was `{00, 11, slot}`, which for the record numbers 7 to 32 is a value the 06.88 chip
+does not hear; it is now `{00, 11, dect_tpui_slot_byte(slot)}`: unchanged for slots 1 to 6, then 0x11
+to 0x16, 0x21 to 0x26, and so on. A host that sets every record's TPUI (a pool) is not affected; its
+pool must pass `dect_tpui_hearable()`. No layout change.

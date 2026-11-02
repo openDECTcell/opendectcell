@@ -1472,6 +1472,51 @@ static void test_sub_slot_drives_the_tpui(void)
 	dect_mm_tpui(&mm, id);
 	CHECK_EQ(id[1], 0x22u);
 	CHECK_EQ(id[2], 0x07u);
+
+	/*
+	 * The default TPUI of every record number is one the 06.88 chip hears
+	 * (low nibble 1 to 6), unique per record, and for slots 1 to 6 still
+	 * {00, 11, slot}. Records 7 to 32 used to get {00, 11, 7..0x20}, which
+	 * it does not hear (7412, 2026-11-02).
+	 */
+	{
+		uint8_t seen[256] = { 0 };
+		unsigned k;
+
+		for (k = 1; k <= DECT_HS_MAX; k++) {
+			memset(&cfg, 0, sizeof(cfg));
+			cfg.sub_slot = (uint8_t)k;
+			dect_mm_init(&mm, &cfg);
+			dect_mm_tpui(&mm, id);
+			CHECK_EQ(id[1], 0x11u);
+			CHECK(dect_tpui_hearable(id));
+			CHECK_EQ(seen[id[2]], 0);
+			seen[id[2]] = 1;
+			if (k <= DECT_MM_MAX_SLOT)
+				CHECK_EQ(id[2], k);
+		}
+		CHECK_EQ(dect_tpui_slot_byte(7), 0x11u);
+		CHECK_EQ(dect_tpui_slot_byte(12), 0x16u);
+		CHECK_EQ(dect_tpui_slot_byte(13), 0x21u);
+	}
+}
+
+/* The bytes the 06.88 chip hears, from the bench of 2026-11-02. */
+static void test_tpui_hearable(void)
+{
+	static const uint8_t heard[] = { 0x01, 0x02, 0x06, 0x11, 0x16, 0x25, 0x35, 0x42, 0x43, 0xf1 };
+	static const uint8_t deaf[] = { 0x00, 0x07, 0x08, 0x0d, 0x0f, 0x17, 0x19, 0x3d, 0xf0, 0xff };
+	uint8_t t[3] = { 0x00, 0x11, 0 };
+	size_t i;
+
+	for (i = 0; i < sizeof(heard); i++) {
+		t[2] = heard[i];
+		CHECK(dect_tpui_hearable(t));
+	}
+	for (i = 0; i < sizeof(deaf); i++) {
+		t[2] = deaf[i];
+		CHECK(!dect_tpui_hearable(t));
+	}
 }
 
 /*
@@ -1989,6 +2034,7 @@ static void test_register_assigns_an_identity(void)
 
 int main(void)
 {
+	test_tpui_hearable();
 	test_ipei_text();
 	test_mm_transaction_rules();
 	test_access_request_without_identity_is_rejected();

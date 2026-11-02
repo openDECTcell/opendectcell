@@ -668,6 +668,25 @@ uint8_t dect_mm_sub_slot(const struct dect_mm *mm)
 	return slot;
 }
 
+int dect_tpui_hearable(const uint8_t tpui[3])
+{
+	const uint8_t lo = tpui[2] & 0x0fu;
+
+	return lo >= 1u && lo <= 6u;
+}
+
+/*
+ * Slots 1 to 6 keep {00, 11, slot}; the records above them (host-only, 7 to
+ * 32) take 0x11 to 0x16, 0x21 to 0x26, ... so that the 06.88 chip hears them
+ * too. Up to now they got {00, 11, slot}, 07 to 20 hex, which it does not.
+ */
+uint8_t dect_tpui_slot_byte(unsigned slot)
+{
+	const unsigned n = slot ? slot - 1u : 0u;
+
+	return (uint8_t)(((n / 6u) << 4) | (n % 6u + 1u));
+}
+
 void dect_mm_tpui(const struct dect_mm *mm, uint8_t out[3])
 {
 	const uint8_t *t = mm->cfg.tpui;
@@ -676,9 +695,9 @@ void dect_mm_tpui(const struct dect_mm *mm, uint8_t out[3])
 		out[0] = t[0]; out[1] = t[1]; out[2] = t[2];
 		return;
 	}
-	out[0] = 0x00;			/* historical: derived from the slot */
+	out[0] = 0x00;			/* derived from the slot, always hearable */
 	out[1] = TPUI_PREFIX;
-	out[2] = dect_mm_sub_slot(mm);
+	out[2] = dect_tpui_slot_byte(dect_mm_sub_slot(mm));
 }
 
 static void send_locate_accept(struct dect_mm *mm, const uint8_t *la, size_t la_len)

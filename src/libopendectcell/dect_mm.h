@@ -461,6 +461,23 @@ size_t dect_mm_fixed_identity(const struct dect_mm *mm, uint8_t *out,
 void dect_mm_tpui(const struct dect_mm *mm, uint8_t out[3]);
 
 /*
+ * Whether a handset holding this TPUI is heard: the 06.88 chip (the 7412)
+ * routes a handset's own access (a call, the answer to a page) by the low
+ * nibble of the TPUI's last byte and hears only 1 to 6. 0, 7 and 8 to 15 are
+ * never heard, whatever else is installed (bench 2026-11-02: 02, 11, 16, 25,
+ * 35, 42, 43, f1 answered; 0d, 17, 19, 3d never; clean-room A-0158). The
+ * 08.25 chip (the 7520) hears any, so a TPUI that passes this is right for
+ * both. Page TPUIs for a pool must also keep the middle byte 0x11.
+ */
+int dect_tpui_hearable(const uint8_t tpui[3]);
+
+/*
+ * The last byte of the TPUI {00, 11, N} a record gets when the host sets none:
+ * 1 to 6 for slots 1 to 6, then 0x11 to 0x16, 0x21 to 0x26, ... (always
+ * hearable, one per record number). */
+uint8_t dect_tpui_slot_byte(unsigned slot);
+
+/*
  * Run the MM timers: <MM_ident.1>, <MM_key.1>, <MM_auth.1>, <MM_cipher.1>
  * and <MM_access.2> (EN 300 175-5 A.5). Each starts on the first tick after
  * its procedure begins, so call it every loop pass.
