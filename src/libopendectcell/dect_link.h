@@ -80,6 +80,16 @@ struct dect_link {
 	uint8_t  held[DECT_LINK_HELD][DECT_LAPC_MSG_MAX];
 	size_t   held_len[DECT_LINK_HELD];
 	unsigned held_n;
+	/*
+	 * auth_required (set by the host when it opens the link, with auth_first): list access is not
+	 * served before the handset has proved its key. An IPUI is not secret, so a peer that knows one
+	 * could otherwise read and change the phonebook and the call lists while the base's authentication
+	 * request goes unanswered. The handset's {CC-IWU-INFO} is held, one message, and handled when
+	 * mm.authenticated is set (dect_link_tick); it is dropped when the call ends first.
+	 */
+	uint8_t  auth_required;
+	uint8_t  iwu_held[DECT_LAPC_MSG_MAX];
+	size_t   iwu_held_len;
 	uint32_t lce_bad_ti;		/* LCE messages ignored: F = 1 or TV != 0 */
 	/*
 	 * Optional: may the handset with this IPUI get call status? Asked

@@ -25,8 +25,8 @@ interface.
   profiles*), for a provider or your own telephone system; several handsets
   can share one, and a call to it rings them all.
 - **Up to three calls at once**, over SIP or between handsets.
-- **HD voice and encryption:** wideband G.722 audio, encrypted on the air by
-  default.
+- **HD voice and encryption:** wideband G.722 audio, ciphered on the air with
+  the DECT standard cipher when the handset supports it (DECT's cipher is weak).
 - **Caller ID and line names** on the handset display.
 - **Calls between handsets** on the same box.
 - **A web interface for everything:** settings, handsets and VoIP profiles

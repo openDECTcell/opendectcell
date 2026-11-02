@@ -21,6 +21,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <ctype.h>
 #include <errno.h>
+#include <sys/random.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <poll.h>
@@ -2592,19 +2593,28 @@ static void tear_down(struct stubd *s)
 
 /* ---- GAP registration: drive the host C-plane stack over the STUB ---- */
 
-/* Fill buf with n random bytes (urandom, with a weak clock fallback). */
+/*
+ * Fill buf with n random bytes from the kernel. RAND_F, RS and the base's challenges come from here: if the
+ * kernel cannot give random numbers the daemon stops rather than hand out guessable ones (security review
+ * 2026-11-02, L-1: it used to fall back to a clock-seeded generator without a word).
+ */
 static void gen_rand(struct stubd *s, uint8_t *buf, size_t n)
 {
+	size_t got = 0;
+
+	/* the file the daemon opened (/dev/urandom; the tests' fixed bytes) first, then the kernel's call */
 	if (s->rand_fd >= 0 && read(s->rand_fd, buf, n) == (ssize_t)n)
 		return;
-	{
-		uint64_t x = mono_ms() * 0x9E3779B97F4A7C15ull;
-		size_t i;
+	while (got < n) {
+		ssize_t r = getrandom(buf + got, n - got, 0);
 
-		for (i = 0; i < n; i++) {
-			x ^= x >> 29; x *= 0xBF58476D1CE4E5B9ull; x ^= x >> 32;
-			buf[i] = (uint8_t)x;
+		if (r < 0 && errno == EINTR)
+			continue;
+		if (r <= 0) {
+			fprintf(stderr, "dect-stubd: no random numbers (%s); stopping\n", strerror(errno));
+			_exit(70);
 		}
+		got += (size_t)r;
 	}
 }
 

@@ -178,6 +178,19 @@ int dect_link_send_ciss(struct dect_link *l, const uint8_t *msg, size_t len)
 
 void dect_link_tick(struct dect_link *l, uint64_t now)
 {
+	if (l->iwu_held_len) {
+		if (!dect_cc_busy(&l->cc)) {
+			l->iwu_held_len = 0;		/* the call ended before the proof came */
+		} else if (l->mm.authenticated) {
+			uint8_t msg[DECT_LAPC_MSG_MAX];
+			size_t n = l->iwu_held_len;
+
+			memcpy(msg, l->iwu_held, n);
+			l->iwu_held_len = 0;
+			dect_cc_set_gate(&l->cc, l->mm.port_id, l->mm.port_id_len);
+			dect_cc_rx(&l->cc, msg, n);
+		}
+	}
 	dect_lapc_tick(&l->lapc, now);
 	dect_cc_tick(&l->cc, now);
 	dect_mm_tick(&l->mm, now);
@@ -314,6 +327,14 @@ static void rx_cc(struct dect_link *l, const struct dect_nwk_hdr *h,
 	if (h->msg_type == DECT_CC_SETUP &&
 	    rx_cc_setup(l, h, ies, ies_len, ind->nwk, ind->nwk_len))
 		return;
+	if (h->msg_type == DECT_CC_IWU_INFO && l->auth_required && !l->mm.authenticated) {
+		/* list access waits for the handset's proof (auth_required); a second request while one waits is dropped */
+		if (!l->iwu_held_len && ind->nwk_len <= sizeof(l->iwu_held)) {
+			memcpy(l->iwu_held, ind->nwk, ind->nwk_len);
+			l->iwu_held_len = ind->nwk_len;
+		}
+		return;
+	}
 	dect_cc_set_gate(&l->cc, l->mm.port_id, l->mm.port_id_len);
 	dect_cc_rx(&l->cc, ind->nwk, ind->nwk_len);
 	/*

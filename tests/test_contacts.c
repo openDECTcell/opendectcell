@@ -61,6 +61,10 @@ static void test_fold_order(void)
 	CHECK_EQ(dect_contacts_fold_cmp("Smith", "smith"), 0);
 	CHECK_EQ(dect_contacts_fold_cmp("Ärger", "arger"), 0);
 	CHECK_EQ(dect_contacts_fold_cmp("Straße", "STRASSE"), 0);
+	/* code points above U+00FF are kept as they are; the Latin-1 table is not read past its end (U+0532, U+07FF) */
+	CHECK(dect_contacts_fold_cmp("a", "\xD4\xB2") != 0);
+	CHECK(dect_contacts_fold_cmp("\xD4\xB2", "\xD4\xB2") == 0);
+	CHECK(dect_contacts_fold_cmp("\xDF\xBF", "z") != 0);
 	CHECK(dect_contacts_fold_cmp("Alexander", "BORDONADO") < 0);
 	CHECK(dect_contacts_fold_cmp("Müller", "Mueller") > 0);	/* u > e */
 	CHECK(dect_contacts_fold_cmp("Sm", "Smith") < 0);

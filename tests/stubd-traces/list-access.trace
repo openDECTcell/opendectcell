@@ -33,6 +33,15 @@ mail fff1 07 4b 95 00 00 11 00
 mail fff1 07 5c 95 00 00 11 00
 mail fff1 07 6d 95 00 00 11 00
 mail fff1 07 18 95 00 00 11 00
+# List access is served only to a handset that has proved its key (security review 2026-11-02, H-1):
+# the handset answers the base's authentication request, RES1 for the made-up UAK and this RAND_F and RS.
+pp 85 41 0d 04 87 f4 da aa
+fp 05 4c 19 02 81 98
+mail 0208 01 02 10 57 29 9e c1 af 71 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ff ff 00 00
+tick 200
+chip 0209 01
+tick 200
+mail fff1 07 18 95 00 00 11 00
 # {CC-IWU-INFO} <<IWU-TO-IWU>>: start session on list 00
 pp 03 60 77 04 c3 00 00 00
 fp 83 60 77 0a c3 01 00 81 81 00 00 00 ff 00
@@ -42,7 +51,6 @@ pp 03 60 77 07 c3 06 81 81 01 00 01
 fp 83 60 77 05 c3 07 81 81 01
 fp 83 60 77 11 c3 14 81 81 8c 01 8a 80 00 01 02 03 04 06 07 08 09
 tick 200
-mail fff1 07 18 95 00 00 11 00
 # end session 1
 pp 03 60 77 03 c3 02 81
 fp 83 60 77 03 c3 03 81

@@ -200,19 +200,21 @@ function http(method, url, headers, body) {
 
 	for (let hops = 0; hops < 4; hops++) {
 		let h = { ...(headers || {}) };
+		// the credentials go to the configured server only, never to a host a redirect or an href names
+		let home = origin(url) == origin(cfg.url);
 
-		if (cfg.auth)
+		if (cfg.auth && home)
 			h['Authorization'] = 'Basic ' + b64enc(cfg.auth);
 		r = attempt(method, url, h, body, false);
-		if (r.status == 401 && cfg.auth)
+		if (r.status == 401 && cfg.auth && home)
 			r = attempt(method, url, headers || {}, body, true);
 		r.url = url;
 		let to = r.headers.location;
 		if (index([ 301, 302, 303, 307, 308 ], r.status) < 0 || !to)
 			break;
 		to = absolute(url, to);
-		if (index(to, 'https://') != 0)
-			break;
+		if (index(to, 'https://') != 0 || origin(to) != origin(cfg.url))
+			break;	// not followed: another host gets no request of ours
 		url = to;
 	}
 	return r;

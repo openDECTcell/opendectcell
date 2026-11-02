@@ -909,6 +909,33 @@ int main(void)
 		CHECK_EQ(dect_base_call_out(&b, -1, 0), 0);	/* no bridge */
 	}
 
+	/* a dialled string with a character that is not a key never reaches the bridge (security review M-3) */
+	{
+		struct dect_cc *cc;
+		struct dect_mm_cfg mc;
+		static const char good[] = "0301234*#+";
+		static const char evil[] = "100@other.example";
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.bridge = 1;
+		memset(&mc, 0, sizeof(mc));
+		dect_link_init(&b.main_link.link, 1, &mc);
+		b.main_link.active = 1;
+		cc = &b.main_link.link.cc;
+		cc->state = DECT_CC_ST_PROCEEDING;
+		memcpy(cc->keypad, evil, sizeof(evil) - 1);
+		cc->keypad_len = sizeof(evil) - 1;
+		event_line[0] = '\0';
+		CHECK_EQ(dect_base_call_out(&b, -1, 0), 1);	/* answered: refused */
+		CHECK_EQ(event_line[0], '\0');			/* no call-out went out */
+		memcpy(cc->keypad, good, sizeof(good) - 1);
+		cc->keypad_len = sizeof(good) - 1;
+		cc->state = DECT_CC_ST_PROCEEDING;
+		CHECK_EQ(dect_base_call_out(&b, -1, 0), 1);
+		CHECK(strstr(event_line, "call-out") != NULL);
+	}
+
 	/* a handset's number (S3p) */
 	{
 		struct dect_cc cc;

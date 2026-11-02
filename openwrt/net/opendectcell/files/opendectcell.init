@@ -219,8 +219,8 @@ load_chip() {
 	/usr/sbin/dect-fwload --uart "$tty" --dect-dev /dev/dect0 \
 		--first "$dir/$first" --second "$dir/$second" --mode "$mode" \
 		$extra \
-		>/tmp/dect-fwload.log 2>&1 || {
-		log "chip firmware upload failed, see /tmp/dect-fwload.log"
+		>/var/run/opendectcell/dect-fwload.log 2>&1 || {
+		log "chip firmware upload failed, see /var/run/opendectcell/dect-fwload.log"
 		rm -f /var/run/opendectcell/stub.second
 		return 1
 	}
@@ -237,7 +237,7 @@ warm_chip() {
 	log "chip freshly uploaded: one short run to warm it"
 	# shellcheck disable=SC2086
 	$PROG $PCM_ARGS -M "0x22:0x02:0x022c:01" -M "0x22:0x02:0x015b:00" -t 6 \
-		>/tmp/dect-warm.log 2>&1
+		>/var/run/opendectcell/dect-warm.log 2>&1
 }
 
 # The chip's reset line in /sys/class/gpio: the board profile's GPIO chip

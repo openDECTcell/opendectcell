@@ -574,6 +574,7 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 	bl->enrol_switched = 0;
 	bl->handle = handle;
 	dect_link_init(&bl->link, handle, cfg);
+	bl->link.auth_required = b->cfg.auth_first && !b->cfg.no_cipher;
 	if (b->rec.port_id_len) {
 		memcpy(mm->port_id, b->rec.port_id, b->rec.port_id_len);
 		mm->port_id_len = b->rec.port_id_len;
@@ -1535,6 +1536,18 @@ int dect_base_call_out(struct dect_base *b, int p, uint64_t now)
 	if (len)
 		memcpy(num, k, len);
 	num[len] = '\0';
+	/*
+	 * The number goes on to a SIP URI. A handset's keypad octets are whatever it sent: accept dialling
+	 * characters only, so a string like "100@other.example" or one with URI parameters never reaches the
+	 * bridge (security review 2026-11-02, M-3).
+	 */
+	for (size_t j = 0; j < len; j++)
+		if (!strchr("0123456789*#+ABCD", num[j])) {
+			dect_base_log(b, "bridge: dialled digits with a character that is not a key -- refused");
+			(void)dect_cc_release_reason(cc, DECT_CC_REASON_USER_UNKNOWN);
+			dect_base_drain(b, p, now);
+			return 1;
+		}
 	c = dect_base_call_new(b);
 	if (!c) {
 		(void)dect_cc_busy_system(cc);

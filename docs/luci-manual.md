@@ -77,7 +77,7 @@ the box is a cell of a controller, the page looks different: see
 | Field | Default | What it does |
 |---|---|---|
 | **Enable the DECT base** | off | Boots the DECT chip and puts the base on the air. Needs the chip firmware (tab *Firmware*, [install.md](install.md) step 3). Off: the radio is parked and nothing transmits |
-| **Encrypt calls** | on | DECT standard encryption on every call and every list session (phonebook, call lists). Switch off only to debug audio |
+| **Encrypt calls** | on | DECT standard encryption on calls and list sessions (phonebook, call lists) when the handset supports it; a list is served only after the handset has proved its key. The DECT cipher is weak: treat it as protection against casual listening. Switch off only to debug audio |
 | **Check handsets when they report in** | on | Each handset proves it holds its key whenever it reports in to the base; a handset that cannot is turned away |
 | **Wideband audio (HD)** | on | G.722 (HD voice) when the handset offers it. Off keeps every call narrowband |
 | **Several calls** | on | Up to three calls at once: other handsets may call and be called while one is in a call. Off: one call at a time, and a second caller hears "busy" |

@@ -15,7 +15,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 | Base on the air, handsets find it | ✅ | |
 | Registering handsets with a PIN | ✅ | Random 8-digit PIN by default; 6 or 4 digits for handsets that need it. Registration is open only for two minutes after you press *Register a handset* |
 | Up to six handsets | 🟡 | Three handsets at once tested |
-| Authentication and encryption | ✅ | Every call is encrypted by default |
+| Authentication and encryption | ✅ | A handset proves its key before a call is routed or a list is served, and calls are ciphered with the DECT standard cipher when the handset supports it. DECT's own cipher and authentication are weak (published attacks), so this is not a substitute for end-to-end security; a call whose cipher request the handset rejects or never completes goes on unciphered |
 | Deregistering a handset from the web page | ✅ | The handset must be switched on and in range |
 | Deregistering from the handset's own menu | 🟡 | Only some handsets offer it; not yet working on the Gigaset A540 |
 | Handset names (*DECT 1*, *Kitchen*, …) | ✅ | Set in the web page or renamed on the handset |

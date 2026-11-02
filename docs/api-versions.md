@@ -1115,3 +1115,11 @@ and stamps `detached_ms[i]`; being a segment it also counts in `last_seen_ms[i]`
 `detached_ms[i] >= last_seen_ms[i]`. The message is not authenticated: use it for what is shown, never to refuse a call.
 Layout change; no change for a host that sets none.
 
+**154.** dect_link.h, 2026-11-02, from the security review: **list access waits for the handset's proof.** `struct dect_link` gains
+`auth_required`, `iwu_held[]`, `iwu_held_len`. With `auth_required` (set by `dect_base_link_open()` when `cfg.auth_first` is on and
+`cfg.no_cipher` off) a handset's {CC-IWU-INFO} is held, one message, until `mm.authenticated` is set, then handled by
+`dect_link_tick()`; it is dropped if the call ends first. Before, a peer that knew a handset's IPUI (sent in the clear) could read and change
+the phonebook and the call lists while the base's authentication request went unanswered. Also in this change: `dect_base_call_out()` refuses a
+dialled string with a character other than `0-9 * # + A-D`; the contacts' case folding no longer reads past its table for a code point above U+00FF.
+A host that sets neither `auth_first` nor `auth_required` sees no change.
+

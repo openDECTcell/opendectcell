@@ -74,14 +74,14 @@ RPN 09 = `10f4201109`.
 uci set opendectcell.main.role=cell; uci set opendectcell.main.rfpi_test=10f4201109; uci commit opendectcell
 /etc/init.d/opendectcell stop; rm -f /var/run/opendectcell/stub.second
 /etc/init.d/opendectcell start      # uploads with tag 1 = 10f4201109, dect-stubd -K stays parked
-logread -e rfpi -e 'control slot'; cat /tmp/dect-fwload.log
+logread -e rfpi -e 'control slot'; cat /var/run/opendectcell/dect-fwload.log
 # afterwards: uci delete opendectcell.main.rfpi_test; uci set opendectcell.main.role=base; uci commit opendectcell
 #             /etc/init.d/opendectcell stop; rm -f /var/run/opendectcell/stub.second; /etc/init.d/opendectcell start
 ```
 
 | test | pass | fail and what it means |
 |---|---|---|
-| N4a. The upload with the class B RFPI | `/tmp/dect-fwload.log` counts one more TLV patched; `control slot found`; the chip's periodic mails as usual | no control slot after 3 minutes: a class B tag 1 stops the STUB booting |
+| N4a. The upload with the class B RFPI | `/var/run/opendectcell/dect-fwload.log` counts one more TLV patched; `control slot found`; the chip's periodic mails as usual | no control slot after 3 minutes: a class B tag 1 stops the STUB booting |
 | N4b. The read-back | `rfpi: the chip reports the RFPI rfpicheck= names, all 5 octets` | `DIFFERS ... octet(s) 5`: the STUB rewrote the RPN (it keeps 3 bits: class A only); other octets: it rewrote the ARI; no `rfpi:` line: no 0xF601 came (the contact answer) |
 | N4c. Back to the factory RFPI (the afterwards lines), then a handset | the base back as before, the A540 finds it | the chip kept the class B RFPI: the reload did not run (`stub.second` still there) |
 

@@ -58,7 +58,7 @@ static size_t fold_next(const unsigned char *s, unsigned char out[2],
 	}
 	if ((s[0] & 0xE0u) == 0xC0u && (s[1] & 0xC0u) == 0x80u) {
 		cp = ((s[0] & 0x1Fu) << 6) | (s[1] & 0x3Fu);
-		if (cp >= 0xC0u && latin1[cp - 0xC0u]) {
+		if (cp >= 0xC0u && cp <= 0xFFu && latin1[cp - 0xC0u]) {
 			char f = latin1[cp - 0xC0u];
 
 			if (cp == 0xDFu) {			/* ß as ss */
