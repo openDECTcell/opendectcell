@@ -1060,6 +1060,45 @@ int main(void)
 	}
 
 	/*
+	 * A page response nobody waits for (the call that paged the handset was
+	 * released a moment before; 7412, 2026-11-02) is rejected and its link
+	 * released, not left for the handset's own timers (about two minutes,
+	 * and the 06.88 chip has one lane per slot class). A response while a
+	 * call still pages (a side ring) is left to the side-ring code.
+	 */
+	{
+		struct dect_link_ind ind;
+		struct dect_base_call *c;
+		struct dect_mm_cfg cfg;
+		static const uint8_t id1[5] = { 0x01, 0x11, 0x11, 0x00, 0x01 };
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.hs[0].slot = 1;
+		b.cur = 0;
+		memset(&cfg, 0, sizeof(cfg));
+		dect_link_init(&b.main_link.link, 1, &cfg);
+		memset(&ind, 0, sizeof(ind));
+		ind.page_response = 1;
+		memcpy(ind.page_id, id1, sizeof(id1));
+		ind.page_id_len = sizeof(id1);
+		dect_base_main_page_response(&b, &ind, 200);
+		CHECK_EQ(ind.page_response, 0);		/* answered with a reject */
+
+		c = dect_base_call_new(&b);
+		c->id = 9;
+		c->party = DECT_BASE_PARTY_PAGING;
+		c->target = 0;
+		memset(&ind, 0, sizeof(ind));
+		ind.page_response = 1;
+		memcpy(ind.page_id, id1, sizeof(id1));
+		ind.page_id_len = sizeof(id1);
+		dect_base_main_page_response(&b, &ind, 300);
+		CHECK_EQ(ind.page_response, 1);		/* a side ring may want it */
+	}
+
+	/*
 	 * More records than the chip has slots (docs/more-than-six.md): record
 	 * numbers go to DECT_HS_MAX, the verbs take them, the MM can hold their
 	 * identities, and nothing about a record above the chip's six is written

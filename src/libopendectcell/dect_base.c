@@ -4512,6 +4512,17 @@ static int main_ring_swap(struct dect_base *b, const struct dect_link_ind *ind,
 	return 1;
 }
 
+/* A call of the bridge still pages its handset (a side ring). */
+static int any_call_paging(const struct dect_base *b)
+{
+	unsigned i;
+
+	for (i = 0; i < DECT_BASE_CALLS; i++)
+		if (b->calls[i].id && b->calls[i].party == DECT_BASE_PARTY_PAGING)
+			return 1;
+	return 0;
+}
+
 void dect_base_main_page_response(struct dect_base *b,
 				  struct dect_link_ind *ind, uint64_t now)
 {
@@ -4575,6 +4586,35 @@ void dect_base_main_page_response(struct dect_base *b,
 		 * waiting for the page response is to hit that window.
 		 */
 		dect_base_drain(b, -1, now);
+	}
+
+	/*
+	 * A page response nobody waits for: the call that paged the handset was
+	 * released a moment before (two handsets ring, one answers, the call
+	 * ends, the other answers its last page; 7412, 2026-11-02). The handset
+	 * waits for a CC-SETUP that never comes and keeps the link up for about
+	 * two minutes, and the 06.88 chip has one lane per slot class, so the
+	 * handsets of its class are deaf meanwhile. Reject it and release.
+	 */
+	if (ind->page_response && b->ring.state == DECT_BASE_RING_IDLE &&
+	    b->ic.st == DECT_BASE_IC_IDLE && !any_call_paging(b)) {
+		int rejected = dect_link_page_reject(&bl->link, ind->page_id,
+						     ind->page_id_len,
+						     ind->page_ti) == 0;
+
+		if (rejected) {
+			dect_link_drain(&bl->link, now);
+			rejected = !bl->link.lce_len;
+		}
+		if (rejected)
+			dect_lapc_disconnect(&bl->link.lapc);
+		pump(b, bl);
+		dect_base_log(b, "ring: page response and no ring waiting for "
+			      "it -- %s",
+			      rejected ? "LCE-PAGE-REJECT sent, link released"
+				       : "could not send LCE-PAGE-REJECT, "
+					 "ignored");
+		ind->page_response = 0;
 	}
 }
 
