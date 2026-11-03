@@ -68,9 +68,9 @@ the directory. If `carddav.uc` ran before the init script made the directory, it
 
 | File | Holds | Mode | Removed |
 |---|---|---|---|
-| `/tmp/opendectcell-carddav-discover.json` | The server, user name and **password** typed into "Fetch address books" | 0600 (LuCI writes it with mode 0600) | `carddav.uc discover` reads and deletes it. If that command never runs, it stays until a reboot. The review lists this file as still open |
-| `/tmp/opendectcell-enroll.<random>` | The cell enrolment string with its one-time token | 0600 | `/etc/init.d/opendectcell enroll` deletes it after the attempt. If the cell package is missing the script returns before it does |
-| `/tmp/opendectcell-fw-upload.<role>` | An uploaded chip firmware file | set by LuCI's upload handler (`cgi-io`): not established here | `firmware.sh install` deletes it on success and on every refusal in the code it reads |
+| `/var/run/opendectcell-ui/opendectcell-carddav-discover.json` | The server, user name and **password** typed into "Fetch address books" | 0600 (LuCI writes it with mode 0600) | `carddav.uc discover` reads and deletes it. If that command never runs, it stays until a reboot. The review lists this file as still open |
+| `/var/run/opendectcell-ui/opendectcell-enroll.<random>` | The cell enrolment string with its one-time token | 0600 | `/etc/init.d/opendectcell enroll` deletes it after the attempt. If the cell package is missing the script returns before it does |
+| `/var/run/opendectcell-ui/opendectcell-fw-upload.<role>` | An uploaded chip firmware file | set by LuCI's upload handler (`cgi-io`): not established here | `firmware.sh install` deletes it on success and on every refusal in the code it reads |
 
 Whether `/tmp` is a RAM filesystem is OpenWrt's default but is not set by openDECTcell: not established here.
 

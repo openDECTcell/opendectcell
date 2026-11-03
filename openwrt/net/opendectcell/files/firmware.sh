@@ -9,7 +9,7 @@
 #
 #   firmware.sh status                  JSON: board, folder, and per file
 #                                       {role, name, expected, sha256, state}
-#   firmware.sh install ROLE FILE       FILE: /tmp/opendectcell-fw-upload.*
+#   firmware.sh install ROLE FILE       FILE: /var/run/opendectcell-ui/opendectcell-fw-upload.*
 #   firmware.sh delete ROLE
 #
 # ROLE is `first` or `second`. The name a file gets comes from the board
@@ -26,7 +26,7 @@
 
 BOARDS=${OPENDECTCELL_BOARDS:-/usr/share/opendectcell/boards}
 BOARD_NAME=${OPENDECTCELL_BOARD_NAME:-/tmp/sysinfo/board_name}
-UPLOAD=${OPENDECTCELL_UPLOAD_DIR:-/tmp}
+UPLOAD=${OPENDECTCELL_UPLOAD_DIR:-/var/run/opendectcell-ui}
 MAXSIZE=${OPENDECTCELL_FW_MAX:-400000}
 
 # The builds openDECTcell knows, with the name each is kept under (the init

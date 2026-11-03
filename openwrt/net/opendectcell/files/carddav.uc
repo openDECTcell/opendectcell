@@ -932,6 +932,11 @@ if (ARGV[0] == 'discover') {
 	// LuCI hands the form's values over in a root-only file, never on a
 	// command line every local user could read
 	if (ARGV[1]) {
+		// only the file LuCI hands over in, never another path
+		if (ARGV[1] != '/var/run/opendectcell-ui/opendectcell-carddav-discover.json') {
+			print(sprintf('%J\n', { ok: false, error: 'not the hand-over file' }));
+			exit(1);
+		}
 		let req = json(fs.readfile(ARGV[1]) || '{}');
 
 		fs.unlink(ARGV[1]);

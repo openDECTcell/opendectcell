@@ -25,10 +25,10 @@ The per-device **calibration data** is different: it is read at runtime from the
 
 The page does **not** read an AVM image in the browser: the user runs the extractor on the PC first, then uploads the two `.hex` files it wrote (option 2c; reading the image in JavaScript stays possible later). On the Firmware tab, and on the cell page in cell mode, one row per file the board needs: its name, the SHA-256 the board profile pins (or "any build openDECTcell knows" on the 7520, whose profile has no pin), its state, *Upload…* and *Delete*.
 
-- The browser refuses a file over 400 000 bytes before sending it, and LuCI's own `cgi-upload` leaves it in `/tmp/opendectcell-fw-upload.<role>`.
+- The browser refuses a file over 400 000 bytes before sending it, and LuCI's own `cgi-upload` leaves it in `/var/run/opendectcell-ui/opendectcell-fw-upload.<role>`.
 - `/usr/share/opendectcell/firmware.sh install <role> <file>` (the package `opendectcell`) takes it from there: it accepts only that path (no `..`, no symlink), takes the destination name from the board profile or the `first`/`second` options, never from the browser, and checks the SHA-256. Wrong build for the board, unknown build, or a known build under another build's name (the name decides the chip RAM addresses the daemon uses) are refused, and the old file stays. With `fw_allow_unverified` it lets them in, as the init script lets them run. A good file is written to `.<name>.new` with mode 0600 and moved into place.
 - A new file takes effect at the next chip boot, not at once.
-- ACL: `luci-app-opendectcell` may run only `firmware.sh status|install *|delete *`, write `/tmp/opendectcell-fw-upload.*` and use `cgi-io` upload.
+- ACL: `luci-app-opendectcell` may run only `firmware.sh status`, `install first|second` of the one upload file each, `delete first|second`, write `/var/run/opendectcell-ui/opendectcell-fw-upload.*` and use `cgi-io` upload.
 - The hash table is kept in three places: this script, the init script (hashes) and `tools/dect-fw-extract.py` (hashes and names). `tests/test_firmware_sh.py` (in `make check`) fails if they drift. The 7362 SL's builds are in all three since 2026-11-01: its second stage as `dectfw_secondlevel_441-07.18-7362sl.hex`, its first stage (the 7412's file) under the 7412's name.
 - Tested: the script, under dash and busybox ash, against a scratch folder, board profile and `uci`. **Not yet tested on a box:** the browser side (file picker, `cgi-upload` and its ACL, the table, delete) and the extractor on a real image.
 

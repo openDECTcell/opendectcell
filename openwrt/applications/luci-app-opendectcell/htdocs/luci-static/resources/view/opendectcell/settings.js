@@ -47,9 +47,10 @@ var LINK = '/var/run/opendectcell/cell-link.json';
 var CARDDAV = '/usr/share/opendectcell/carddav.uc';
 var CARDDAV_STATE = '/var/run/opendectcell/carddav.json';
 var CARDDAV_BOOKS = '/var/run/opendectcell/carddav-books.json';
-var CARDDAV_REQ = '/tmp/opendectcell-carddav-discover.json';
+var UI_DIR = '/var/run/opendectcell-ui/';	/* root-only, made by the service: where the browser hands files over */
+var CARDDAV_REQ = UI_DIR + 'opendectcell-carddav-discover.json';
 var FW = '/usr/share/opendectcell/firmware.sh';
-var FW_TMP = '/tmp/opendectcell-fw-upload.';
+var FW_TMP = UI_DIR + 'opendectcell-fw-upload.';
 var FW_MAX = 400000;	/* the box's check refuses more; the two files are under 200 KB */
 
 var callServices = rpc.declare({
@@ -135,7 +136,9 @@ var BookList = form.Value.extend({
 
 					this.current = this.formvalue(sid);
 					dom.content(msg, _('Asking the server…'));
-					return fs.write(CARDDAV_REQ, JSON.stringify(req), 384).then(function() {
+					return fs.exec(INIT, [ 'ui_dir' ]).then(function() {
+						return fs.write(CARDDAV_REQ, JSON.stringify(req), 384);
+					}).then(function() {
 						return fs.exec(CARDDAV, [ 'discover', CARDDAV_REQ ]);
 					}).then(function(r) {
 						var res = {};
@@ -396,11 +399,13 @@ function enrollDialog() {
 					 * file, so it is not on a command line for every local
 					 * user to read; the init script removes the file
 					 */
-					var rnd = new Uint8Array(8), tmp = '/tmp/opendectcell-enroll.';
+					var rnd = new Uint8Array(8), tmp = UI_DIR + 'opendectcell-enroll.';
 
 					window.crypto.getRandomValues(rnd);
 					rnd.forEach(function(b) { tmp += ('0' + b.toString(16)).slice(-2); });
-					return fs.write(tmp, v + '\n', 384 /* 0600 */).then(function() {
+					return fs.exec(INIT, [ 'ui_dir' ]).then(function() {
+						return fs.write(tmp, v + '\n', 384 /* 0600 */);
+					}).then(function() {
 						return fs.exec(INIT, [ 'enroll', '@' + tmp ]);
 					}).then(function(r) {
 						ui.hideModal();
@@ -490,7 +495,9 @@ function fwUpload(f) {
 		data.append('sessionid', rpc.getSessionID());
 		data.append('filename', FW_TMP + f.role);
 		data.append('filedata', file);
-		request.post(L.env.cgi_base + '/cgi-upload', data, { timeout: 0 }).then(function(res) {
+		fs.exec(INIT, [ 'ui_dir' ]).then(function() {
+			return request.post(L.env.cgi_base + '/cgi-upload', data, { timeout: 0 });
+		}).then(function(res) {
 			if (!res.ok)
 				throw new Error(res.statusText || ('HTTP ' + res.status));
 			return fs.exec(FW, [ 'install', f.role, FW_TMP + f.role ]);

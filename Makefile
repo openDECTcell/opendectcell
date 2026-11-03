@@ -250,6 +250,7 @@ check: $(TESTS)
 	@python3 -I tests/test_package_keep.py
 	@python3 -I tests/test_release_files.py
 	@python3 -I tests/test_sip_init.py
+	@python3 -I tests/test_luci_acl.py
 
 clean:
 	rm -rf $(BUILD)
