@@ -1,12 +1,12 @@
 # Builds the OpenWrt packages with the official SDK (tools/release/build.sh).
-# A tag v<version> also makes a draft release with the packages and their
-# checksums; it is published by hand on GitHub after a look at it. Its text
-# is tools/release/notes-<version>.md if that exists, else notes.md.
+# Run by hand only (2026-11-03): a tag no longer starts it, so a release built
+# on the maintainer's machine (tools/release/build.sh and images.sh, with the
+# private kernel-module repositories reachable) does not also cost CI minutes.
+# On a tag ref it would make a draft release with the packages and their
+# checksums; its text is tools/release/notes-<version>.md if that exists, else notes.md.
 name: Packages
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       images:
