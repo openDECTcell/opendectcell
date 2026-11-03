@@ -127,7 +127,7 @@ parsed by `getopt` with `"d:c:T:R:t:vpM:gKb:P:s:k:w:V:Ca:h"`.
 | `-d DEV`, `-c N` | Transport device (default `/dev/dect0`) and slots per frame (default 8) |
 | `-T SLOT`, `-R SLOT` | Give the transmit and receive control slot instead of probing |
 | `-t SECS` | Run this long, then park (if `-g` or `-K`) and exit |
-| `-v`, `-p` | Log every mail; `-p` also its parameter bytes (may contain identity data: do not share such logs) |
+| `-v`, `-p` | Log every mail and NWK message, challenges, list contents and party numbers left out; `-p` the parameter bytes and the NWK messages in full (identity data and secrets: do not share such logs) |
 | `-M SRC:DST:PRIM[:HEX]` | Send this mail once the link is up, one per loop tick; repeatable |
 | `-g` | Base mode: bring the radio up (registration closed unless `-a regopen`) and run the host stack; parks at exit |
 | `-K` | Cell mode, see above; cannot be combined with `-g` |

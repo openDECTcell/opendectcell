@@ -78,14 +78,16 @@ Whether `/tmp` is a RAM filesystem is OpenWrt's default but is not set by openDE
 
 | Where | What | Notes |
 |---|---|---|
-| System log (`logger -t opendectcell` from the init script; the daemons' stdout and stderr, which the init script gives to procd with `stdout 1`, `stderr 1`) | Normal operation: start and stop, registrations, **dialled numbers** (`call: dialled "..."`), **names** given to handsets (`names: DECT 1 is now ...`), the numbers and peers of SIP calls (`call from ... rings`, `DECT 1 calls ... on Line 1`), SIP registration failures | Where the system log lives and how long it is kept is OpenWrt's setting (`logd`): not established here. The Log tab of Status > DECT reads it with `logread` |
-| Verbose daemon output (`dect-stubd -v`) | Every chip mail with its type and length; "parameters hidden" | Not used by the init script (it passes neither `-v` nor `-p`), only by a developer starting the daemon by hand |
-| `dect-stubd -p` | Also the parameter bytes of every mail: identity data. Key bytes print as `**` even then (`log_mail`, `mail_byte_is_key`) | Never share such a log |
+| System log (`logger -t opendectcell` from the init script; the daemons' stdout and stderr, which the init script gives to procd with `stdout 1`, `stderr 1`) | Normal operation: start and stop, registrations, **dialled numbers** (since 2026-11-03 without their middle digits: `03******67`; whole with `-v`) (`call: dialled "..."`), **names** given to handsets (`names: DECT 1 is now ...`), the numbers and peers of SIP calls (`call from ... rings`, `DECT 1 calls ... on Line 1`), SIP registration failures | Where the system log lives and how long it is kept is OpenWrt's setting (`logd`): not established here. The Log tab of Status > DECT reads it with `logread` |
+| Verbose daemon output (`dect-stubd -v`) | Every chip mail with its type and length, "parameters hidden", and every NWK message with the challenges (RAND, RES, RS), the list-access contents, the keypad and the calling and called party left out (`..`); dialled numbers whole | Not used by the init script (it passes neither `-v` nor `-p`), only by a developer starting the daemon by hand |
+| `dect-stubd -p` | Also the parameter bytes of every mail and every NWK message in full: identity data, challenges, phonebook entries. Key bytes print as `**` even then (`log_mail`, `mail_byte_is_key`) | Never share such a log |
 | `dect-stubd -w FILE` | The speech of calls, raw | A developer option; the file holds call audio |
 
-What the daemon masks: with `-v` the parameters are hidden; with `-p` the UAK bytes in the key records are still
-printed as `**`. What it does not mask: the review's finding L-8 says `-v` logs list contents and registration
-challenges, and the daemon's normal lines carry dialled numbers and names (above).
+What the daemon masks: with `-v` the mail parameters are hidden and the NWK messages are printed without the
+challenges, the list contents, the keypad and the party numbers (finding L-8, fixed 2026-11-03); with `-p` the UAK
+bytes in the key records are still printed as `**` but the rest is whole. The normal lines show a dialled number
+without its middle digits; a caller's name given to a handset is not logged outside `-v`. Handset identities and
+SIP addresses still appear in normal lines.
 
 ## 2. Removing a handset and its data
 

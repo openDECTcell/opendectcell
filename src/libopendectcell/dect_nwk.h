@@ -245,6 +245,15 @@ size_t dect_nwk_put_fixed_ie(uint8_t *out, size_t cap, size_t off, uint8_t id,
  */
 int dect_nwk_find_fixed_ie(const uint8_t *ies, size_t ies_len, uint8_t id);
 
+/*
+ * A NWK message as text for a log, with what is secret or personal left out (API 156): the header octets
+ * and every information element's identifier and length are shown, and the contents of the authentication
+ * elements (RAND, RES, RS), the IWU-to-IWU element (list access: phonebook, call lists, names), the keypad
+ * and the calling and called party elements are replaced by "..". Everything else is shown in hex. Always
+ * ends in a NUL; returns the length.
+ */
+size_t dect_nwk_format_redacted(const uint8_t *msg, size_t len, char *out, size_t cap);
+
 const uint8_t *dect_nwk_find_ie(const uint8_t *ies, size_t ies_len, uint8_t id,
 				size_t *out_len);
 

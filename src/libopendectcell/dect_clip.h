@@ -182,4 +182,10 @@ size_t dect_clip_put_number(uint8_t *out, size_t cap, size_t off,
 size_t dect_clip_put_name(uint8_t *out, size_t cap, size_t off,
 			  const struct dect_clip *id, size_t budget);
 
+/*
+ * A number for the log without its middle (API 156): the first two and the last two characters, the
+ * rest as '*'; a number of four characters or fewer entirely as '*'. Returns the length written.
+ */
+size_t dect_mask_number(const char *s, size_t len, char *out, size_t cap);
+
 #endif /* OPENDECTCELL_DECT_CLIP_H */

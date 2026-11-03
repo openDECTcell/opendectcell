@@ -229,3 +229,17 @@ size_t dect_clip_put_name(uint8_t *out, size_t cap, size_t off,
 	return dect_nwk_put_ie(out, cap, off, DECT_IE_CALLING_PARTY_NAME,
 			       body, n + 1);
 }
+
+size_t dect_mask_number(const char *s, size_t len, char *out, size_t cap)
+{
+	size_t i;
+
+	if (!cap)
+		return 0;
+	if (len >= cap)
+		len = cap - 1;
+	for (i = 0; i < len; i++)
+		out[i] = (len > 4 && (i < 2 || i >= len - 2)) ? s[i] : '*';
+	out[len] = '\0';
+	return len;
+}

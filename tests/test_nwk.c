@@ -145,8 +145,56 @@ static void test_truncated_ie(void)
 	CHECK(p == NULL);
 }
 
+/* A NWK message for a log: the challenges, the lists, the numbers are left out, the rest is shown (API 156). */
+static void test_redacted(void)
+{
+	/* {AUTHENTICATION-REQUEST}: AUTH-TYPE, RAND, RES ... then a CALLING-PARTY-NUMBER, an IWU-TO-IWU, a fixed IE */
+	static const uint8_t msg[] = {
+		0x05, 0x40,
+		0x0A, 0x03, 0x01, 0x18, 0x00,				/* AUTH-TYPE: shown */
+		0x0C, 0x08, 1, 2, 3, 4, 5, 6, 7, 8,			/* RAND: hidden */
+		0x0D, 0x04, 0xAA, 0xBB, 0xCC, 0xDD,			/* RES: hidden */
+		0x6C, 0x04, 0x00, '0', '3', '0',			/* CALLING-PARTY-NUMBER: hidden */
+		0x77, 0x03, 0x01, 0x02, 0x03,				/* IWU-TO-IWU: hidden */
+		0xE0, 0x88,						/* BASIC-SERVICE (double octet): shown */
+	};
+	char out[256];
+	size_t n = dect_nwk_format_redacted(msg, sizeof(msg), out, sizeof(out));
+
+	CHECK_EQ(n, strlen(out));
+	CHECK(strstr(out, "0a 03 01 18 00") != NULL);
+	CHECK(strstr(out, "0c 08 .. ") != NULL);
+	CHECK(strstr(out, "0d 04 .. ") != NULL);
+	CHECK(strstr(out, "6c 04 .. ") != NULL);
+	CHECK(strstr(out, "77 03 .. ") != NULL);
+	CHECK(strstr(out, "e0 88") != NULL);
+	CHECK(strstr(out, "aa bb") == NULL);			/* no response bytes */
+	CHECK(strstr(out, "01 02 03 04") == NULL);		/* no challenge bytes */
+	CHECK(strstr(out, "30 33 30") == NULL);			/* no digits */
+	/* truncated and overrunning elements are shown as such, and nothing is read past the end */
+	{
+		static const uint8_t cut[] = { 0x05, 0x40, 0x0C };
+		static const uint8_t over[] = { 0x05, 0x40, 0x0C, 0x08, 1, 2 };
+
+		(void)dect_nwk_format_redacted(cut, sizeof(cut), out, sizeof(out));
+		CHECK(strstr(out, "(cut)") != NULL);
+		(void)dect_nwk_format_redacted(over, sizeof(over), out, sizeof(out));
+		CHECK(strstr(out, "(overruns)") != NULL);
+		CHECK(strstr(out, "01 02") == NULL);
+	}
+	/* a small buffer is filled to its end with a NUL, never past it */
+	{
+		char small[12];
+
+		(void)dect_nwk_format_redacted(msg, sizeof(msg), small, sizeof(small));
+		CHECK(strlen(small) < sizeof(small));
+		CHECK_EQ(dect_nwk_format_redacted(msg, sizeof(msg), small, 0), 0u);
+	}
+}
+
 int main(void)
 {
+	test_redacted();
 	test_header();
 	test_header_short();
 	test_extended_tv_is_ignored();

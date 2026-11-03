@@ -400,7 +400,8 @@ struct dect_base_cfg {
 	int      auth_first;	/* a handset proves its key before its call goes anywhere */
 	int      no_cipher;	/* -C, a lab option: no ciphering, no proof */
 	int      no_chip_key;	/* -k off: the call key withheld from the chip */
-	int      verbose;	/* -v: each segment and NWK message in the log */
+	int      verbose;	/* -v: each segment and NWK message in the log, secrets and numbers left out */
+	int      log_raw;	/* -p: ... with everything in it (keys' challenges, lists, numbers) (API 156) */
 	int      locauth;	/* authenticate on location registration */
 	int      no_overlap;	/* no overlap sending: the number en bloc */
 	unsigned dial_wait_ms;	/* the dial pause that ends a number */

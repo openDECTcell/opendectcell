@@ -1135,3 +1135,10 @@ answered on one link; the rest get {AUTHENTICATION-REJECT}, so a peer cannot dra
 (4) `dect_mm_wipe()` overwrites a connection's session keys, the call-time key and the PIN copy when the link is released (main and
 side links). `dect-stubd -g` without `-P` is refused (it defaulted to the lab PIN 0000). Layout change; a host that sets nothing gets
 the budget of 10.
+
+**156.** dect_nwk.h, dect_clip.h, dect_base.h, dect_proto.h, 2026-11-03, from the security review (L-8): **logs without secrets.** New
+`dect_nwk_format_redacted()` and `dect_mask_number()`; `dect_base_cfg` gains `log_raw`. With `verbose` the base logs a NWK message
+with the contents of RAND, RES, RS, IWU-TO-IWU (list access), the keypad and the calling and called party elements replaced by `..`;
+with `log_raw` (dect-stubd `-p`) in full as before. A dialled number in the ordinary log keeps its first and last two characters unless
+`verbose` or `log_raw` is set; an internal call's caller name is not logged then. Layout change; a host that sets neither sees the
+redacted form.

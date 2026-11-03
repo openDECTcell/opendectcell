@@ -1972,8 +1972,9 @@ static void ic_name_info(struct dect_base *b, struct dect_cc *t, uint64_t now)
 		return;
 	}
 	dect_base_drain(b, ic->tside, now);
-	dect_base_log(b, "intern: caller's name \"%s\" sent in CC-INFO (Part "
-		      "3, A-0130)", ic->clip.name);
+	dect_base_log(b, "intern: caller's name%s%s sent in CC-INFO (Part 3, A-0130)",
+		      b->cfg.verbose || b->cfg.log_raw ? " " : " (hidden)",
+		      b->cfg.verbose || b->cfg.log_raw ? ic->clip.name : "");
 }
 
 void dect_base_ic_tick(struct dect_base *b, uint64_t now)
@@ -5407,6 +5408,20 @@ void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known)
 	(void)dect_base_serve(b, 0, " (link released)");
 }
 
+/* A number as the log may show it: whole with -v, without its middle otherwise (API 156). */
+static const char *log_number(const struct dect_base *b, const char *s, size_t len, char *buf, size_t cap)
+{
+	if (b->cfg.verbose || b->cfg.log_raw) {
+		if (len >= cap)
+			len = cap - 1;
+		memcpy(buf, s, len);
+		buf[len] = '\0';
+		return buf;
+	}
+	(void)dect_mask_number(s, len, buf, cap);
+	return buf;
+}
+
 /* Show a dialled number: GAP's 0-9, * and #, anything else as an escape. */
 static void log_keypad(struct dect_base *b)
 {
@@ -5424,6 +5439,12 @@ static void log_keypad(struct dect_base *b)
 					      "\\x%02x", c);
 	}
 	show[o] = '\0';
+	if (!b->cfg.verbose && !b->cfg.log_raw) {
+		char masked[sizeof(show)];
+
+		(void)dect_mask_number(show, o, masked, sizeof(masked));
+		memcpy(show, masked, o + 1);
+	}
 	dect_base_log(b, "call: handset dialled: %s (%zu character%s)%s", show,
 		      n, n == 1 ? "" : "s",
 		      b->main_link.link.cc.keypad_overflow ? " [TRUNCATED]"
@@ -5448,6 +5469,12 @@ static void log_segment(struct dect_base *b, const struct dect_link_ind *ind)
 			      ind->frame.info_len);
 	if (!ind->nwk_len)
 		return;
+	if (!b->cfg.log_raw) {
+		/* the challenges, the lists, the numbers stay out of a log that may be posted */
+		(void)dect_nwk_format_redacted(ind->nwk, ind->nwk_len, hex, sizeof(hex));
+		dect_base_log(b, "reg: nwk in  <-- %s", hex);
+		return;
+	}
 	for (i = 0; i < ind->nwk_len && o + 4 < sizeof(hex); i++)
 		o += (size_t)snprintf(hex + o, sizeof(hex) - o, "%02x ",
 				      ind->nwk[i]);
@@ -5733,13 +5760,16 @@ void dect_base_main_dial_tick(struct dect_base *b, uint64_t now)
 	if (!due)
 		return;
 	k = dect_cc_keypad(&ml->link.cc, &len);
-	if (due == 1)
-		dect_base_log(b, "call: dialled \"%.*s\", complete -- connecting",
-			      (int)len, (const char *)k);
-	else
-		dect_base_log(b, "call: dialled \"%.*s\" -- complete after %u ms "
-			      "without a digit, connecting", (int)len,
-			      (const char *)k, b->cfg.dial_wait_ms);
+	{
+		char shown[DECT_CC_KEYPAD_MAX + 1];
+		const char *num = log_number(b, (const char *)k, len, shown, sizeof(shown));
+
+		if (due == 1)
+			dect_base_log(b, "call: dialled \"%s\", complete -- connecting", num);
+		else
+			dect_base_log(b, "call: dialled \"%s\" -- complete after %u ms "
+				      "without a digit, connecting", num, b->cfg.dial_wait_ms);
+	}
 	ml->ic_tried = 1;
 	if (!(b->bridge && b->cfg.bridge_internal) && dect_base_ic_start(b, -1, now)) {
 		dect_base_drain(b, -1, now);

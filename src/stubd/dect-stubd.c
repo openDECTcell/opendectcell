@@ -3803,6 +3803,14 @@ static void log_nwk_out(void *ctx, const uint8_t *msg, size_t len)
 	if (!s->verbose)
 		return;
 	printf("reg: nwk out --> ");
+	if (!s->show_params) {
+		char red[3 * 256 + 64];
+
+		(void)dect_nwk_format_redacted(msg, len, red, sizeof(red));
+		printf("%s\n", red);
+		fflush(stdout);
+		return;
+	}
 	for (i = 0; i < len; i++)
 		printf("%02x ", msg[i]);
 	printf("\n");
@@ -4800,6 +4808,14 @@ static void log_nwk_out_side(void *ctx, const uint8_t *msg, size_t len)
 	if (!s->verbose)
 		return;
 	printf("side: nwk out --> ");
+	if (!s->show_params) {
+		char red[3 * 256 + 64];
+
+		(void)dect_nwk_format_redacted(msg, len, red, sizeof(red));
+		printf("%s\n", red);
+		fflush(stdout);
+		return;
+	}
 	for (i = 0; i < len; i++)
 		printf("%02x ", msg[i]);
 	printf("\n");
@@ -7934,7 +7950,8 @@ static void usage(void)
 		"  -R SLOT  receive control slot (skip probing)\n"
 		"  -t SECS  run for SECS seconds then exit (default: until signal)\n"
 		"  -v       log every mail (prim and length; parameters hidden)\n"
-		"  -p       also log parameter bytes (may hold identity data; do\n"
+		"  -p       also log parameter bytes and NWK messages in full (identity\n"
+		"           data, challenges, phonebook: do\n"
 		"           not share such logs) -- implies -v\n"
 		"  -M SRC:DST:PRIM[:HEX]  after contact, send this mail (repeatable,\n"
 		"           one per ~100 ms; e.g. the MAC bring-up sequence)\n"
@@ -8710,6 +8727,7 @@ int main(int argc, char **argv)
 	s.base.cfg.no_cipher = s.no_cipher;
 	s.base.cfg.no_chip_key = s.chip_cipher.disabled;
 	s.base.cfg.verbose = s.verbose;
+	s.base.cfg.log_raw = s.show_params;
 	s.base.cfg.locauth = s.audio.locauth;
 	s.base.cfg.no_overlap = s.audio.no_overlap;
 	s.base.cfg.dial_wait_ms = s.audio.dial_wait_ms;

@@ -386,8 +386,27 @@ static void test_setup_carries_identity(void)
 	CHECK(memcmp(a, b, la) == 0);
 }
 
+/* A number in the log: the first two and the last two characters, the rest as '*' (API 156). */
+static void test_mask_number(void)
+{
+	char out[16];
+
+	CHECK_EQ(dect_mask_number("0301234567", 10, out, sizeof(out)), 10u);
+	CHECK_EQ(strcmp(out, "03******67"), 0);
+	CHECK_EQ(dect_mask_number("1234", 4, out, sizeof(out)), 4u);	/* short: all hidden */
+	CHECK_EQ(strcmp(out, "****"), 0);
+	CHECK_EQ(dect_mask_number("12345", 5, out, sizeof(out)), 5u);
+	CHECK_EQ(strcmp(out, "12*45"), 0);
+	CHECK_EQ(dect_mask_number("", 0, out, sizeof(out)), 0u);
+	CHECK_EQ(out[0], '\0');
+	CHECK_EQ(dect_mask_number("0301234567", 10, out, 6), 5u);	/* cut to the buffer, NUL-terminated */
+	CHECK_EQ(strlen(out), 5u);
+	CHECK_EQ(dect_mask_number("0301234567", 10, out, 0), 0u);
+}
+
 int main(void)
 {
+	test_mask_number();
 	test_number_vector();
 	test_number_stock_descriptors();
 	test_number_is_ia5();
