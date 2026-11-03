@@ -19,6 +19,7 @@ Where to start depends on what you want:
 | [../ARCHITECTURE.md](../ARCHITECTURE.md) | The pieces, how they talk, the data flow of a registration and a call, the rules that keep them apart |
 | [developing.md](developing.md) | Build and test, where a change goes, how the tests work, debugging on a box, commit rules |
 | [glossary.md](glossary.md) | DECT terms and the project's own words |
+| [releasing.md](releasing.md) | How a release is built, signed and published; the one OpenWrt version a release is built for |
 | [api-versions.md](api-versions.md) | What changed in `libopendectcell`'s public interface at each API version |
 
 ## For users
@@ -84,15 +85,19 @@ chip. They are the basis for the code.
 
 ## Development journal
 
-How the project got here: bench sessions, experiments, dead ends and task
-lists, kept as they were written. They are dated and often superseded by
-later findings; the documents above are the current state. Each journal page
-says at the top what it was ## Development journal
-
 How the project got here (bench sessions, experiments, dead ends, task lists) is in [journals/](journals/README.md),
 kept as it was written. The documents above are the current state; the journals are dated and often superseded.
 
- hardware]` | Seen on a real box or handset |
+The project-wide history and hand-over notes are in
+the maintainers' notes; the plan is in [ROADMAP.md](../ROADMAP.md).
+
+## Labels used in the documents
+
+Many statements carry a label saying how we know them:
+
+| Label | Meaning |
+|---|---|
+| `[observed]`, `[observed on hardware]` | Seen on a real box or handset |
 | `[derived statically]` | Worked out from analysing files, not yet seen running |
 | `[CR A-NNNN]` | A fact from the clean-room process: answer NNNN, given by a separate analysis that is not part of this repository |
 | *assumed*, `[inferred]` | Our reasoning, not yet checked |
