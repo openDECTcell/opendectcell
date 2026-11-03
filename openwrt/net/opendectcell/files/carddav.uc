@@ -56,6 +56,9 @@ const STATE = DIR + '/carddav.json';
 const BOOKS = DIR + '/carddav-books.json';	// the last discovery, for LuCI
 const MULTIGET = 50;		// cards per REPORT
 const SYSTEM_CA = '/etc/ssl/certs/ca-certificates.crt';
+// The largest response body we keep, in bytes: a listing or an address book
+// of the 500 contacts the handsets can hold is far below it.
+const MAX_BODY = 4 * 1024 * 1024;
 const MAX_CONTACTS = 500;	// DECT_CONTACTS_MAX
 const NAME_MAX = 31;		// DECT_CONTACT_NAME_MAX - 1, UTF-8 bytes
 
@@ -154,8 +157,16 @@ function attempt(method, url, headers, body, challenge) {
 		data_read: function() {
 			let d;
 
-			while (length(d = cl.read()))
+			while (length(d = cl.read())) {
+				// a server must not be able to fill the router's RAM
+				if (length(res.body) + length(d) > MAX_BODY) {
+					res.status = 0;
+					res.error = 'response too large';
+					uloop.end();
+					return;
+				}
 				res.body += d;
+			}
 		},
 		data_eof: function() {
 			uloop.end();

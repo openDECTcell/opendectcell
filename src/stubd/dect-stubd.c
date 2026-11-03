@@ -8232,6 +8232,8 @@ static int bridge_echo(int argc, char **argv)
 	signal(SIGTERM, on_signal);
 	memset(&a, 0, sizeof(a));
 	a.sun_family = AF_UNIX;
+	if (strlen(path ? path : DECT_CTL_PATH) >= sizeof(a.sun_path))
+		return 2;
 	strcpy(a.sun_path, path ? path : DECT_CTL_PATH);
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof(a))) {

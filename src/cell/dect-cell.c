@@ -1901,9 +1901,16 @@ static void restart_service(void)
 	signal(SIGTERM, SIG_DFL);
 	for (fd = 0; fd < 1024; fd++)
 		(void)close(fd);
-	(void)open("/dev/null", O_RDWR);
-	(void)dup(0);
-	(void)dup(0);
+	/* stdin, stdout and stderr on /dev/null; a failure here changes nothing for the restart */
+	{
+		int n0 = open("/dev/null", O_RDWR);
+		int n1 = dup(0);
+		int n2 = dup(0);
+
+		(void)n0;
+		(void)n1;
+		(void)n2;
+	}
 	(void)sleep(1);
 	execl(restart_cmd, restart_cmd, "restart", (char *)NULL);
 	_exit(127);
