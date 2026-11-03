@@ -1,6 +1,6 @@
 **Pre-release for testers, not announced.** Packages and ready-made images for **OpenWrt {OPENWRT}**, built on the
-maintainer's machine with the official SDK and ImageBuilder. The packages are **not signed** (install them with
-`apk add --allow-untrusted`; the images need nothing). The kernel module loads only into that OpenWrt version's kernel.
+maintainer's machine with the official SDK and ImageBuilder. The packages carry the SDK's own throwaway signature, not the
+project's key, so install them with `apk add --allow-untrusted` (the images need nothing). The kernel module loads only into that OpenWrt version's kernel.
 
 What is new since 0.3.2:
 
