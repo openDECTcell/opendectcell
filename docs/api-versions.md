@@ -1123,3 +1123,15 @@ the phonebook and the call lists while the base's authentication request went un
 dialled string with a character other than `0-9 * # + A-D`; the contacts' case folding no longer reads past its table for a code point above U+00FF.
 A host that sets neither `auth_first` nor `auth_required` sees no change.
 
+**155.** dect_mm.h, dect_base.h, dect_proto.h, 2026-11-03, from the security review (L-5 to L-7): **registration attempts, {DETACH}, the
+FT-authentication oracle, key wiping.** `dect_base_cfg` gains `reg_fail_max` and `DECT_BASE_REG_FAIL_MAX` (10); `struct dect_base`
+gains `reg_wrong`; `struct dect_mm` gains `detach_tag`; `dect_mm_stats` gains `ft_auth_capped`; new `dect_mm_find()`,
+`dect_mm_wipe()`, `DECT_MM_FT_AUTH_MAX` (3). (1) A wrong PIN on the main link, not the one a model tries on purpose, counts against the
+window; `dect_base_tick()` closes a window that has had `reg_fail_max` of them (default 10; the host sees `reg_open` fall and the log line
+"too many wrong PINs") and opening a window starts the count again. (2) A {DETACH} names the held handset it carries and stamps
+that record's `detached_ms`; it no longer adopts it, because the message is not authenticated: before, a peer could move a live
+connection onto another handset's slot, TPUI and identity. (3) At most `DECT_MM_FT_AUTH_MAX` of a PT's {AUTHENTICATION-REQUEST}s are
+answered on one link; the rest get {AUTHENTICATION-REJECT}, so a peer cannot draw RES2 values for chosen challenges without end.
+(4) `dect_mm_wipe()` overwrites a connection's session keys, the call-time key and the PIN copy when the link is released (main and
+side links). `dect-stubd -g` without `-P` is refused (it defaulted to the lab PIN 0000). Layout change; a host that sets nothing gets
+the budget of 10.

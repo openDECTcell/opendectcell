@@ -7,7 +7,7 @@ codecs, list access, the link/MM/CC stack, the base with control verbs, the file
 120 million executions, seeded from the golden traces), `gcc -fanalyzer`. `dect-cell` and the SRTP code were read by hand
 only (no mbedTLS headers on the review machine). Nothing was tried on hardware.
 
-## Fixed (libopendectcell API 154 and the OpenWrt files)
+## Fixed (libopendectcell API 154 and 155 and the OpenWrt files)
 
 | Finding | What was wrong | What changed |
 |---|---|---|
@@ -18,6 +18,10 @@ only (no mbedTLS headers on the review machine). Nothing was tried on hardware.
 | **L-1** weak random fallback | `gen_rand` fell back to a clock-seeded generator without a word | the kernel's `getrandom`, and the daemon stops if it cannot give numbers |
 | **L-2** fixed `/tmp` names | the init script wrote `/tmp/dect-fwload.log` and `/tmp/dect-warm.log` as root | `/var/run/opendectcell/` (0700). **Still open:** the LuCI discover file (`/tmp/opendectcell-carddav-discover.json`, holds the CardDAV password) and the firmware upload file |
 | **M-6 (medium)** "every call is encrypted" | the documents promised more than the code does: a call whose cipher request is rejected or never completes goes on unciphered, and the DECT cipher and authentication are weak | wording in `README.md`, `docs/status.md`, `docs/luci-manual.md` |
+| **L-4** `strcpy` into `sun_path` | the developer subcommand `--bridge-echo` copied its socket path unchecked | the length is checked first (2026-11-03) |
+| **L-5** no PIN attempt limit, default PIN | a PIN could be guessed at the radio's speed; `dect-stubd -g` without `-P` ran with `0000` | a window closes itself after 10 wrong PINs (`dect_base_tick`, API 155); `-g` without `-P` is refused. Tests: `test_base.c`, `test_stubd.c` |
+| **L-6** FT-authentication oracle, {DETACH} adoption | a peer claiming a held identity could draw unlimited RES2 values for challenges it chose; an unauthenticated {DETACH} moved the connection onto another handset's identity | at most 3 answers per link (`DECT_MM_FT_AUTH_MAX`); a {DETACH} names, it does not adopt. Tests in `test_mm.c`. Not done: a limit across links |
+| **L-7** keys never wiped | session keys and the PIN copy stayed in the link after release | `dect_mm_wipe()` on every release (volatile writes). Test in `test_mm.c`. The stored subscription keys stay by design |
 
 ## Open
 
@@ -26,10 +30,6 @@ only (no mbedTLS headers on the review machine). Nothing was tried on hardware.
 | **M-2 (medium)** release signing | the key is a plain repository secret and is in the SDK build tree while unpinned feeds compile; the only copy is the secret; users fetch the trust anchor from the release page | a protected environment with required reviewers; sign in a last step; pin feeds; keep an offline copy; publish the fingerprint in the README |
 | **M-5 (medium)** everything runs as root | baresip listens on 0.0.0.0:5060 as root next to the keys; a non-registering account skips the origin check | bind to the LAN, run baresip under its own user, apply the origin check to every account |
 | L-3 | the rpcd ACL grants open-ended arguments to root commands (`carddav.uc discover *`, `enroll *`, `logread -l *`) | narrow the patterns; ignore a path argument |
-| L-4 | `strcpy` into `sun_path` in a developer subcommand | `snprintf` with a length check |
-| L-5 | no attempt limiter for the registration PIN in the library; the daemon's default PIN is `0000` when started by hand | a per-window attempt budget; refuse `-g` without `-P` |
-| L-6 | an unauthenticated peer can use FT authentication as an oracle; a {DETACH} adopts the link | rate-limit; do not adopt on {DETACH} |
-| L-7 | key material is never wiped | `explicit_bzero` on link release |
 | L-8 | `-v` logs list contents and registration challenges | mask IWU data and RAND/RES/RS |
 | info | kernel module, cell pinning and enrolment, SRTP (by hand), the init script, `firmware.sh` and the LuCI JS showed no exploitable bug | |
 

@@ -1296,6 +1296,97 @@ static void test_detach_from_our_handset_is_counted(void)
 }
 
 /*
+ * A {DETACH} is not authenticated (API 155): it may name a handset we hold, and that is counted
+ * for the record it names, but it never moves the connection onto that handset.
+ */
+static void test_detach_does_not_adopt(void)
+{
+	static const uint8_t a[] = { 0x80, 0xa8, 0x02, 0x11, 0x22, 0x33 };
+	static const uint8_t b2[] = { 0x80, 0xa8, 0x02, 0x44, 0x55, 0x66 };
+	static const uint8_t tp_a[3] = { 0x11, 0x01, 0x01 };
+	static const uint8_t tp_b[3] = { 0x11, 0x02, 0x02 };
+	struct dect_mm mm;
+	struct dect_mm_cfg cfg;
+	uint8_t buf[64], port_before[DECT_MM_PORTID_MAX], tpui_before[3];
+	uint8_t slot_before;
+	size_t n;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(dect_mm_hold(&mm, a, sizeof(a), 1, tp_a, 0), 0);
+	CHECK_EQ(dect_mm_hold(&mm, b2, sizeof(b2), 2, tp_b, 1), 0);
+	CHECK(dect_mm_adopt(&mm, a, sizeof(a)));	/* this connection is handset 0's */
+	memcpy(port_before, mm.port_id, sizeof(port_before));
+	memcpy(tpui_before, mm.cfg.tpui, sizeof(tpui_before));
+	slot_before = mm.cfg.sub_slot;
+
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR, 0, DECT_MM_DETACH);
+	n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_PORTABLE_IDENTITY, b2, sizeof(b2));
+	dect_mm_rx(&mm, buf, n, NULL, NULL);
+	CHECK_EQ(mm.stats.detached, 1u);
+	CHECK_EQ(mm.detach_tag, 1);			/* named: handset 1 */
+	CHECK_EQ(mm.adopted, 0);			/* ... and the connection stays handset 0's */
+	CHECK_EQ(memcmp(mm.port_id, port_before, sizeof(port_before)), 0);
+	CHECK_EQ(memcmp(mm.cfg.tpui, tpui_before, sizeof(tpui_before)), 0);
+	CHECK_EQ(mm.cfg.sub_slot, slot_before);
+	CHECK_EQ(dect_mm_find(&mm, b2, sizeof(b2)), 1);
+	CHECK_EQ(dect_mm_find(&mm, tp_a, sizeof(tp_a)), -1);
+}
+
+/* An unauthenticated peer may draw only a few RES2 values from us per link (API 155). */
+static void test_ft_authentication_is_capped(void)
+{
+	static const uint8_t at[3] = { 0x01, 0x18, 0x00 };
+	uint8_t uak[16] = { 0x31, 0x41, 0x59, 0x26 };
+	uint8_t rand_p[8] = { 9, 8, 7, 6, 5, 4, 3, 2 };
+	uint8_t rs16[16] = { 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC };
+	uint8_t buf[64], out[64];
+	struct dect_mm_cfg cfg = { .rfpi = { 1, 2, 3, 4, 5 } };
+	struct dect_mm mm;
+	unsigned i;
+	size_t n;
+
+	dect_mm_init(&mm, &cfg);
+	dect_mm_set_uak(&mm, uak);
+	for (i = 0; i < DECT_MM_FT_AUTH_MAX + 2u; i++) {
+		rand_p[0] = (uint8_t)i;
+		n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_MM, DECT_TI_ORIGINATOR, 0,
+				       DECT_MM_AUTHENTICATION_REQUEST);
+		n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_AUTH_TYPE, at, 3);
+		n = dect_nwk_put_ie(buf, sizeof(buf), n, DECT_IE_RAND, rand_p, 8);
+		dect_mm_rx(&mm, buf, n, NULL, rs16);
+		n = dect_mm_poll(&mm, out, sizeof(out));
+		CHECK_EQ(msg_type_of(out, n), i < DECT_MM_FT_AUTH_MAX ? DECT_MM_AUTHENTICATION_REPLY
+								      : DECT_MM_AUTHENTICATION_REJECT);
+	}
+	CHECK_EQ(mm.stats.ft_auth, DECT_MM_FT_AUTH_MAX);
+	CHECK_EQ(mm.stats.ft_auth_capped, 2u);
+}
+
+/* The keys and the PIN copy are gone when a connection ends (API 155). */
+static void test_wipe(void)
+{
+	uint8_t uak[16] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
+	uint8_t zero[16] = { 0 };
+	struct dect_mm_cfg cfg;
+	struct dect_mm mm;
+
+	memset(&cfg, 0, sizeof(cfg));
+	snprintf(cfg.pin, sizeof(cfg.pin), "12345678");
+	dect_mm_init(&mm, &cfg);
+	dect_mm_set_uak(&mm, uak);
+	memcpy(mm.dck, uak, sizeof(mm.dck));
+	memcpy(mm.rs, uak, sizeof(mm.rs));
+	dect_mm_wipe(&mm);
+	CHECK_EQ(memcmp(mm.uak, zero, sizeof(mm.uak)), 0);
+	CHECK_EQ(memcmp(mm.cipher_uak, zero, sizeof(mm.cipher_uak)), 0);
+	CHECK_EQ(memcmp(mm.dck, zero, sizeof(mm.dck)), 0);
+	CHECK_EQ(memcmp(mm.rs, zero, sizeof(mm.rs)), 0);
+	CHECK_EQ(mm.cfg.pin[0], '\0');
+	CHECK_EQ(mm.uak_known, 0);
+}
+
+/*
  * Drive MM to the point where a {LOCATE-ACCEPT} has gone out carrying a TPUI
  * -- which is what starts the temporary-identity assignment procedure.
  */
@@ -2079,6 +2170,9 @@ int main(void)
 	test_locate_request_from_a_stranger_is_rejected();
 	test_locate_request_from_our_handset_is_accepted();
 	test_detach_from_our_handset_is_counted();
+	test_detach_does_not_adopt();
+	test_ft_authentication_is_capped();
+	test_wipe();
 	test_a_held_handset_is_accepted_and_adopted();
 	test_a_stranger_is_still_rejected_with_handsets_held();
 	test_held_handsets_need_no_port_id();

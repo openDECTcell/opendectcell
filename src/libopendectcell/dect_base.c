@@ -1183,6 +1183,17 @@ void dect_base_ring_setup(struct dect_base *b, uint64_t now, const char *why)
 		      DECT_BASE_SETUP_RETRY_MS);
 }
 
+/*
+ * A {DETACH} named record t on this link: the handset says it is off. The message is not
+ * authenticated, so it stamps the record it names and adopts nothing (API 155).
+ */
+static void stamp_detach(struct dect_base *b, const struct dect_mm *mm, uint32_t *seen, uint64_t now)
+{
+	if (mm->stats.detached > *seen && mm->detach_tag >= 0 && (unsigned)mm->detach_tag < b->n_hs)
+		b->detached_ms[mm->detach_tag] = now;
+	*seen = mm->stats.detached;
+}
+
 static void pump(struct dect_base *b, struct dect_base_link *bl)
 {
 	if (b->ops && b->ops->pump)
@@ -4838,6 +4849,9 @@ void dect_base_main_enrolment(struct dect_base *b)
 			b->ops->registration_rejected(b->ctx,
 						      mm->stats.auth_fail != 0,
 						      expected);
+		/* a wrong PIN counts against the window's budget (API 155); the tick closes it */
+		if (mm->stats.auth_fail && !expected && b->reg_open)
+			b->reg_wrong++;
 		/* back to the ring target's store (review, finding 13) */
 		if (bl->enrol_switched) {
 			bl->enrol_switched = 0;
@@ -4935,6 +4949,8 @@ void dect_base_reg_window(struct dect_base *b, int open, unsigned secs,
 	chip_mail(b, open ? 0x022Bu : 0x022Cu, &mode, 1);
 	b->reg_open = open;
 	b->reg_open_until = open && secs ? now + secs * 1000ull : 0;
+	if (open)
+		b->reg_wrong = 0;
 	if (b->main_link.active)
 		b->main_link.link.mm.cfg.registration = dect_base_reg_policy(b);
 	if (open && secs)
@@ -5297,6 +5313,7 @@ static void side_down(struct dect_base *b, unsigned k)
 {
 	if (b->ops && b->ops->side_down)
 		b->ops->side_down(b->ctx, k);
+	dect_mm_wipe(&b->side[k].link.mm);
 	b->side[k].active = 0;
 }
 
@@ -5385,6 +5402,7 @@ void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known)
 	}
 	if (ml->active)
 		dect_base_log(b, "reg: connection released");
+	dect_mm_wipe(&ml->link.mm);
 	ml->active = 0;
 	(void)dect_base_serve(b, 0, " (link released)");
 }
@@ -5465,12 +5483,9 @@ static void main_mail(struct dect_base *b, const struct dect_mail *m,
 	}
 	pump(b, ml);			/* at least the LAPC ack */
 	a = ml->link.mm.adopted;
-	if (a >= 0 && (unsigned)a < b->n_hs) {
+	if (a >= 0 && (unsigned)a < b->n_hs)
 		b->last_seen_ms[a] = now;
-		if (ml->link.mm.stats.detached > ml->detach_seen)
-			b->detached_ms[a] = now;
-	}
-	ml->detach_seen = ml->link.mm.stats.detached;
+	stamp_detach(b, &ml->link.mm, &ml->detach_seen, now);
 
 	/*
 	 * MM took on one of the other handsets we hold (its LOCATE-REQUEST,
@@ -5582,12 +5597,9 @@ static void side_mail(struct dect_base *b, unsigned k,
 	}
 	side_call(b, k, now);
 	a = sl->link.mm.adopted;
-	if (a >= 0 && (unsigned)a < b->n_hs) {
+	if (a >= 0 && (unsigned)a < b->n_hs)
 		b->last_seen_ms[a] = now;
-		if (sl->link.mm.stats.detached > sl->detach_seen)
-			b->detached_ms[a] = now;
-	}
-	sl->detach_seen = sl->link.mm.stats.detached;
+	stamp_detach(b, &sl->link.mm, &sl->detach_seen, now);
 	if (a >= 0 && a != sl->adopted && (unsigned)a < b->n_hs) {
 		unsigned slot = dect_base_slot(b, (unsigned)a);
 
@@ -5742,6 +5754,9 @@ void dect_base_tick(struct dect_base *b, uint64_t now, int radio_on)
 {
 	unsigned k;
 
+	/* too many wrong PINs close the window: a PIN cannot be guessed at the radio's speed (API 155) */
+	if (b->reg_open && b->reg_wrong >= (b->cfg.reg_fail_max ? b->cfg.reg_fail_max : DECT_BASE_REG_FAIL_MAX))
+		dect_base_reg_window(b, 0, 0, now, "too many wrong PINs");
 	dect_base_sub_check_tick(b, now);
 	dect_base_main_dial_tick(b, now);
 	dect_base_info_tick(b, now);

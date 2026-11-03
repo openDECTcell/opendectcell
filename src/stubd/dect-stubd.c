@@ -8493,7 +8493,8 @@ int main(int argc, char **argv)
 	s.audio.auth_first = 1;	/* security audit 2026-10-29, A1 */
 	s.tx_idle = 0xFFu;
 	s.tx_voice_idle = 0xFFu;
-	s.pin = "0000";		/* the lab's; the library has no default */
+	s.pin = "0000";		/* only for code paths that never register: -g needs -P (below) */
+	int pin_given = 0;
 	while ((c = getopt(argc, argv, "d:c:T:R:t:vpM:gKb:P:s:k:w:V:Ca:h")) != -1) {
 		switch (c) {
 		case 'd': dev = optarg; break;
@@ -8548,6 +8549,7 @@ int main(int argc, char **argv)
 				return 2;
 			}
 			s.pin = optarg;
+			pin_given = 1;
 			break;
 		case 's':
 			if (!optarg[0]) {
@@ -8591,6 +8593,10 @@ int main(int argc, char **argv)
 
 	/* -g auto-sends the MAC bring-up (radio on, open registration) unless the
 	 * caller supplied its own -M mails. [CR COMMAND_SET §6.1/§6.2] */
+	if (s.do_register && !pin_given) {
+		fprintf(stderr, "-g needs -P PIN (or -P @FILE): there is no default registration PIN\n");
+		return 2;
+	}
 	if (s.do_register && s.n_xmail == 0) {
 		auto_bringup = 1;
 		/*

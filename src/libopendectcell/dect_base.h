@@ -383,7 +383,11 @@ struct dect_base_ring {
  * Stage S3i: how the base runs calls, the host's options (dect-stubd's -a
  * keys of the same names). Set once at start.
  */
+/* wrong PINs one registration window takes before it closes itself (API 155) */
+#define DECT_BASE_REG_FAIL_MAX 10u
+
 struct dect_base_cfg {
+	unsigned reg_fail_max;	/* wrong PINs per window, 0 = DECT_BASE_REG_FAIL_MAX (API 155) */
 	int      narrowband;	/* the speech is narrowband: G.726, no G.722 */
 	int      two_calls;	/* up to three calls (twocalls) */
 	/*
@@ -611,6 +615,7 @@ struct dect_base {
 	uint64_t detached_ms[DECT_BASE_HS_MAX];
 	/* the registration window (S3z) */
 	int      reg_open;
+	unsigned reg_wrong;		/* wrong PINs since the window opened (API 155) */
 	uint64_t reg_open_until;	/* 0: until closed */
 	/* the Contact List the host keeps, NULL: none (S5a) */
 	struct dect_contacts *contacts;

@@ -228,6 +228,7 @@ struct dect_mm_stats {
 	uint32_t locate_auth_failed; /* ... and refused for it */
 	uint32_t ft_auth;	   /* the PT authenticated us: replies sent */
 	uint32_t ft_auth_refused;  /* ... refused: no UAK, or not DSAA/UAK */
+	uint32_t ft_auth_capped;   /* ... refused: more than DECT_MM_FT_AUTH_MAX on this link (API 155) */
 	uint32_t locate_deferred;  /* unknown identities held for the owner */
 	uint32_t locate_retrans;   /* the PT repeated a held request */
 	uint32_t bad_ti;	   /* MM messages ignored: TV other than 0 */
@@ -321,6 +322,11 @@ struct dect_mm {
 	struct dect_mm_held held[DECT_MM_HELD_MAX];
 	unsigned n_held;
 	int      adopted;
+	/*
+	 * The record a {DETACH} named (API 155), or -1. A {DETACH} is not authenticated, so it never
+	 * adopts: it only names a handset we hold, and the base stamps that record.
+	 */
+	int      detach_tag;
 
 	/*
 	 * What the handset said about itself in its {LOCATE-REQUEST} or
@@ -427,6 +433,20 @@ int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
  * CC gate, so the two gates admit the same handsets.
  */
 int dect_mm_adopt(struct dect_mm *mm, const uint8_t *id, size_t id_len);
+/*
+ * The tag of the held handset `id` names, or of the connection's own identity (-2 when no record is
+ * adopted), or -1 if it is neither. Like dect_mm_adopt() but it changes nothing: for messages that are
+ * not authenticated (API 155).
+ */
+int dect_mm_find(const struct dect_mm *mm, const uint8_t *id, size_t id_len);
+/*
+ * At most this many of a PT's {AUTHENTICATION-REQUEST}s are answered on one link (API 155): each
+ * answer is the base's response to a challenge the peer chose, under the key of the identity it
+ * claimed; a handset asks once or twice per connection.
+ */
+#define DECT_MM_FT_AUTH_MAX 3u
+/* Overwrite the connection's keys and PIN copies when it ends (API 155). */
+void dect_mm_wipe(struct dect_mm *mm);
 
 /*
  * A held {LOCATE-REQUEST}: returns 1 and its identity, or 0 if none is

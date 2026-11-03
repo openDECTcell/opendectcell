@@ -678,6 +678,18 @@ static void test_probe_window(void)
 
 #define TRACE_DIR	"tests/stubd-traces"
 
+/* -g (the registering base) without -P is refused: there is no default registration PIN (API 155). */
+static void test_g_needs_a_pin(void)
+{
+	char *with_g[] = { "dect-stubd", "-g", NULL };
+	char *with_pin[] = { "dect-stubd", "-g", "-P", "1x", NULL };	/* a bad PIN is refused too */
+
+	optind = 1;
+	CHECK_EQ(stubd_main(2, with_g), 2);
+	optind = 1;
+	CHECK_EQ(stubd_main(4, with_pin), 2);
+}
+
 int main(int argc, char **argv)
 {
 	const char *u = getenv("GOLDEN_UPDATE");
@@ -687,6 +699,7 @@ int main(int argc, char **argv)
 	setenv("TZ", "UTC", 1);
 	tzset();
 	unlink("build/test_stubd.log");
+	test_g_needs_a_pin();
 	test_probe_window();
 	for (i = 1; i < argc; i++, ran++)
 		run_trace(argv[i]);

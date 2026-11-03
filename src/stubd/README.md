@@ -131,7 +131,7 @@ parsed by `getopt` with `"d:c:T:R:t:vpM:gKb:P:s:k:w:V:Ca:h"`.
 | `-M SRC:DST:PRIM[:HEX]` | Send this mail once the link is up, one per loop tick; repeatable |
 | `-g` | Base mode: bring the radio up (registration closed unless `-a regopen`) and run the host stack; parks at exit |
 | `-K` | Cell mode, see above; cannot be combined with `-g` |
-| `-P PIN` | Registration PIN (4 to 8 digits); `-P @FILE` reads it from a root-only file |
+| `-P PIN` | Registration PIN (4 to 8 digits); `-P @FILE` reads it from a root-only file. `-g` refuses to start without it: there is no default PIN |
 | `-s PATH` | Subscription store; repeat for every handset slot. `-s ""` turns the store off |
 | `-b FILE` | Offer the handsets a contact list from FILE (the CardDAV sync writes it); changes are appended to `FILE.changes` |
 | `-k off` | Do not send the call key to the chip before cipher requests |

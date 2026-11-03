@@ -82,7 +82,28 @@ void dect_mm_init(struct dect_mm *mm, const struct dect_mm_cfg *cfg)
 	mm->cfg.authenticate = cfg->authenticate ? 1u : 0u;
 	mm->state = DECT_MM_IDLE;
 	mm->adopted = -1;
+	mm->detach_tag = -1;
 	mm->reg_pin = -1;
+}
+
+/* memset the compiler may not drop: the keys are dead after it */
+static void secure_zero(void *p, size_t n)
+{
+	volatile uint8_t *v = p;
+
+	while (n--)
+		*v++ = 0;
+}
+
+void dect_mm_wipe(struct dect_mm *mm)
+{
+	secure_zero(mm->uak, sizeof(mm->uak));
+	secure_zero(mm->cipher_uak, sizeof(mm->cipher_uak));
+	secure_zero(mm->dck, sizeof(mm->dck));
+	secure_zero(mm->rs, sizeof(mm->rs));
+	secure_zero(mm->rand_f, sizeof(mm->rand_f));
+	secure_zero(mm->cfg.pin, sizeof(mm->cfg.pin));
+	mm->uak_known = 0;
 }
 
 int dect_mm_hold(struct dect_mm *mm, const uint8_t *id, size_t id_len,
@@ -132,6 +153,23 @@ int dect_mm_locate_resume(struct dect_mm *mm)
 		return 1;
 	}
 	send_locate_reject(mm, DECT_MM_REJECT_IPUI_UNKNOWN);
+	return -1;
+}
+
+int dect_mm_find(const struct dect_mm *mm, const uint8_t *id, size_t id_len)
+{
+	unsigned i;
+
+	if (!id || !id_len)
+		return -1;
+	for (i = 0; i < mm->n_held; i++) {
+		const struct dect_mm_held *h = &mm->held[i];
+
+		if (h->id_len == id_len && !memcmp(h->id, id, id_len))
+			return h->tag;
+	}
+	if (mm->port_id_len && id_len == mm->port_id_len && !memcmp(id, mm->port_id, id_len))
+		return mm->adopted >= 0 ? mm->adopted : -2;	/* ours, but no record to stamp */
 	return -1;
 }
 
@@ -438,6 +476,15 @@ static void on_ft_authentication(struct dect_mm *mm, const uint8_t *ies,
 
 	at = dect_nwk_find_ie(ies, ies_len, DECT_IE_AUTH_TYPE, &at_len);
 	rand_p = dect_nwk_find_ie(ies, ies_len, DECT_IE_RAND, &rand_len);
+	if (mm->stats.ft_auth >= DECT_MM_FT_AUTH_MAX) {
+		/* a peer that has not proved its key may not draw RES2 values without end */
+		mm->stats.ft_auth_capped++;
+		b = txq_slot(mm, &idx);
+		if (b)
+			txq_commit(mm, idx, hdr(mm, b, DECT_TI_RESPONDER,
+					   DECT_MM_AUTHENTICATION_REJECT));
+		return;
+	}
 	if (!mm->uak_known || !rs || !rand_p ||
 	    rand_len != DECT_AUTH_RAND_LEN || !at || at_len < 2u ||
 	    at[0] != 0x01u || (at[1] >> 4) != 0x1u) {
@@ -1301,9 +1348,15 @@ void dect_mm_rx(struct dect_mm *mm, const uint8_t *msg, size_t len,
 			const uint8_t *pid;
 			size_t pid_len;
 
+			int tag;
+
 			pid = dect_nwk_find_ie(ies, ies_len, DECT_IE_PORTABLE_IDENTITY, &pid_len);
-			if (pid && dect_mm_adopt(mm, pid, pid_len))
+			tag = pid ? dect_mm_find(mm, pid, pid_len) : -1;
+			if (tag != -1) {
+				/* named, not adopted: the peer has proved nothing (API 155) */
+				mm->detach_tag = tag;
 				mm->stats.detached++;
+			}
 		}
 		break;
 	case DECT_MM_TEMP_IDENTITY_ASSIGN_ACK:

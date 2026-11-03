@@ -1699,6 +1699,61 @@ int main(void)
 		CHECK_EQ(dect_base_side_start(&b, 5), -1);	/* none free */
 	}
 
+	/*
+	 * Wrong PINs close the window (API 155): a PIN is not to be guessed at the radio's speed. The
+	 * ones a model makes on purpose (PIN 0000 first) and a window that is closed do not count; a
+	 * window opened again starts from none.
+	 */
+	{
+		struct dect_base_link *bl;
+		struct dect_mm *mm;
+		unsigned i;
+
+		dect_base_init(&b);
+		b.ops = &ops;
+		b.n_hs = 1;
+		b.cur = 0;
+		bl = &b.main_link;
+		mm = &bl->link.mm;
+		dect_base_reg_window(&b, 1, 120, 1000, "test");
+		for (i = 0; i < DECT_BASE_REG_FAIL_MAX - 1; i++) {
+			bl->reported_state = DECT_MM_IDLE;
+			mm->state = DECT_MM_FAILED;
+			mm->stats.auth_fail = 1;
+			dect_base_main_enrolment(&b);
+		}
+		CHECK_EQ(b.reg_wrong, DECT_BASE_REG_FAIL_MAX - 1u);
+		dect_base_tick(&b, 2000, 0);
+		CHECK_EQ(b.reg_open, 1);		/* one short of the budget */
+		/* a model that tries 0000 first: its attempt is not a guess */
+		b.prof[0].reg_tries_0000_first = 1;
+		bl->reported_state = DECT_MM_IDLE;
+		mm->state = DECT_MM_FAILED;
+		dect_base_main_enrolment(&b);
+		CHECK_EQ(b.reg_wrong, DECT_BASE_REG_FAIL_MAX - 1u);
+		b.prof[0].reg_tries_0000_first = 0;
+		bl->reported_state = DECT_MM_IDLE;
+		mm->state = DECT_MM_FAILED;
+		dect_base_main_enrolment(&b);
+		n_sent = 0;
+		dect_base_tick(&b, 3000, 0);
+		CHECK_EQ(b.reg_open, 0);		/* the budget is spent */
+		CHECK(n_sent >= 1 && sent[0].prim == 0x022C);
+		/* a window opened again starts over; a smaller budget can be set */
+		dect_base_reg_window(&b, 1, 120, 4000, "test");
+		CHECK_EQ(b.reg_wrong, 0u);
+		b.cfg.reg_fail_max = 2;
+		b.reg_wrong = 2;
+		dect_base_tick(&b, 5000, 0);
+		CHECK_EQ(b.reg_open, 0);
+		/* failures with the window closed are not counted */
+		b.reg_wrong = 0;
+		bl->reported_state = DECT_MM_IDLE;
+		mm->state = DECT_MM_FAILED;
+		dect_base_main_enrolment(&b);
+		CHECK_EQ(b.reg_wrong, 0u);
+	}
+
 	/* connections up and down (S6a) */
 	{
 		dect_base_init(&b);
