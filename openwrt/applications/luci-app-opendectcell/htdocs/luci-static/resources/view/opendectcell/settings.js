@@ -367,6 +367,27 @@ function reloadSoon() {
 	window.setTimeout(function() { location.reload(); }, 3000);
 }
 
+/* The enrolment's outcome, written by `enroll_start`: "running T", "ok T text" or "error T text". */
+var ENROLL_STATUS = UI_DIR + 'enroll.status';
+var ENROLL_WAIT_MS = 90000;
+
+/* Polls the status until the enrolment is over or 90 seconds have passed since `started`. */
+function waitForEnrolment(started) {
+	return L.resolveDefault(fs.read(ENROLL_STATUS), '').then(function(text) {
+		var m = /^(running|ok|error) (\d+)\s*(.*)$/.exec((text || '').trim());
+
+		if (m && m[1] == 'ok')
+			return { ok: true, text: m[3] };
+		if (m && m[1] == 'error')
+			return { ok: false, text: m[3] };
+		if (Date.now() - started > ENROLL_WAIT_MS + 3000)
+			return { ok: false, text: _('no answer within 90 seconds') };
+		return new Promise(function(resolve) { window.setTimeout(resolve, 1000); }).then(function() {
+			return waitForEnrolment(started);
+		});
+	});
+}
+
 /*
  * Enrol with a controller: its enrollment string (its web interface makes
  * one per cell), then cell mode. The service restarts as a cell.
@@ -393,7 +414,7 @@ function enrollDialog() {
 						return;
 					}
 					ui.showModal(_('Enrolling'), [ E('p', { 'class': 'spinning' },
-						_('Asking the controller; this can take up to a minute.')) ]);
+						_('Asking the controller; this can take up to 90 seconds.')) ]);
 					/*
 					 * the string carries the one-time token: a root-only
 					 * file, so it is not on a command line for every local
@@ -403,19 +424,30 @@ function enrollDialog() {
 
 					window.crypto.getRandomValues(rnd);
 					rnd.forEach(function(b) { tmp += ('0' + b.toString(16)).slice(-2); });
+					/*
+					 * A call to the box ends after 20 to 30 seconds, and the service restart alone can take 15: so the
+					 * enrolment runs in the background (enroll_start, with a limit of 90 seconds of its own) and the
+					 * page polls its status file, and gives up after 90 seconds itself.
+					 */
 					return fs.exec(INIT, [ 'ui_dir' ]).then(function() {
 						return fs.write(tmp, v + '\n', 384 /* 0600 */);
 					}).then(function() {
-						return fs.exec(INIT, [ 'enroll', '@' + tmp ]);
+						return fs.exec(INIT, [ 'enroll_start', '@' + tmp ]);
 					}).then(function(r) {
+						if (r.code != 0)
+							throw new Error((r.stderr || r.stdout || String(r.code)).trim());
+						return waitForEnrolment(Date.now());
+					}).then(function(res) {
 						ui.hideModal();
-						if (r.code != 0) {
-							ui.addNotification(null, E('p', {}, [ _('Not enrolled: %s').format(
-								(r.stderr || r.stdout || String(r.code)).trim()) ]), 'warning');
+						if (!res.ok) {
+							ui.addNotification(null, E('p', {}, [ _('Not enrolled: %s').format(res.text) ]), 'warning');
 							return;
 						}
 						ui.addNotification(null, E('p', {}, _('Enrolled: this box is now a cell. The page reloads.')), 'info');
 						reloadSoon();
+					}).catch(function(e) {
+						ui.hideModal();
+						ui.addNotification(null, E('p', {}, [ _('Not enrolled: %s').format(e.message || String(e)) ]), 'warning');
 					});
 				}
 			}, _('Enrol'))

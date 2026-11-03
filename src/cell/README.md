@@ -57,8 +57,9 @@ LuCI is written to `/var/run/opendectcell/cell-link.json`.
 On a box the init script runs it: `opendectcell.init` `start_cell()` starts
 `dect-stubd -K` and a second procd instance `dect-cell run` (with `-P` when the
 UCI option `cell_plain_rtp` is set); `/etc/init.d/opendectcell enroll '<string>'`
-calls `dect-cell enroll` and switches the role to cell, `cell_leave` calls
-`dect-cell forget`. Built as the OpenWrt package `opendectcell-cell`
+calls `dect-cell enroll` and switches the role to cell (`enroll_start @FILE` is the same in the
+background, with a limit of 90 seconds, its outcome in `/var/run/opendectcell-ui/enroll.status`: what LuCI uses, since a call
+to the box ends after 20 to 30 seconds), `cell_leave` calls `dect-cell forget`. Built as the OpenWrt package `opendectcell-cell`
 (`openwrt/net/opendectcell/Makefile`).
 
 ## Structure of dect-cell.c

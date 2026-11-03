@@ -14,6 +14,7 @@ USE_PROCD=1
 extra_command "register" "Open handset registration for 'regwindow' seconds (120)"
 extra_command "forget" "Remove a deregistered handset's settings: forget <1-6>"
 extra_command "enroll" "Make this box a cell of an openDECTcell controller: enroll '<enrollment string>' or enroll @<file with it>"
+extra_command "enroll_start" "enroll in the background (what LuCI uses): enroll_start @<file with the string>; the outcome is in the status file, the time limit is 90 seconds"
 extra_command "ui_dir" "Make the root-only directory LuCI hands files to this service over in"
 extra_command "cell_leave" "Leave cell mode: erase the cell's credentials and run the base again"
 
@@ -905,6 +906,45 @@ enroll() {
 	uci -q set opendectcell.main.role=cell && uci -q commit opendectcell
 	log "enrolled: cell mode from now on"
 	restart
+}
+
+# What LuCI uses: it cannot wait for `enroll` (a call to the box ends after 20 to 30 seconds, and the service restart alone can take 15),
+# so the enrolment runs in the background and its outcome is written to a status file the page polls:
+#   running <epoch>  |  ok <epoch> <what dect-cell said>  |  error <epoch> <why>
+# It is given ENROLL_LIMIT seconds (90) in all, the restart included; after that it is stopped and says so.
+ENROLL_STATUS=$UI_DIR/enroll.status
+ENROLL_LIMIT=${ENROLL_LIMIT:-90}
+enroll_start() {
+	local st="$ENROLL_STATUS" started
+
+	ui_dir || return 1
+	[ -n "$1" ] || { log "usage: enroll_start @<file with the enrollment string>"; return 1; }
+	started=$(sed -n 's/^running \([0-9]*\)$/\1/p' "$st" 2>/dev/null)
+	if [ -n "$started" ] && [ $(( $(date +%s) - started )) -lt $((ENROLL_LIMIT + 5)) ]; then
+		log "an enrolment is already running"
+		return 1
+	fi
+	echo "running $(date +%s)" > "$st"
+	(
+		local work dog rc msg
+		enroll "$1" > "$st.out" 2>&1 &
+		work=$!
+		( sleep "$ENROLL_LIMIT"; kill $work 2>/dev/null ) &
+		dog=$!
+		wait $work
+		rc=$?
+		kill $dog 2>/dev/null
+		msg=$(head -n 1 "$st.out" 2>/dev/null | tr -d '\r')
+		if [ $rc -eq 0 ]; then
+			echo "ok $(date +%s) ${msg:-enrolled}" > "$st"
+		elif [ $rc -ge 128 ]; then
+			echo "error $(date +%s) no answer within $ENROLL_LIMIT seconds" > "$st"
+		else
+			echo "error $(date +%s) ${msg:-the enrolment failed}" > "$st"
+		fi
+		rm -f "$st.out"
+	) </dev/null >/dev/null 2>&1 &
+	return 0
 }
 
 cell_leave() {

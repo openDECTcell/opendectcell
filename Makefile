@@ -251,6 +251,7 @@ check: $(TESTS)
 	@python3 -I tests/test_release_files.py
 	@python3 -I tests/test_sip_init.py
 	@python3 -I tests/test_luci_acl.py
+	@python3 -I tests/test_enroll_start.py
 
 clean:
 	rm -rf $(BUILD)

@@ -477,8 +477,11 @@ its SIP client does not run.
 
 **Becoming a cell.** Network > DECT, tab *General*, *Make this box a
 cell…*. Paste the **enrollment string** from the controller's web
-interface (it starts with `opendectcell-enroll:v1?`) and press *Enrol*. This can
-take up to a minute. The page then reloads in cell mode. An administrator
+interface (it starts with `opendectcell-enroll:v1?`) and press *Enrol*. It takes
+15 to 30 seconds (most of it the service restarting as a cell) and is given 90
+seconds at most: after that the page says *no answer within 90 seconds*, and
+the controller's reason is shown if it refused (an used or expired token, for
+example). The page then reloads in cell mode. An administrator
 may have to approve the cell on the controller first.
 
 **In cell mode** Network > DECT shows only:
