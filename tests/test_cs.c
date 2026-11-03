@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Tests for src/libopendectcell/dect_cs.c: decoding inbound 0x0203 Cs segments and
- * encoding the outbound 0x0244 / 0x0202 C-plane transport mails. No hardware.
+ * encoding the outbound 0x0244 C-plane transport mail. No hardware.
  */
 #include "check.h"
 #include "../src/libopendectcell/dect_cs.h"

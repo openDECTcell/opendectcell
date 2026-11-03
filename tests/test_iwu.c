@@ -2,7 +2,7 @@
 /*
  * Tests for src/libopendectcell/dect_iwu.c: the CAT-iq list access responder,
  * TS 102 527-3 V1.7.1 clause 7.4.10. Request bytes are the ones a Gigaset
- * A540 CAT sends (work/box-tmp/vCOLLIDE-20261024-183515.log); the expected
+ * A540 CAT sends (a bench capture of 2026-10-24); the expected
  * replies are built from the standard's tables, not from a capture.
  */
 #include "check.h"

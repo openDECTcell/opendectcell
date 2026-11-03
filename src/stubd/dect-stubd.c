@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * dect-stubd: keep the STUB control channel up on /dev/dect0.
+ * dect-stubd: the daemon that runs the base on a box. It keeps the STUB
+ * control channel up, hosts the base-station stack of libopendectcell (struct
+ * dect_base: handsets, calls, registration, lists), serves the control and
+ * audio sockets to the SIP side, and in cell mode (-K) hands every chip mail
+ * to dect-cell instead. See src/stubd/README.md for a map of this file.
  *
- * It brings up the PCM receive and transmit path step by step (the same
+ * Below the stack it brings up the PCM receive and transmit path step by step (the same
  * six DECT_IOC_PCM_STEP bring-up as dect-pcmcap), finds the control slot,
  * sends the 0xF600 contact mail and then maintains the link: it decodes
  * the STUB's 0xAA-framed mails (libopendectcell/dect_mail.h), runs the contact

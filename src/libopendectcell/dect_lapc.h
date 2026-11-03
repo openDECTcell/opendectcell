@@ -10,7 +10,7 @@
  *
  * This header covers the frame codec: parse a received LAPC frame into its
  * fields, and build I-frames and supervisory (RR) frames. The class-A
- * acknowledged-link state machine is added on top (same module).
+ * acknowledged-link state machine follows in this header.
  *
  * We are the fixed part (FT). Per §7.3.2 the FT sends commands with C/R = 1 and
  * responses with C/R = 0 (the PT does the opposite). GAP connection-oriented

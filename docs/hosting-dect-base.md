@@ -161,7 +161,7 @@ should hold and clear the others (`install()` does both), then audit.
 
 ## 8. Testing a host
 
-The fifteen golden traces in `tests/stubd-traces/` are the behaviour, mail
+The sixteen golden traces in `tests/stubd-traces/` are the behaviour, mail
 for mail: what goes to the chip and what goes to the bridge after each
 segment from a handset. They carry made-up identities and keys only. A
 second host that replays them through its own callbacks and gets the same

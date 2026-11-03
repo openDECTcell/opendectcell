@@ -31,20 +31,24 @@ the web interface, the browser's console output helps.
 
 ### Layout
 
+[ARCHITECTURE.md](ARCHITECTURE.md) explains how the pieces fit together, [docs/developing.md](docs/developing.md)
+is the working guide, and each directory below has a README that says what each of its files does.
+
 | Path | What is there |
 |---|---|
-| `src/libopendectcell/` | The DECT protocol library: framing, link layer, registration and authentication, call control, G.722, diagnostics, profiles |
-| `src/stubd/` | `dect-stubd`, the daemon that runs the base |
-| `src/fwload/` | `dect-fwload`, the chip firmware loader |
-| `src/baresip/` | The baresip module that connects calls to SIP |
+| `src/libopendectcell/` | The DECT protocol library: framing, link layer, registration and authentication, call control, G.722, diagnostics, profiles ([README](src/libopendectcell/README.md)) |
+| `src/stubd/` | `dect-stubd`, the daemon that runs the base ([README](src/stubd/README.md)) |
+| `src/cell/` | `dect-cell`, the box's link to a controller ([README](src/cell/README.md)) |
+| `src/fwload/` | `dect-fwload`, the chip firmware loader ([README](src/fwload/README.md)) |
+| `src/baresip/` | The baresip module that connects calls to SIP ([README](src/baresip/README.md)) |
 | `src/tools/` | Development tools for captures (`dect-pcmcap`, `dect-maildump`, …) |
-| `kernel/` | The kernel drivers, one per SoC family (GPL-2.0-only) |
+| `kernel/` | The kernel drivers, one per SoC family (GPL-2.0-only) ([README](kernel/README.md)) |
 | `openwrt/` | The OpenWrt feed, laid out as upstream: `net/opendectcell` (packages, init script, configuration), `applications/luci-app-opendectcell`; see [openwrt/README.md](openwrt/README.md) |
-| `boards/` | Board profiles, one per FRITZ!Box model |
-| `profiles/` | Handset profiles |
-| `tests/` | Unit tests, run on the PC |
+| `boards/` | Board profiles, one per FRITZ!Box model ([README](boards/README.md)) |
+| `profiles/` | Handset profiles ([README](profiles/README.md)) |
+| `tests/` | Unit tests, run on the PC ([README](tests/README.md)) |
 | `tools/` | PC tools: firmware extraction, release build, analysis helpers ([tools/README.md](tools/README.md)) |
-| `docs/` | Documentation ([docs/README.md](docs/README.md)) |
+| `docs/` | Documentation ([docs/README.md](docs/README.md)); dated logs of bench sessions and investigations are in `docs/journals/` |
 
 ### Build and test on the PC
 

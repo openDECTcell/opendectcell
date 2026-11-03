@@ -7,7 +7,7 @@ and the record of each stage.
 
 ## Where things are
 
-`dect-stubd.c` is 13,400 lines, the library's C files 10,800 (2026-10-30).
+`dect-stubd.c` was 13,400 lines, the library's C files 10,800 (2026-10-30); since the move the daemon is about 9,100 lines and the library 16,800.
 
 | Part | Where |
 |---|---|
@@ -25,9 +25,10 @@ Mails enter the stack at `handle_reg_mail()` and leave through
 A `struct dect_base` in the library: one chip's worth of stack state
 (links, handset records, calls, lists), driven by
 
-- `dect_base_mail(base, mail, now)`: a mail from the chip;
+- `dect_base_conn_up()`/`dect_base_conn_down()` and `dect_base_segment(base, mail, now)`: connections and the
+  C-plane mails from the chip;
 - `dect_base_tick(base, now)`: time;
-- `dect_base_ctl(base, message, now)`: the bridge's verbs
+- `dect_base_ctl_call()` and `dect_base_ctl_admin()`: the bridge's verbs
   (`docs/bridge-interface.md`);
 
 and talking back through callbacks the host sets: send a mail, emit a
@@ -48,7 +49,7 @@ and changes no byte on the air unless it says so.
 | S2 | Registration and locate into `dect_base` | S0 traces; bench: register and relocate one handset |
 | S3 | Calls: in, out, internal, parallel, side links, paging | S0 traces; bench: card A calls |
 | S4 | Lists, MWI, date and time, CLIP, missed call notification | S0 traces; bench: card A lists |
-| S5 | The control socket verbs as `dect_base_ctl()` | `test_ctl` and S0 |
+| S5 | The control socket verbs as `dect_base_ctl_call()` and `dect_base_ctl_admin()` | `test_ctl` and S0 |
 | S6 | The controller's cgo host (opendectcell-controller C3) over the mail tunnel | a handset registers through the controller |
 
 Bench time is needed from S2 on: each stage is one bench session on the
@@ -131,7 +132,7 @@ unchanged:
    move without the links. The build-specific RAM addresses (06.88,
    08.25) come with them as data the host sets.
 3. **The main link**: `reg` (its `dect_link`, handle, flags) into
-   `dect_base`, and `dect_base_mail()` for connection up, down and the
+   `dect_base`, and `dect_base_conn_up()`, `dect_base_conn_down()` and `dect_base_segment()` for connection up, down and the
    C-plane segments on it; `reg_start()`, the identity gate and adoption
    move with it.
 4. **Side links** the same way.

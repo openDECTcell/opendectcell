@@ -1,10 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * The base station above the links: what dect-stubd holds today and the
- * library takes over stage by stage (docs/stack-in-library.md), so the box
- * and the controller run one implementation.
+ * The base station above the links: one base's whole state (handset records,
+ * the chip's slots, main and side links, registration window, locate, ring
+ * and page, calls in and out, lists, notices, ciphering, deregistration), so
+ * the box (dect-stubd) and the controller run one implementation. The host
+ * supplies the callbacks in struct dect_base_ops and calls dect_base_init(),
+ * dect_base_conn_up()/_down(), dect_base_segment(), dect_base_tick() and the
+ * control verbs. See src/libopendectcell/README.md for the map and
+ * docs/hosting-dect-base.md for writing a host; docs/stack-in-library.md
+ * records how the code moved here from dect-stubd, stage by stage.
  *
- * Stage S1a: a handset's record, the part of a subscription that outlives a
+ * A handset's record is the part of a subscription that outlives a
  * connection and a restart. The host stores it (dect-stubd in its -s files,
  * the controller in its database); the stack reads and changes it.
  *

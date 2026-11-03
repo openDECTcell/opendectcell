@@ -118,7 +118,9 @@ alter their behaviour.**
 | Path | What belongs there |
 |---|---|
 | `docs/models/` | Per-model analyses (image format, components, GPIOs, boot) |
-| `docs/` | Protocol and interface notes (STUB API, control channel, SPI-TDM, …) |
+| `docs/journals/` | Dated logs: bench cards and their results, task lists, investigation logs. History, not reference |
+| `docs/` | Protocol and interface notes (STUB API, control channel, SPI-TDM, …); `docs/README.md` is the index, `docs/glossary.md` the glossary, `docs/developing.md` the developer guide |
+| `ARCHITECTURE.md` | The map of the code: pieces, data flow, the rules that keep them apart. Each source directory also has a README listing its files; keep both in step when files are added, renamed or removed |
 | `tools/` | Analysis and release tools (Python standard library preferred) |
 | `kernel/` | Kernel modules, one per OpenWrt target (`kmod-opendectcell-lantiq`, …) with the transport drivers and the board table (GPL-2.0) |
 | `boards/` | Board profiles, one per model, named after OpenWrt's `board_name` (e.g. `avm,fritz7412`); see `docs/hardware-abstraction.md` |

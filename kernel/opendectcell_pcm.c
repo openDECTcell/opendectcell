@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * openDECTcell - PCM/TDM receive path through the IPQ4019 audio subsystem
- * (ADSS) for the AVM 7520/7530: the SoC is a TDM slave of the DECT chip.
+ * openDECTcell - PCM/TDM path (receive, and transmit when the caller asks for it)
+ * through the IPQ4019 audio subsystem (ADSS) for the AVM 7520/7530: the SoC is
+ * a TDM slave of the DECT chip.
  *
  * Written from docs/pcm-tdm-ipq4019.md; "doc §n" refers to its sections.
- * Receive only: pins 24-27 and the transmit MBOX are not touched.
+ * Receive is the base; the transmit pins and MBOX are set up only with
+ * DECT_PCM_CF_TX (doc §14).
  */
 #include <linux/bitfield.h>
 #include <linux/bits.h>

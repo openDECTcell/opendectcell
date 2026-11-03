@@ -13,14 +13,14 @@ Register your DECT handsets with the box, connect them to a SIP account, and
 make phone calls, in HD voice and encrypted, configured in OpenWrt's web
 interface.
 
-> **Status: early, but it makes real phone calls.** On a FRITZ!Box 7520,
-> Gigaset handsets register, ring, and call out and in over SIP. Many
-> comfort features are still missing, and only one box model is tested. See [what works and what doesn't](docs/status.md).
+> **Status: early, but it makes real phone calls.** On a FRITZ!Box 7520 and a 7412,
+> Gigaset handsets register, ring, and call out and in over SIP, alone or as cells of a
+> controller. Some comfort features are still missing. See [what works and what doesn't](docs/status.md).
 
 ## Features
 
 - **Your handsets on OpenWrt:** register GAP and CAT-iq handsets with a
-  random PIN; up to six per box.
+  random PIN; up to six per box, and many more with a [controller](#more-than-one-box-or-more-than-six-handsets-a-controller).
 - **Phone calls over SIP:** each handset gets up to two SIP accounts (*VoIP
   profiles*), for a provider or your own telephone system; several handsets
   can share one, and a call to it rings them all.
@@ -28,7 +28,7 @@ interface.
 - **HD voice and encryption:** wideband G.722 audio, ciphered on the air with
   the DECT standard cipher when the handset supports it (DECT's cipher is weak).
 - **Caller ID and line names** on the handset display.
-- **Calls between handsets** on the same box.
+- **Calls between handsets** on the same box (and, with a controller, between a user's handsets on different boxes).
 - **A web interface for everything:** settings, handsets and VoIP profiles
   under Network > DECT; a live monitor (base, handsets, signal, SIP
   registrations, running calls, logs) under Status > DECT.
@@ -36,10 +36,10 @@ interface.
 
 ### What's missing so far
 
-No call waiting or hold; no phonebook on the handset; only the FRITZ!Box
-7520 is tested (the 7412 is being brought up).
-The full list is in [docs/status.md](docs/status.md), and what comes next is
-in the [roadmap](ROADMAP.md).
+Call waiting, hold and a voicemail indicator are built but not yet tried on real handsets; the 7530 and the
+7362 SL are not (fully) tested. The phonebook (from a CardDAV address book) and the call lists work on the
+Gigaset A540. The full list is in [docs/status.md](docs/status.md), and what comes next is in the
+[roadmap](ROADMAP.md).
 
 ## Supported hardware
 
@@ -47,7 +47,7 @@ in the [roadmap](ROADMAP.md).
 |---|---|
 | **FRITZ!Box 7520** | ✅ works: the development box |
 | **FRITZ!Box 7530** | 🟡 same hardware as the 7520, not yet tested |
-| FRITZ!Box 7412 | 🟡 handsets register and SIP calls work (needs `kmod-lantiq-ssc-pcm`); not released yet |
+| FRITZ!Box 7412 | 🟡 handsets register and calls work, standalone and as a cell (needs `kmod-lantiq-ssc-pcm`, which the releases include); in rare cases the box's network dies at a service stop ([details](docs/7412-stop-hang.md)) |
 | FRITZ!Box 7362 SL | 🟡 a handset registers, rings and talks (HD voice, echo test; needs `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm`); the service and SIP calls not tested yet |
 
 **Tested handsets:** Gigaset A540 CAT, Gigaset C430A, Gigaset AS690H and AVM
@@ -57,8 +57,10 @@ does.
 
 ## Quick start
 
-You need a FRITZ!Box 7520 or 7530 running **OpenWrt 25.12.5**, a PC with
-Python 3, and an official FRITZ!OS image for your box from AVM.
+You need a FRITZ!Box 7520, 7530 or 7412, a PC with Python 3, and an official FRITZ!OS image for your box from AVM.
+The kernel module fits only the OpenWrt release the packages were built for (the release page says which), so
+either flash the release's **ready-made image** for your box (it has the packages inside) or install the packages
+on exactly that OpenWrt release.
 
 1. **Install the packages** from the [latest release](https://github.com/openDECTcell/opendectcell/releases):
    add the project's signing key once, then upload the packages under
@@ -126,6 +128,16 @@ AVM's closed kernel module. openDECTcell replaces that part:
 
 More: [the documentation](docs/README.md), and for cells and a controller
 [the wiki](https://github.com/openDECTcell/opendectcell-controller/blob/main/docs/wiki/Home.md).
+
+## Documentation and code map
+
+| You want to | Start here |
+|---|---|
+| Use it | [docs/status.md](docs/status.md), [docs/install.md](docs/install.md), [docs/luci-manual.md](docs/luci-manual.md) |
+| Understand how it is built | [ARCHITECTURE.md](ARCHITECTURE.md), [docs/glossary.md](docs/glossary.md) |
+| Change the code | [docs/developing.md](docs/developing.md), [CONTRIBUTING.md](CONTRIBUTING.md), and the README in each source directory: [src/libopendectcell](src/libopendectcell/README.md), [src/stubd](src/stubd/README.md), [src/cell](src/cell/README.md), [src/fwload](src/fwload/README.md), [src/baresip](src/baresip/README.md), [kernel](kernel/README.md), [boards](boards/README.md), [profiles](profiles/README.md), [tests](tests/README.md), [openwrt](openwrt/README.md), [tools](tools/README.md) |
+| Know the chip's interface | [docs/stub-api.md](docs/stub-api.md) and the other reference documents in [docs/README.md](docs/README.md) |
+| See how it got here | [docs/journals/](docs/journals/README.md), [ROADMAP.md](ROADMAP.md) |
 
 ## Building from source
 
@@ -211,7 +223,7 @@ public work. These sources were read, compared against or used as tools:
 ## Contributing
 
 Reports of handsets and boxes, bug reports and code are welcome:
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](CONTRIBUTING.md); the working guide for code is [docs/developing.md](docs/developing.md).
 
 ## License
 

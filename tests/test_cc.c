@@ -897,7 +897,7 @@ static void test_release_from_fp(void)
 
 /*
  * Open the list-access call a session rides on, as the A540 does before its
- * first {CC-IWU-INFO} (work/box-tmp/vT3nb.log: SETUP with `e0 28`, then the
+ * first {CC-IWU-INFO} (a bench capture: SETUP with `e0 28`, then the
  * session opens on that transaction), and drain our CALL-PROC.
  */
 static void open_list_access_call(struct dect_cc *cc)
@@ -913,7 +913,7 @@ static void open_list_access_call(struct dect_cc *cc)
 /* A non-CC message (MM PD) is ignored. */
 /*
  * The exact {CC-IWU-INFO} a Gigaset A540 sends during call setup, copied from
- * work/box-tmp/vT3nb.log: `03 60 77 04 c3 00 05 00`. The handset opens four of
+ * a bench capture: `03 60 77 04 c3 00 05 00`. The handset opens four of
  * these per call and every one went unanswered before dect_iwu existed.
  */
 static void test_answers_the_handsets_iwu_session_open(void)

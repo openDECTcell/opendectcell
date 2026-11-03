@@ -61,4 +61,5 @@ with the SDK's compiler if you need them:
 | Tool | What it does |
 |---|---|
 | [syslog-sink.py](syslog-sink.py) | Collects a box's remote syslog (UDP) into a file named by the start time, flushed per line, so the log outlives a hang |
-| [bench-stop-race.sh](bench-stop-race.sh) | Starts the service on a box, stops it after N seconds and checks the box still answers (bench-later U8f) |
+| [bench-stop-race.sh](bench-stop-race.sh) | Starts the service on a box, stops it after N seconds and checks the box still answers ([journals/bench-later.md](../docs/journals/bench-later.md), U8f) |
+| [hang-campaign/](hang-campaign/README.md) | Long start/stop campaigns on a 7412 that survive a hang by power-cycling the box ([7412-stop-hang.md](../docs/7412-stop-hang.md)) |

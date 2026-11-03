@@ -3,13 +3,23 @@
 Where to start depends on what you want:
 
 - **Use openDECTcell on your box:** [status.md](status.md), then [install.md](install.md).
-- **Understand how it works:** the "How it works" section of the
-  [main README](../README.md#how-it-works), then the design documents below.
-- **Work on the code:** [CONTRIBUTING.md](../CONTRIBUTING.md),
-  [AGENTS.md](../AGENTS.md) (the project's rules), then the reference
-  documents.
+- **Understand how it works:** [ARCHITECTURE.md](../ARCHITECTURE.md) (the map of the code and the data flow), the
+  [glossary](glossary.md), then the design documents below.
+- **Work on the code:** [developing.md](developing.md) (build, test, where a change goes), the README of the
+  directory you are in ([src/libopendectcell](../src/libopendectcell/README.md), [src/stubd](../src/stubd/README.md),
+  [kernel](../kernel/README.md), [tests](../tests/README.md) and the others), [CONTRIBUTING.md](../CONTRIBUTING.md),
+  [AGENTS.md](../AGENTS.md) (the project's rules), then the reference documents.
 - **Port it to another FRITZ!Box:** [hardware-abstraction.md](hardware-abstraction.md)
   and the model analyses.
+
+## For developers
+
+| Document | What it covers |
+|---|---|
+| [../ARCHITECTURE.md](../ARCHITECTURE.md) | The pieces, how they talk, the data flow of a registration and a call, the rules that keep them apart |
+| [developing.md](developing.md) | Build and test, where a change goes, how the tests work, debugging on a box, commit rules |
+| [glossary.md](glossary.md) | DECT terms and the project's own words |
+| [api-versions.md](api-versions.md) | What changed in `libopendectcell`'s public interface at each API version |
 
 ## For users
 
@@ -32,14 +42,15 @@ Where to start depends on what you want:
 | [two-calls.md](two-calls.md) | Two calls at the same time on one chip |
 | [phonebook.md](phonebook.md) | The handsets' phonebook from a CardDAV address book, both ways |
 | [diagnostics.md](diagnostics.md) | What the DECT Monitor shows, and where each value comes from |
+| [7412-stop-hang.md](7412-stop-hang.md) | The 7412's rare network death at a service stop: the evidence, the hypotheses, what was ruled out |
+| [vendor-specific-support.md](vendor-specific-support.md) | Plan for handsets that need more than GAP and CAT-iq (manufacturer-specific commands) |
+| [images-plan.md](images-plan.md) | Ready-made OpenWrt images with the packages inside |
+| [security-review-2026-11-02.md](security-review-2026-11-02.md) | The security review of 2026-11-02: what was fixed and what is open |
 | [capacity.md](capacity.md) | How many handsets and calls one box carries, and how to go beyond |
 | [more-than-six.md](more-than-six.md) | Design and test plan for more than six stand-by handsets in one base (chip slots as a cache), 2026-10-31 |
-| [bench-2026-11-01.md](journals/bench-2026-11-01.md) | Run sheet for the bench day 2026-11-01: the open tests in 14 blocks, box state, restore commands |
-| [multicell-experiments.md](journals/multicell-experiments.md) | Experiments towards several boxes as one DECT system |
 | [notes-for-the-controller.md](notes-for-the-controller.md) | Interface notes for the separate multi-cell controller project |
 | [hosting-dect-base.md](hosting-dect-base.md) | For a second host of the stack (the controller): the chip mails, the callbacks, the per-cell chip settings, testing against the golden traces |
 | [stack-in-library.md](stack-in-library.md) | How the DECT stack moved from `dect-stubd` into `libopendectcell` (`struct dect_base`), stage by stage, so the controller can host it |
-| [api-versions.md](api-versions.md) | What changed in `libopendectcell`'s public interface at each API version |
 | [multicell-identities.md](multicell-identities.md) | Identities (RFPI, IPUI) for many cells under one controller |
 
 ## Reference: the DECT chip interface
@@ -76,32 +87,12 @@ chip. They are the basis for the code.
 How the project got here: bench sessions, experiments, dead ends and task
 lists, kept as they were written. They are dated and often superseded by
 later findings; the documents above are the current state. Each journal page
-says at the top what it was for.
+says at the top what it was ## Development journal
 
-| Document | What it covers |
-|---|---|
-| [registration-g6.md](journals/registration-g6.md) | Getting the first handset to register (gate G6) |
-| [call-g7.md](journals/call-g7.md) | Getting a handset to ring and talk (gate G7): the long log of every run |
-| [why-the-handsets-never-rang.md](journals/why-the-handsets-never-rang.md) | The search for why the Gigasets would not ring, and the answer |
-| [tasks-2026-10-28.md](journals/tasks-2026-10-28.md), [tasks-2026-10-30.md](journals/tasks-2026-10-30.md) | Task lists, still current for some open details |
-| [bench-later.md](journals/bench-later.md) | Every open bench test on one card, with the outcomes written before the run, and the unattended runs' results |
-| [bench-2026-10-25.md](journals/bench-2026-10-25.md), [bench-next.md](journals/bench-next.md), [bench-7412.md](journals/bench-7412.md) | Older bench test cards and their results; `docs/journals/bench-7412.md` the first handset on a 7412 |
-| [bench-7362sl.md](journals/bench-7362sl.md) | Gate G1 on a 7362 SL: the first STUB upload over the USIF UART, and whether the PCM clocks start |
-| [bench-7362sl-g2.md](journals/bench-7362sl-g2.md) | Gate G2 on a 7362 SL: the control channel over the VR9 TDM transport, radio off |
-| [bench-7362sl-g3-g4.md](journals/bench-7362sl-g3-g4.md) | Gates G3 and G4 on a 7362 SL: request and answer, and the STUB loop-back over the TDM transport, radio off |
-| [bench-7362sl-g5.md](journals/bench-7362sl-g5.md) | Gate G5 on a 7362 SL: a handset finds the base; the 07.18 STUB needs stock's configuration mails before the radio |
-| [bench-7362sl-g6-g7.md](journals/bench-7362sl-g6-g7.md) | Gates G6 and G7 on a 7362 SL: a handset registers, rings, and its speech comes back as an echo (G.722) |
+How the project got here (bench sessions, experiments, dead ends, task lists) is in [journals/](journals/README.md),
+kept as it was written. The documents above are the current state; the journals are dated and often superseded.
 
-The project-wide history and hand-over notes are in
-the maintainers' notes; the plan is in [ROADMAP.md](../ROADMAP.md).
-
-## Labels used in the documents
-
-Many statements carry a label saying how we know them:
-
-| Label | Meaning |
-|---|---|
-| `[observed]`, `[observed on hardware]` | Seen on a real box or handset |
+ hardware]` | Seen on a real box or handset |
 | `[derived statically]` | Worked out from analysing files, not yet seen running |
 | `[CR A-NNNN]` | A fact from the clean-room process: answer NNNN, given by a separate analysis that is not part of this repository |
 | *assumed*, `[inferred]` | Our reasoning, not yet checked |
