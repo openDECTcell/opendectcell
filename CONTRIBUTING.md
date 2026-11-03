@@ -61,11 +61,11 @@ The unit tests need no hardware. They must pass before every commit.
 
 ### Build for the box
 
-With the [OpenWrt SDK](https://downloads.openwrt.org/releases/25.12.5/targets/ipq40xx/generic/)
+With the [OpenWrt SDK](https://downloads.openwrt.org/releases/25.12.6/targets/ipq40xx/generic/)
 for the target unpacked somewhere:
 
 ```sh
-make cross SDK=/path/to/openwrt-sdk-25.12.5-ipq40xx-generic_…
+make cross SDK=/path/to/openwrt-sdk-25.12.6-ipq40xx-generic_…
 ```
 
 This puts ARM builds of `dect-stubd`, `dect-fwload` and the capture tools

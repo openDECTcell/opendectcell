@@ -91,6 +91,10 @@ controller. The full guide, from the controller's Docker setup to the first call
 troubleshooting, is the controller's wiki:
 **[docs/wiki/Quick-start.md](https://github.com/openDECTcell/opendectcell-controller/blob/main/docs/wiki/Quick-start.md)**.
 
+Multi-cell operation is early. What has been tried on real hardware, and what is only built or simulated (for
+example calls between boxes, and handsets moving between cells on their own), is in
+[docs/status.md](docs/status.md) and [docs/journals/bench-status-2026-11-02.md](docs/journals/bench-status-2026-11-02.md).
+
 ## How it works
 
 ```mermaid
@@ -226,6 +230,8 @@ Reports of handsets and boxes, bug reports and code are welcome:
 [CONTRIBUTING.md](CONTRIBUTING.md); the working guide for code is [docs/developing.md](docs/developing.md).
 
 ## License
+
+The licence of each component and the third-party parts are listed in [docs/licensing.md](docs/licensing.md); the policy for reporting a vulnerability is [SECURITY.md](SECURITY.md); what data the box keeps is in [docs/privacy-and-data.md](docs/privacy-and-data.md).
 
 GPL-2.0, see [LICENSE](LICENSE). The kernel driver under `kernel/` is
 GPL-2.0-only; everything else (programs, `libopendectcell`, tools) is

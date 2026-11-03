@@ -19,6 +19,7 @@ Where to start depends on what you want:
 | [../ARCHITECTURE.md](../ARCHITECTURE.md) | The pieces, how they talk, the data flow of a registration and a call, the rules that keep them apart |
 | [developing.md](developing.md) | Build and test, where a change goes, how the tests work, debugging on a box, commit rules |
 | [glossary.md](glossary.md) | DECT terms and the project's own words |
+| [licensing.md](licensing.md) | The licence of each component, the kernel/userspace boundary, third-party parts, provenance (not legal advice) |
 | [releasing.md](releasing.md) | How a release is built, signed and published; the one OpenWrt version a release is built for |
 | [api-versions.md](api-versions.md) | What changed in `libopendectcell`'s public interface at each API version |
 
@@ -29,6 +30,7 @@ Where to start depends on what you want:
 | [status.md](status.md) | What works, what doesn't yet, tested boxes and handsets |
 | [install.md](install.md) | Installing a release, the chip firmware, registering handsets, phone lines |
 | [luci-manual.md](luci-manual.md) | The web pages (Network > DECT, Status > DECT), field by field, with troubleshooting |
+| [privacy-and-data.md](privacy-and-data.md) | What personal and secret data the box stores, where, for how long, and how to remove it |
 | [firmware-sourcing.md](firmware-sourcing.md) | Why you supply the DECT chip firmware yourself, and which FRITZ!OS builds are known |
 | [handset-profiles.md](handset-profiles.md) | Handset profiles: per-model settings in `/etc/opendectcell/profiles/`, and how to write one |
 | [handset-compatibility.md](handset-compatibility.md) | What each tested handset does against openDECTcell, and what is special about it (the October investigation is in [journals/](journals/handset-compatibility-2026-10.md)) |

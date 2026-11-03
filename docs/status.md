@@ -1,8 +1,10 @@
 # What works, and what doesn't yet
 
-The state of openDECTcell **0.3.1** (October 2026), tested on a FRITZ!Box 7520 with
-OpenWrt 25.12.5. "Tested" means seen working on real hardware with real
-handsets, not only in the unit tests.
+The state of openDECTcell **0.3.3** (a pre-release; November 2026), tested on a FRITZ!Box 7520 (OpenWrt 25.12.5)
+and a FRITZ!Box 7412 (25.12.6). "Tested" means seen working on real hardware with real handsets, not only in the
+unit tests. The 0.3.3 images and packages themselves (OpenWrt 25.12.6) are built but not yet flashed on a box.
+Per feature, what is only unit-tested or only built is marked 🟡. The dated bench results are in
+[journals/bench-status-2026-11-02.md](journals/bench-status-2026-11-02.md).
 
 Legend: ✅ works and tested · 🟡 works with limits, or built but not fully
 tested · ❌ not built yet · ➖ out of scope for now
@@ -63,12 +65,13 @@ tested · ❌ not built yet · ➖ out of scope for now
 |---|---|---|
 | FRITZ!Box 7520 | ✅ | The development box |
 | FRITZ!Box 7530 | 🟡 | Same hardware as the 7520 and the same OpenWrt image, but not tested on one yet |
-| FRITZ!Box 7412 | 🟡 | With the `kmod-lantiq-ssc-pcm` transport (2026-10-29): two handsets registered, SIP calls in and out with HD voice, a call between handsets; unattended start, restore and key read-back on the current code (2026-10-30). The transport module is not released yet ([bench-7412.md](journals/bench-7412.md)) |
-| FRITZ!Box 7362 SL | ❌ | Board profile and firmware extraction in place; the DECT chip's UART (USIF) and PCM link (VR9 TDM) need new drivers ([analysis](models/7362SL-DECT-analysis.md) §7) |
+| FRITZ!Box 7412 | 🟡 | Works as a standalone base and as a cell of a controller, with the `kmod-lantiq-ssc-pcm` transport, which the release includes: handsets register, SIP calls in and out with HD voice, calls between handsets (2026-10-29 to 2026-11-02). In rare cases the box's network died at a service stop (4 in about 190 stops on 2026-10-30/31; 640 stops since did not reproduce it): [7412-stop-hang.md](7412-stop-hang.md) |
+| FRITZ!Box 7362 SL | 🟡 | With `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm` (their own repositories, not in the release): the chip firmware uploads, a handset registers, rings and its speech comes back as an echo in HD voice. The service and SIP calls are not tested yet ([journals/bench-7362sl-g6-g7.md](journals/bench-7362sl-g6-g7.md)) |
 | Other FRITZ!Boxes | ❌ | Many use the same DECT chip; see [hardware-abstraction.md](hardware-abstraction.md) for what a new model needs |
 
-Only **OpenWrt 25.12.5** is supported: the kernel module must be built for the
-exact kernel on the box.
+A release is built for **one OpenWrt version** (named in `tools/release/OPENWRT_VERSION`, and on the release page):
+the kernel module must be built for the exact kernel on the box. Flash the release's image for your box, or install
+the packages on exactly that OpenWrt release; a box on another release needs the release built for it.
 
 ## Handsets
 
