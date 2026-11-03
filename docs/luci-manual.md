@@ -564,7 +564,7 @@ reboot and a firmware upgrade (sysupgrade keeps them). For the command line:
 
 After a change on the command line: `uci commit opendectcell` and
 `/etc/init.d/opendectcell restart`. Some settings exist only on the command
-line, e.g. `sip_any_source` ([install.md](install.md#5-phone-lines-sip)).
+line, e.g. `sip_any_source`, `sip_peer`, `sip_bind` and `sip_user` ([install.md](install.md#who-may-call-the-base-and-what-runs-as-root)).
 
 The live files the Monitor reads, `/var/run/opendectcell/state.json` and
-`voip.json`, are described in [diagnostics.md](diagnostics.md).
+`/var/run/opendectcell-sip/voip.json`, are described in [diagnostics.md](diagnostics.md).

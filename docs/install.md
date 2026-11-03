@@ -192,14 +192,32 @@ busy) is set at your provider, not on the base. To listen, call the
 mailbox number your provider gives; Gigaset handsets can store it as the
 "network mailbox" of the line and call it with a long press on 1.
 
-The base takes a SIP call only from the server the account registers with.
-If your provider's calls come from other addresses (the Log says "is not
-from the account's server -- 403"), allow them on the command line:
+### Who may call the base, and what runs as root
 
-```sh
-uci set opendectcell.main.sip_any_source=1; uci commit opendectcell
-/etc/init.d/opendectcell restart
-```
+SIP is an open door on the network, so the base closes it as far as it can:
+
+- **Only from where the account registers.** An account that registers takes a call only from the server it
+  registers with. If your provider's calls come from other addresses (the Log says "is not from where the account
+  registers or a named peer -- 403"), allow them on the command line (this opens the check for every account):
+
+  ```sh
+  uci set opendectcell.main.sip_any_source=1; uci commit opendectcell
+  /etc/init.d/opendectcell restart
+  ```
+- **An account that does not register takes calls from nobody** unless you name the peers. For a PBX that knows the
+  box by its address, list it (addresses or prefixes, IPv4 or IPv6):
+
+  ```sh
+  uci add_list opendectcell.main.sip_peer='192.0.2.5'
+  uci add_list opendectcell.main.sip_peer='198.51.100.0/24'
+  uci commit opendectcell; /etc/init.d/opendectcell restart
+  ```
+- **Only on the LAN address.** baresip listens on the IPv4 address of the `lan` interface (option `sip_bind`:
+  another interface name, an address, or `all`). If the interface has no address 15 seconds after start, the base
+  listens on all addresses and says so in the log. A firewall that blocks SIP from the WAN is still a good idea.
+- **Not as root.** baresip, which holds the SIP passwords, runs as the user `opendectcell` (made by the package) in
+  `/var/run/opendectcell-sip`; the bridge sockets belong to that group. `sip_user 'root'` restores the old behaviour; it
+  is also used when the user is missing or `sip_port` is below 1024.
 
 ## Upgrading and removing
 

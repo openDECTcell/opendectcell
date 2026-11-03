@@ -68,6 +68,7 @@ define Package/opendectcell/conffiles
 endef
 
 define Package/opendectcell-baresip
+  USERID:=opendectcell:opendectcell
   $(call Package/opendectcell/Default)
   TITLE:=SIP for the opendectcell DECT base (baresip module)
   DEPENDS:=+opendectcell +baresip +baresip-mod-g711 +baresip-mod-auresamp \
@@ -159,6 +160,7 @@ define Build/Compile/baresip
 		-I$(STAGING_DIR)/usr/include/re -I$(PKG_BUILD_DIR)/src/libopendectcell \
 		-o $(PKG_BUILD_DIR)/build/opendectcell.so \
 		$(PKG_BUILD_DIR)/src/baresip/opendectcell.c \
+		$(PKG_BUILD_DIR)/src/baresip/peers.c \
 		$(PKG_BUILD_DIR)/src/libopendectcell/dect_ctl.c
 endef
 

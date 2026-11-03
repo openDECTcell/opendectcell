@@ -121,6 +121,53 @@ uci_get() {
 	eval "$1=\$__v"
 }
 
+# The IPv4 address baresip listens on (sip_bind): 'lan' (the default) or another interface name,
+# an address, or 'all'. A box listens on the network it serves, not on every address it has; an
+# interface that has no address yet gets 15 s, then the box listens on all addresses and says so.
+bs_listen_addr() {
+	local b="$1" a n=0
+
+	case "$b" in
+	all) echo 0.0.0.0; return ;;
+	*[!0-9.]*) ;;				# an interface name
+	*) echo "$b"; return ;;			# an address
+	esac
+	while [ $n -lt 15 ]; do
+		a=$(ubus call "network.interface.$b" status 2>/dev/null |
+			jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)
+		[ -n "$a" ] && { echo "$a"; return; }
+		n=$((n + 1))
+		sleep 1
+	done
+	log "SIP: interface $b has no IPv4 address; listening on all addresses (option sip_bind)" >&2
+	echo 0.0.0.0
+}
+
+# The user baresip runs as: `opendectcell` (made by the package opendectcell-baresip), or nobody (root) when option
+# sip_user is 'root', the user does not exist, or the SIP port is below 1024. It needs nothing of root's.
+sip_runas() {
+	local u port
+
+	uci_get u sip_user opendectcell 'A-Za-z0-9._-'
+	[ "$u" = root ] && return 0
+	uci_get port sip_port 5060 '0-9'
+	if [ "${port:-5060}" -lt 1024 ] 2>/dev/null; then
+		log "SIP: port $port is below 1024, so baresip stays root (option sip_user)"
+		return 0
+	fi
+	if ! id "$u" >/dev/null 2>&1; then
+		log "SIP: user $u does not exist, so baresip stays root"
+		return 0
+	fi
+	echo "$u"
+}
+
+# One `list sip_peer` entry: an IP address or a prefix (192.0.2.5, 198.51.100.0/24, 2001:db8::/32), kept
+# for the baresip config's opendectcell_peers line.
+bs_peer() {
+	uci_ok sip_peer "$1" '0-9A-Fa-f:./' && BS_PEERS="${BS_PEERS:+$BS_PEERS,}$1"
+}
+
 # Bench B0 (docs/multicell-identities.md): option rfpi_test, 10 hex digits,
 # goes into the STUB image's tag 1 at upload, and dect-stubd says whether
 # the chip reports it back (rfpicheck=). Empty: the factory RFPI as always.
@@ -388,9 +435,10 @@ lines_write() {
 # The SIP side (Network > DECT, VoIP Profiles, assigned under Handsets):
 # baresip with the openDECTcell module as the bridge (docs/bridge-interface.md),
 # its config and accounts written here from /etc/config/opendectcell, and the
-# line map /var/run/opendectcell/lines ("<hs> <line> <aor>") the module reads.
+# line map $BS_DIR/lines ("<hs> <line> <aor>") the module reads. baresip holds the SIP passwords
+# and talks to the network, so it runs as its own user (sip_runas) in its own directory.
 BARESIP=/usr/bin/baresip
-BS_DIR=/var/run/opendectcell/baresip
+BS_DIR=/var/run/opendectcell-sip
 BS_MODS=/usr/lib/baresip/modules
 BS_ACCOUNTS=0
 
@@ -414,7 +462,7 @@ bs_line() {
 	# a profile shared by handsets is one baresip account, written once
 	case "$BS_SECS" in
 	*" $sec "*)
-		printf '%s %s %s\n' "$slot" "$n" "$aor" >> /var/run/opendectcell/lines
+		printf '%s %s %s\n' "$slot" "$n" "$aor" >> "$BS_DIR/lines"
 		return 0
 		;;
 	esac
@@ -509,7 +557,7 @@ bs_line() {
 	config_get v "$sec" extra
 	case "$v" in ";"*) line="$line$v" ;; esac
 	printf '%s\n' "$line" >> "$BS_DIR/accounts"
-	printf '%s %s %s\n' "$slot" "$n" "$aor" >> /var/run/opendectcell/lines
+	printf '%s %s %s\n' "$slot" "$n" "$aor" >> "$BS_DIR/lines"
 	BS_ACCOUNTS=$((BS_ACCOUNTS + 1))
 }
 
@@ -534,9 +582,10 @@ baresip_write() {
 	[ -x "$BARESIP" ] && [ -f "$BS_MODS/opendectcell.so" ] || return 1
 	mkdir -p "$BS_DIR"
 	chmod 700 /var/run/opendectcell "$BS_DIR"
+	rm -rf /var/run/opendectcell/baresip
 	: > "$BS_DIR/accounts"
 	chmod 600 "$BS_DIR/accounts"
-	: > /var/run/opendectcell/lines
+	: > "$BS_DIR/lines"
 	BS_AORS=" "
 	BS_SECS=" "
 	config_foreach bs_handset handset
@@ -544,7 +593,8 @@ baresip_write() {
 	{
 		echo "# written by /etc/init.d/opendectcell from /etc/config/opendectcell"
 		uci_get v sip_port 5060 '0-9'
-		echo "sip_listen 0.0.0.0:$v"
+		uci_get sipbind sip_bind lan 'A-Za-z0-9._-'
+		echo "sip_listen $(bs_listen_addr "$sipbind"):$v"
 		uci_get v rtp_ports '10000-20000' '0-9-'
 		echo "rtp_ports $v"
 		uci_get v rtp_dscp 46 '0-9'
@@ -582,7 +632,15 @@ baresip_write() {
 		# 2xx); sip_any_source '1' for a provider calling from elsewhere
 		config_get_bool v main sip_any_source 0
 		[ "$v" = 1 ] && echo "opendectcell_any_source yes"
+		# An account that does not register has no such address: it takes an
+		# INVITE only from the addresses or prefixes named in `list sip_peer`,
+		# and from nobody if there are none (it still calls out).
+		BS_PEERS=
+		config_list_foreach main sip_peer bs_peer
+		[ -n "$BS_PEERS" ] && echo "opendectcell_peers $BS_PEERS"
 	} > "$BS_DIR/config"
+	# what baresip reads and writes belongs to the user it runs as
+	[ -n "$SIP_USER" ] && chown -R "$SIP_USER:$SIP_USER" "$BS_DIR"
 	# auresamp: baresip's core drops frames whose rate is not the
 	# codec's; the bridge's are, unless a codec changes mid-call or the
 	# two ends share no codec. opendectcell.so is the G.722 codec too (the
@@ -678,6 +736,9 @@ start_service() {
 	# follow, so a key set there again wins (the daemon takes the last).
 	config_get options main options ''
 	options="mask=0x0002,codec=3,status=8000${options:+,$options}"
+	# the bridge sockets belong to baresip's group, when it is not root
+	SIP_USER=$(sip_runas)
+	[ -n "$SIP_USER" ] && options="$options,sockgroup=$SIP_USER"
 	config_get_bool reg main registration 0
 	[ "$reg" = 1 ] && options="${options:+$options,}regopen"
 	config_get_bool wb main wideband 1
@@ -769,6 +830,7 @@ start_service() {
 	if baresip_write; then
 		procd_open_instance baresip
 		procd_set_param command "$BARESIP" -f "$BS_DIR"
+		[ -n "$SIP_USER" ] && procd_set_param user "$SIP_USER"
 		procd_set_param stdout 1
 		procd_set_param stderr 1
 		procd_set_param respawn 3600 5 5

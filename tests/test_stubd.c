@@ -678,6 +678,35 @@ static void test_probe_window(void)
 
 #define TRACE_DIR	"tests/stubd-traces"
 
+/* sockgroup=NAME: the bridge sockets belong to that group, 0660; no such group: root-only, 0600. */
+static void test_sock_perms(void)
+{
+	static struct stubd s;
+	const char *path = "build/test_sock_perms.sock";
+	struct group *own = getgrgid(getgid());
+	struct stat st;
+	int fd;
+
+	CHECK(own != NULL);
+	fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	close(fd);
+	memset(&s, 0, sizeof(s));
+	CHECK_EQ(sock_perms(&s, path), 0);			/* no group asked for: root-only */
+	CHECK_EQ(stat(path, &st), 0);
+	CHECK_EQ(st.st_mode & 0777, 0600);
+	s.audio.sock_group = own ? own->gr_name : "";
+	CHECK_EQ(sock_perms(&s, path), 0);
+	CHECK_EQ(stat(path, &st), 0);
+	CHECK_EQ(st.st_mode & 0777, 0660);			/* group read and write */
+	CHECK_EQ(st.st_gid, getgid());
+	s.audio.sock_group = "no-such-group-opendectcell";
+	CHECK_EQ(sock_perms(&s, path), 0);			/* falls back to root-only */
+	CHECK_EQ(stat(path, &st), 0);
+	CHECK_EQ(st.st_mode & 0777, 0600);
+	unlink(path);
+}
+
 /* -g (the registering base) without -P is refused: there is no default registration PIN (API 155). */
 static void test_g_needs_a_pin(void)
 {
@@ -700,6 +729,7 @@ int main(int argc, char **argv)
 	tzset();
 	unlink("build/test_stubd.log");
 	test_g_needs_a_pin();
+	test_sock_perms();
 	test_probe_window();
 	for (i = 1; i < argc; i++, ran++)
 		run_trace(argv[i]);

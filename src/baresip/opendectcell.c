@@ -35,13 +35,13 @@
  *     (baresip's mwi module, RFC 3842) goes to dect-stubd as "mwi" for
  *     every handset line the account is, which tells the handsets
  *     (TS 102 527-3 §7.4.1.2);
- *   - the line map /var/run/opendectcell/lines ("<hs> <line> <aor>" per line,
+ *   - the line map /var/run/opendectcell-sip/lines ("<hs> <line> <aor>" per line,
  *     written by the init script from /etc/config/opendectcell): which accounts
  *     belong to which handsets. An account may be the line of several
  *     handsets: a call to it rings all of them, one leg each, and the
  *     first to answer takes it. A handset's calls go out on the line it
  *     chose, else its Line 1;
- *   - the VoIP status /var/run/opendectcell/voip.json for the Monitor (Status >
+ *   - the VoIP status /var/run/opendectcell-sip/voip.json for the Monitor (Status >
  *     DECT, tab VoIP), rewritten every 2 s and on every registration
  *     event: each line's registration, and each call's codec, endpoints,
  *     data rates, loss, jitter and encryption.
@@ -57,15 +57,17 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <arpa/inet.h>
 #include <re.h>
 #include <rem.h>
 #include <baresip.h>
 #include "dect_ctl.h"
 #include "dect_clip.h"
+#include "peers.h"
 
 #define CTL_PATH	"/var/run/opendectcell.sock"
-#define LINES_PATH	"/var/run/opendectcell/lines"
-#define STATUS_PATH	"/var/run/opendectcell/voip.json"
+#define LINES_PATH	"/var/run/opendectcell-sip/lines"
+#define STATUS_PATH	"/var/run/opendectcell-sip/voip.json"
 #define STATUS_MS	2000u
 #define FRAME_MAX	320u	/* samples: 20 ms at 16 kHz */
 #define RETRY_MS	2000u
@@ -148,6 +150,7 @@ struct incall {
 static struct incall incalls[MAX_CALLS];
 static unsigned next_tok;
 static bool any_source;		/* config opendectcell_any_source: see sip_origin_ok() */
+static struct dect_peers peers;	/* config opendectcell_peers: who may call an account that does not register */
 
 static struct {
 	int            fd;
@@ -1016,8 +1019,10 @@ static void ctl_connect(void *arg)
  * transports in the config's filter_registrar, and setting that there
  * would also stop listening on TCP and TLS, so it is switched on for this
  * one call. An account that does not register has no such address and is
- * not checked. `opendectcell_any_source yes` in the config turns the check off,
- * for a provider whose INVITEs come from elsewhere.
+ * has no such address: it takes an INVITE only from the peers the
+ * administrator named (`list sip_peer`, config line `opendectcell_peers`), and
+ * from nobody when none is named. `opendectcell_any_source yes` in the config
+ * turns the check off, for a provider whose INVITEs come from elsewhere.
  */
 static int sip_origin_ok(const struct ua *ua, const struct sip_msg *msg)
 {
@@ -1025,7 +1030,24 @@ static int sip_origin_ok(const struct ua *ua, const struct sip_msg *msg)
 	uint32_t keep;
 	int ok;
 
-	if (any_source || !cfg || !account_regint(ua_account(ua)))
+	if (any_source)
+		return 1;
+	if (!account_regint(ua_account(ua))) {
+		uint8_t a[16];
+
+		if (sa_af(&msg->src) == AF_INET) {
+			uint32_t v = htonl(sa_in(&msg->src));
+
+			memcpy(a, &v, 4);
+			return dect_peers_match(&peers, 4, a);
+		}
+		if (sa_af(&msg->src) == AF_INET6) {
+			sa_in6(&msg->src, a);
+			return dect_peers_match(&peers, 6, a);
+		}
+		return 0;
+	}
+	if (!cfg)
 		return 1;
 	keep = cfg->sip.reg_filt;
 	cfg->sip.reg_filt = UINT32_MAX;
@@ -1422,8 +1444,8 @@ static void event_handler(enum ua_event ev, struct bevent *event, void *arg)
 			break;
 		}
 		if (!sip_origin_ok(ua, msg)) {
-			info("openDECTcell: INVITE from %J is not from the "
-			     "account's server -- 403\n", &msg->src);
+			info("openDECTcell: INVITE from %J is not from where the "
+			     "account registers or a named peer -- 403\n", &msg->src);
 			(void)sip_treply(NULL, uag_sip(), msg, 403,
 					 "Forbidden");
 			bevent_stop(event);
@@ -1612,6 +1634,16 @@ static int module_init(void)
 	for (i = 0; i < MAX_CALLS; i++)
 		calls[i].afd = -1;
 	(void)conf_get_bool(conf_cur(), "opendectcell_any_source", &any_source);
+	{
+		char list[512];
+
+		if (!conf_get_str(conf_cur(), "opendectcell_peers", list, sizeof(list)) &&
+		    dect_peers_parse(&peers, list))
+			warning("openDECTcell: opendectcell_peers has an entry that is not an "
+				"address or a prefix; the good ones before it are used\n");
+		if (peers.n)
+			info("openDECTcell: %u peer(s) may call an account that does not register\n", peers.n);
+	}
 	if (any_source)
 		warning("openDECTcell: opendectcell_any_source -- INVITEs taken from "
 			"any address\n");

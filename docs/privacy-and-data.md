@@ -178,7 +178,7 @@ if they prefer, the handset's IPEI before posting a log. In terms of the lists a
 - the Status > DECT page and `state.json` show the IPEI; the normal log lines do not print it (`dect_ipei_text` is
   used only for the state file);
 - a log taken with `-p` holds identity data and must not be posted at all (the daemon's own help says so);
-- never post `/etc/config/opendectcell`, a store file, `/var/run/opendectcell/baresip/accounts` or a backup. To share
+- never post `/etc/config/opendectcell`, a store file, `/var/run/opendectcell-sip/accounts` or a backup. To share
   settings, use `uci export opendectcell` and delete every `password`, `stunpass`, `pin`, `username` and `url` line first.
 
 A security problem goes through the private channel in [SECURITY.md](../SECURITY.md), not a public issue.

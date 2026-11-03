@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <sys/random.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <inttypes.h>
 #include <poll.h>
 #include <signal.h>
@@ -830,6 +831,7 @@ struct stubd {
 		unsigned remode_ms;
 		const char *led_path;	/* led=PATH, NULL = the default */
 		const char *state_path;	/* statefile=PATH, NULL = the default */
+		const char *sock_group;	/* sockgroup=NAME: the bridge sockets belong to this group, 0660 */
 		int      no_state;	/* nostatefile */
 		int      reg_open;	/* regopen: open registration at start-up */
 		unsigned reg_window_s;	/* regopen=SECS: close after; 0 = never */
@@ -5337,6 +5339,28 @@ static void ab_init(struct stubd *s)
 }
 
 /* The listening audio socket, for the bridge or, in cell mode, dect-cell. */
+/*
+ * The bridge sockets belong to root with mode 0600; with sockgroup=NAME (the service sets it when baresip runs
+ * as an unprivileged user) they belong to that group with mode 0660, so exactly that user can connect. A group
+ * that does not exist leaves them root-only.
+ */
+static int sock_perms(const struct stubd *s, const char *path)
+{
+	const char *name = s->audio.sock_group;
+	struct group *g;
+
+	if (!name || !*name)
+		return chmod(path, 0600);
+	g = getgrnam(name);
+	if (!g) {
+		printf("sock: no group %s -- %s stays root-only\n", name, path);
+		return chmod(path, 0600);
+	}
+	if (chown(path, (uid_t)-1, g->gr_gid))
+		return -1;
+	return chmod(path, 0660);
+}
+
 static void ab_listen(struct stubd *s)
 {
 	struct sockaddr_un a;
@@ -5352,7 +5376,7 @@ static void ab_listen(struct stubd *s)
 		return;
 	old = umask(077);
 	if (bind(fd, (struct sockaddr *)&a, sizeof(a)) ||
-	    chmod(AB_PATH, 0600) || listen(fd, (int)AB_LANES)) {
+	    sock_perms(s, AB_PATH) || listen(fd, (int)AB_LANES)) {
 		printf("ctl: %s: %s -- no audio socket\n", AB_PATH,
 		       strerror(errno));
 		umask(old);
@@ -5666,7 +5690,7 @@ static void ctl_open(struct stubd *s)
 	}
 	old = umask(077);
 	if (bind(fd, (struct sockaddr *)&a, sizeof(a)) ||
-	    chmod(s->ctl.path, 0600) || listen(fd, (int)CTL_CLIENTS)) {
+	    sock_perms(s, s->ctl.path) || listen(fd, (int)CTL_CLIENTS)) {
 		printf("ctl: %s: %s -- no control socket\n", s->ctl.path,
 		       strerror(errno));
 		umask(old);
@@ -7446,7 +7470,7 @@ static int run_loop(struct stubd *s, unsigned int fpb, unsigned int run_seconds)
  */
 static const char *const audio_word_keys[] = {
 	"seqstep", "play", "playpcm", "playraw", "led",
-	"statefile", "profiles", "ctl", "linename", "remote",
+	"statefile", "profiles", "ctl", "linename", "remote", "sockgroup",
 	"clip", "memdump", "latemail", "timesync", "codeclist", "infoie",
 	"lane2", "lane3", "cnip", "rfpicheck",
 };
@@ -7781,6 +7805,12 @@ static int parse_audio(struct audio_cfg *a, const char *spec)
 			if (!path)
 				return -1;
 			a->profile_dir = path;
+		} else if (eq && klen == 9 && !memcmp(key, "sockgroup", 9)) {
+			char *name = audio_value(eq, spec);
+
+			if (!name)
+				return -1;
+			a->sock_group = name;
 		} else if (eq && klen == 9 && !memcmp(key, "statefile", 9)) {
 			char *path = audio_value(eq, spec);
 
@@ -7963,6 +7993,8 @@ static void usage(void)
 		"                     per Gigaset, 0x02 C4; default 0x00) [CR A-0113]\n"
 		"           attflag=N 0x0247 install flag byte (stock bit0=1,\n"
 		"                     A540 0x03; default 0x00) [CR A-0113]\n"
+		"           sockgroup=NAME the control and audio sockets belong to\n"
+		"                     this group, mode 0660 (default: root, 0600)\n"
 		"           ipuio=N   assign a registering handset IPUI O number N\n"
 		"                     (up to 32 bits) instead of its IPUI N (B4a)\n"
 		"           rfpicheck=HEX10 compare the RFPI the chip reports in\n"

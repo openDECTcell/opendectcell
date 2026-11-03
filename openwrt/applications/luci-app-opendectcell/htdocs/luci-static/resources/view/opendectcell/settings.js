@@ -37,7 +37,7 @@
  * package is installed, with the last sync's result from carddav.json.
  */
 var STATE = '/var/run/opendectcell/state.json';
-var VOIP = '/var/run/opendectcell/voip.json';
+var VOIP = '/var/run/opendectcell-sip/voip.json';
 var CTL = '/usr/sbin/dect-stubd';
 var PROFILES = '/etc/opendectcell/profiles';
 var BOARDS = '/usr/share/opendectcell/boards/';

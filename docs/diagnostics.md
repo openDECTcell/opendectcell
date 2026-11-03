@@ -78,7 +78,7 @@ answer "is this handset in range and what is it doing" without reading a log.
 Deliberately **not** a debugging console — raw mails stay in `dect-stubd -v`.
 
 Since round 9 (2026-10-28) the Monitor has two tabs. **DECT** is the above,
-with each handset's IPEI. **VoIP** reads `/var/run/opendectcell/voip.json`, which
+with each handset's IPEI. **VoIP** reads `/var/run/opendectcell-sip/voip.json`, which
 the baresip module writes every 2 s and on each registration event: per line
 its registration (and the server's answer when it failed), per call the
 codec, signalling transport, both media endpoints, bit rates, packets, loss,

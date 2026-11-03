@@ -4,9 +4,9 @@
 		"read": {
 			"file": {
 				"/var/run/opendectcell/state.json": [ "read" ],
-				"/var/run/opendectcell/voip.json": [ "read" ],
+				"/var/run/opendectcell-sip/voip.json": [ "read" ],
 				"/tmp/run/opendectcell/state.json": [ "read" ],
-				"/tmp/run/opendectcell/voip.json": [ "read" ],
+				"/tmp/run/opendectcell-sip/voip.json": [ "read" ],
 				"/etc/opendectcell/profiles": [ "list" ],
 				"/etc/opendectcell-sub.*.profile": [ "read" ],
 				"/etc/opendectcell/profiles/*.profile": [ "read" ],

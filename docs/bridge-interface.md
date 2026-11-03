@@ -22,7 +22,7 @@ handsets ~~ air ~~ chip ── dect-stubd ──(control socket)── baresip +
   socket's client, translates the messages below to and from baresip's
   calls, and is baresip's audio source and player on the audio socket.
   One baresip account per VoIP profile that is a handset's line; the init
-  script writes the accounts and the line map `/var/run/opendectcell/lines`
+  script writes the accounts and the line map `/var/run/opendectcell-sip/lines`
   (`<hs> <line> <aor>`) at every start (§5, step 4).
 - **baresip** (OpenWrt telephony feed, BSD) does SIP, RTP and the codecs on
   the network side.
@@ -182,7 +182,7 @@ the audio socket runs at each call's SIP rate.
    `src/baresip/opendectcell.c` (package `opendectcell-baresip`, `make baresip-mod`).
    It is the control client (it sends `bridge`), the audio source and
    player `opendectcell` on the audio socket, and maps accounts to handsets via
-   `/var/run/opendectcell/lines`. The init script writes baresip's `config` and
+   `/var/run/opendectcell-sip/lines`. The init script writes baresip's `config` and
    `accounts` from each handset's Line 1/Line 2 and the VoIP tab, and runs
    baresip when a line is on. A call to an account rings its handset
    (`call-in hs=N`); a handset's calls go out on its Line 1. baresip 3

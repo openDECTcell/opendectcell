@@ -11,7 +11,7 @@
  * Status > DECT, the DECT Monitor: what the base is doing, for someone who
  * should not have to read a log. Three tabs: DECT reads
  * /var/run/opendectcell/state.json, which dect-stubd rewrites at most once a second
- * (docs/diagnostics.md); VoIP reads /var/run/opendectcell/voip.json, which the
+ * (docs/diagnostics.md); VoIP reads /var/run/opendectcell-sip/voip.json, which the
  * baresip module writes every 2 s; both start with their service's state
  * from procd, so a stopped service is told apart from anything else that
  * goes wrong. Log shows the system log's lines of both, for when it does.
@@ -31,7 +31,7 @@
  * dect-stubd -K (cell.json).
  */
 var STATE = '/var/run/opendectcell/state.json';
-var VOIP = '/var/run/opendectcell/voip.json';
+var VOIP = '/var/run/opendectcell-sip/voip.json';
 var CELL = '/var/run/opendectcell/cell.json';
 var LINK = '/var/run/opendectcell/cell-link.json';
 var HISTORY_S = 300;		/* the graph's span */

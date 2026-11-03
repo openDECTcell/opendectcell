@@ -16,12 +16,13 @@ sends and receives is the protocol in
 | File | What it is |
 |---|---|
 | `opendectcell.c` | The whole module (about 1,650 lines) |
+| `peers.c`, `peers.h` | The list of addresses and prefixes an account that does not register may be called from (`opendectcell_peers` in the config, `list sip_peer` in UCI); needs no baresip header, tested by `tests/test_peers.c` |
 | `../libopendectcell/dect_ctl.c`, `dect_ctl.h` | The control socket's line format (verb plus `key=value` pairs); compiled into the module, tested by `tests/test_ctl.c` |
 | `../libopendectcell/dect_clip.h` | Only the size limits of the caller's number and name (`DECT_CLIP_NUMBER_MAX`, `DECT_CLIP_NAME_MAX`), so the module cuts them to what `dect-stubd` puts into the CLIP |
 
 ## How it is built and loaded
 
-- **Built** as `opendectcell.so` from `opendectcell.c` and `../libopendectcell/dect_ctl.c`,
+- **Built** as `opendectcell.so` from `opendectcell.c`, `peers.c` and `../libopendectcell/dect_ctl.c`,
   against the headers of the baresip and libre versions on the box. Two ways:
   the OpenWrt package `opendectcell-baresip` (`Build/Compile/baresip` in
   `openwrt/net/opendectcell/Makefile`, installs to `/usr/lib/baresip/modules/`;
@@ -30,10 +31,10 @@ sends and receives is the protocol in
   top-level `Makefile`.
 - **Started** by the init script `openwrt/net/opendectcell/files/opendectcell.init`:
   when at least one handset has a VoIP line, `baresip_write()` writes
-  `/var/run/opendectcell/baresip/config` and `accounts` (one account per VoIP profile
+  `/var/run/opendectcell-sip/config` and `accounts` (one account per VoIP profile
   that is some handset's Line 1 or Line 2, from `/etc/config/opendectcell`) and the
-  line map `/var/run/opendectcell/lines` (`<handset> <line> <aor>`), and
-  `start_service()` runs `baresip -f /var/run/opendectcell/baresip` as a procd
+  line map `/var/run/opendectcell-sip/lines` (`<handset> <line> <aor>`), and
+  `start_service()` runs `baresip -f /var/run/opendectcell-sip` as a procd
   instance. Without a usable line, baresip is not started.
 - **Loaded** by lines in that generated config: `module auresamp.so`,
   `g711.so`, `opendectcell.so`, then the NAT and media modules that exist
@@ -59,7 +60,7 @@ sends and receives is the protocol in
 | the control socket | `ctl_connect()`, `ctl_read()`, `ctl_line()` (one branch per verb from `dect-stubd`: `call-out`, `call-in-ok`, `busy`, `answered`, `released`, `audio`, `hold`/`resume`, `digit`, `hs`, `error`), `ctl_send()`, `call_out()`, `call_in()` |
 | the audio device | `aud_open()` (connects to the socket `dect-stubd` named), `aud_read()`, `aud_read_g722()`, `src_alloc()`, `play_alloc()`, `g722_through` (the pass-through codec), `narrow_begin()` / `narrow_end()` (offer G.711 only for narrowband handsets) |
 | baresip's events | `event_handler()`: registration, ringing, answered, closed, re-INVITE codec changes, MWI; `mwi_notify()` sends `mwi` to `dect-stubd` |
-| the VoIP status | `status_write()`, `status_tick()`: `/var/run/opendectcell/voip.json` every two seconds and on registration events (registration per line; per call codec, endpoints, rates, loss, jitter, encryption). Shown in Status > DECT, tab VoIP |
+| the VoIP status | `status_write()`, `status_tick()`: `/var/run/opendectcell-sip/voip.json` every two seconds and on registration events (registration per line; per call codec, endpoints, rates, loss, jitter, encryption). Shown in Status > DECT, tab VoIP |
 | the module | `module_init()`, `module_close()`, `DECL_EXPORTS(opendectcell)` |
 
 Codec rule (maintainer's rule, also in the file header): the phones code the

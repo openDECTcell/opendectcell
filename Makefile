@@ -15,7 +15,7 @@ FW7520  := work/7520/rootfs/lib/firmware
 export OPENDECTCELL_STUB_HEX ?= $(FW7520)/dectfw_secondlevel_441.hex
 export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 
-TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls $(BUILD)/test_stubd $(BUILD)/test_stubd_cell $(BUILD)/test_base
+TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls $(BUILD)/test_stubd $(BUILD)/test_stubd_cell $(BUILD)/test_base $(BUILD)/test_peers
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 
 # Cross build for the 7520 with the OpenWrt SDK (the release of tools/release/OPENWRT_VERSION, ipq40xx/generic).
@@ -180,6 +180,10 @@ $(BUILD)/test_profile: tests/test_profile.c src/libopendectcell/dect_profile.c s
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_profile.c src/libopendectcell/dect_profile.c
 
+$(BUILD)/test_peers: tests/test_peers.c src/baresip/peers.c src/baresip/peers.h tests/check.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_peers.c src/baresip/peers.c
+
 $(BUILD)/test_ctl: tests/test_ctl.c src/libopendectcell/dect_ctl.c src/libopendectcell/dect_ctl.h tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_ctl.c src/libopendectcell/dect_ctl.c
@@ -208,7 +212,7 @@ baresip-mod: src/baresip/opendectcell.c src/libopendectcell/dect_ctl.c src/libop
 	@mkdir -p $(BUILD)
 	STAGING_DIR=$(dir $(TCBIN))/.. $(XCC) -std=gnu11 -Os -Wall -Wextra -Werror -fPIC -shared \
 		-DHAVE_INTTYPES_H -I$(RE_SRC)/include -I$(BARESIP_SRC)/include -Isrc/libopendectcell \
-		-o $(BUILD)/opendectcell.so src/baresip/opendectcell.c src/libopendectcell/dect_ctl.c
+		-o $(BUILD)/opendectcell.so src/baresip/opendectcell.c src/baresip/peers.c src/libopendectcell/dect_ctl.c
 
 # dect-cell, the link to an openDECTcell controller: needs mbedTLS 3.6, e.g. for
 # the 7412 with the OpenWrt SDK (MBEDTLS = its staging_dir/target-*/usr):
@@ -245,6 +249,7 @@ check: $(TESTS)
 	@python3 -I tests/test_firmware_sh.py
 	@python3 -I tests/test_package_keep.py
 	@python3 -I tests/test_release_files.py
+	@python3 -I tests/test_sip_init.py
 
 clean:
 	rm -rf $(BUILD)
