@@ -45,7 +45,7 @@ static struct gpiod_lookup_table fritz7412_gpio_lookup = {
  * table, [CR 7362SL/A-0001]); no clock-enable line. The boot strap is the
  * chip's TX line, GPIO 11, which is the USIF's RX pin: the ROM answers only
  * if it is held low while reset is released, as on the 7520 (observed on a
- * 7362 SL, 2026-11-01, docs/bench-7362sl.md). */
+ * 7362 SL, 2026-11-01, docs/journals/bench-7362sl.md). */
 static struct gpiod_lookup_table fritz7362sl_gpio_lookup = {
 	.dev_id = "dect0",
 	.table = {

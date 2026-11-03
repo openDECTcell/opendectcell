@@ -97,7 +97,7 @@ did not help. `dect-stubd` now starts the 06.88 bring-up with radio-off
 (`143c5fd`). In the validation run the levels fell back to the floor after
 about 15 s while the header stayed `04 02`. Whether the levels are our own
 beacon or a neighbour that the scan sees only while it runs is **open**
-(asked as Q-0008); a handset decides (`bench-7412.md`).
+(asked as Q-0008); a handset decides (`docs/journals/bench-7412.md`).
 
 **Field meanings [CR A-0008]** (the room's 08.25 model; our runs fit it
 except where noted):
@@ -122,7 +122,7 @@ after `015B 00`, `01` after radio-on, `00` after the park); `0x010C` and
 byte for byte, decay included. After a park, though, `0x010C`/`0x010B` keep
 the carrier and bearer while `0x010A` is 0 and `0xF623` stops, so it is open
 whether the park ends the transmission or the bytes go stale (Q-0010;
-`bench-7412.md` test 3 checks it with a handset). **[CR A-0010]:** stale --
+`docs/journals/bench-7412.md` test 3 checks it with a handset). **[CR A-0010]:** stale --
 the `0x015B 00` path clears `0x010A`, removes both beacon bearers (the
 inverse of the radio-on path) and stops the MAC, but never writes
 `0x010B`/`0x010C`. Use `0x010A` == 0 plus the absence of `0xF623` as "parked".

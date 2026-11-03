@@ -20,7 +20,7 @@
  * (TS 102 527-3 7.4.10.4.3.2: "Content of list entry is transmitted in data
  * packets"); a handset that does not get them keeps resynchronising and
  * runs a list-access call on every link (observed on hardware, see
- * docs/call-g7.md).
+ * docs/journals/call-g7.md).
  *
  * Coding conventions used throughout (7.4.10.4.10 table 62, 7.4.10.5.1.0,
  * and note 1 at table 39): session identifiers, indices, entry identifiers

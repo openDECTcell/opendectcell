@@ -16,7 +16,7 @@
 > opposite design). No decay on either build up to 60 minutes.
 
 Status: design and test plan, 2026-10-31. Nothing here is built. Written
-from our own notes (`capacity.md`, `multicell-experiments.md`,
+from our own notes (`capacity.md`, `docs/journals/multicell-experiments.md`,
 `stub-api.md`), the clean-room answers A-0025, A-0041 and A-0131, and the
 maintainer's question of the same day. The chip firmware stays unchanged.
 
@@ -33,7 +33,7 @@ decides it:
 
 | Fact | Source |
 |---|---|
-| The chip admits a handset it holds no key for; our host's identity gates decide who may open a link. Measured on 07.56: A540 and AS690H located and connected with the chip's table empty | `multicell-experiments.md` M1, 2026-10-25 |
+| The chip admits a handset it holds no key for; our host's identity gates decide who may open a link. Measured on 07.56: A540 and AS690H located and connected with the chip's table empty | `docs/journals/multicell-experiments.md` M1, 2026-10-25 |
 | A keyless handset is paged and rings (it answers the page with a location registration first) | M2', same day |
 | **Measured 2026-10-31 (08.25, warm chip):** a changed key written with `0x020A` reads back correctly 20 ms later (36 of 36 from 20 to 800 ms); a read in the same instant gets no answer. A slot clear (`0x0247` op 0) leaves the key bytes in the table | §4b |
 | **Unmeasured:** whether a call with ciphering works when the key is written just before it; whether a cleared slot still admits its handset | T-C, T-D, Q-0073 |

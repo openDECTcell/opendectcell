@@ -9,7 +9,7 @@ only the tail.
 
 Why beeps work as markers under every hypothesis: a linear sine misread as
 A-law or mu-law still peaks at its own frequency (it loses purity, not pitch
--- measured, see docs/call-g7.md "Desk session, 2026-10-23 morning"). So the
+-- measured, see docs/journals/call-g7.md "Desk session, 2026-10-23 morning"). So the
 markers stay audible whatever the lane turns out to be, and they double as the
 liveness control that every audio test on this path needs.
 

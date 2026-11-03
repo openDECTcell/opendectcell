@@ -8,7 +8,7 @@
  * incoming call is external: the FP shall send one in every incoming external
  * CC-SETUP, even with a single line, and an internal call carries none. A
  * SETUP without this IE is therefore shaped like an internal call. See
- * docs/call-g7.md, "Intern": the incoming SETUP carries no line identifier.
+ * docs/journals/call-g7.md, "Intern": the incoming SETUP carries no line identifier.
  *
  * Each subrecord is optional and must be asked for, so an unset structure
  * emits nothing and a SETUP stays byte-identical to the one proved at G7.

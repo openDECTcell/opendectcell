@@ -67,7 +67,7 @@ and `<<CONNECTION-ATTRIBUTES>>` declares a **basic connection**, and
 
 We omit both and establish nothing, so the handset rejects with "Insufficient
 resources". The full argument, the stock-trace agreement and the rejected
-alternatives are in `call-g7.md`. **This is not a CC-layer defect** -- the CC
+alternatives are in `docs/journals/call-g7.md`. **This is not a CC-layer defect** -- the CC
 layer is doing the right thing with the wrong lower layer underneath it, which
 is why auditing CC alone would never have found it.
 
@@ -1083,7 +1083,7 @@ its call with 0x32, re-present ours immediately) was never implemented.
 (2) The handset refuses any incoming call while its list sync is pending,
 and the sync is pending for ever because our list-access replies never
 delivered an entry. Both were implemented; the bench separates them —
-`call-g7.md`, "THE REFUSAL IS A {CC-SETUP} COLLISION" and the two runs
+`docs/journals/call-g7.md`, "THE REFUSAL IS A {CC-SETUP} COLLISION" and the two runs
 after it.
 
 ### Earlier rejections of the collision reading, re-read
@@ -1121,7 +1121,7 @@ so that is the next conformance gap, in that order of handset impact.
 
 An external review of commit `e899958` (`the clean-room record/an external review-24102026.md`)
 listed ten findings. All ten were checked against the code, `docs/specs/` and
-the thirteen clean `vCOLLIDE` logs (`call-g7.md`, "External review").
+the thirteen clean `vCOLLIDE` logs (`docs/journals/call-g7.md`, "External review").
 
 **Fixed:**
 

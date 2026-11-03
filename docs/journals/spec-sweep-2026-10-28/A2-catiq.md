@@ -277,4 +277,4 @@ Just outside the top 10: ciphering fails (GAP.N.17/N.35 are M in 527-3; Test 17)
 10. FACILITY/<<EVENTS-NOTIFICATION>>: missed call + list change, MWI, line-settings and internal-names list change, all re-sent after location registration per attached line (I1–I3, H5).
 11. Room question: which STUB mail sets broadcast bits a34 (multiple lines) and checks a24/a29 (B9, M1.11).
 
-**Uncertainties.** Bench claims come from `docs/bench-2026-10-25.md`; I opened no logs. Whether the 2026-10-28 A540 `lineid=1` run also carried callid/callstatus is not recorded. The LiA-collision rate comes from a code comment written before the 10-24 fix. The Gigaset behaviour hypotheses in F2 and Top 5 are not spec facts. Line numbers marked `~` are within a few lines.
+**Uncertainties.** Bench claims come from `docs/journals/bench-2026-10-25.md`; I opened no logs. Whether the 2026-10-28 A540 `lineid=1` run also carried callid/callstatus is not recorded. The LiA-collision rate comes from a code comment written before the 10-24 fix. The Gigaset behaviour hypotheses in F2 and Top 5 are not spec facts. Line numbers marked `~` are within a few lines.

@@ -2,8 +2,8 @@
 
 The MVP decided on 2026-10-28 (ROADMAP M9b): **two SIP lines per handset from a
 line pool**. This page is the design for the DECT side of it, from TS 102 527-3
-V1.7.1 and the spec sweep (`spec-sweep-2026-10-28.md`, findings 1, 3-6, and the
-CAT-iq tables in `spec-sweep-2026-10-28/A2-catiq.md` sections D, E, G, K,
+V1.7.1 and the spec sweep (`docs/journals/spec-sweep-2026-10-28.md`, findings 1, 3-6, and the
+CAT-iq tables in `docs/journals/spec-sweep-2026-10-28/A2-catiq.md` sections D, E, G, K,
 MVP-1). It covers what the cell must do; the SIP side (baresip bridge) only
 appears as the events it exchanges.
 
@@ -69,7 +69,7 @@ done for reading the choice and naming the selected line (`7f1b9d9`,
 case), the refusal of an unattached line still open; step 3 done (`f5d150a`,
 `9a13f74`, API 41). Also: the full call information to Part 3 handsets on our
 rings, and CS call connect after they answer (`2c76ace`). On-air checks:
-`bench-next.md` tests 8-10.
+`docs/journals/bench-next.md` tests 8-10.
 
 **Progress (2026-10-29):** step 4 done in the bridge rather than in the
 daemon: a VoIP profile may be the line of several handsets, and the

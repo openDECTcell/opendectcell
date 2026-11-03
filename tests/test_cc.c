@@ -1323,7 +1323,7 @@ static void test_busy_spans_the_whole_call(void)
  * EN 300 444 §6.9.2: an FP-originated call takes the lowest free transaction
  * value, which for this one-call entity is always 0 -- on a fresh entity and
  * again after a call has been released. The Gigaset A540 refuses a SETUP on
- * value 1 with 0x32 and rings on 0 (runs 15/16, docs/call-g7.md).
+ * value 1 with 0x32 and rings on 0 (runs 15/16, docs/journals/call-g7.md).
  */
 static void test_transaction_value_is_lowest_free(void)
 {

@@ -84,7 +84,7 @@ Seen while recording: after a new handset's first location registration
 the subscription install (slot clears, `0x020A`, `0x017C`) went to the
 chip twice in a row, once from the registration and once from the
 start-up restore, which then found a UAK (`register.trace`). Fixed as
-task T2 of `docs/tasks-2026-10-30.md`: the registration's install counts
+task T2 of `docs/journals/tasks-2026-10-30.md`: the registration's install counts
 as the restore; the trace lost the 15 repeated mails.
 
 The harness sends the chip's contact answer `0xF601` at start with a
@@ -187,7 +187,7 @@ Traces unchanged, unit test added.
 S2.3 is done as far as it goes without calls and side links: the
 remaining main-link code is the arbitration on connection-up and the
 reactions to calls, lists and the clock, which move with S2.4, S3 and S4.
-**Bench after S2.3** (`docs/bench-later.md`, N2): register and relocate.
+**Bench after S2.3** (`docs/journals/bench-later.md`, N2): register and relocate.
 
 **S2.4, 2026-10-30.** Side links: dect-stubd's `struct side_link` embeds a
 `struct dect_base_link`; `dect_base_side_open()` sets one up (every record

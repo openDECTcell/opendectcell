@@ -1,7 +1,7 @@
 # Diagnostics: what a DECT base should be able to tell you
 
 **Status: built** (2026-10-28, round 4): Status > DECT in `luci-app-opendectcell`
-shows the fields below that are decoded; see `docs/tasks-2026-10-28.md` L3.
+shows the fields below that are decoded; see `docs/journals/tasks-2026-10-28.md` L3.
 Written 2026-10-23 after the maintainer pointed
 at AVM's **DECT Monitor**, a feature of stock FRITZ!OS. Roadmap items are in
 `ROADMAP.md` M8/M9 and in the controller's C5/C7.

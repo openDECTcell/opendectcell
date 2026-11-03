@@ -54,7 +54,7 @@ we hold.
 Only one so far, and it is vendor-scoped **by definition** rather than by
 quirk: the handset **name and clock push**, carried in `<<ESCAPE-TO-
 PROPRIETARY>>` (`0x7B`) under **EMC `0x0002`**, sub-tag `0x54` (name) and
-`0x3B` (BCD date/time). See `registration-g6.md`. `[observed]` EMC `0x0002` is
+`0x3B` (BCD date/time). See `docs/journals/registration-g6.md`. `[observed]` EMC `0x0002` is
 used in both directions and by a factory-reset third-party Gigaset, so emitting
 it is interoperation rather than impersonation.
 
@@ -444,7 +444,7 @@ predicts. The daemon rotated the CC transaction value per call from
 2026-10-20, so every incoming call a Gigaset was ever offered carried value 1
 or higher. EN 300 444 §6.9.2 requires the lowest free value, 0. The C4 accepts
 any value; the A540 refuses anything but 0 with `0x32`. Measured in one
-session (`call-g7.md`, runs 14-16): value 0 rang, value 1 was refused twice,
+session (`docs/journals/call-g7.md`, runs 14-16): value 0 rang, value 1 was refused twice,
 once with stock's full SETUP content and once as a control.
 
 So the recommendation at the top stands, now with its strongest example: no

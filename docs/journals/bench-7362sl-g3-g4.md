@@ -5,7 +5,7 @@ G4: **the audio path**: the STUB's test tone in a voice slot, or the
 loop-back. On the 7520 the literal test tone was never heard (this STUB
 build appears to have no usable tone generator, ROADMAP M4), and the
 loop-back on a contact-only bench was the audio-path proof
-([stub-pcm-control-channel.md](stub-pcm-control-channel.md), "Loop-back
+([stub-pcm-control-channel.md](../stub-pcm-control-channel.md), "Loop-back
 works"). The same proof is used here.
 
 **Radio off throughout:** no `-g`, no `0x015B 01`. Every session ends; the

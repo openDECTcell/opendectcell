@@ -3,7 +3,7 @@
 For the maintainer, at the 7412 (`root@192.168.1.1`) with one Gigaset. Two
 tests, about 15 minutes. On 2026-10-29 the service ran on the 7412 without a
 handset: STUB upload, control channel, bring-up, radio-on and park all worked
-([7412-spi-tdm-and-loader.md](7412-spi-tdm-and-loader.md) §1b). Whether the
+([7412-spi-tdm-and-loader.md](../7412-spi-tdm-and-loader.md) §1b). Whether the
 radio really beacons can only be seen from a handset. The 06.88 STUB needs its
 radio switched off before the bring-up; the daemon does that since `143c5fd`
 (command check, same doc §1b).

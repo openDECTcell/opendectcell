@@ -43,7 +43,7 @@ the repository).
 
 The 7412 runs the base since 2026-10-29: handsets register, and SIP calls in
 and out work with HD voice ([7412-spi-tdm-and-loader.md](7412-spi-tdm-and-loader.md) §1b,
-[bench-7412.md](bench-7412.md)). Its PCM bus needs a second kernel module
+[bench-7412.md](journals/bench-7412.md)). Its PCM bus needs a second kernel module
 that is **not part of the release yet**: `kmod-lantiq-ssc-pcm`, the generic
 Lantiq SSC PCM transport, from its own repository. Build it with the OpenWrt
 SDK for `lantiq/xrx200` (its `tools/build.sh`) and install the package, or

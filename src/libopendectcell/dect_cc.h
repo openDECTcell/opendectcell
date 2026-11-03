@@ -576,7 +576,7 @@ uint8_t dect_cc_line(const struct dect_cc *cc);
  * the lowest free value for a call we originate is always 0. Any other
  * value is for testing a handset: the Gigasets refuse an incoming call on
  * value 1 with "insufficient resources" (observed on hardware,
- * docs/call-g7.md). A transaction left open by a lost call is cleared by
+ * docs/journals/call-g7.md). A transaction left open by a lost call is cleared by
  * releasing it, not dodged by picking another value.
  */
 void dect_cc_set_next_ti(struct dect_cc *cc, uint8_t ti);

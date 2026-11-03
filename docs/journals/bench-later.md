@@ -1,7 +1,7 @@
 # Bench later: every open test on one card
 
 Collected 2026-10-30 while the maintainer is away from the bench
-(`docs/tasks-2026-10-30.md`). Newest work first. Each test names its pass
+(`docs/journals/tasks-2026-10-30.md`). Newest work first. Each test names its pass
 and its fail before the run; results go into the file the test comes from,
 or here for the tests written here.
 
@@ -530,7 +530,7 @@ The controller places or takes a call through a cell (the 7412 in cell
 mode, `dect-cell` enrolled) once its C3 host drives calls. Built and tested
 at the desk only (`tests/test_stubd_cell.c`, `make check-cell`); the
 sources are opendectcell-controller cell-protocol.md §8 and
-[notes-for-the-controller.md](notes-for-the-controller.md), "The cell's
+[notes-for-the-controller.md](../notes-for-the-controller.md), "The cell's
 media is built".
 
 | test | pass | fail and what it means |
@@ -539,7 +539,7 @@ media is built".
 | M1b. A narrowband call (`-a narrowband` on the controller's side, or a G.711-only peer) | `... (TDM word W, narrowband), 8 kHz linear on the socket`; speech both ways | noise: byte order on the 7412 (big-endian MIPS: host order on the socket, network order on the wire, `media_up()`/`media_down()`) |
 | M1c. Hang up at either end | `cell: media N closed (requested)` or `(the chip released the channel)`, and the controller's MEDIA_CLOSED; `"media":0` in `/var/run/opendectcell/cell.json` | a session left open: the release path missed `0x0201` on the handle |
 
-## 2. Card A, 7412 (`docs/bench-7412.md`, "Card A")
+## 2. Card A, 7412 (`docs/journals/bench-7412.md`, "Card A")
 
 | test | state |
 |---|---|
@@ -547,7 +547,7 @@ media is built".
 | A13 | the load passed on the box; still open: after real calls (A1, A2) restart the service and look at the A540's call lists |
 | A14 | passed on the box; still open: watch the A540 lose the base after `kill -9` and the stop |
 
-## 3. Older cards with no recorded result (`docs/bench-next.md`, mostly the 7520)
+## 3. Older cards with no recorded result (`docs/journals/bench-next.md`, mostly the 7520)
 
 | test | what |
 |---|---|

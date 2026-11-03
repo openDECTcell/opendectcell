@@ -67,5 +67,5 @@ just the base standard.**
 **Why these six.** Parts 3/4/5 are the DECT stack we implement the host side
 of; TS 102 527-1 is CAT-iq part 1, which defines the wideband codec negotiation
 (`<<CODEC-LIST>>`) that a wideband call depends on. Clause references in
-`call-g7.md`, `registration-g6.md` and `spec-conformance.md` point into these
+`docs/journals/call-g7.md`, `docs/journals/registration-g6.md` and `spec-conformance.md` point into these
 versions specifically.

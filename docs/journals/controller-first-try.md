@@ -4,7 +4,7 @@ Prepared 2026-10-31 night for the maintainer's first run of the controller
 with a real cell (the controller repo's "step 3"). What is ready, what to do
 in what order, what to watch, and how to get back. The controller side is
 `opendectcell-controller` (`docs/deployment.md`, the maintainers' notes); the cell side is
-[luci-manual.md](luci-manual.md) section 4.
+[luci-manual.md](../luci-manual.md) section 4.
 
 ## What is ready
 

@@ -76,7 +76,7 @@ for the model but **read by nothing yet**; some are in no profile file yet.
 | `fw_secondlevel` | STUB file name; `dect-stubd` picks chip RAM addresses by it, so a build gets a name of its own | `dectfw_secondlevel_441-06.88-7412.hex` |
 | `fw_firstlevel_sha256`, `fw_secondlevel_sha256` | Builds our docs are verified against (reference by hash only). Not read: the init script checks both files against its own list of known builds (`KNOWN_FW`, the same table as `tools/dect-fw-extract.py`) | `72f8e27a…045f2`, `4fabee65…cfaa6` |
 | `dect_mode` | Mode word: low byte goes into TLV tag 7, bit 8 is the first-level boot flag | `0x119` |
-| `uart` | Firmware-load UART device; empty or missing: the service does not start | `/dev/ttyLTQ0` (*observed* 2026-10-29, [bench-7412.md](bench-7412.md)) |
+| `uart` | Firmware-load UART device; empty or missing: the service does not start | `/dev/ttyLTQ0` (*observed* 2026-10-29, [bench-7412.md](journals/bench-7412.md)) |
 | `uart_is_console` | The UART is also the serial console (console must be released). Not read: the init script and the uci-defaults script release whatever getty runs on `uart` | `1` |
 | `uart_baud_rom`, `uart_baud_stub` | Baud rates for the ROM and the first-level stage | *open* |
 | `pcm_kmod` | Transport module loaded before the chip boots, where another module than openDECTcell's carries the bus (it holds the PCM clock enable); empty: none. The 7362 SL: `lantiq_tdm_pcm` | `lantiq_ssc_pcm` |

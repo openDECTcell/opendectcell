@@ -5,7 +5,7 @@
 The real dect-cell, built with the sanitizers (make check-cell MBEDTLS=...),
 enrols with a controller made from tools/cell-testpeer.py's CA and frames
 and is then put through cases from the security review of 2026-10-30
-(docs/tasks-2026-10-30.md, D2):
+(docs/journals/tasks-2026-10-30.md, D2):
 
   1. a GOODBYE takes the link down without corrupting memory, and the cell
      reconnects (finding 1);

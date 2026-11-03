@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Start the openDECTcell service on a box, stop it again after N seconds, and see
-# whether the box still answers (docs/bench-later.md, U8f). Runs on the PC.
+# whether the box still answers (docs/journals/bench-later.md, U8f). Runs on the PC.
 #
 #   bench-stop-race.sh HOST KNOWN_HOSTS DELAY [DELAY...]
 #

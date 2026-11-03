@@ -114,7 +114,7 @@ ways, speech lane 1).
 **The fault was ours:** the control-slot search looked only at the first
 mail in each lane and wanted a contact answer there; a freshly booted
 chip sends its `0xFFF2` build stamp first
-([stub-pcm-control-channel.md](stub-pcm-control-channel.md)). The search
+([stub-pcm-control-channel.md](../stub-pcm-control-channel.md)). The search
 also dropped what did not fit the 1024-byte receive buffer. Fixed in
 `d697936`, with a test.
 

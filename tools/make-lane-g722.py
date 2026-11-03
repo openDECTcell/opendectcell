@@ -3,7 +3,7 @@
 """Build a verbatim TDM lane carrying G.722 for `dect-stubd -a playraw=`.
 
 The lane convention, measured from the chip's own uplink (v22.raw, 53 s of a
-live wideband call -- see docs/call-g7.md, desk session 2026-10-23 part 2):
+live wideband call -- see docs/journals/call-g7.md, desk session 2026-10-23 part 2):
 
   * two G.722 code octets per 16-bit word,
   * **each word written into TWO consecutive frames**, 99.8 % of word runs

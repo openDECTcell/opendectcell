@@ -46,7 +46,7 @@ uart_is_console=0
 
 # The boot strap is the chip's TX line (GPIO 11, the USIF's RX pin): the ROM
 # answers only if it is held low while reset is released, as on the 7520
-# (observed 2026-11-01, docs/bench-7362sl.md). The openDECTcell module drives it
+# (observed 2026-11-01, docs/journals/bench-7362sl.md). The openDECTcell module drives it
 # and hands the pin back to the USIF afterwards.
 strap=1
 

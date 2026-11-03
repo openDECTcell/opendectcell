@@ -23,7 +23,7 @@ synchronisation port, the inter-RFP timing tolerance) and EN 300 175-7
 (security: the handover encryption process, 6.4.7). Every statement below that
 would need those is marked as such. Nothing is cited from memory.
 
-Our own notes read first: `docs/multicell-experiments.md`, `docs/capacity.md`,
+Our own notes read first: `docs/journals/multicell-experiments.md`, `docs/capacity.md`,
 `docs/stub-image-format.md` §4, `docs/mac-bringup.md` (RFPI section),
 `docs/7412-spi-tdm-and-loader.md`, `docs/pcm-tdm-ipq4019.md`;
 controller `docs/cell-protocol.md` §7.4, `docs/architecture.md` §8, `ROADMAP.md` C9.
@@ -207,7 +207,7 @@ PARK{y} (GAP 13.7 table 128 stores IPUI, PARK, PLI, LAL, last ARI, last RPN,
 UAK). Any RFP whose PARI the PARK includes is the same system to the handset.
 Registration (`{ACCESS-RIGHTS-REQUEST}`) happens once; moving between cells at
 most causes a location registration, and with one LA not even that. This is
-what M4 saw on the A540 (`multicell-experiments.md`).
+what M4 saw on the A540 (`docs/journals/multicell-experiments.md`).
 
 **PLI.** With class A and PLI 36 the PARK names exactly one ARI. A smaller PLI
 widens access to every ARI sharing the first y bits (-6 6.0, 6.1.0). With a
@@ -493,14 +493,14 @@ were read on the 7520 host driver and matched against the 06.88 build):
    RFPI whose RPN is 8, upload, keep the radio parked, and read the RFPI
    back from `0xF601` [CR A-0132]. *Built 2026-10-30:* uci `rfpi_test`
    (`dect-fwload --rfpi`, `dect-stubd -a rfpicheck=`); card N4 in
-   `docs/bench-later.md`. Pass: the 5 bytes come back unchanged
+   `docs/journals/bench-later.md`. Pass: the 5 bytes come back unchanged
    and the chip runs as usual. Falsified if the RPN comes back altered or
    the STUB does not come up. A pass shows that the STUB stores tag 1
    verbatim. That the beacon carries the same bytes is the room's
    derivation (one stored RFPI), so the beacon itself still has to be
    checked on the air: step 4.
    **Passed 2026-10-30** (7412, 06.88 STUB, observed on hardware; T13 U2
-   in `docs/bench-later.md`): with tag 1 = `10 f4 20 11 09` (made up:
+   in `docs/journals/bench-later.md`): with tag 1 = `10 f4 20 11 09` (made up:
    class B, EIC 0F42, FPN 01, FPS 1, RPN 09) the STUB booted and the
    contact answer `0xF601` carried all 5 octets unchanged. So the STUB
    keeps an RPN above 7 as given; the beacon is still to be checked.
@@ -510,7 +510,7 @@ were read on the 7520 host driver and matched against the 06.88 build):
    page by the derived TPUI, a call). *Built 2026-10-30:* `dect-stubd -a
    ipuio=N` assigns IPUI O number N (`dect_mm_cfg.assign_id`), shown at the
    desk by `tests/stubd-traces/register-ipuio.trace`; the card is N3 in
-   `docs/bench-later.md`.
+   `docs/journals/bench-later.md`.
 3. The EIC. *Revised 2026-10-30 (maintainer):* this is experimental, and
    the controller's admin may make one up (opendectcell-controller d20a930:
    "Make one up…" on the Cells page, saved only after the risks are

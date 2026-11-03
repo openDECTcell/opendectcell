@@ -723,7 +723,7 @@ struct stubd {
 		 * 0x0230 is {link, mode, mask_le16, master, extra}
 		 * [CR A-CodecModes-1]. The CLI keys below are the historical
 		 * names and are kept so the recorded hardware runs in
-		 * docs/call-g7.md stay reproducible -- `flags` is the mode
+		 * docs/journals/call-g7.md stay reproducible -- `flags` is the mode
 		 * byte, `mode` is the master byte, `codec` is the extra byte.
 		 */
 		uint8_t  flags;		/* 0x0230 mode byte: low nibble = audio
@@ -1019,7 +1019,7 @@ struct stubd {
 		/*
 		 * ring=MS: MS ms after the radio is up, call the handset.
 		 * Page it with 0x0300, then send an FP-originated CC-SETUP on
-		 * the link it brings up. Milestone B; see docs/call-g7.md.
+		 * the link it brings up. Milestone B; see docs/journals/call-g7.md.
 		 */
 		unsigned ring_ms;
 		/*
@@ -2332,7 +2332,7 @@ done:
  * chip the answer comes right after the 0xFFF2 build stamp
  * (docs/stub-pcm-control-channel.md), and a search that looked at the
  * first mail only never found the 7362 SL's control slot after an upload
- * (2026-11-01, docs/bench-7362sl-g2.md). Pulling as we push keeps a window
+ * (2026-11-01, docs/journals/bench-7362sl-g2.md). Pulling as we push keeps a window
  * longer than the receive buffer (DECT_RX_BUF) whole.
  */
 static int slot_has_contact_ack(const uint8_t *data, size_t frames,
@@ -2994,7 +2994,7 @@ static unsigned hs_slot(const struct stubd *s, unsigned i);
 static void hs_name(const struct stubd *s, unsigned i, char *buf, size_t cap);
 
 /*
- * holdback=MS (docs/multicell-experiments.md, test M2): every store but the
+ * holdback=MS (docs/journals/multicell-experiments.md, test M2): every store but the
  * first stays out of the chip until MS after start, as if a controller
  * pushed it then. The host still holds them; only the chip lacks the key.
  */
@@ -3028,7 +3028,7 @@ static void fetch_keep(struct stubd *s)
 }
 
 /*
- * Test M4 (docs/multicell-experiments.md): play the controller for a
+ * Test M4 (docs/journals/multicell-experiments.md): play the controller for a
  * roamer. MM holds a {LOCATE-REQUEST} from an identity this link does not
  * know; if it is the remote= store's, its record "arrives" fetchdelay ms
  * after the request, and the request is answered. Times are from the
@@ -8078,7 +8078,7 @@ static void usage(void)
 		"           prints its slot, carrier and signal levels\n"
 		"           holdback=MS nochipkeys remote=PATH fetchdelay=MS\n"
 		"           locvalid=N: the multi-cell tests M2 and M4\n"
-		"           (docs/multicell-experiments.md)\n"
+		"           (docs/journals/multicell-experiments.md)\n"
 		"           latemail=MS:SRC:DST:PRIM[:HEX] send this raw mail MS ms\n"
 		"           after the subscriptions were reloaded (repeatable, up\n"
 		"           to 8, in list order); -M sends before the radio is on\n"
@@ -8708,7 +8708,7 @@ int main(int argc, char **argv)
 	 * within 1-2 s, five runs of five. Radio-off after the configuration
 	 * did not help (runs X2 and Z1, observed on a 7412, 2026-10-29).
 	 * Whether the levels are our beacon or a neighbour the scan only sees
-	 * while it runs is open; a handset decides (docs/bench-7412.md).
+	 * while it runs is open; a handset decides (docs/journals/bench-7412.md).
 	 */
 	if (!strcmp(s.stub_name, DECT_STUB_0688)) {
 		sub_uak_base = SUB_UAK_BASE_0688;

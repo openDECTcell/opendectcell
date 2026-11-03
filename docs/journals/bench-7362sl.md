@@ -6,7 +6,7 @@ time openDECTcell boots the DECT chip on a 7362 SL.
 
 **Only with the maintainer's agreement:** this boots the chip's firmware.
 No mail is sent to it, so the radio stays off (it starts only on
-`0x015B 01`, [mac-bringup.md](mac-bringup.md)); at the end the chip is held
+`0x015B 01`, [mac-bringup.md](../mac-bringup.md)); at the end the chip is held
 in reset anyway.
 
 ## What is known going in
@@ -24,7 +24,7 @@ in reset anyway.
   chip should drive FSC and DCL [CR 7362SL/A-0001].
 - The upload: stage 1 at 9600 Bd (mode 0x101 has bit 8, so the first 11
   attempts are "slow"), stage 2 at 230400 Bd (the first stage's file name
-  has neither `_slow` nor `_fast`; [stub-loader-protocol.md](stub-loader-protocol.md)
+  has neither `_slow` nor `_fast`; [stub-loader-protocol.md](../stub-loader-protocol.md)
   §2-§3).
 - `ubihealthd` reads NAND every 120 s with interrupts off for about 27 ms,
   longer than the USIF's receive FIFO lasts at 230400 Bd [CR 7362SL/A-0002
@@ -84,7 +84,7 @@ TLVs patched (block at urlader 0x1985).
 the bus. Whether DI (41) moves says whether the chip already sends on it.
 **If nothing moves:** the chip may need a different mode word to clock the
 bus (on the 7412 only its own build clocked, and the mode word set the
-rate; [7412-spi-tdm-and-loader.md](7412-spi-tdm-and-loader.md) §1a). Note
+rate; [7412-spi-tdm-and-loader.md](../7412-spi-tdm-and-loader.md) §1a). Note
 it; no other mode is tried without a new card.
 
 ## 4. Hold the chip in reset, unload
@@ -116,7 +116,7 @@ by hand (the `opendectcell` package itself would not install: it still required
 **First run, without the strap** (`--no-strap`, as the 7412): 3 rounds of 16
 stage-1 attempts at 9600 and 115200 Bd, **no byte at all** from the chip
 (USIF `rx 0`). The 7520 showed exactly this without its strap
-([stub-loader-protocol.md](stub-loader-protocol.md) §7).
+([stub-loader-protocol.md](../stub-loader-protocol.md) §7).
 
 **Strap probe:** with the USIF module unloaded, GPIO 11 (the chip's TX, the
 USIF's RX pin) was held low or left as an input while reset (GPIO 30) was

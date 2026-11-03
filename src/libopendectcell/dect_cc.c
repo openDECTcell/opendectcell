@@ -1265,7 +1265,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 	 * anything; everything else "shall" be disregarded (§10.4.2.3), and
 	 * CC serves none of those. Clearing it as an unknown call instead
 	 * makes a Gigaset that sends AVM's proprietary escape there cycle the
-	 * link ([CR A-0055], docs/call-g7.md).
+	 * link ([CR A-0055], docs/journals/call-g7.md).
 	 */
 	if (h.ti_value == 6u)
 		return;

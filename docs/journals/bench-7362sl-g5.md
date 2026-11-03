@@ -25,7 +25,7 @@ run (no link mail); in the third run the handset stopped at the PIN
 prompt, as nothing on the base side could complete a registration.
 
 **G5 passed** with the third run. On the 07.18 STUB the 7520's two-mail
-bring-up (radio on, open registration, [mac-bringup.md](mac-bringup.md)) did
+bring-up (radio on, open registration, [mac-bringup.md](../mac-bringup.md)) did
 not give a beacon a handset finds; stock's three configuration mails
 before the radio did. Those are what `dect-stubd -g` sends (the
 "stock's MAC bring-up" comment in `dect-stubd.c`), so the service's path

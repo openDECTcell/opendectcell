@@ -148,7 +148,7 @@ The cause is not the clock crossing §4 implied and not feeder starvation: the
 transmit queue never underruns in either case. On a base-originated bearer the
 chip holds lane words about twenty times as often (152/s against 7/s), so the
 lane is not consuming at the rate we write. Details, measurements and the
-remaining confounds are in `docs/call-g7.md`, "Bench session, 2026-10-22
+remaining confounds are in `docs/journals/call-g7.md`, "Bench session, 2026-10-22
 evening".
 
 Nothing here changes the controller's interface. It changes what you should
@@ -409,7 +409,7 @@ how you will present incoming calls.** Every refusal of an FP-originated
 call by a Gigaset in our corpus (60 of 60) coincided with the handset's own
 CAT-iq list-access call, and the handset never finished its list sync
 against us because our responder confirmed reads and never sent a data
-packet. Full account in `call-g7.md` ("THE REFUSAL IS A {CC-SETUP}
+packet. Full account in `docs/journals/call-g7.md` ("THE REFUSAL IS A {CC-SETUP}
 COLLISION") and `spec-conformance.md` (the corpus table and the TS 102 527-3
 audit).
 
@@ -454,7 +454,7 @@ is seconds after attach rather than for ever.
 
 ## Incoming calls ring on a Gigaset: transaction value 0 `[2026-10-24 night]`
 
-The Gigaset A540 now rings on an FP-originated call (`docs/call-g7.md`,
+The Gigaset A540 now rings on an FP-originated call (`docs/journals/call-g7.md`,
 runs 14-16). The cause was ours: the daemon rotated the CC transaction value
 per call, and EN 300 444 §6.9.2 requires the lowest free value. The A540
 refuses value 1 with `0x32` and alerts on 0; the C4 accepts both, which is
@@ -583,7 +583,7 @@ the base never stored -- an independent review found exactly that in
 
 ## API 18-20: roaming between cells of one controller `[2026-10-25 morning]`
 
-Results and method: `docs/multicell-experiments.md`. On STUB 07.56 the
+Results and method: `docs/journals/multicell-experiments.md`. On STUB 07.56 the
 chip admits, pages and rings a handset whose key it does not hold (M1, M2');
 so a cell can serve a roamer from host records alone. What the controller
 has to do differently:
@@ -618,7 +618,7 @@ renewing is gone). Whether Gigasets honour it is test M6.
 
 ## API 21-25: PINs, wideband, dialling, and a call in steps `[2026-10-25 midday]`
 
-All measured at the bench the same day (`docs/bench-2026-10-25.md`).
+All measured at the bench the same day (`docs/journals/bench-2026-10-25.md`).
 
 **API 21, PINs.** `dect_dsaa_pin_to_ac()` returns -1 for a non-digit or more
 than 8 digits; it used to write in front of the buffer at 9+. Validate a
@@ -820,7 +820,7 @@ the transport, its sockets and files, audio lanes and diagnostics.
   (`tests/stubd-traces/`, made-up identities): a host that replays them
   and gets the same mails and bridge events is the same base. The
   cheapest first test of a cgo host.
-- **On hardware since the move** (`docs/bench-later.md` §1a): the 7412
+- **On hardware since the move** (`docs/journals/bench-later.md` §1a): the 7412
   (06.88) started, restored, read back and audited its slots, served
   STATS and resumed a link to your controller in Docker (U1-U6); the lab
   7520 (07.56) runs the new build with three Gigasets (V1, V3; V2, a
@@ -921,7 +921,7 @@ MEDIA_OPEN no longer answers status 4. What the cell does (cell-protocol.md
   session with reason 2. A lost control link leaves the flows running
   (§6.4).
 - Not on air yet: the first call with audio is C3's. Bench card M1 in
-  `docs/bench-later.md`.
+  `docs/journals/bench-later.md`.
 
 ## The cell renews its certificate `[2026-10-30, late night]`
 

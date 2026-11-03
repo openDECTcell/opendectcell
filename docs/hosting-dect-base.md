@@ -177,7 +177,7 @@ driven directly. Recording a new trace: `GOLDEN_UPDATE=1 build/test_stubd
   a handset registered through cell A is in cell A's records only. Sharing
   records across cells (roaming) is not built: see
   [multicell-identities.md](multicell-identities.md) and
-  [multicell-experiments.md](multicell-experiments.md).
+  [multicell-experiments.md](journals/multicell-experiments.md).
 - `dect-stubd` still holds its controller-fetch experiment (M4) and the
   control verbs that are not the bridge's (S5c).
 - Behaviour on the air was checked on two box models and three Gigaset

@@ -23,13 +23,13 @@ Source abbreviations below identify repository files; each use also names a sect
 | L | `docs/stub-loader-protocol.md` |
 | I | `docs/stub-image-format.md` |
 | M | `docs/mac-bringup.md` |
-| R | `docs/registration-g6.md` |
-| G | `docs/call-g7.md` |
+| R | `docs/journals/registration-g6.md` |
+| G | `docs/journals/call-g7.md` |
 | T | `docs/two-calls.md` |
 | D | `docs/diagnostics.md` |
 | C | `docs/capacity.md` |
 | F | `docs/models/7520-DECT-analysis.md` |
-| B | `docs/bench-2026-10-25.md` |
+| B | `docs/journals/bench-2026-10-25.md` |
 | V | `docs/verification-gap.md` |
 | H | `src/libopendectcell/dect_proto.h` |
 | MAIL | `src/libopendectcell/dect_mail.c` and `dect_mail.h` |

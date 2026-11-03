@@ -3,7 +3,7 @@
 For the maintainer, with the A540, C430A and AS690H at hand. Seven tests, about 50 minutes.
 Every test checks one change made at the desk on 2026-10-28, none of which has
 been on air yet. What each result means is written down in advance; the
-technical detail is in `docs/spec-sweep-2026-10-28.md` ("Next bench tests").
+technical detail is in `docs/journals/spec-sweep-2026-10-28.md` ("Next bench tests").
 
 **Before anything:** the box runs `bd7ede5` or later (`md5sum /tmp/dect-stubd`
 against `build/dect-stubd.arm`; deploy if they differ), the radio is parked. After
@@ -722,7 +722,7 @@ from that handset. Afterwards, with the same N: `N=2; cp /root/subN.keep /etc/op
 | the mobile rings | A1 failed: send the log at once |
 | the handset cannot reach the base at all | the chip refused the wrong key already; inconclusive for A1, restore and say so |
 
-### 35. 7412 (when there is time): `docs/bench-7412.md`
+### 35. 7412 (when there is time): `docs/journals/bench-7412.md`
 
 The 7412 card carries the same daemon; its test 3 also shows the verified
 park.

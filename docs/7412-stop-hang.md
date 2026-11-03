@@ -2,7 +2,7 @@
 
 Status 2026-11-02. A FRITZ!Box 7412 running the service sometimes loses its
 network when the service is stopped, and has to be power-cycled. This page
-collects the evidence (from [bench-later.md](bench-later.md), U8e and U8f), the
+collects the evidence (from [bench-later.md](journals/bench-later.md), U8e and U8f), the
 hypotheses with the result each one predicts, and the fix to try. A guard that
 reboots the box after the fact is **not** the fix: the aim is that the stop
 never kills the network.
@@ -76,7 +76,7 @@ If H2 is the cause, the fix is in the module's use of the DMA API (the module
 must take the same lock the Ethernet driver uses for the channel-select
 register, or use the channel through the API only).
 
-Whatever is found, record the result here and in [bench-later.md](bench-later.md).
+Whatever is found, record the result here and in [bench-later.md](journals/bench-later.md).
 
 ## Results, 2026-11-03 (lab 7412, module `e3c898d`, the box power-cycled by the PC)
 
