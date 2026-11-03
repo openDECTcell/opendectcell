@@ -7,7 +7,7 @@
 #   tools/release/images.sh ipq40xx/generic APKDIR OUTDIR   # FRITZ!Box 7520/7530
 #   tools/release/images.sh lantiq/xrx200 APKDIR OUTDIR     # FRITZ!Box 7412
 #
-# OPENWRT picks the release; it must be the one APKDIR's packages were built
+# OPENWRT picks the release (default: tools/release/OPENWRT_VERSION); it must be the one APKDIR's packages were built
 # against (the kernel module only fits that kernel). The ImageBuilder is
 # downloaded once into build/release (or $CACHE) and checked against
 # OpenWrt's sha256sums. OUTDIR gets the sysupgrade image, the manifest and
@@ -22,7 +22,7 @@ target=${1:?usage: images.sh TARGET/SUBTARGET APKDIR OUTDIR}
 apks=${2:?usage: images.sh TARGET/SUBTARGET APKDIR OUTDIR}
 out=${3:?usage: images.sh TARGET/SUBTARGET APKDIR OUTDIR}
 root=$(cd "$(dirname "$0")/../.." && pwd)
-openwrt=${OPENWRT:?set OPENWRT to the release the packages were built against}
+openwrt=${OPENWRT:-$(cat "$root/tools/release/OPENWRT_VERSION")}
 cache=${CACHE:-$root/build/release}
 base=https://downloads.openwrt.org/releases/$openwrt/targets/$target
 

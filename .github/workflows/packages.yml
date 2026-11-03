@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Builds the OpenWrt packages with the official SDK (tools/release/build.sh).
 # Run by hand only (2026-11-03): a tag no longer starts it, so a release built
 # on the maintainer's machine (tools/release/build.sh and images.sh, with the
@@ -61,6 +62,8 @@ jobs:
         env:
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           SIGN_KEY_PEM: ${{ secrets.OPENDECTCELL_SIGN_KEY }}
+          # the kernel-module repositories are private: a CI build has no 7412 audio transport
+          ALLOW_MISSING_KMOD: "1"
         run: |
           if [ -n "$SIGN_KEY_PEM" ]; then
             printf '%s\n' "$SIGN_KEY_PEM" > "$RUNNER_TEMP/sign.pem"

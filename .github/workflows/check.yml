@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # The host build and every test, golden traces included (make check), on
 # each push and pull request. The packages are the Packages workflow's.
 name: Check
@@ -16,3 +17,33 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: make check
         run: make check
+
+  # The cell link and the media encryption (dect-cell, SRTP) with the sanitizers, against a scripted
+  # controller. They need mbedTLS 3.6, which Ubuntu does not ship, so it is built once from the release the
+  # OpenWrt packages use (pinned by hash) and cached.
+  cell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: mbedTLS cache
+        id: mbedtls
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/mbedtls
+          key: mbedtls-3.6.7-v1
+      - name: Build mbedTLS 3.6.7
+        if: steps.mbedtls.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake
+          curl -fsSL -o mbedtls.tar.bz2 https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2
+          echo "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6  mbedtls.tar.bz2" | sha256sum -c -
+          tar -xjf mbedtls.tar.bz2
+          cmake -S mbedtls-3.6.7 -B mbedbuild -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/mbedtls"
+          cmake --build mbedbuild -j"$(nproc)"
+          cmake --install mbedbuild
+      - name: make check-cell
+        run: |
+          sudo apt-get install -y python3-cryptography
+          make check-cell MBEDTLS="$HOME/mbedtls"

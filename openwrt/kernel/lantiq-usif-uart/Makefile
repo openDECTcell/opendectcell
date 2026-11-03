@@ -9,10 +9,7 @@ PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/openDECTcell/kmod-lantiq-usif-uart.git
 PKG_SOURCE_DATE:=2026-11-01
 PKG_SOURCE_VERSION:=f3591066c33cb4a007c9fde19d9596200b7e2468
-# Not computed yet: the repository is private and was not reachable from
-# the build host. Set it from `make package/lantiq-usif-uart/check FIXUP=1`
-# once it is.
-PKG_MIRROR_HASH:=skip
+PKG_MIRROR_HASH:=9858849caa3af36aeb782974b96284f30ae0283bd111a678895cdb1996772669
 
 PKG_LICENSE:=GPL-2.0-or-later GPL-2.0-only
 PKG_MAINTAINER:=ctandi <amo@ct.de>

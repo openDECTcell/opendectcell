@@ -18,8 +18,8 @@ export OPENDECTCELL_FL_HEX   ?= $(FW7520)/dectfw_firstlevel_441_slow.hex
 TESTS := $(BUILD)/test_fwimage $(BUILD)/test_mail $(BUILD)/test_session $(BUILD)/test_audio $(BUILD)/test_cs $(BUILD)/test_lc $(BUILD)/test_lapc $(BUILD)/test_nwk $(BUILD)/test_dsaa $(BUILD)/test_mm $(BUILD)/test_cc $(BUILD)/test_iwu $(BUILD)/test_g722 $(BUILD)/test_clip $(BUILD)/test_callinfo $(BUILD)/test_time $(BUILD)/test_link $(BUILD)/test_diag $(BUILD)/test_profile $(BUILD)/test_ctl $(BUILD)/test_ssc_align $(BUILD)/test_cell $(BUILD)/test_trace $(BUILD)/test_contacts $(BUILD)/test_calls $(BUILD)/test_stubd $(BUILD)/test_stubd_cell $(BUILD)/test_base
 FWLOAD_SRC := src/fwload/dect-fwload.c src/fwload/loader.c src/fwload/fwimage.c
 
-# Cross build for the 7520 with the OpenWrt SDK (25.12.5, ipq40xx/generic).
-SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-25.12.5-ipq40xx-*))
+# Cross build for the 7520 with the OpenWrt SDK (the release of tools/release/OPENWRT_VERSION, ipq40xx/generic).
+SDK     ?= $(firstword $(wildcard $(HOME)/opt/openwrt-sdk-$(shell cat tools/release/OPENWRT_VERSION)-ipq40xx-*))
 TCBIN   := $(firstword $(wildcard $(SDK)/staging_dir/toolchain-*/bin))
 XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 
@@ -244,6 +244,7 @@ check: $(TESTS)
 	@python3 -I tests/test_luci_js.py
 	@python3 -I tests/test_firmware_sh.py
 	@python3 -I tests/test_package_keep.py
+	@python3 -I tests/test_release_files.py
 
 clean:
 	rm -rf $(BUILD)

@@ -9,10 +9,7 @@ PKG_SOURCE_PROTO:=git
 PKG_SOURCE_URL:=https://github.com/openDECTcell/kmod-lantiq-tdm-pcm.git
 PKG_SOURCE_DATE:=2026-11-01
 PKG_SOURCE_VERSION:=44508910c4375de38e4b4e89f6138457056f035e
-# Not computed yet: the repository is private and was not reachable from
-# the build host. Set it from `make package/lantiq-tdm-pcm/check FIXUP=1`
-# once it is.
-PKG_MIRROR_HASH:=skip
+PKG_MIRROR_HASH:=e35e62e07c69bda12010009ef9202613eaa047edad399b20b15963d966dc1a11
 
 PKG_LICENSE:=GPL-2.0-only
 PKG_MAINTAINER:=ctandi <amo@ct.de>

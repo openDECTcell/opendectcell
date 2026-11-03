@@ -11,7 +11,10 @@
 # against OpenWrt's sha256sums. OUTDIR gets the .apk files, named with
 # their architecture so the two targets' files do not collide.
 #
-# OPENWRT=25.12.5 picks the OpenWrt release; TAG=v0.3.0 makes the build
+# TRANSPORTS="lantiq-ssc-pcm" builds only the 7412's transport (a release without the 7362 SL's);
+# a wanted transport that is not reachable stops the build unless ALLOW_MISSING_KMOD=1.
+# OPENWRT=25.12.6 picks the OpenWrt release (default: tools/release/OPENWRT_VERSION, the one
+# place the supported release is named); TAG=v0.3.0 makes the build
 # fail unless the tag matches PKG_VERSION in openwrt/net/opendectcell/Makefile.
 #
 # The packages build the way an OpenWrt feed builds them (openwrt/README.md):
@@ -27,7 +30,7 @@ set -eu
 target=${1:?usage: build.sh TARGET/SUBTARGET OUTDIR}
 out=${2:?usage: build.sh TARGET/SUBTARGET OUTDIR}
 root=$(cd "$(dirname "$0")/../.." && pwd)
-openwrt=${OPENWRT:-25.12.5}
+openwrt=${OPENWRT:-$(cat "$root/tools/release/OPENWRT_VERSION")}
 cache=${CACHE:-$root/build/release}
 base=https://downloads.openwrt.org/releases/$openwrt/targets/$target
 
@@ -51,16 +54,31 @@ esac
 dropped=""
 case $target in
 lantiq/*)
+	# TRANSPORTS names the ones this build must contain (default: all three). A wanted one that is
+	# not reachable stops the build, so a release cannot lose a board's driver unnoticed; only
+	# ALLOW_MISSING_KMOD=1 (a CI run without access to the private repositories) turns that into a
+	# warning and drops the package and openDECTcell's dependency on it.
 	for t in lantiq-ssc-pcm lantiq-tdm-pcm lantiq-usif-uart; do
+		case " ${TRANSPORTS:-lantiq-ssc-pcm lantiq-tdm-pcm lantiq-usif-uart} " in
+		*" $t "*) ;;
+		*)
+			echo "note: kmod-$t is not part of this build (TRANSPORTS)" >&2
+			dropped="$dropped $t"
+			continue ;;
+		esac
 		url=$(sed -n 's/^PKG_SOURCE_URL:=//p' \
 			"$root/openwrt/kernel/$t/Makefile")
 		if GIT_TERMINAL_PROMPT=0 git ls-remote "$url" >/dev/null 2>&1; then
 			sources="$sources $t"
 			packages="$packages kmod-$t"
-		else
+		elif [ "${ALLOW_MISSING_KMOD:-0}" = 1 ]; then
 			echo "warning: $url not reachable: no kmod-$t," \
 				"and opendectcell's dependency on it is dropped" >&2
 			dropped="$dropped $t"
+		else
+			echo "error: $url is not reachable, so kmod-$t cannot be built." \
+				"Set ALLOW_MISSING_KMOD=1 for a build without it." >&2
+			exit 1
 		fi
 	done
 	# the 7362 SL's meta package, where both of its transports build
