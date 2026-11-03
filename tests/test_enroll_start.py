@@ -35,7 +35,7 @@ lib = '\n'.join(func(src, n) for n in ('ui_dir', 'enroll_start'))
 check('ENROLL_LIMIT=${ENROLL_LIMIT:-90}' in src, 'the time limit is not 90 seconds')
 
 
-def run(enroll_body, limit='90', wait=12):
+def run(enroll_body, limit='90', wait=12, running=True, enabled='1'):
     """Start an enrolment whose `enroll` does enroll_body; return (what enroll_start returned, final status)."""
     with tempfile.TemporaryDirectory() as ui:
         pre = '''UI_DIR=%s
@@ -43,7 +43,10 @@ ENROLL_STATUS=$UI_DIR/enroll.status
 ENROLL_LIMIT=%s
 log() { echo "LOG: $*" >&2; }
 enroll() { %s; }
-''' % (ui, limit, enroll_body)
+ENROLL_SETTLE=0
+pidof() { %s; }
+uci() { echo %s; }
+''' % (ui, limit, enroll_body, 'return 0' if running else 'return 1', enabled)
         r = subprocess.run(['sh', '-c', pre + lib + '\nenroll_start @/x; echo "rc=$?"'], capture_output=True, text=True, timeout=30)
         st = os.path.join(ui, 'enroll.status')
         first = open(st).read().strip() if os.path.exists(st) else ''
@@ -63,6 +66,14 @@ check(left == ['enroll.status'], 'nothing is left in the directory: %r' % left)
 
 rc, first, final, left = run('echo "the controller said the token is not valid" >&2; return 1')
 check(re.fullmatch(r'error \d+ the controller said the token is not valid', final), 'failure carries the reason: %r' % final)
+
+# enrolled, but the cell service did not start: a warning that says why, not a plain success
+rc, first, final, left = run('echo "enrolled with c.example:7300; the cell is active"; echo "opendectcell: chip firmware missing in /etc/opendectcell/firmware (a, b); not starting" >&2; return 0', running=False)
+check(re.fullmatch(r'warn \d+ chip firmware missing in /etc/opendectcell/firmware \(a, b\); not starting', final), 'enrolled but not running (firmware): %r' % final)
+rc, first, final, left = run('echo "enrolled with c.example:7300; the cell is active"; return 0', running=False, enabled='0')
+check(re.fullmatch(r'warn \d+ the DECT service is switched off .*', final), 'enrolled but not running (switched off): %r' % final)
+rc, first, final, left = run('echo "enrolled with c.example:7300; the cell is active"; return 0', running=False, enabled='1')
+check(final.startswith('warn ') and 'logread' in final, 'enrolled but not running, no reason known: %r' % final)
 
 # it does not wait for the enrolment, and a hung one is stopped at the limit and says so
 t = time.time()

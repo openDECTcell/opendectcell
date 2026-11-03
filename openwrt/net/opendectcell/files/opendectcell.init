@@ -910,10 +910,13 @@ enroll() {
 
 # What LuCI uses: it cannot wait for `enroll` (a call to the box ends after 20 to 30 seconds, and the service restart alone can take 15),
 # so the enrolment runs in the background and its outcome is written to a status file the page polls:
-#   running <epoch>  |  ok <epoch> <what dect-cell said>  |  error <epoch> <why>
+#   running <epoch>  |  ok <epoch> <what dect-cell said>  |  warn <epoch> <why this box is not a running cell>  |  error <epoch> <why>
+# "warn": the controller accepted the enrolment, but the cell service did not start (switched off, no chip firmware): to the
+# controller this box would be a cell that enrolled and never connects.
 # It is given ENROLL_LIMIT seconds (90) in all, the restart included; after that it is stopped and says so.
 ENROLL_STATUS=$UI_DIR/enroll.status
 ENROLL_LIMIT=${ENROLL_LIMIT:-90}
+ENROLL_SETTLE=${ENROLL_SETTLE:-2}
 enroll_start() {
 	local st="$ENROLL_STATUS" started
 
@@ -936,7 +939,15 @@ enroll_start() {
 		kill $dog 2>/dev/null
 		msg=$(head -n 1 "$st.out" 2>/dev/null | tr -d '\r')
 		if [ $rc -eq 0 ]; then
-			echo "ok $(date +%s) ${msg:-enrolled}" > "$st"
+			sleep "$ENROLL_SETTLE"	# the restart returns before procd has started everything
+			if pidof dect-cell >/dev/null 2>&1; then
+				echo "ok $(date +%s) ${msg:-enrolled}" > "$st"
+			else
+				why=$(grep -i "not starting\|missing\|needs the" "$st.out" 2>/dev/null | tail -n 1 | sed 's/^opendectcell: //')
+				[ -n "$why" ] || [ "$(uci -q get opendectcell.main.enabled)" = 1 ] ||
+					why="the DECT service is switched off (Network > DECT: enable it)"
+				echo "warn $(date +%s) ${why:-see the system log (logread | grep opendectcell)}" > "$st"
+			fi
 		elif [ $rc -ge 128 ]; then
 			echo "error $(date +%s) no answer within $ENROLL_LIMIT seconds" > "$st"
 		else

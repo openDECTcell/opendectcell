@@ -367,17 +367,19 @@ function reloadSoon() {
 	window.setTimeout(function() { location.reload(); }, 3000);
 }
 
-/* The enrolment's outcome, written by `enroll_start`: "running T", "ok T text" or "error T text". */
+/* The enrolment's outcome, written by `enroll_start`: "running T", "ok T text", "warn T text" (enrolled, but the cell service does not run) or "error T text". */
 var ENROLL_STATUS = UI_DIR + 'enroll.status';
 var ENROLL_WAIT_MS = 90000;
 
 /* Polls the status until the enrolment is over or 90 seconds have passed since `started`. */
 function waitForEnrolment(started) {
 	return L.resolveDefault(fs.read(ENROLL_STATUS), '').then(function(text) {
-		var m = /^(running|ok|error) (\d+)\s*(.*)$/.exec((text || '').trim());
+		var m = /^(running|ok|warn|error) (\d+)\s*(.*)$/.exec((text || '').trim());
 
 		if (m && m[1] == 'ok')
 			return { ok: true, text: m[3] };
+		if (m && m[1] == 'warn')
+			return { ok: true, warn: true, text: m[3] };
 		if (m && m[1] == 'error')
 			return { ok: false, text: m[3] };
 		if (Date.now() - started > ENROLL_WAIT_MS + 3000)
@@ -441,6 +443,11 @@ function enrollDialog() {
 						ui.hideModal();
 						if (!res.ok) {
 							ui.addNotification(null, E('p', {}, [ _('Not enrolled: %s').format(res.text) ]), 'warning');
+							return;
+						}
+						if (res.warn) {
+							/* the controller has this box, but it will never connect: say why, and stay on the page */
+							ui.addNotification(null, E('p', {}, [ _('Enrolled, but this box does not run as a cell yet, so the controller will show it as offline: %s').format(res.text) ]), 'warning');
 							return;
 						}
 						ui.addNotification(null, E('p', {}, _('Enrolled: this box is now a cell. The page reloads.')), 'info');
