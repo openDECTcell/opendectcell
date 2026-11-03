@@ -43,8 +43,20 @@ for e in execs:
 
 # 2. nothing is written in /tmp: hand-overs use the root-only directory
 for w in writes:
-    check(not w.startswith('/tmp/'), 'write to /tmp: %s' % w)
-    check(w.startswith('/var/run/opendectcell-ui/') or w.startswith('/etc/opendectcell-sub.'), 'write outside the hand-over directory: %s' % w)
+    check(not w.startswith('/tmp/') or w.startswith('/tmp/run/opendectcell-ui/'), 'write to /tmp: %s' % w)
+    check(w.startswith(('/var/run/opendectcell-ui/', '/tmp/run/opendectcell-ui/', '/etc/opendectcell-sub.')), 'write outside the hand-over directory: %s' % w)
+
+# 2b. rpcd matches a file ACL against the path it resolves, and /var/run is /tmp/run on the box: a file under the
+# hand-over directory must be listed under both names, or the browser is told "Permission denied" (found on the 7412,
+# 2026-11-03: the exact hand-over paths of the SEC-05 hardening named only /var/run). Reads and writes alike.
+for part in ('read', 'write'):
+    files = acl.get(part, {}).get('file', {})
+    for path, perms in files.items():
+        if path.startswith('/var/run/opendectcell-ui/') and not any(p in ('exec',) for p in perms):
+            twin = '/tmp/run/' + path[len('/var/run/'):]
+            check(twin in files and files[twin] == perms, 'no /tmp/run twin with the same rights for %s' % path)
+        if path.startswith('/tmp/run/opendectcell-ui/'):
+            check('/var/run/' + path[len('/tmp/run/'):] in files, 'a /tmp/run entry without its /var/run name: %s' % path)
 
 # 3. the paths the page uses are the ones the ACL, the init script, firmware.sh and carddav.uc agree on
 js = read(os.path.join(APP, 'htdocs/luci-static/resources/view/opendectcell/settings.js'))
