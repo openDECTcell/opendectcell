@@ -175,15 +175,16 @@ A switch for a module that is not built yet is accepted and has no effect.
 - Test by copying the file to `/etc/opendectcell/profiles/`, `kill -HUP` the
   daemon (or `--check-profile` first), and the bench card's run.
 
-## 8. Examples (from the 2026-10-28 bench)
+## 8. Examples (the files in `profiles/`)
 
-These are in the repo as `profiles/*.profile` and installed to
-`/etc/opendectcell/profiles/` by the package; `dect-stubd --check-profile`
-accepts each.
+These are the real files in `profiles/*.profile`, installed to `/etc/opendectcell/profiles/` by the package;
+`dect-stubd --check-profile` accepts each. What is special about each handset, and why, is in
+[handset-compatibility.md](handset-compatibility.md).
 
-`gigaset.profile`, the manufacturer layer:
+`gigaset.profile`, the manufacturer layer (it sets nothing; the devices extend it):
 
 ```
+# Gigaset handsets: the manufacturer layer (docs/handset-profiles.md).
 format = 1
 id = gigaset
 kind = manufacturer
@@ -191,9 +192,10 @@ name = "Gigaset"
 source = "bench 2026-10-28, docs/journals/bench-next.md results table"
 ```
 
-`gigaset-c430a.profile`:
+`gigaset-c430a.profile` (a Part 1 handset: the name shows only as text the base draws):
 
 ```
+# Gigaset C430A (NG-DECT Part 1).
 format = 1
 id = gigaset-c430a
 kind = device
@@ -202,27 +204,45 @@ name = "Gigaset C430A"
 source = "bench 2026-10-28: vRINGC430A-20261028-095744-1; [CR A-0125]"
 # source: test 1 -- the name shows only as base-drawn display text
 cc.name.method = both
-# source: [CR A-0125] section 5, stock's framing, as bench test S3b sent it
-#   (`infoie=2811020a1a910202095765646e65736461790d` for "Wednesday")
+# source: [CR A-0125] section 5, stock's framing, as bench test S3b sent it;
+# test 1 put the number line, not the name, on screen: unconfirmed
 cc.name.display = hex:02 0a 1a 91 02 02 {len} {text} 0d
 ```
 
-(Test 1 put the number line, not the name, on the C430A with this framing,
-so the file is an example of the syntax until the bench confirms it.)
-
-`gigaset-a540.profile`: none is needed. Everything the A540 required on the
-bench turned out to be the standard (TI 0, <<SIGNAL>>, the full
-<<CALL-INFORMATION>> to a Part 3 handset), which is the default. Its PIN
-habit is the one quirk:
+`gigaset-as690h.profile`, the same habit on a second Part 1 handset:
 
 ```
+# Gigaset AS690H (NG-DECT Part 1).
+format = 1
+id = gigaset-as690h
+kind = device
+extends = gigaset
+name = "Gigaset AS690H"
+source = "bench 2026-10-28: test 1 (no name from <<CALLING-PARTY-NAME>>)"
+# source: test 1 -- like the C430A, names only as display text
+cc.name.method = both
+```
+
+`gigaset-a540.profile`: the A540 needed nothing beyond the standard (TI 0, <<SIGNAL>>, the full
+<<CALL-INFORMATION>> to a Part 3 handset), which is the default. It has two habits:
+
+```
+# Gigaset A540 (NG-DECT Part 3). Everything it needed on the bench turned
+# out to be the standard; this is its one habit.
 format = 1
 id = gigaset-a540
 kind = device
 extends = gigaset
 name = "Gigaset A540"
-source = "bench 2026-10-28 test 20, RES1 matched PIN 0000"
+source = "bench 2026-10-28 test 20: RES1 matched PIN 0000"
 reg.tries_0000_first = yes
+# The list change notices after its location registration (the Line Settings
+# List, the List of Supported Lists) make it read the List of Supported Lists
+# and give up the list session: it never reads the Internal Names List, so it
+# keeps no name (bench 2026-11-01: none of the contacts with the notices got
+# a name, all three without them did). Without a notice it reads lists 06 and
+# 08 by itself when it reconnects.
+notify = off
 ```
 
 ## 9. Open points

@@ -20,7 +20,7 @@ signalling level, or only partly:
 - **vendor lists** (a phonebook or call list reached over a vendor channel, not
   TS 102 527-3 list access).
 
-[handset-compatibility.md](handset-compatibility.md) concluded in October that
+[journals/handset-compatibility-2026-10.md](journals/handset-compatibility-2026-10.md) concluded in October that
 per-device support should wait until "two demonstrably *conformant* handsets
 need genuinely different FP behaviour". The Gigasets already needed framing
 data (`cc.name.display`); a handset that **registers but cannot call** is the

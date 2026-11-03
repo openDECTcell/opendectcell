@@ -30,7 +30,7 @@ Where to start depends on what you want:
 | [luci-manual.md](luci-manual.md) | The web pages (Network > DECT, Status > DECT), field by field, with troubleshooting |
 | [firmware-sourcing.md](firmware-sourcing.md) | Why you supply the DECT chip firmware yourself, and which FRITZ!OS builds are known |
 | [handset-profiles.md](handset-profiles.md) | Handset profiles: per-model settings in `/etc/opendectcell/profiles/`, and how to write one |
-| [handset-compatibility.md](handset-compatibility.md) | What each tested handset did against openDECTcell, in detail |
+| [handset-compatibility.md](handset-compatibility.md) | What each tested handset does against openDECTcell, and what is special about it (the October investigation is in [journals/](journals/handset-compatibility-2026-10.md)) |
 
 ## How it works (design)
 

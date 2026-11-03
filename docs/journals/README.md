@@ -24,3 +24,4 @@ are the place to look when you ask "why does it do that?" or "was that ever trie
 | [tasks-2026-10-31.md](tasks-2026-10-31.md) | Tasks noted on 2026-10-31, each waiting for the maintainer's go |
 | [controller-first-try.md](controller-first-try.md) | The controller's first run with a real 7412: order, what to watch, how to get back |
 | [spec-sweep-2026-10-28.md](spec-sweep-2026-10-28.md) | A full review against GAP, CAT-iq and the procedures; its three reports are in [spec-sweep-2026-10-28/](spec-sweep-2026-10-28/) |
+| [handset-compatibility-2026-10.md](handset-compatibility-2026-10.md) | How the handset findings were made, October 2026: why the A540 would not ring, the multi-handset runs; the current table is [../handset-compatibility.md](../handset-compatibility.md) |

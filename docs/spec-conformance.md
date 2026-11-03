@@ -351,7 +351,7 @@ reason is better.
 
 Audit against the **standard**, not against a handset. Every difference between
 the C4 and the Gigasets examined so far has been our own non-conformance that
-the C4 tolerated. See `handset-compatibility.md`.
+the C4 tolerated. See `journals/handset-compatibility-2026-10.md`.
 
 
 ## Gaps 1 and 3 closed (2026-10-22)

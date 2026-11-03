@@ -2,8 +2,9 @@
 /*
  * openDECTcell - DECT reset and boot strap control for the AVM 7520/7530.
  *
- * Phase A (reset, boot strap), read-only GPIO polling diagnostics and
- * Phase B (PCM receive through the ADSS TDM block, opendectcell_pcm.c).
+ * Reset and boot strap of the chip, read-only GPIO polling diagnostics, and
+ * the PCM path (receive, and transmit when asked for, through the ADSS TDM
+ * block, opendectcell_pcm.c).
  */
 #include <linux/bits.h>
 #include <linux/device.h>
@@ -649,7 +650,7 @@ static int __init dect_init(void)
 		goto err_pcm_init;
 	}
 
-	pr_info("Phase A + B loaded for %s\n", board->compatible);
+	pr_info("loaded for %s\n", board->compatible);
 	return 0;
 
 err_pcm_init:
@@ -674,7 +675,7 @@ static void __exit dect_exit(void)
 	iounmap(dect.pcm_regs);
 	iounmap(dect.strap_ctl);
 	put_device(dect.serial);
-	pr_info("Phase A + B unloaded\n");
+	pr_info("unloaded\n");
 }
 
 module_init(dect_init);
