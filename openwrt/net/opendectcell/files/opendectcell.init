@@ -235,6 +235,13 @@ load_chip() {
 			log "insmod $uart_kmod failed"
 			return 1
 		}
+		# hotplug makes the device node after insmod returns: at boot
+		# that took long enough for the check below to fail (7362 SL)
+		f=0
+		while [ -n "$tty" ] && [ ! -c "$tty" ] && [ $f -lt 10 ]; do
+			sleep 1
+			f=$((f + 1))
+		done
 	fi
 	# No firmware-load UART, no start. Checked before the chip is touched
 	# or a getty frozen; an empty name would match every getty.
