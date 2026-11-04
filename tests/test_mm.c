@@ -2153,6 +2153,33 @@ static void test_register_assigns_an_identity(void)
 	CHECK_EQ(memcmp(mm.uak_id, ipuio, sizeof(ipuio)), 0);
 }
 
+/*
+ * What a connection proved for one handset is no proof for another (review finding C1, API 157): when the connection
+ * takes on a different held handset's identity, authenticated is cleared; naming the same handset again leaves it.
+ */
+static void test_authentication_does_not_carry_to_another_handset(void)
+{
+	static const uint8_t a[7] = { 0x80, 0xa8, 0x00, 0x01, 0x02, 0x03, 0x04 };
+	static const uint8_t b2[7] = { 0x80, 0xa8, 0x00, 0x05, 0x06, 0x07, 0x08 };
+	static const uint8_t tp_a[3] = { 0x11, 0x01, 0x01 };
+	static const uint8_t tp_b[3] = { 0x11, 0x02, 0x02 };
+	struct dect_mm mm;
+	struct dect_mm_cfg cfg;
+
+	memset(&cfg, 0, sizeof(cfg));
+	dect_mm_init(&mm, &cfg);
+	CHECK_EQ(dect_mm_hold(&mm, a, sizeof(a), 1, tp_a, 0), 0);
+	CHECK_EQ(dect_mm_hold(&mm, b2, sizeof(b2), 2, tp_b, 1), 0);
+	CHECK(dect_mm_adopt(&mm, a, sizeof(a)));
+	CHECK_EQ(mm.authenticated, 0);		/* claiming an IPUI proves nothing */
+	mm.authenticated = 1;			/* ... the handset then proves its key */
+	CHECK(dect_mm_adopt(&mm, a, sizeof(a)));
+	CHECK_EQ(mm.authenticated, 1);		/* the same handset again: still proved */
+	CHECK(dect_mm_adopt(&mm, b2, sizeof(b2)));
+	CHECK_EQ(mm.adopted, 1);
+	CHECK_EQ(mm.authenticated, 0);		/* another handset: it has to prove its own */
+}
+
 int main(void)
 {
 	test_tpui_hearable();
@@ -2186,6 +2213,7 @@ int main(void)
 	test_sub_slot_drives_the_tpui();
 	test_register_ok();
 	test_register_assigns_an_identity();
+	test_authentication_does_not_carry_to_another_handset();
 	test_register_bad_pin();
 	test_register_8_digit_pin();
 	test_register_with_several_pins();

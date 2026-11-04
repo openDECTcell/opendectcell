@@ -809,6 +809,12 @@ int dect_base_main_segment(struct dect_base *b, const struct dect_mail *m,
 int dect_base_main_registered(struct dect_base *b);
 
 /*
+ * Note a contact with the handset a connection serves, for last_seen_ms: only if the connection has authenticated
+ * it (mm->authenticated). A segment before that proves nothing (the IPUI is sent in clear). (API 157)
+ */
+void dect_base_note_seen(struct dect_base *b, const struct dect_mm *mm, uint64_t now);
+
+/*
  * A handset that registers does a location registration on the same link,
  * and the subscription is persisted after it (above). A handset that already
  * counts itself located at this base (a re-registration over its own record)

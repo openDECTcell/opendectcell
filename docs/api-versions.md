@@ -1142,3 +1142,10 @@ with the contents of RAND, RES, RS, IWU-TO-IWU (list access), the keypad and the
 with `log_raw` (dect-stubd `-p`) in full as before. A dialled number in the ordinary log keeps its first and last two characters unless
 `verbose` or `log_raw` is set; an internal call's caller name is not logged then. Layout change; a host that sets neither sees the
 redacted form.
+
+**157.** dect_base.h, dect_proto.h, 2026-11-04, from the controller review (finding C1): **a handset is seen only once it has proved its key.** New
+`dect_base_note_seen()`. A segment on a connection counts as a contact with the handset it serves (`last_seen_ms`, which a host reads as
+"heard here last") only if the connection has authenticated it: a LOCATE-REQUEST naming a held IPUI made the connection adopt that handset and
+stamped it as present, so anyone in range could draw a victim's next call to a cell. `dect_mm_adopt()` also clears `authenticated` when the connection
+takes on another held handset's identity. Behaviour change; the stamp comes with the segment that carries the proof, so a handset that authenticates is
+seen as before. Tests: `test_mm.c`, `test_base.c`. Not yet confirmed on the radio.

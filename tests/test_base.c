@@ -160,11 +160,39 @@ static void count_mask(void *ctx)
 	mask_calls++;
 }
 
+/*
+ * A segment from a handset that has not proved its key is no contact (review finding C1, API 157): a LOCATE-REQUEST naming
+ * a held IPUI makes the connection adopt that handset, but last_seen_ms stays 0 until the key has been proved.
+ */
+static void test_an_unproved_handset_is_not_seen(void)
+{
+	struct dect_base b;
+	struct dect_mm *mm;
+
+	dect_base_init(&b);
+	b.n_hs = 2;
+	mm = &b.main_link.link.mm;
+	mm->adopted = 1;
+	mm->authenticated = 0;
+	dect_base_note_seen(&b, mm, 1000);
+	CHECK_EQ(b.last_seen_ms[1], 0u);		/* named, not proved: not seen */
+	mm->authenticated = 1;
+	dect_base_note_seen(&b, mm, 2000);
+	CHECK_EQ(b.last_seen_ms[1], 2000u);		/* proved: seen */
+	CHECK_EQ(b.last_seen_ms[0], 0u);		/* and only that record */
+	mm->adopted = -1;
+	dect_base_note_seen(&b, mm, 3000);		/* no handset adopted: nothing */
+	mm->adopted = 5;				/* out of range: nothing */
+	dect_base_note_seen(&b, mm, 3000);
+	CHECK_EQ(b.last_seen_ms[1], 2000u);
+}
+
 int main(void)
 {
 	struct dect_base b;
 	char nm_buf[64];
 
+	test_an_unproved_handset_is_not_seen();
 	dect_base_init(&b);
 	b.n_hs = 3;
 	b.hs[0].slot = 1;

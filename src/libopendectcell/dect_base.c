@@ -5481,6 +5481,17 @@ static void log_segment(struct dect_base *b, const struct dect_link_ind *ind)
 	dect_base_log(b, "reg: nwk in  <-- %s", hex);
 }
 
+/*
+ * A segment from the handset a connection serves counts as a contact (last_seen_ms) only if the connection has proved
+ * that handset's key: an IPUI is sent in clear, so a LOCATE-REQUEST naming a handset proves nothing, and anyone in
+ * range could otherwise make the base report that handset as present here (API 157).
+ */
+void dect_base_note_seen(struct dect_base *b, const struct dect_mm *mm, uint64_t now)
+{
+	if (mm->authenticated && mm->adopted >= 0 && (unsigned)mm->adopted < b->n_hs)
+		b->last_seen_ms[mm->adopted] = now;
+}
+
 static void main_mail(struct dect_base *b, const struct dect_mail *m,
 		      uint64_t now)
 {
@@ -5488,7 +5499,7 @@ static void main_mail(struct dect_base *b, const struct dect_mail *m,
 	struct dect_link_ind ind;
 	uint32_t collisions = ml->link.cc.stats.collisions;
 	uint32_t represented = ml->link.cc.stats.represented;
-	int switched, a;
+	int switched;
 
 	if (dect_base_main_segment(b, m, now, &ind, &switched) < 0) {
 		if (ind.foreign) {
@@ -5509,9 +5520,7 @@ static void main_mail(struct dect_base *b, const struct dect_mail *m,
 		return;
 	}
 	pump(b, ml);			/* at least the LAPC ack */
-	a = ml->link.mm.adopted;
-	if (a >= 0 && (unsigned)a < b->n_hs)
-		b->last_seen_ms[a] = now;
+	dect_base_note_seen(b, &ml->link.mm, now);
 	stamp_detach(b, &ml->link.mm, &ml->detach_seen, now);
 
 	/*
@@ -5624,8 +5633,7 @@ static void side_mail(struct dect_base *b, unsigned k,
 	}
 	side_call(b, k, now);
 	a = sl->link.mm.adopted;
-	if (a >= 0 && (unsigned)a < b->n_hs)
-		b->last_seen_ms[a] = now;
+	dect_base_note_seen(b, &sl->link.mm, now);
 	stamp_detach(b, &sl->link.mm, &sl->detach_seen, now);
 	if (a >= 0 && a != sl->adopted && (unsigned)a < b->n_hs) {
 		unsigned slot = dect_base_slot(b, (unsigned)a);

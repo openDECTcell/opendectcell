@@ -184,6 +184,12 @@ int dect_mm_adopt(struct dect_mm *mm, const uint8_t *id, size_t id_len)
 
 		if (h->id_len != id_len || memcmp(h->id, id, id_len))
 			continue;
+		/*
+		 * Another handset's identity on this connection: what the connection proved was for the one before
+		 * (the key of one handset is no proof for another).
+		 */
+		if (mm->adopted >= 0 && mm->adopted != h->tag)
+			mm->authenticated = 0;
 		memcpy(mm->port_id, h->id, h->id_len);
 		mm->port_id_len = h->id_len;
 		mm->cfg.sub_slot = h->slot;
