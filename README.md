@@ -48,7 +48,7 @@ Gigaset A540. The full list is in [docs/status.md](docs/status.md), and what com
 | **FRITZ!Box 7520** | ✅ works: the development box |
 | **FRITZ!Box 7530** | 🟡 same hardware as the 7520, not yet tested |
 | FRITZ!Box 7412 | 🟡 handsets register and calls work, standalone and as a cell (needs `kmod-lantiq-ssc-pcm`, which the releases include); in rare cases the box's network dies at a service stop ([details](docs/7412-stop-hang.md)) |
-| FRITZ!Box 7362 SL | 🟡 a handset registers, rings and talks (HD voice, echo test; needs `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm`); the service and SIP calls not tested yet |
+| FRITZ!Box 7362 SL | 🟡 works as a cell of a controller: SIP calls in and out in HD voice (needs `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm`, not in the release); as a standalone base not tested yet |
 
 **Tested handsets:** Gigaset A540 CAT, Gigaset C430A, Gigaset AS690H and AVM
 FRITZ!Fon C4. openDECTcell follows the DECT standards, so other GAP or CAT-iq

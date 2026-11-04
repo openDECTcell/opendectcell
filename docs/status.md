@@ -66,7 +66,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 | FRITZ!Box 7520 | ✅ | The development box |
 | FRITZ!Box 7530 | 🟡 | Same hardware as the 7520 and the same OpenWrt image, but not tested on one yet |
 | FRITZ!Box 7412 | 🟡 | Works as a standalone base and as a cell of a controller, with the `kmod-lantiq-ssc-pcm` transport, which the release includes: handsets register, SIP calls in and out with HD voice, calls between handsets (2026-10-29 to 2026-11-02). In rare cases the box's network died at a service stop (4 in about 190 stops on 2026-10-30/31; 640 stops since did not reproduce it): [7412-stop-hang.md](7412-stop-hang.md) |
-| FRITZ!Box 7362 SL | 🟡 | With `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm` (their own repositories, not in the release): the chip firmware uploads, a handset registers, rings and its speech comes back as an echo in HD voice. The service and SIP calls are not tested yet ([journals/bench-7362sl-g6-g7.md](journals/bench-7362sl-g6-g7.md)) |
+| FRITZ!Box 7362 SL | 🟡 | With `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm` (their own repositories, not in the release): works as a cell of a controller (2026-11-04): a handset registered, SIP calls in and out with HD voice, the cell survives service restarts and reboots. As a standalone base with SIP it is not tested yet; how many calls at once is not measured. In the first seconds after a boot the transport once lost frames (the maintainers' notes; bench: [journals/bench-7362sl-g6-g7.md](journals/bench-7362sl-g6-g7.md)) |
 | Other FRITZ!Boxes | ❌ | Many use the same DECT chip; see [hardware-abstraction.md](hardware-abstraction.md) for what a new model needs |
 
 A release is built for **one OpenWrt version** (named in `tools/release/OPENWRT_VERSION`, and on the release page):
