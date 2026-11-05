@@ -262,6 +262,52 @@ static void test_keys_and_override(void)
 	CHECK(!memcmp(&hp, &def, sizeof(hp)));
 }
 
+/*
+ * The shipped Motorola O201 profile (profiles/), read from the file: it parses without a report, extends the
+ * Motorola layer, and resolves to basic service 0x80 for our setups, which is what makes the handset ring
+ * (DECT Command Finder run, 2026-11-05: 0x88 is refused with release reason 0x0E, 0x80 rings).
+ */
+static int read_file(const char *path, char *buf, size_t cap)
+{
+	FILE *f = fopen(path, "r");
+	size_t n;
+
+	if (!f)
+		return -1;
+	n = fread(buf, 1, cap - 1, f);
+	fclose(f);
+	buf[n] = '\0';
+	return (int)n;
+}
+
+static void test_motorola_o201_file(void)
+{
+	static char mtext[4096], dtext[4096];
+	struct dect_profile mfr, dev;
+	struct dect_hs_profile hp;
+	char desc[256];
+
+	CHECK(read_file("profiles/motorola.profile", mtext, sizeof(mtext)) > 0);
+	CHECK(read_file("profiles/motorola-o201.profile", dtext, sizeof(dtext)) > 0);
+	CHECK_EQ(parse(mtext, &mfr), 0);
+	CHECK_EQ(n_reports, 0u);
+	CHECK_EQ(mfr.kind, DECT_PROFILE_MANUFACTURER);
+	CHECK(strcmp(mfr.id, "motorola") == 0);
+	CHECK_EQ(parse(dtext, &dev), 0);
+	CHECK_EQ(n_reports, 0u);
+	CHECK_EQ(dev.kind, DECT_PROFILE_DEVICE);
+	CHECK(strcmp(dev.id, "motorola-o201") == 0);
+	CHECK(strcmp(dev.extends, "motorola") == 0);
+	CHECK(strcmp(dev.name, "Motorola O201") == 0);
+	dect_profile_resolve(&mfr, &dev, NULL, &hp);
+	CHECK_EQ(hp.cc_basic_service, 2u);		/* basic: 0x80 */
+	CHECK(dect_profile_describe(&hp, desc, sizeof(desc)) > 0);
+	CHECK(strcmp(desc, "cc.basic_service=basic") == 0);
+	/* the manufacturer layer alone changes nothing */
+	dect_profile_resolve(&mfr, NULL, NULL, &hp);
+	CHECK_EQ(hp.cc_basic_service, 0u);
+}
+
 int main(void)
 {
 	test_parse_and_layers();
@@ -269,5 +315,6 @@ int main(void)
 	test_display_expansion();
 	test_errors();
 	test_keys_and_override();
+	test_motorola_o201_file();
 	return CHECK_DONE();
 }

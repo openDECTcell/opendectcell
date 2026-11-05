@@ -24,6 +24,8 @@ repeat the key list. Vendor behaviour that needs more than values is covered by
 | [gigaset-a540.profile](gigaset-a540.profile) | device (NG-DECT Part 3) | `reg.tries_0000_first = yes` (it tries PIN 0000 first), `notify = off` (see the comment in the file) |
 | [gigaset-c430a.profile](gigaset-c430a.profile) | device (NG-DECT Part 1) | `cc.name.method = both`, `cc.name.display` (the vendor's display-text framing as hex) |
 | [gigaset-as690h.profile](gigaset-as690h.profile) | device (NG-DECT Part 1) | `cc.name.method = both` |
+| [motorola.profile](motorola.profile) | manufacturer | Nothing yet: the common layer the Motorola devices extend |
+| [motorola-o201.profile](motorola-o201.profile) | device (GAP only, narrowband only) | `cc.basic_service = basic`: it refuses a wideband (0x88) setup with release reason 0x0E and rings on 0x80. The first profile from a DECT Command Finder run |
 
 ## Format, by example
 
