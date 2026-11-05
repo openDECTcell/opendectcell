@@ -297,6 +297,13 @@ struct dect_cc {
 	size_t   codec_list_len;
 
 	struct dect_cc_stats stats;
+	/*
+	 * The <<RELEASE-REASON>> of the last {CC-RELEASE} or {CC-RELEASE-COM} the peer sent on a
+	 * transaction we hold (-1: it named none), and how many such messages came;
+	 * dect_cc_take_peer_release() hands each over once.
+	 */
+	int16_t  peer_reason;
+	uint32_t peer_releases, peer_releases_noted;
 	struct dect_iwu iwu;	/* <<IWU-TO-IWU>> session responder */
 };
 
@@ -612,6 +619,20 @@ void dect_cc_set_parallel(struct dect_cc *cc, int on);
  */
 int dect_cc_take_control(struct dect_cc *cc, uint8_t *code,
 			 uint8_t *call_id);
+
+/*
+ * The handset's release of the call, once each: 1 if a {CC-RELEASE} or
+ * {CC-RELEASE-COM} came on our transaction since the last call, with its
+ * <<RELEASE-REASON>> (EN 300 175-5 §7.6.7) in *reason, or -1 when it named
+ * none. A host logs it, so a handset that refuses a call says why.
+ */
+int dect_cc_take_peer_release(struct dect_cc *cc, int *reason);
+
+/*
+ * The name EN 300 175-5 V2.9.1 §7.6.7 gives a release reason ("partial
+ * release", "user busy" ...); "reserved" for a value it does not assign.
+ */
+const char *dect_cc_reason_name(unsigned reason);
 
 /*
  * A call status for one of the handset's calls in {CC-INFO} (§7.4.6.4):

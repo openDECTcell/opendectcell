@@ -1149,3 +1149,10 @@ redacted form.
 stamped it as present, so anyone in range could draw a victim's next call to a cell. `dect_mm_adopt()` also clears `authenticated` when the connection
 takes on another held handset's identity. Behaviour change; the stamp comes with the segment that carries the proof, so a handset that authenticates is
 seen as before. Tests: `test_mm.c`, `test_base.c`. Not yet confirmed on the radio.
+
+**158.** dect_cc.h, dect_base.c, dect_proto.h, 2026-11-05, from the first O201 trace: **a handset's release reason is kept and logged.** `struct dect_cc`
+gains `peer_reason`, `peer_releases` and `peer_releases_noted`; new `dect_cc_take_peer_release()` and `dect_cc_reason_name()` (the names of
+EN 300 175-5 V2.9.1 §7.6.7). A {CC-RELEASE} or {CC-RELEASE-COM} on a transaction we hold stores its <<RELEASE-REASON>>; `dect_base_bridge_tick()` logs it
+once per release, "call: the handset released the call (link N): reason 0x0E, partial release". Before this the log said only that the call ended on the
+handset. Layout change; a host that does not call the new function sees one more log line per released call. Tests: `test_cc.c`. Not a behaviour change
+on the air.

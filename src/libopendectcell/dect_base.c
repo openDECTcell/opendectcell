@@ -2660,10 +2660,33 @@ static int party_auth_ok(struct dect_base *b, int p)
 	return dect_base_call_auth_ok(b, &dect_base_party_link(b, p)->link);
 }
 
+/*
+ * A handset's release of its call, with the reason it gives: said once, so a handset
+ * that refuses a call is heard saying why (the O201 releases an incoming
+ * setup with "partial release", 2026-11-05).
+ */
+static void note_peer_release(struct dect_base *b, struct dect_base_link *bl)
+{
+	int reason;
+
+	if (!dect_cc_take_peer_release(&bl->link.cc, &reason))
+		return;
+	if (reason < 0)
+		dect_base_log(b, "call: the handset released the call (link %u), no reason given",
+			      bl->handle);
+	else
+		dect_base_log(b, "call: the handset released the call (link %u): reason 0x%02X, %s",
+			      bl->handle, (unsigned)reason, dect_cc_reason_name((unsigned)reason));
+}
+
 void dect_base_bridge_tick(struct dect_base *b, uint64_t now)
 {
 	unsigned i;
 	int p;
+
+	note_peer_release(b, &b->main_link);
+	for (i = 0; i < DECT_BASE_SIDES; i++)
+		note_peer_release(b, &b->side[i]);
 
 	/*
 	 * Control codes and keypad, once per link with a call of ours. A

@@ -2125,6 +2125,77 @@ static void test_insufficient_resources_represents_the_setup(void)
 	CHECK_EQ(dect_cc_busy(&cc), 0);
 }
 
+/*
+ * A handset's release of our call keeps its reason (API 158), once. The O201's answer to an incoming
+ * {CC-SETUP} (2026-11-05, the frames 83 5a e2 0e): {CC-RELEASE-COM}, <<RELEASE-REASON>> 0x0E "partial release".
+ */
+static void test_peer_release_reason_is_kept_once(void)
+{
+	static const uint8_t port_id[] = { 0x80, 0xa8, 0x02, 0x12, 0x34 };
+	static const uint8_t fixed_id[] = { 0x20, 0xa0, 0xa5, 0x11, 0x22 };
+	struct dect_cc cc;
+	uint8_t out[64], rel[8];
+	size_t off;
+	int reason = 99;
+
+	dect_cc_init(&cc);
+	CHECK_EQ(dect_cc_take_peer_release(&cc, &reason), 0);	/* nothing yet */
+	dect_cc_set_next_ti(&cc, 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
+	CHECK(dect_cc_poll(&cc, out, sizeof(out)) > 0);
+
+	/* 83 5a e2 0e: TI flag set, PD CC, {CC-RELEASE-COM}, <<RELEASE-REASON>> 0x0E */
+	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER, 0, DECT_CC_RELEASE_COM);
+	off = dect_nwk_put_fixed_ie(rel, sizeof(rel), off, DECT_IE_RELEASE_REASON, 0x0E);
+	CHECK_EQ(off, 4u);
+	CHECK_EQ(rel[0], 0x83);
+	CHECK_EQ(rel[1], 0x5a);
+	CHECK_EQ(rel[2], 0xe2);
+	CHECK_EQ(rel[3], 0x0e);
+	dect_cc_rx(&cc, rel, off);
+	CHECK_EQ(cc.state, DECT_CC_ST_RELEASED);
+	CHECK_EQ(dect_cc_take_peer_release(&cc, &reason), 1);
+	CHECK_EQ(reason, 0x0E);
+	CHECK_EQ(strcmp(dect_cc_reason_name((unsigned)reason), "partial release"), 0);
+	CHECK_EQ(dect_cc_take_peer_release(&cc, &reason), 0);	/* once */
+
+	/* a release without a reason, on a call of ours: -1; and one on a transaction we do not hold: nothing */
+	dect_cc_init(&cc);
+	dect_cc_set_next_ti(&cc, 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
+	CHECK(dect_cc_poll(&cc, out, sizeof(out)) > 0);
+	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER, 5, DECT_CC_RELEASE_COM);
+	dect_cc_rx(&cc, rel, off);
+	CHECK_EQ(dect_cc_take_peer_release(&cc, &reason), 0);
+	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER, 0, DECT_CC_RELEASE_COM);
+	dect_cc_rx(&cc, rel, off);
+	CHECK_EQ(dect_cc_take_peer_release(&cc, &reason), 1);
+	CHECK_EQ(reason, -1);
+
+	/* the handset hanging up: {CC-RELEASE} with "normal" is kept too */
+	dect_cc_init(&cc);
+	dect_cc_set_next_ti(&cc, 0);
+	CHECK_EQ(dect_cc_setup_id(&cc, port_id, sizeof(port_id), fixed_id, sizeof(fixed_id), 0x80, NULL), 0);
+	CHECK(dect_cc_poll(&cc, out, sizeof(out)) > 0);
+	off = dect_nwk_build_hdr(rel, sizeof(rel), DECT_PD_CC, DECT_TI_RESPONDER, 0, DECT_CC_RELEASE);
+	off = dect_nwk_put_fixed_ie(rel, sizeof(rel), off, DECT_IE_RELEASE_REASON, 0x00);
+	dect_cc_rx(&cc, rel, off);
+	CHECK_EQ(dect_cc_take_peer_release(&cc, &reason), 1);
+	CHECK_EQ(reason, 0);
+
+	/* the names of §7.6.7, a few of each group, and a value it does not assign */
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x00), "normal"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x05), "incompatible service"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x06), "service not implemented"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x0D), "timer expiry"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x14), "user busy"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x15), "user rejection"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x32), "insufficient resources"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x43), "no cipher key available"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x20), "reserved"), 0);
+	CHECK_EQ(strcmp(dect_cc_reason_name(0x44), "reserved"), 0);
+}
+
 /* Any other release reason, or a release on another transaction, is final. */
 static void test_other_release_reasons_are_not_represented(void)
 {
@@ -2979,6 +3050,7 @@ int main(void)
 	test_setup_collision_releases_the_handsets_call();
 	test_insufficient_resources_represents_the_setup();
 	test_other_release_reasons_are_not_represented();
+	test_peer_release_reason_is_kept_once();
 	test_second_setup_during_an_active_call_is_rejected();
 	test_setup_carries_line_identifier();
 	test_foreign_transaction_does_not_touch_our_call();

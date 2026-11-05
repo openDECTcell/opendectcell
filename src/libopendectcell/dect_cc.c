@@ -16,6 +16,7 @@ void dect_cc_init(struct dect_cc *cc)
 	cc->state = DECT_CC_ST_NULL;
 	cc->peer_basic_service = DECT_CC_SVC_NONE;
 	cc->peer_line = DECT_CC_LINE_UNSET;
+	cc->peer_reason = -1;
 	cc->ti_flag = DECT_TI_RESPONDER;	/* until a call says otherwise */
 	/*
 	 * EN 300 444 §8.14: the FT starts PT alerting with <<SIGNAL>> in the
@@ -1250,6 +1251,66 @@ static void close_unknown(struct dect_cc *cc, const struct dect_nwk_hdr *h)
 	cc->stats.closed_unknown++;
 }
 
+/* The peer released our call: keep its reason for dect_cc_take_peer_release(). */
+static void note_peer_release(struct dect_cc *cc, const uint8_t *ies, size_t ies_len)
+{
+	int r = dect_nwk_find_fixed_ie(ies, ies_len, DECT_IE_RELEASE_REASON);
+
+	cc->peer_reason = (int16_t)(r < 0 ? -1 : r);
+	cc->peer_releases++;
+}
+
+int dect_cc_take_peer_release(struct dect_cc *cc, int *reason)
+{
+	if (cc->peer_releases == cc->peer_releases_noted)
+		return 0;
+	cc->peer_releases_noted = cc->peer_releases;
+	if (reason)
+		*reason = cc->peer_reason;
+	return 1;
+}
+
+const char *dect_cc_reason_name(unsigned reason)
+{
+	switch (reason) {
+	case 0x00: return "normal";
+	case 0x01: return "unexpected message";
+	case 0x02: return "unknown transaction identifier";
+	case 0x03: return "mandatory information element missing";
+	case 0x04: return "invalid information element contents";
+	case 0x05: return "incompatible service";
+	case 0x06: return "service not implemented";
+	case 0x07: return "negotiation not supported";
+	case 0x08: return "invalid identity";
+	case 0x09: return "authentication failed";
+	case 0x0A: return "unknown identity";
+	case 0x0B: return "negotiation failed";
+	case 0x0C: return "collision";
+	case 0x0D: return "timer expiry";
+	case 0x0E: return "partial release";
+	case 0x0F: return "unknown";
+	case 0x10: return "user detached";
+	case 0x11: return "user not in range";
+	case 0x12: return "user unknown";
+	case 0x13: return "user already active";
+	case 0x14: return "user busy";
+	case 0x15: return "user rejection";
+	case 0x16: return "user call modify";
+	case 0x21: return "external handover not supported";
+	case 0x22: return "network parameters missing";
+	case 0x23: return "external handover release";
+	case 0x31: return "overload";
+	case 0x32: return "insufficient resources";
+	case 0x33: return "insufficient bearers available";
+	case 0x34: return "IWU congestion";
+	case 0x40: return "security attack assumed";
+	case 0x41: return "encryption activation failed";
+	case 0x42: return "re-keying failed";
+	case 0x43: return "no cipher key available";
+	default: return "reserved";
+	}
+}
+
 void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 {
 	struct dect_nwk_hdr h;
@@ -1412,6 +1473,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		/* EN 300 175-5 §17.3.2.1: unknown transaction, no action. */
 		if (!our_transaction(cc, &h))
 			break;
+		note_peer_release(cc, ies, ies_len);
 		/*
 		 * A release collision: our own {CC-RELEASE} is unanswered
 		 * (RELEASE PENDING) and the peer's crosses it. §9.5.3: stop
@@ -1538,6 +1600,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 		 */
 		if (!our_transaction(cc, &h))
 			break;
+		note_peer_release(cc, ies, ies_len);
 		if (cc->incoming && cc->state == DECT_CC_ST_CALL_PRESENT &&
 		    h.ti_flag == DECT_TI_RESPONDER &&
 		    h.ti_value == cc->ti_value && cc->setup_len &&
