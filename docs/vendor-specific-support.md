@@ -263,3 +263,19 @@ S1 the `probe` verb, the decoded result and the frame decoder, with a bench comm
 unit tests (the O201's own frames from 2026-11-05 as the first decoder test); S2 the runner and the suspension with its
 fail-safes (tested with a fake daemon); S3 the LuCI page; S4 the profile writer and the bundle; S5 (later) the same
 sequence run **by the controller** for cell users who do not want to suspend anything.
+
+### 7.6 Decisions of the same day: the 7412 is the development box, and the identity is always random
+
+- **Development box: the FRITZ!Box 7412** (192.168.1.124, OpenWrt 25.12.6, lantiq/xrx200, packages 0.3.3, a cell of the
+  lab controller). It stays enrolled; the tool suspends it (§7.2 piece 4). Code that runs on the PC is tested with
+  `make check` first; the 7412 needs the MIPS build (`tools/release/build.sh lantiq/xrx200 OUT`, which downloads the
+  OpenWrt SDK once).
+- **The probe always runs under a random identity of its own**, drawn for each session: a class B identity with a made-up
+  EIC, FPN, FPS and RPN 0, applied by a chip reload when the session starts and taken away when it ends (the box then has
+  its own identity again: the factory one, or the controller's in cell mode). Two reasons:
+  (A) the handset's **registration is captured from the first frame**, under an identity nobody else uses, so no
+  stale subscription can hide or change what the handset does; (B) a subscription made under a throwaway identity
+  **cannot collide with** or be mistaken for the identity the box or the controller uses later, in stand-alone or in
+  controller mode. The price: the handset keeps a leftover entry under a name it cannot show; the page tells the user to
+  delete that base on the handset when the run is over. The identity is in the bundle (it is made up and of no use
+  afterwards).
