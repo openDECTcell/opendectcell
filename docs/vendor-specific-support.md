@@ -177,3 +177,89 @@ Pre-commit the readings before running (the list in §1 is the list):
 
 Nothing in A or D depends on what the O201 turns out to be, so they can be
 built first; B and C are decided by the first trace, not before.
+
+## 7. Decision of 2026-11-05: the tool starts on the box, in LuCI
+
+**First evidence (the controller's debug log, 2026-11-05).** The O201 answers our incoming {CC-SETUP} (basic service
+0x88, signal 0x41, a calling-party number; our stack starts authentication on the link at the same time) with
+{CC-RELEASE-COM} and <<RELEASE-REASON>> 0x0E, "Partial release" (EN 300 175-5 V2.9.1 §7.6.7), about 380 ms after the
+SETUP and before it alerts. Three attempts, the same each time. Its outgoing calls work, narrowband and ciphered. It
+reports no terminal capability or model. H2 (wideband refused) is **not** confirmed: it would normally be 0x05 or
+0x06. The reason names no cause, so the cause is found by varying what we send.
+
+**Decision (the maintainer).** The tool is a **LuCI page on the box**, for the standalone box and for a box that is a
+cell. People who want to support a handset have a second FRITZ!Box, or can take theirs off the controller for an
+hour; so the tool **suspends cell mode without un-enrolling** and resumes it afterwards. Nothing is erased: the
+controller's key, certificate and enrolment stay on the box.
+
+### 7.1 What exists already (do not build twice)
+
+- `dect-stubd -a basicsvc=N | signal=N | clip=NUMBER | cnip=NAME | dialwait=MS | bindfirst | nonlr | allcallstatus`
+  set the lab variations of the call we send, per daemon start. They are the variants of the first sequence.
+- The control socket (`DECT_CTL_PATH`): verbs `bridge` (with `call-in line=1 hs=N number=... name=...`),
+  `register-window`, `reload-profiles`. `dect-stubd --bridge-echo ring` rings a handset from the shell.
+- The profile format and its resolution (handset-profiles.md); profiles are read from `/etc/opendectcell/profiles/` and
+  re-read on SIGHUP or `reload-profiles`.
+- `dect_diag` per link; the debug log shows every 5-octet Lc frame of a link (`chip mail content` / `chip mail down`),
+  which is how the O201's release was read; nothing decodes it for the reader yet.
+- LuCI: `luci-app-opendectcell` with `settings.js` (Network > DECT) and `monitor.js` (Status > DECT).
+
+### 7.2 Pieces
+
+1. **A `probe` verb on the control socket** (libopendectcell + stubd): `probe call hs=N basicsvc=.. signal=.. clip=none|number|display
+   cnip=none|.. auth=with|after-alert|none dialwait=..`: rings the handset with **this attempt's** variation, without
+   restarting the daemon (a restart drops the handset's lock for seconds and some handsets, as seen with the AS690H,
+   need more than that), and answers with a **decoded result event**: `probe-result outcome=alerting|connected|
+   released|no-answer reason=0x0E name="partial release" by=handset after_ms=380 handset_msgs=[CC-RELEASE-COM ...]`.
+2. **Trace capture** per attempt: every Lc frame in both directions with the time, reassembled into NWK messages and
+   decoded (message type, element ids, release reason names), as text; the raw hex stays next to it. Keys and the
+   IPUI are not written (synthetic IPUI).
+3. **A runner** (`opendectcell-probe`, ucode) that does the sequence (§7.4), keeps its state in a file the LuCI page reads
+   over rpcd, takes the human's answers, and writes the result bundle under `/etc/opendectcell/probe/<model>-<date>/`.
+4. **Suspension** (cell mode only): stop the link service (`opendectcell-cell`), start the box's own stack for the probe,
+   and **resume on every way out**: the end of the run, the Cancel button, a 60-minute limit, and a reboot (a flag file
+   the init script reads at boot and clears, so a power cut in the middle never leaves a cell suspended).
+5. **The LuCI page** (a tab next to the DECT Monitor: *Handset lab*): the warning, the handset picker, the steps with
+   live results, the questions ("did it ring?", "what does the display show?", "do you hear the other side?"), then
+   **Download profile**, **Download trace bundle**, **Save to this box** (writes the profile and sets the handset's
+   model).
+6. **A profile writer**: maps conclusions to **existing keys only**; what no key can express is written as a comment in
+   the profile (and the trace says where), never as an invented key.
+
+### 7.3 What the user has to know (shown on the page before anything starts)
+
+- **Cell mode: this box stops serving the controller for the duration.** Every handset on this cell loses coverage
+  from this cell, calls on it end; the controller shows the cell offline and other cells may take the handsets. The
+  run is 20 to 40 minutes; it ends by itself after 60.
+- **The handset must be registered on this box for the run** (the box's own base, with its own identity: the page
+  shows the registration window). A handset that holds **one** subscription only gives up its other registration
+  when it takes this one: the page says to register it again on its real base afterwards, and offers to deregister
+  the probe registration at the end. We do not know how many subscriptions the O201 holds; the first run finds out
+  (register on the box while it is registered on the controller, and look at both).
+- A probe can leave a handset confused (a restart of the handset cures it, as with the AS690H); it cannot damage it.
+- The bundle contains no keys; it does contain the handset's manufacturer code and the messages it sent.
+
+### 7.4 The first sequence (pre-committed; each line says what it would mean)
+
+Run in this order, one incoming call each, narrowband first because it is what the O201 does outgoing; the run
+stops asking about a variant as soon as an earlier one rings and records the later ones as "not needed".
+
+| # | We send | If it rings | If it releases with ... |
+|---|---|---|---|
+| 1 | the controller's own SETUP (control: reproduce the failure on the box) | the controller's stack or the radio path is the difference | the same 0x0E: reproduced on the box |
+| 2 | basic service 0x80 | H2: narrowband only; profile `cc.basic_service = basic` | another reason: note it |
+| 3 | 2 without the calling-party number | the number element is refused | |
+| 4 | 3 with signal 0x40 | the ring pattern is refused | |
+| 5 | 4 with authentication only after the handset alerts (or none) | a parallel MM transaction is not handled | |
+| 6 | 5 with {CALL-INFORMATION} (Part 3) | it wants it | |
+| 7 | none of these: it still releases | go to Step C (what does *it* send first?) | |
+
+Also in the run: location registration after a power cycle (the handset's), an outgoing call (audio delay as measured
+from the dial pause: `dialwait` 0 and 3000), answer and audio both ways, release from each side.
+
+### 7.5 Slices
+
+S1 the `probe` verb, the decoded result and the frame decoder, with a bench command (`dect-stubd --probe ...`) and
+unit tests (the O201's own frames from 2026-11-05 as the first decoder test); S2 the runner and the suspension with its
+fail-safes (tested with a fake daemon); S3 the LuCI page; S4 the profile writer and the bundle; S5 (later) the same
+sequence run **by the controller** for cell users who do not want to suspend anything.
