@@ -219,7 +219,7 @@ controller's key, certificate and enrolment stay on the box.
 4. **Suspension** (cell mode only): stop the link service (`opendectcell-cell`), start the box's own stack for the probe,
    and **resume on every way out**: the end of the run, the Cancel button, a 60-minute limit, and a reboot (a flag file
    the init script reads at boot and clears, so a power cut in the middle never leaves a cell suspended).
-5. **The LuCI page** (a tab next to the DECT Monitor: *Handset lab*): the warning, the handset picker, the steps with
+5. **The LuCI page** (a tab next to the DECT Monitor: *DECT Command Finder*): the warning, the handset picker, the steps with
    live results, the questions ("did it ring?", "what does the display show?", "do you hear the other side?"), then
    **Download profile**, **Download trace bundle**, **Save to this box** (writes the profile and sets the handset's
    model).
@@ -279,3 +279,43 @@ sequence run **by the controller** for cell users who do not want to suspend any
   controller mode. The price: the handset keeps a leftover entry under a name it cannot show; the page tells the user to
   delete that base on the handset when the run is over. The identity is in the bundle (it is made up and of no use
   afterwards).
+
+## 7.7 The first manual run, 2026-11-05 (lab 7412, random identity 10729a3900, O201 as DECT 4)
+
+Done by hand with the existing lab options; the Finder's own sequence is not built. The run is the template for it.
+
+**Incoming calls: solved.**
+
+| # | We sent | Result |
+|---|---|---|
+| 1 | normal setup, basic service 0x88 (the control) | reproduced on the box: the O201 answers with {CC-RELEASE-COM}, reason 0x0E, after about 380 ms, never alerting |
+| 2 | basic service 0x80 (`-a basicsvc=0x80`) | authenticated, ciphered, **rings**, answers, narrowband audio flows both ways (H2 confirmed) |
+| 3 | the profile `motorola-o201` alone (`cc.basic_service = basic`), no option | **rings**: the profile does the job |
+| 4 | display | the number and the handset's own "Externer Anruf"; the name we send is not shown |
+
+Variants 3 to 6 of §7.4 were not needed. Reason 0x0E ("partial release") is simply how the O201 ends **every** call, also a normal hang-up (its {CC-RELEASE}
+carries it too), so the reason alone never named a cause: the variation did. The handset reports **GAP only** in its <<TERMINAL-CAPABILITY>> and puts a vendor
+element, <<ESCAPE-TO-PROPRIETARY>> `7b 02 80 04`, in every outgoing {CC-SETUP}; we ignore it. Profile files: `profiles/motorola*.profile` (`887051d`).
+
+**Outgoing calls: the digits and the setup work, the audio does not, and the cause is not found.**
+
+- The O201 sends its digits in a {CC-INFO} keypad ("123"), no <<SENDING-COMPLETE>>; the base waits `dialwait` (3000 ms), then CALL-PROC, ALERTING, and CONNECT
+  when the far end answers. Every handset has the same 3 s pause.
+- **What was measured** (the call-end log line of `68da86d`, `from the handset X of Y frames with signal`): the radio link is clean in every call (quality 80,
+  no CRC or sync errors), frames flow both ways with no underruns, and the base feeds the downlink all the time (0 of 8000 frames idle-filled). The O201's
+  microphone signal reached us in **one call of about ten** (peak 26692, then peak 6280 in a later one); in the others it was silence (peak 258).
+- **What the user heard**: the first call of the series, an echo after 10 s; the next two calls, nothing; later, counted beeps (`DECT_ECHO_TONE=1`):
+  nothing in 40 s; nothing in a second call; once **at a call timer of 6 to 8 s**; and "none" with `bindfirst`, "none" with ciphering off (`-C`).
+- **Ruled out by those runs:** the radio link, the audio flow through the stack, ciphering (off: no change), the order of bind and CONNECT (`bindfirst`: no
+  change), the codec width (always narrowband), the dial pause.
+- **Still open:** (a) the handset: its receive path opens at an unpredictable time after our CONNECT, or never, and its transmit path likewise
+  (the spec lets a PT connect its receive U-plane late, §9.3.1.4); (b) **the 7412's PCM transport**: the stub's TDM lanes move during calls (`ssc: watch:
+  LANES MOVED`) and the controller's early 7412 bench showed three Gigasets with working audio, so a comparison on the same box is needed; (c) a missing message
+  the O201 waits for: a <<PROGRESS-INDICATOR>> "in-band information available" (§9.3.1.4) is not implemented in libopendectcell, nor is the vendor escape element.
+- **Next, in this order:** 1. the same dial test with a **Gigaset registered on the same box** (the control handset: does it get audio at once on this box
+  and identity?); 2. the O201 on the lab **7520** (same test: box or handset?); 3. only then a <<PROGRESS-INDICATOR>> variant (a library change), and the
+  vendor element, from a trace of what the handset sends.
+
+**What the Finder must therefore do** (additions to §7.2): measure each direction's level automatically (done in `68da86d`) and ask the human only
+what no instrument can tell; run each variant more than once (a single trial would have said "works" on the first O201 call and "broken" on the next);
+write `source =` lines of at most 128 characters (the parser's limit; details go in `# source:` comments).
