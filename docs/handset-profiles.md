@@ -89,7 +89,7 @@ key = value            # applies only to that firmware range
 | `kind` | `manufacturer`, `device` | yes | the layer |
 | `extends` | a manufacturer `id` | device files | the manufacturer layer under it |
 | `name` | string | yes | what the user picks from, e.g. `"Gigaset C430A"` |
-| `match.model` | hex | no | the handset's <<MODEL-IDENTIFIER>> value (EN 300 175-5 §7.7.30), to suggest this profile |
+| `match.model` | hex | no | the handset's <<MODEL-IDENTIFIER>> value (EN 300 175-5 §7.7.46), to suggest this profile |
 | `source` | string | yes | where the facts come from: a bench log name, a capture, a clean-room answer (`[CR A-NNNN]`), a standard's clause |
 
 Every behaviour key should also say where it comes from in a comment on its

@@ -46,7 +46,8 @@ Where to start depends on what you want:
 | [phonebook.md](phonebook.md) | The handsets' phonebook from a CardDAV address book, both ways |
 | [diagnostics.md](diagnostics.md) | What the DECT Monitor shows, and where each value comes from |
 | [7412-stop-hang.md](7412-stop-hang.md) | The 7412's rare network death at a service stop: the evidence, the hypotheses, what was ruled out |
-| [vendor-specific-support.md](vendor-specific-support.md) | Plan for handsets that need more than GAP and CAT-iq (manufacturer-specific commands) |
+| [vendor-specific-support.md](vendor-specific-support.md) | Plan for handsets that need more than GAP and CAT-iq (manufacturer-specific commands); the O201 case and the DECT Command Finder |
+| [handset-variation-catalog.md](handset-variation-catalog.md) | Every variation of the basic DECT functions the standards permit (registration, call control, audio, display and features, old procedures too), with what we can send today and how to tell the result |
 | [images-plan.md](images-plan.md) | Ready-made OpenWrt images with the packages inside |
 | [security-review-2026-11-02.md](security-review-2026-11-02.md) | The security review of 2026-11-02: what was fixed and what is open |
 | [capacity.md](capacity.md) | How many handsets and calls one box carries, and how to go beyond |

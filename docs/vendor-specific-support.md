@@ -334,3 +334,29 @@ never applied (a daemon variant was not stopped; `pidof` did not match its name)
 **What the Finder must therefore do** (additions to §7.2): measure each direction's level automatically (done in `68da86d`) and ask the human only
 what no instrument can tell; run each variant more than once (a single trial would have said "works" on the first O201 call and "broken" on the next);
 write `source =` lines of at most 128 characters (the parser's limit; details go in `# source:` comments).
+
+## 7.8 Decision of 2026-11-05 (evening): the catalogue first, the tool in tiers
+
+**Why.** The first run found two keys. The first (basic service) was in the planned sequence; the second (the in-band
+indication) was not: it came from reading EN 300 175-5 §9.3.1.4 after the audio stayed silent. A battery that runs without
+someone reading the results can therefore only fit a handset to variations that are already catalogued. So the variations
+are catalogued first, from the standards.
+
+**The catalogue** is [handset-variation-catalog.md](handset-variation-catalog.md): per function (registration and
+security, call control, audio and bearers, display and features, old and unusual procedures) a table of every variation
+the standards permit, with the clause, why a strict handset might care, what we can send today (`key:`, `lab:`,
+`default`, `code`, `chip`), how the outcome is seen, and a rank. It is built from the standards on disk
+(`docs/specs/`, not in git) and our own notes; entries from bench notes are marked observed, entries from the standard
+are marked spec-permitted. What it says about the size of the work is in its introduction.
+
+**The tool, in tiers** (replaces the order of §7.5 until a second handset needs more):
+1. **Tier 1:** the frame decoder (S1: Lc frames to named NWK messages and elements, release reasons by name), the `probe`
+   verb, and a **support bundle** (decoded trace, handset facts, outcomes; no keys). Works standalone and as a cell
+   without suspending anything, from the log the box already writes. This is what a maintainer or an AI reads when a handset is odd.
+2. **Tier 2:** a "Record a support bundle" button in LuCI (a capture of a few minutes, decoded, downloadable).
+3. **Tier 3, when a second handset needs it:** the guided fitter (runner, suspension with its fail-safes, random identity,
+   LuCI wizard, profile writer), driven by the catalogue's rank-A rows. §7.2 to §7.6 stay the design for it.
+4. S5 (the controller runs the sequence) stays later.
+
+**Not built yet:** all of it. The decision of the maintainer (2026-11-05): the key `cc.progress_in_band` stays named; a generic
+"append octets to a message" profile key only when a second case cannot be named. Nothing here touches the Pi or waits for the soak.

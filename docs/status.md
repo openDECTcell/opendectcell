@@ -24,7 +24,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 | Fon/DECT LED | ✅ | On while the radio is on, blinks on activity |
 | Date and time on the handsets | ✅ | CAT-iq handsets, from the box's clock once NTP has set it (the A540, on a 7412). GAP handsets such as the C430A don't take it. Set the box's time zone under System > System |
 | Signal strength and link quality per handset | ✅ | Status > DECT |
-| Handset models with their own settings ("profiles") | 🟡 | Profiles for the Gigaset A540, C430A and AS690H; every other handset uses the standard behaviour |
+| Handset models with their own settings ("profiles") | 🟡 | Profiles for the Gigaset A540, C430A and AS690H and the Motorola O201; every other handset uses the standard behaviour |
 
 ## Calls
 
@@ -81,6 +81,7 @@ the packages on exactly that OpenWrt release; a box on another release needs the
 | Gigaset C430A | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number. Shows no date and time from the base |
 | Gigaset AS690H | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number |
 | AVM FRITZ!Fon C4 | CAT-iq | Registered and called during development; not tested with this release |
+| Motorola O201 | GAP only, narrowband only (not CAT-iq) | With its profile `motorola-o201` (2026-11-05, a standalone 7412): registration, calls in and out with audio both ways, 3 of 3 calls. It needs the profile: without it incoming calls are refused and outgoing calls are silent. Name display not working (it shows "Externer Anruf"); not tried through the controller; [handset-compatibility.md](handset-compatibility.md#the-motorola-o201) |
 
 openDECTcell follows the DECT standards (GAP, CAT-iq) rather than one maker's
 habits, so other GAP or CAT-iq handsets should work too. Reports of other

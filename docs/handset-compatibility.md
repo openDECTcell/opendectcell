@@ -61,9 +61,26 @@ key, so it is data and not code ([handset-profiles.md](handset-profiles.md)).
 
 ## Handsets that are not plain GAP or CAT-iq
 
-Some handsets are listed by the community as registering but not doing more (for example the Motorola O201). They
-may use manufacturer-specific commands. [vendor-specific-support.md](vendor-specific-support.md) is the plan for
-finding out what they need.
+Some handsets register but do not do more. They may be strict about things the standard leaves optional, or use
+manufacturer-specific commands. [vendor-specific-support.md](vendor-specific-support.md) is the plan for finding out
+what they need, and [handset-variation-catalog.md](handset-variation-catalog.md) lists every variation of the basic
+functions that the standards permit, with what we can send today.
+
+### The Motorola O201
+
+Seen 2026-11-05 on a standalone 7412 under a random identity, and registered with the controller. It is GAP only and
+narrowband only; it reports no terminal capability or model. Three things were needed, and each is data now:
+
+| What it does | Why | Profile key |
+|---|---|---|
+| Releases an incoming {CC-SETUP} with basic service 0x88 (wideband) after about 380 ms, <<RELEASE-REASON>> 0x0E ("partial release", EN 300 175-5 §7.6.7); rings on 0x80 | it refuses the wideband setup | `cc.basic_service = basic` |
+| Plays no audio on a call it places until our first answer carries <<PROGRESS-INDICATOR>> "in-band information available" (cause 8); audio at once with it (3 of 3 calls) | EN 300 175-5 §9.3.1.4 lets a PT keep its receive path closed without it | `cc.progress_in_band = yes` (API 159) |
+| Ends every call with reason 0x0E, whatever the reason | generic for this handset, not a fault | none |
+
+Not needed (tried and ruled out): a CONNECT-ACK variant, the vendor element `7b 02 80 04` it sends in its SETUP. Open: its
+display shows the number and its own "Externer Anruf", not the caller's name; it waits about 3 s after the last digit
+(`dialwait`, the same for every handset). It keeps a base entry for each identity it registered with; delete the unused one in its menu.
+The run that found this: [vendor-specific-support.md §7.7](vendor-specific-support.md).
 
 ## Adding a handset
 

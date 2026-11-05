@@ -1146,3 +1146,19 @@ into a chip slot, the controller frees the slot in place instead of rebuilding t
 enrolment never ends a call. Your `save()` must set `loaded[cur] = 1` and `absent[cur] = 0` the way
 `dect-stubd`'s does; `cdect.h` needs `148` when you take it. Not tried on air yet: the clear of a slot on a
 running radio is the deregistration's own mail pair, the rest is host bookkeeping.
+
+## API 158: a handset's release reason is logged `[2026-11-05]`
+
+`dect_cc_take_peer_release()` and `dect_cc_reason_name()` (openDECTcell `docs/api-versions.md` #158). The library keeps the
+<<RELEASE-REASON>> of a handset's {CC-RELEASE} or {CC-RELEASE-COM} and logs it once per call: "the handset released the call
+(link N): reason 0x0E, partial release". Nothing on the air. `cdect.h` needs `158` when you take it. Not a bug of ours when a
+handset ends every call with 0x0E (the Motorola O201 does).
+
+## API 159: the in-band indication, profile key `cc.progress_in_band` `[2026-11-05]`
+
+With the key on for a handset, our first answer to a call it places ({CC-SETUP-ACK}, else {CC-CALL-PROC}) carries
+<<PROGRESS-INDICATOR>> `1e 02 81 88`, once per call (openDECTcell `docs/api-versions.md` #159). Off by default; only the profile
+`motorola-o201` sets it. The new link hook `progress_for` is wired in `link_cc_cfg`, which `cdect` gets by taking the submodule;
+no controller code is needed. `cdect.h` needs `159`. The controller mirrors the profile files in
+`internal/dect/profiles/data` (a test compares them with the library's). Seen on a standalone 7412 only.
+

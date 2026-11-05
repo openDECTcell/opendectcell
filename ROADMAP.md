@@ -13,6 +13,11 @@
   indicator ([docs/lines-and-calls.md](docs/lines-and-calls.md); cards in
   [docs/journals/bench-7412.md](docs/journals/bench-7412.md) and
   [docs/journals/bench-next.md](docs/journals/bench-next.md)).
+- **Handsets that are not plain GAP or CAT-iq (November 2026):** the Motorola O201 works both ways through a device profile
+  (API 158, 159). Next: a catalogue of every variation of the basic functions the standards permit
+  ([docs/handset-variation-catalog.md](docs/handset-variation-catalog.md)), then the DECT Command Finder in tiers: a frame
+  decoder, a `probe` verb and a support bundle first, a guided fitter and a LuCI page only when a second handset needs
+  them ([docs/vendor-specific-support.md](docs/vendor-specific-support.md) §7.8).
 - **Then:** call lists and the phonebook on the handset (M9b, optional),
   the FRITZ!Box 7412 as a release target (section Later), the multi-cell
   controller (M10, M11).
