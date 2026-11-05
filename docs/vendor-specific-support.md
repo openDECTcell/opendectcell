@@ -312,7 +312,15 @@ element, <<ESCAPE-TO-PROPRIETARY>> `7b 02 80 04`, in every outgoing {CC-SETUP}; 
   (the spec lets a PT connect its receive U-plane late, §9.3.1.4); (b) **the 7412's PCM transport**: the stub's TDM lanes move during calls (`ssc: watch:
   LANES MOVED`) and the controller's early 7412 bench showed three Gigasets with working audio, so a comparison on the same box is needed; (c) a missing message
   the O201 waits for: a <<PROGRESS-INDICATOR>> "in-band information available" (§9.3.1.4) is not implemented in libopendectcell, nor is the vendor escape element.
-- **Next, in this order:** 1. the same dial test with a **Gigaset registered on the same box** (the control handset: does it get audio at once on this box
+- **Incoming calls' audio works** (same box, same session, 2026-11-05 late): ring, answer, the first counted pulses after about 2 s, the handset's
+  voice reached the base (313 of 712 frames with signal, peak 5516). So the O201's audio path and the box are fine; only the **outgoing** sequence fails.
+  The incoming sequence differs from the outgoing one in what we send after the handset's CONNECT: a {CC-CONNECT-ACK} (`03 0f`). An experiment sent a
+  {CC-CONNECT-ACK} after our {CC-CONNECT} on outgoing calls too (three calls, `83 0f` seen in the trace): **no change**, no audio. Not committed.
+- **Next, in this order:** (the earlier plan of a Gigaset control on this box is dropped: the box carries the Gigasets' audio and the O201's incoming audio, so it
+  is not the cause.) 1. what an outgoing call differs in: we send {CC-SETUP-ACK} (overlap sending), {CC-CALL-PROC}, {CC-ALERTING}, {CC-CONNECT}; try CONNECT
+  without the earlier states, and a <<PROGRESS-INDICATOR>> "in-band information available" (library change) in the SETUP-ACK or ALERTING (§9.3.1.4); 2. the vendor
+  element `7b 02 80 04` the handset puts in its SETUP; 3. the O201 on its own Motorola base, if the maintainer has it, to compare what works. The old plan
+  was: the same dial test with a **Gigaset registered on the same box** (the control handset: does it get audio at once on this box
   and identity?); 2. the O201 on the lab **7520** (same test: box or handset?); 3. only then a <<PROGRESS-INDICATOR>> variant (a library change), and the
   vendor element, from a trace of what the handset sends.
 
