@@ -460,6 +460,14 @@ struct ab_lane {
 	unsigned rx_run;
 	int      phase, locked, primed;
 	uint32_t underruns, dropped, frames_up, frames_down;
+	/*
+	 * How loud each direction was, for the log at the end of a call: the frames that carried signal
+	 * (a sample above AB_SIGNAL) and the highest sample, in the lane's own PCM before any resampling.
+	 * It tells a silent direction from a lost one (the O201 test, 2026-11-05). Narrowband and linear
+	 * wideband only: G.722 octets passed through are not looked at.
+	 */
+	uint32_t up_sig, down_sig;
+	int16_t  up_peak, down_peak;
 };
 
 struct stubd {
@@ -1781,6 +1789,27 @@ static void ab_pop(struct ab_lane *l)
  * One word from the handset; every 20 ms a frame to the bridge in the
  * socket's format. Nothing is decoded while no bridge is connected.
  */
+#define AB_SIGNAL 32	/* a sample above this (about -60 dBFS) counts as signal */
+
+static void ab_level(int16_t *peak, uint32_t *sig, const int16_t *pcm, size_t n)
+{
+	int16_t top = 0;
+	size_t i;
+
+	for (i = 0; i < n; i++) {
+		int v = pcm[i] < 0 ? -(int)pcm[i] : (int)pcm[i];
+
+		if (v > 32767)
+			v = 32767;
+		if (v > top)
+			top = (int16_t)v;
+	}
+	if (top > *peak)
+		*peak = top;
+	if (top > AB_SIGNAL)
+		(*sig)++;
+}
+
 static void ab_up(struct ab_lane *l, const uint8_t *w)
 {
 	int16_t wb[AB_FRAME / 2u], nb[AB_FRAME / 4u];
@@ -1813,6 +1842,7 @@ static void ab_up(struct ab_lane *l, const uint8_t *w)
 		n = 160u;
 		out = nb;
 	}
+	ab_level(&l->up_peak, &l->up_sig, out, n);
 	if (l->wideband && l->rate == 8000u) {
 		n = dect_rs2_down(&l->rs_up, wb, n, nb);
 		out = nb;
@@ -1856,6 +1886,7 @@ static void ab_down(struct ab_lane *l, const void *buf, size_t len)
 		n = len / sizeof(int16_t);
 		pcm = buf;
 	}
+	ab_level(&l->down_peak, &l->down_sig, pcm, n);
 	/* the socket's rate (16 kHz for G.722) to the lane's */
 	if (l->wideband && l->rate == 8000u && !l->g722) {
 		n = dect_rs2_up(&l->rs_down, pcm, n, wb);
@@ -5419,6 +5450,9 @@ static void ab_end(struct ab_lane *l, const char *why)
 	printf("audio: call %u's socket closed (%s): %u frames up, %u down, "
 	       "%u underruns, %u dropped\n", l->call, why, l->frames_up,
 	       l->frames_down, l->underruns, l->dropped);
+	printf("audio: call %u's levels: from the handset %u of %u frames with signal, peak %d; "
+	       "to the handset %u of %u frames with signal, peak %d\n", l->call, l->up_sig,
+	       l->frames_up, l->up_peak, l->down_sig, l->frames_down, l->down_peak);
 }
 
 static void ab_close(struct stubd *s)
@@ -8273,6 +8307,17 @@ static int bridge_echo(int argc, char **argv)
 	char in[DECT_CTL_LINE_MAX * 2], line[DECT_CTL_LINE_MAX];
 	static int16_t ring[ECHO_DELAY][AB_FRAME / 2u];
 	unsigned rw = 0, rn = 0, answer_call = 0;
+	/*
+	 * DECT_ECHO_TONE=1: instead of the echo, a group of 1 kHz pulses every 2 s from the moment the audio
+	 * channel opens, silence between: 1 pulse (80 ms on, 80 ms off) in the first group, 2 in the second,
+	 * up to 10, then again. It tells a handset whose speaker opens late from one whose microphone is
+	 * silent (the O201, 2026-11-05): the listener says how many pulses the first group they heard had,
+	 * which is the time since the channel opened in units of 2 s.
+	 */
+	int tone = getenv("DECT_ECHO_TONE") != NULL;
+	unsigned tick = 0;
+	static const int16_t sine16[16] = { 0, 3827, 7071, 9239, 10000, 9239, 7071, 3827,
+					    0, -3827, -7071, -9239, -10000, -9239, -7071, -3827 };
 	uint64_t answer_at = 0;
 	size_t il = 0;
 	int fd, afd = -1, n;
@@ -8326,10 +8371,23 @@ static int bridge_echo(int argc, char **argv)
 				rw = (rw + 1u) % ECHO_DELAY;
 				if (rn < ECHO_DELAY)
 					rn++;
-				/* the frame from half a second ago */
-				if (rn == ECHO_DELAY)
+				if (tone) {
+					static int16_t beep[AB_FRAME / 2u];
+					size_t i, ns = (size_t)r / sizeof(int16_t);
+
+					if (ns > AB_FRAME / 2u)
+						ns = AB_FRAME / 2u;
+					for (i = 0; i < ns; i++)
+						beep[i] = (tick % 100u) < 8u * (tick / 100u % 10u + 1u) && (tick % 8u) < 4u ? sine16[i % 16u] : 0;
+					if (tick % 100u == 0)
+						printf("echo: group of %u pulses at audio frame %u (%u ms)\n", tick / 100u % 10u + 1u, tick, tick * 20u);
+					tick++;
+					(void)send(afd, beep, ns * sizeof(int16_t), MSG_DONTWAIT | MSG_NOSIGNAL);
+				} else if (rn == ECHO_DELAY) {
+					/* the frame from half a second ago */
 					(void)send(afd, ring[rw], (size_t)r,
 						   MSG_DONTWAIT | MSG_NOSIGNAL);
+				}
 			}
 		}
 		if (!(p[0].revents & (POLLIN | POLLHUP)))
@@ -8380,6 +8438,7 @@ static int bridge_echo(int argc, char **argv)
 							afd = -1;
 						}
 						rn = rw = 0;
+						tick = 0;
 						printf("echo: audio %s\n",
 						       afd >= 0 ? "connected"
 								: "FAILED");
