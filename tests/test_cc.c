@@ -104,6 +104,85 @@ static void test_incoming_setup(void)
 	CHECK_EQ(cc.stats.connected, 1);
 }
 
+/*
+ * The in-band indication (API 159, the Motorola O201): with it on, our first answer to the handset's call carries
+ * <<PROGRESS-INDICATOR>> 1e 02 81 88 (EN 300 175-5 §7.7.31, cause 8), the SETUP-ACK when we run overlap sending, else the
+ * CALL-PROC; once per call; off, nothing.
+ */
+static int has_progress(const uint8_t *m, size_t n)
+{
+	size_t i;
+
+	for (i = 2; i + 3 < n; i++)
+		if (m[i] == 0x1e && m[i + 1] == 0x02 && m[i + 2] == 0x81 && m[i + 3] == 0x88)
+			return 1;
+	return 0;
+}
+
+static void test_progress_in_band_in_the_first_answer(void)
+{
+	struct dect_cc cc;
+	uint8_t buf[64], out[64];
+	size_t n;
+
+	/* overlap sending: the SETUP-ACK carries it, the CALL-PROC after the number does not */
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	dect_cc_set_progress_in_band(&cc, 1);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_SETUP_ACK);
+	CHECK_EQ(has_progress(out, n), 1);
+	CHECK_EQ(cc.progress_sent, 1);
+	CHECK_EQ(dect_cc_alert(&cc), 0);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	CHECK_EQ(has_progress(out, n), 0);		/* once per call */
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_ALERTING);
+	CHECK_EQ(has_progress(out, n), 0);
+
+	/* no overlap sending: the CALL-PROC is the first answer and carries it */
+	dect_cc_init(&cc);
+	dect_cc_set_progress_in_band(&cc, 1);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CALL_PROC);
+	CHECK_EQ(has_progress(out, n), 1);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_CONNECT);
+	CHECK_EQ(has_progress(out, n), 0);
+
+	/* off (the default): never */
+	dect_cc_init(&cc);
+	dect_cc_set_overlap(&cc, 1);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(msg_type_of(out, n), DECT_CC_SETUP_ACK);
+	CHECK_EQ(has_progress(out, n), 0);
+
+	/* a second call on the same connection gets it again */
+	dect_cc_init(&cc);
+	dect_cc_set_progress_in_band(&cc, 1);
+	n = pp_setup(buf, sizeof(buf), 0);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(has_progress(out, n), 1);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	n = dect_nwk_build_hdr(buf, sizeof(buf), DECT_PD_CC, DECT_TI_ORIGINATOR, 0, DECT_CC_RELEASE);
+	dect_cc_rx(&cc, buf, n);
+	while (dect_cc_poll(&cc, out, sizeof(out)) > 0)
+		;
+	n = pp_setup(buf, sizeof(buf), 1);
+	dect_cc_rx(&cc, buf, n);
+	n = dect_cc_poll(&cc, out, sizeof(out));
+	CHECK_EQ(has_progress(out, n), 1);
+}
+
 /* PP hangs up: CC-RELEASE -> we answer RELEASE-COM and go released. */
 static void test_release_from_pp(void)
 {
@@ -3051,6 +3130,7 @@ int main(void)
 	test_insufficient_resources_represents_the_setup();
 	test_other_release_reasons_are_not_represented();
 	test_peer_release_reason_is_kept_once();
+	test_progress_in_band_in_the_first_answer();
 	test_second_setup_during_an_active_call_is_rejected();
 	test_setup_carries_line_identifier();
 	test_foreign_transaction_does_not_touch_our_call();

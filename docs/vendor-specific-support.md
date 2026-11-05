@@ -297,7 +297,14 @@ Variants 3 to 6 of §7.4 were not needed. Reason 0x0E ("partial release") is sim
 carries it too), so the reason alone never named a cause: the variation did. The handset reports **GAP only** in its <<TERMINAL-CAPABILITY>> and puts a vendor
 element, <<ESCAPE-TO-PROPRIETARY>> `7b 02 80 04`, in every outgoing {CC-SETUP}; we ignore it. Profile files: `profiles/motorola*.profile` (`887051d`).
 
-**Outgoing calls: the digits and the setup work, the audio does not, and the cause is not found.**
+**Outgoing calls: solved, by the progress indicator.** The O201 keeps its receive path closed until it sees <<PROGRESS-INDICATOR>> "in-band information is now
+available" (cause 8, `1e 02 81 88`), which EN 300 175-5 §9.3.1.4 allows a PT to do. Sent in our first answer to its call, the {CC-SETUP-ACK}, audio opens at once
+(profile only, no option: 3 of 3 calls, the pulses at the connection). Bisection: SETUP-ACK alone 2 of 2; SETUP-ACK + CALL-PROC + ALERTING 3 of 3; ALERTING alone 0 of 3. It is
+the profile key `cc.progress_in_band = yes` (libopendectcell API 159). The vendor element `7b 02 80 04` was not needed and is still ignored. Below is the search, kept because it
+shows what the Finder has to avoid: the long run of negative experiments (ciphering, bind order, CONNECT-ACK, idle time) was **run partly on a wrong premise**, and two of them
+never applied (a daemon variant was not stopped; `pidof` did not match its name), which `/root/finder-daemon.sh` now prevents.
+
+**Outgoing calls, the search (history).**
 
 - The O201 sends its digits in a {CC-INFO} keypad ("123"), no <<SENDING-COMPLETE>>; the base waits `dialwait` (3000 ms), then CALL-PROC, ALERTING, and CONNECT
   when the far end answers. Every handset has the same 3 s pause.
@@ -308,7 +315,7 @@ element, <<ESCAPE-TO-PROPRIETARY>> `7b 02 80 04`, in every outgoing {CC-SETUP}; 
   nothing in 40 s; nothing in a second call; once **at a call timer of 6 to 8 s**; and "none" with `bindfirst`, "none" with ciphering off (`-C`).
 - **Ruled out by those runs:** the radio link, the audio flow through the stack, ciphering (off: no change), the order of bind and CONNECT (`bindfirst`: no
   change), the codec width (always narrowband), the dial pause.
-- **Still open:** (a) the handset: its receive path opens at an unpredictable time after our CONNECT, or never, and its transmit path likewise
+- **Open at the time (all answered by the result above):** (a) the handset: its receive path opens at an unpredictable time after our CONNECT, or never, and its transmit path likewise
   (the spec lets a PT connect its receive U-plane late, §9.3.1.4); (b) **the 7412's PCM transport**: the stub's TDM lanes move during calls (`ssc: watch:
   LANES MOVED`) and the controller's early 7412 bench showed three Gigasets with working audio, so a comparison on the same box is needed; (c) a missing message
   the O201 waits for: a <<PROGRESS-INDICATOR>> "in-band information available" (§9.3.1.4) is not implemented in libopendectcell, nor is the vendor escape element.

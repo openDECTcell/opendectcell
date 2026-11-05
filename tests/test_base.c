@@ -164,6 +164,31 @@ static void count_mask(void *ctx)
  * A segment from a handset that has not proved its key is no contact (review finding C1, API 157): a LOCATE-REQUEST naming
  * a held IPUI makes the connection adopt that handset, but last_seen_ms stays 0 until the key has been proved.
  */
+/*
+ * The in-band indication follows the handset's profile (API 159): a handset whose profile says cc.progress_in_band is told yes, another
+ * handset no, an unknown IPUI has no opinion (-1: the link's setting stands).
+ */
+static void test_progress_in_band_follows_the_profile(void)
+{
+	static const uint8_t a[] = { 0x80, 0xa8, 0x03, 0x11, 0x22, 0x33, 0x44 };
+	static const uint8_t c[] = { 0x80, 0xa8, 0x03, 0x55, 0x66, 0x77, 0x88 };
+	static const uint8_t u[] = { 0x80, 0xa8, 0x03, 0x99, 0x99, 0x99, 0x99 };
+	struct dect_base b;
+
+	dect_base_init(&b);
+	b.n_hs = 2;
+	memcpy(b.hs[0].port_id, a, sizeof(a));
+	b.hs[0].port_id_len = sizeof(a);
+	memcpy(b.hs[1].port_id, c, sizeof(c));
+	b.hs[1].port_id_len = sizeof(c);
+	b.prof[0].cc_progress_in_band = 1;
+	dect_base_conn_up(&b, 1, 0);
+	CHECK(b.main_link.link.progress_for != NULL);
+	CHECK_EQ(b.main_link.link.progress_for(&b, a, sizeof(a)), 1);
+	CHECK_EQ(b.main_link.link.progress_for(&b, c, sizeof(c)), 0);
+	CHECK_EQ(b.main_link.link.progress_for(&b, u, sizeof(u)), -1);
+}
+
 static void test_an_unproved_handset_is_not_seen(void)
 {
 	struct dect_base b;
@@ -193,6 +218,7 @@ int main(void)
 	char nm_buf[64];
 
 	test_an_unproved_handset_is_not_seen();
+	test_progress_in_band_follows_the_profile();
 	dect_base_init(&b);
 	b.n_hs = 3;
 	b.hs[0].slot = 1;

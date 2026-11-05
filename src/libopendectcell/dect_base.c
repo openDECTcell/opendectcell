@@ -4921,6 +4921,17 @@ static int call_status_for(void *ctx, const uint8_t *ipui, size_t len)
 	return !b->cfg.no_call_status && b->cap[i].part3;
 }
 
+/* dect_link's question at a handset's {CC-SETUP}: the in-band indication, from its profile (cc.progress_in_band). */
+static int progress_for(void *ctx, const uint8_t *ipui, size_t len)
+{
+	const struct dect_base *b = ctx;
+	int i = dect_base_hs_by_ipui(b, ipui, len);
+
+	if (i < 0)
+		return -1;
+	return b->prof[i].cc_progress_in_band ? 1 : 0;
+}
+
 /* dect_link's question for a handset's new call: its call id. */
 static uint8_t call_id_for(void *ctx, const struct dect_link *l)
 {
@@ -5033,6 +5044,7 @@ static void link_cc_cfg(struct dect_base *b, struct dect_link *l)
 				b->cfg.callinfo.has_call_id ?
 				b->cfg.callinfo.call_id : 1u);
 	l->call_status_for = call_status_for;
+	l->progress_for = progress_for;
 	l->call_id_for = call_id_for;
 	l->call_status_ctx = b;
 	/* our one line for FP-managed selection ('None', §7.4.5.2.4) */

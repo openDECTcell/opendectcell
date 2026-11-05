@@ -302,6 +302,11 @@ struct dect_cc {
 	 * transaction we hold (-1: it named none), and how many such messages came;
 	 * dect_cc_take_peer_release() hands each over once.
 	 */
+	/*
+	 * The in-band indication (dect_cc_set_progress_in_band()): set before a handset's {CC-SETUP} is answered; progress_sent
+	 * says this call's first answer carried it.
+	 */
+	uint8_t  progress_in_band, progress_sent;
 	int16_t  peer_reason;
 	uint32_t peer_releases, peer_releases_noted;
 	struct dect_iwu iwu;	/* <<IWU-TO-IWU>> session responder */
@@ -627,6 +632,14 @@ int dect_cc_take_control(struct dect_cc *cc, uint8_t *code,
  * none. A host logs it, so a handset that refuses a call says why.
  */
 int dect_cc_take_peer_release(struct dect_cc *cc, int *reason);
+
+/*
+ * For a call the handset places: put <<PROGRESS-INDICATOR>> "in-band information or appropriate pattern is now available" (cause 8) into
+ * our first answer, {CC-SETUP-ACK} or {CC-CALL-PROC}. EN 300 175-5 §9.3.1.4: a PT "is not required to request the LLME to connect its
+ * receive U-plane unless it receives" it, and may connect it late or never (the Motorola O201 plays nothing without it, with it at once).
+ * Off by default: a handset that does not need it is not sent it.
+ */
+void dect_cc_set_progress_in_band(struct dect_cc *cc, int on);
 
 /*
  * The name EN 300 175-5 V2.9.1 §7.6.7 gives a release reason ("partial

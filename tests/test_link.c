@@ -582,6 +582,55 @@ static void test_call_status_is_asked_per_handset(void)
 	}
 }
 
+static int pb_answer;
+
+static int pb_for(void *ctx, const uint8_t *ipui, size_t len)
+{
+	(void)ctx;
+	(void)ipui;
+	(void)len;
+	return pb_answer;
+}
+
+/*
+ * The owner decides per handset whether our first answer to its call carries the in-band indication (API 159): yes -> 1e 02 81 88 in it,
+ * no -> not, no opinion -> the link's setting stands (here: off).
+ */
+static void test_progress_in_band_is_asked_per_handset(void)
+{
+	static const uint8_t ours[] = { 0x80, 0xa8, 0x03, 0x11, 0x22, 0x33, 0x44 };
+	static const int answer[] = { 1, 0, -1 };
+	static const int has[] = { 1, 0, 0 };
+	struct dect_link l;
+	struct dect_link_ind ind;
+	uint8_t msg[32];
+	size_t n, k, i;
+	int found;
+
+	for (k = 0; k < 3; k++) {
+		init(&l);
+		memcpy(l.mm.port_id, ours, sizeof(ours));
+		l.mm.port_id_len = sizeof(ours);
+		l.progress_for = pb_for;
+		pb_answer = answer[k];
+		tx_seen_len = 0;
+		dect_link_set_tx_log(&l, tx_seen, NULL);
+		n = dect_nwk_build_hdr(msg, sizeof(msg), DECT_PD_CC, DECT_TI_ORIGINATOR, 0, DECT_CC_SETUP);
+		n = dect_nwk_put_ie(msg, sizeof(msg), n, DECT_IE_PORTABLE_IDENTITY, ours, sizeof(ours));
+		msg[n++] = DECT_IE_BASIC_SERVICE;
+		msg[n++] = 0x80;
+		feed_nwk(&l, msg, n, &ind);
+		CHECK(tx_seen_len >= 2u);
+		CHECK_EQ(tx_seen_buf[1], DECT_CC_CALL_PROC);
+		found = 0;
+		for (i = 2; i + 3 < tx_seen_len; i++)
+			if (tx_seen_buf[i] == 0x1e && tx_seen_buf[i + 1] == 0x02 &&
+			    tx_seen_buf[i + 2] == 0x81 && tx_seen_buf[i + 3] == 0x88)
+				found = 1;
+		CHECK_EQ(found, has[k]);
+	}
+}
+
 static uint8_t id_for(void *ctx, const struct dect_link *l)
 {
 	(void)ctx;
@@ -838,6 +887,7 @@ int main(void)
 	test_send_time();
 	test_handset_sends_its_clock();
 	test_call_id_is_asked_per_call();
+	test_progress_in_band_is_asked_per_handset();
 	test_init_is_quiet();
 	test_page_response_carries_the_identity();
 	test_cc_admits_only_the_handset_mm_holds();

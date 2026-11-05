@@ -1156,3 +1156,12 @@ EN 300 175-5 V2.9.1 §7.6.7). A {CC-RELEASE} or {CC-RELEASE-COM} on a transactio
 once per release, "call: the handset released the call (link N): reason 0x0E, partial release". Before this the log said only that the call ended on the
 handset. Layout change; a host that does not call the new function sees one more log line per released call. Tests: `test_cc.c`. Not a behaviour change
 on the air.
+
+**159.** dect_nwk.h, dect_cc.h, dect_link.h, dect_base.c, dect_profile.h, dect_proto.h, 2026-11-05, from the Motorola O201 (DECT Command Finder run): **the in-band indication.**
+New `DECT_IE_PROGRESS_INDICATOR` (0x1E), `dect_cc_set_progress_in_band()`, the link hook `progress_for` (asked at a handset's {CC-SETUP}, like `call_status_for`) and the profile key
+`cc.progress_in_band` (`struct dect_hs_profile` gains `cc_progress_in_band`; `struct dect_cc` gains `progress_in_band` and `progress_sent`; `struct dect_link` gains `progress_for`). With it
+on for a handset, our first answer to a call it places, {CC-SETUP-ACK} (overlap sending) or {CC-CALL-PROC}, carries <<PROGRESS-INDICATOR>> `1e 02 81 88` (cause 8, "in-band information or
+appropriate pattern is now available", EN 300 175-5 §7.7.31), once per call. EN 300 175-5 §9.3.1.4 lets a PT keep its receive U-plane closed without it; the O201 plays no audio on outgoing
+calls then, and with it plays at once (2 of 2 calls with the indicator on the SETUP-ACK alone, 3 of 3 with SETUP-ACK, CALL-PROC and ALERTING, 0 of 3 on ALERTING alone). Off by default: a host
+that sets nothing, and a handset whose profile does not say so, see no change. Tests: `test_cc.c`, `test_link.c`, `test_base.c`, `test_profile.c`.
+

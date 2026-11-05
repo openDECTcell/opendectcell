@@ -44,6 +44,7 @@ struct dect_hs_profile {
 	uint8_t cc_signal_external;	/* 0x40..0x48 */
 	uint8_t cc_signal_internal;
 	uint8_t cc_bind_before_connect;	/* 0 no, 1 yes */
+	uint8_t cc_progress_in_band;	/* 0 no, 1 yes: <<PROGRESS-INDICATOR>> in our first answer to its call */
 	uint8_t cc_name_method;		/* 0 cnip, 1 display, 2 both, 3 none */
 	uint8_t cc_name_alphabet;	/* 0 auto, 1 utf8, 2 dect */
 	uint8_t cc_timer;		/* 0 handset, 1 base */

@@ -123,6 +123,7 @@
 #define DECT_IE_ESCAPE_TO_PROPRIETARY	0x7Bu
 #define DECT_IE_CIPHER_INFO		0x19u
 #define DECT_IE_CALL_ATTRIBUTES		0x13u	/* CC, variable length */
+#define DECT_IE_PROGRESS_INDICATOR	0x1Eu	/* EN 300 175-5 §7.7.31, figure 73 (identifier 0001 1110) */
 #define DECT_IE_CONNECTION_ATTRIBUTES	0x17u	/* CC, variable length */
 
 /*

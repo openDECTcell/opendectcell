@@ -48,6 +48,8 @@ static const struct key keys[] = {
 	  0x40, 0x48, 0x40, "call", "Ring pattern, internal calls (0x40-0x48)" },
 	{ "cc.bind_before_connect", T_WORDS, OFF(cc_bind_before_connect), YN,
 	  0, 0, 0, "call", "Switch the audio on before connecting" },
+	{ "cc.progress_in_band", T_WORDS, OFF(cc_progress_in_band), YN,
+	  0, 0, 0, "call", "Tell the handset in-band audio is available (it plays nothing without)" },
 	{ "cc.name.method", T_WORDS, OFF(cc_name_method),
 	  "cnip|display|both|none", 0, 0, 0,
 	  "call", "How the caller's name is shown" },

@@ -101,6 +101,11 @@ struct dect_link {
 	int    (*call_status_for)(void *ctx, const uint8_t *ipui, size_t len);
 	void    *call_status_ctx;
 	/*
+	 * Optional, same ctx: does the handset with this IPUI need the in-band indication in our first answer to its call
+	 * (dect_cc_set_progress_in_band())? Asked at its {CC-SETUP}, before CC answers: 1 yes, 0 no, -1 no opinion (the setting stands).
+	 */
+	int    (*progress_for)(void *ctx, const uint8_t *ipui, size_t len);
+	/*
 	 * Optional, same ctx: the call id for the handset's new call, asked
 	 * at its {CC-SETUP} before CC answers (call ids are unique system-
 	 * wide, TS 102 527-3 §7.4.6.1, which only the owner can see). 0 keeps

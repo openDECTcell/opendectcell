@@ -302,7 +302,8 @@ static void test_motorola_o201_file(void)
 	dect_profile_resolve(&mfr, &dev, NULL, &hp);
 	CHECK_EQ(hp.cc_basic_service, 2u);		/* basic: 0x80 */
 	CHECK(dect_profile_describe(&hp, desc, sizeof(desc)) > 0);
-	CHECK(strcmp(desc, "cc.basic_service=basic") == 0);
+	CHECK_EQ(hp.cc_progress_in_band, 1u);
+	CHECK(strcmp(desc, "cc.basic_service=basic cc.progress_in_band=yes") == 0);
 	/* the manufacturer layer alone changes nothing */
 	dect_profile_resolve(&mfr, NULL, NULL, &hp);
 	CHECK_EQ(hp.cc_basic_service, 0u);

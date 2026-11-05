@@ -280,6 +280,11 @@ static int rx_cc_setup(struct dect_link *l, const struct dect_nwk_hdr *h,
 	int cs = (pid && l->call_status_for) ?
 		 l->call_status_for(l->call_status_ctx, pid, pid_len) : -1;
 
+	int pb = (pid && l->progress_for) ?
+		 l->progress_for(l->call_status_ctx, pid, pid_len) : -1;
+
+	if (pb >= 0 && !dect_cc_busy(&l->cc))
+		dect_cc_set_progress_in_band(&l->cc, pb);
 	if (cs >= 0 && !dect_cc_busy(&l->cc))
 		dect_cc_set_call_status(&l->cc, cs, l->cc.status_call_id);
 	if (l->call_id_for && !dect_cc_busy(&l->cc)) {

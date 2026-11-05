@@ -123,7 +123,22 @@ static void queue_with_status(struct dect_cc *cc, uint8_t msg_type,
 	off = dect_nwk_build_hdr(b, DECT_LAPC_MSG_MAX, DECT_PD_CC,
 				 DECT_TI_RESPONDER, cc->ti_value, msg_type);
 	off = dect_cc_put_call_status(cc, b, DECT_LAPC_MSG_MAX, off, status);
+	if (cc->progress_in_band && !cc->progress_sent &&
+	    (msg_type == DECT_CC_SETUP_ACK || msg_type == DECT_CC_CALL_PROC) &&
+	    off + 4u <= DECT_LAPC_MSG_MAX) {
+		/* location "private network serving the local user", description 8 (§7.7.31) */
+		b[off++] = DECT_IE_PROGRESS_INDICATOR;
+		b[off++] = 2u;
+		b[off++] = 0x81u;
+		b[off++] = 0x88u;
+		cc->progress_sent = 1;
+	}
 	txq_commit(cc, idx, off);
+}
+
+void dect_cc_set_progress_in_band(struct dect_cc *cc, int on)
+{
+	cc->progress_in_band = on ? 1u : 0u;
 }
 
 /*
@@ -1392,6 +1407,7 @@ void dect_cc_rx(struct dect_cc *cc, const uint8_t *msg, size_t len)
 			cc->incoming = 0;
 			cc->proceeded = 0;
 			cc->alerted = 0;
+			cc->progress_sent = 0;
 			learn_id(ies, ies_len, DECT_IE_PORTABLE_IDENTITY,
 				 cc->peer_port_id, &cc->peer_port_id_len);
 			learn_id(ies, ies_len, DECT_IE_FIXED_IDENTITY,
