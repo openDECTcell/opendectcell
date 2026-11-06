@@ -98,7 +98,7 @@ directory. They are separate repositories, each a package in
 [../tools/release/build.sh](../tools/release/build.sh) builds the packages
 with the OpenWrt SDK. For a `lantiq/*` target it checks (`git ls-remote`)
 whether each of these three repositories is reachable. A reachable one is
-built and packaged; an unreachable one (a private repository in CI) is dropped
+built and packaged; an unreachable one is dropped
 from the feed and from `opendectcell`'s dependencies, with a warning.
 
 ## Building out of tree

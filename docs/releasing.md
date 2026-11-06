@@ -46,12 +46,19 @@ Collect the files for the release: the apks (the architecture-independent `luci-
 
 ## Signing
 
-`build.sh` signs each package with the project's key if `SIGN_KEY` names it; users then trust
-`openwrt/opendectcell-signing-key.pem` once. Without it the SDK signs with its own throwaway key and users install with
-`apk add --allow-untrusted`; the images need nothing. **The project's key exists only as a GitHub secret** and
-the way it is handled is an open finding ([security-review-2026-11-02.md](security-review-2026-11-02.md), M-2: sign in a
-last job that no build script runs in, protect the environment, keep an offline copy). Until that is settled, say in
-the release notes which kind of signature the packages carry.
+Users trust `openwrt/opendectcell-signing-key.pem` once (System > Administration > Repo Public Keys); then LuCI's *Upload
+Package* accepts the project's `.apk` files. A package built on a maintainer's machine without `SIGN_KEY` carries the
+SDK's own throwaway signature and installs with `apk add --allow-untrusted`; the images need nothing. Say in the release
+notes which kind of signature the packages carry.
+
+**In CI** the key is the secret `OPENDECTCELL_SIGN_KEY` of the GitHub environment `release` and one job uses it, `sign` in
+`packages.yml`. The build jobs make unsigned packages and run no secret, because they run the build scripts of OpenWrt
+and of third-party packages. `sign` downloads the finished files, takes `apk` from the official SDK (checked against
+openwrt.org's sha256sums), refuses a key that is not the one in `openwrt/opendectcell-signing-key.pem`, signs every package
+with `apk adbsign --allow-untrusted --sign-key KEY --reset-signatures`, verifies the result against the public key and
+uploads it. Settings of the environment (done once, by the owner of the repository): required reviewer = the maintainer,
+deployment branches and tags = `v*` only. The only copy of the private key is that secret; losing it means a new key that
+users add again ([security-review-2026-11-02.md](security-review-2026-11-02.md), M-2).
 
 ## Publishing
 
@@ -62,9 +69,9 @@ gh release create vX.Y.Z --target <commit> --prerelease --title "opendectcell X.
 
 The notes are `tools/release/notes-X.Y.Z.md` with the placeholders filled in. The tag is made by `gh` at `--target`.
 The `Packages` workflow does **not** run on a tag any more (it is manual, so a tag costs no CI minutes and cannot
-race a local release). To use CI instead, run the workflow by hand from the tag's ref: the `release` job runs only
-on a `v*` ref and makes a *draft* release, which needs the signing secret; CI cannot reach the private
-kernel-module repositories, so its 7412 build has no audio transport (`ALLOW_MISSING_KMOD=1` in the workflow).
+race a local release). To use CI instead, run the workflow by hand from the tag's ref: the `sign` and `release` jobs
+run only on a `v*` ref; `sign` waits for the reviewer of the environment `release`, then `release` makes a *draft* release
+with the signed packages.
 
 After publishing, download `SHA256SUMS` from the release and compare it with the local copy.
 

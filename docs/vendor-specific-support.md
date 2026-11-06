@@ -266,7 +266,7 @@ sequence run **by the controller** for cell users who do not want to suspend any
 
 ### 7.6 Decisions of the same day: the 7412 is the development box, and the identity is always random
 
-- **Development box: the FRITZ!Box 7412** (192.168.1.124, OpenWrt 25.12.6, lantiq/xrx200, packages 0.3.3, a cell of the
+- **Development box: the FRITZ!Box 7412** (OpenWrt 25.12.6, lantiq/xrx200, packages 0.3.3, a cell of the
   lab controller). It stays enrolled; the tool suspends it (§7.2 piece 4). Code that runs on the PC is tested with
   `make check` first; the 7412 needs the MIPS build (`tools/release/build.sh lantiq/xrx200 OUT`, which downloads the
   OpenWrt SDK once).

@@ -4,7 +4,7 @@
 
 [![Packages](https://github.com/openDECTcell/opendectcell/actions/workflows/packages.yml/badge.svg)](https://github.com/openDECTcell/opendectcell/actions/workflows/packages.yml)
 [![Release](https://img.shields.io/github/v/release/openDECTcell/opendectcell)](https://github.com/openDECTcell/opendectcell/releases)
-[![License: GPL-2.0](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
+[![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue)](LICENSES/GPL-2.0-or-later.txt)
 
 Many FRITZ!Boxes have a DECT base station built in, for cordless phones. Once
 you install OpenWrt on such a box, that base station goes silent: its software
@@ -176,6 +176,8 @@ hardware people already own.
 - **How the work is done:** the project is developed with AI coding agents
   under these rules; [AGENTS.md](AGENTS.md) holds them.
 
+See [docs/clean-room-process.md](docs/clean-room-process.md) for how the two sides work and what the `[CR A-nnnn]` citations mean.
+
 openDECTcell is not affiliated with or endorsed by AVM. FRITZ!Box and FRITZ!Fon are
 trademarks of AVM GmbH; Gigaset is a trademark of Gigaset Communications GmbH.
 
@@ -231,7 +233,7 @@ Reports of handsets and boxes, bug reports and code are welcome:
 
 ## License
 
-The licence of each component and the third-party parts are listed in [docs/licensing.md](docs/licensing.md); the policy for reporting a vulnerability is [SECURITY.md](SECURITY.md); what data the box keeps is in [docs/privacy-and-data.md](docs/privacy-and-data.md).
+openDECTcell is **GPL-2.0-or-later**, except the kernel modules under `kernel/`, which are GPL-2.0-only (the texts are in [LICENSES/](LICENSES/), `LICENSE` is the GPL-2.0). The licence of each component is listed in [docs/licensing.md](docs/licensing.md), the third-party parts in [THIRD_PARTY.md](THIRD_PARTY.md); the policy for reporting a vulnerability is [SECURITY.md](SECURITY.md); what data the box keeps is in [docs/privacy-and-data.md](docs/privacy-and-data.md).
 
 GPL-2.0, see [LICENSE](LICENSE). The kernel driver under `kernel/` is
 GPL-2.0-only; everything else (programs, `libopendectcell`, tools) is

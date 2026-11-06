@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Builds the OpenWrt packages with the official SDK (tools/release/build.sh).
-# Run by hand only (2026-11-03): a tag no longer starts it, so a release built
-# on the maintainer's machine (tools/release/build.sh and images.sh, with the
-# private kernel-module repositories reachable) does not also cost CI minutes.
-# On a tag ref it would make a draft release with the packages and their
-# checksums; its text is tools/release/notes-<version>.md if that exists, else notes.md.
+# Run by hand only: a tag does not start it, so a release built on the
+# maintainer's machine (tools/release/build.sh and images.sh) does not also cost
+# CI minutes. Started by hand from a tag ref it makes a draft release with the
+# packages and their checksums; its text is tools/release/notes-<version>.md if
+# that exists, else notes.md.
+#
+# The signing key (secret OPENDECTCELL_SIGN_KEY of the environment "release") is
+# used by one job only, "sign", which runs no project build script: the build
+# jobs make unsigned packages (the SDK signs them with its own throwaway key),
+# and "sign" re-signs the finished files with `apk adbsign` using an `apk`
+# downloaded from openwrt.org and checked against its sha256sums. The
+# environment has the maintainer as required reviewer and runs on tags only
+# (docs/releasing.md).
 name: Packages
 
 on:
@@ -61,23 +69,8 @@ jobs:
       - name: Build
         env:
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          SIGN_KEY_PEM: ${{ secrets.OPENDECTCELL_SIGN_KEY }}
-          # the kernel-module repositories are private: a CI build has no 7412 audio transport
-          ALLOW_MISSING_KMOD: "1"
-        run: |
-          if [ -n "$SIGN_KEY_PEM" ]; then
-            printf '%s\n' "$SIGN_KEY_PEM" > "$RUNNER_TEMP/sign.pem"
-            export SIGN_KEY="$RUNNER_TEMP/sign.pem"
-          elif [ -n "$TAG" ]; then
-            echo "a release needs the signing key (secret OPENDECTCELL_SIGN_KEY)" >&2
-            exit 1
-          else
-            echo "::warning::no signing key: these packages install only with apk add --allow-untrusted"
-          fi
-          tools/release/build.sh '${{ matrix.target }}' out
-          # the private key, and the copy build.sh made, gone before
-          # the steps that follow
-          rm -f "$RUNNER_TEMP/sign.pem" build/release/*/private-key.pem
+        # no secret here: the SDK build runs third-party build scripts
+        run: tools/release/build.sh '${{ matrix.target }}' out
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -126,8 +119,60 @@ jobs:
           path: images/*
           if-no-files-found: error
 
+  sign:
+    # The only job that sees the signing key. It runs no script of this project's build: the packages are files from
+    # the build job, the `apk` is the official one from the OpenWrt SDK (checked against openwrt.org's sha256sums).
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: packages-*
+          path: pk
+          merge-multiple: true
+
+      - name: apk from the official SDK
+        run: |
+          base=https://downloads.openwrt.org/releases/$OPENWRT/targets/lantiq/xrx200
+          curl -fsSL -o sha256sums "$base/sha256sums"
+          line=$(grep -E '\*openwrt-sdk-.*\.tar\.zst$' sha256sums)
+          tarball=${line##*\*}
+          curl -fL -o "$tarball" "$base/$tarball"
+          echo "$line" | sha256sum -c -
+          mkdir sdk
+          # the SDK's apk is a wrapper around .apk.bin and the libraries beside it
+          tar --zstd -xf "$tarball" -C sdk --strip-components=3 --wildcards \
+            '*/staging_dir/host/bin/apk' '*/staging_dir/host/bin/.apk.bin' '*/staging_dir/host/lib/*'
+          ./sdk/bin/apk --version
+
+      - name: Sign
+        env:
+          SIGN_KEY_PEM: ${{ secrets.OPENDECTCELL_SIGN_KEY }}
+        run: |
+          key=$RUNNER_TEMP/sign.pem
+          (umask 077; printf '%s\n' "$SIGN_KEY_PEM" > "$key")
+          mkdir -p keys
+          openssl ec -in "$key" -pubout -out keys/opendectcell.pem 2>/dev/null
+          cmp keys/opendectcell.pem openwrt/opendectcell-signing-key.pem ||
+            { echo "the secret is not the key of openwrt/opendectcell-signing-key.pem" >&2; rm -f "$key"; exit 1; }
+          for f in pk/*.apk; do
+            ./sdk/bin/apk adbsign --allow-untrusted --sign-key "$key" --reset-signatures "$f"
+          done
+          rm -f "$key"
+          ./sdk/bin/apk verify --keys-dir "$PWD/keys" pk/*.apk
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed-packages
+          path: pk/*.apk
+          if-no-files-found: error
+
   release:
-    needs: [build, images]
+    needs: [build, images, sign]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -137,6 +182,12 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: signed-packages
+          path: out
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: image-*
           path: out
           merge-multiple: true
 

@@ -20,6 +20,7 @@ Where to start depends on what you want:
 | [developing.md](developing.md) | Build and test, where a change goes, how the tests work, debugging on a box, commit rules |
 | [glossary.md](glossary.md) | DECT terms and the project's own words |
 | [licensing.md](licensing.md) | The licence of each component, the kernel/userspace boundary, third-party parts, provenance (not legal advice) |
+| [clean-room-process.md](clean-room-process.md) | How the analysis and implementation sides work, and what the `[CR A-nnnn]` citations mean |
 | [releasing.md](releasing.md) | How a release is built, signed and published; the one OpenWrt version a release is built for |
 | [api-versions.md](api-versions.md) | What changed in `libopendectcell`'s public interface at each API version |
 

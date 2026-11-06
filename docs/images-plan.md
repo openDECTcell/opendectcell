@@ -13,8 +13,8 @@ ImageBuilder with the CI packages of run 41239885068: it produced
 (11 MB; manifest lists openDECTcell, opendectcell-cell, opendectcell-baresip, the kernel
 module, LuCI, baresip). **Not flashed.** The 7412 target is untried (see I2).
 Answers of the maintainer, 2026-11-01: I1 one release (25.12.6) for both,
-I2 a read-only deploy key for the PCM module's repository (to be created by
-the maintainer, see below), I3 my lean, I5 images only on tags and manual runs.
+I2 first a read-only deploy key for the PCM module's repository; later (2026-11-06) the three Lantiq transport
+repositories are published instead, so CI needs no key, I3 my lean, I5 images only on tags and manual runs.
 The lab 7520 runs 25.12.5, so the new kernel module package fits it only after
 it is flashed with an image (the userspace packages install over apk).
 
@@ -60,7 +60,7 @@ it is flashed with an image (the userspace packages install over apk).
 | # | Question | My lean |
 |---|---|---|
 | I1 | One OpenWrt release for both boxes (25.12.6, so the 7520 changes from 25.12.5), or each box its own? | One release: fewer builds, one kernel to reason about |
-| I2 | `kmod-lantiq-ssc-pcm`: is its repository to become public (or reachable by CI through a deploy key like the controller's)? Without it the 7412 image has no PCM transport | Reach it with a read-only deploy key, as for the controller's submodule |
+| I2 | `kmod-lantiq-ssc-pcm`: public, or reachable by CI through a deploy key? Without it the 7412 image has no PCM transport | Public (decided 2026-11-06) |
 | I3 | Which minimal base: stock OpenWrt packages plus openDECTcell, or also the baresip and CardDAV packages in the default image? | Everything the standalone base needs; the cell needs less |
 | I4 | A cell image (role=cell preset, no baresip) as a second variant? | Later; role is a setting now |
 | I5 | CI minutes: an image job is one SDK build plus one ImageBuilder run per target (about 15 minutes each). Only on tags and on manual dispatch? | Yes: never on push |
@@ -74,13 +74,8 @@ it is flashed with an image (the userspace packages install over apk).
   flash from AVM firmware: `docs/models/` has the notes; an image must not
   change them.
 
-## What the maintainer has to do for I2
+## The transport repositories (I2, settled 2026-11-06)
 
-`kmod-lantiq-ssc-pcm` lives in its own repository (`../kmod-lantiq-ssc-pcm`
-locally). Without CI access to it the 7412 packages and image have no PCM
-transport. Make a read-only **deploy key** for that repository, add its private
-half as a secret of the openDECTcell repository (say `(vendor-internal name)`), and the
-`build` job can fetch it the way the controller's CI fetches the openDECTcell
-submodule (`openDECTcell/opendectcell-controller` `ci.yml`, the step "Check out the openDECTcell
-submodule"). I did not add that step: it needs the key's name and the
-repository's URL as it will be reachable from CI.
+`kmod-lantiq-ssc-pcm` (7412) and the two repositories of the 7362 SL are public, so the Packages workflow fetches them like any
+other source and the 7412 packages and image carry their PCM transport. No deploy key or secret is needed for it.
+

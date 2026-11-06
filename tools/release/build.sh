@@ -23,7 +23,7 @@
 # copy's PKG_HASH. Tracked files only, with their uncommitted changes
 # (git stash create); a new file needs a `git add` first.
 # kmod-lantiq-ssc-pcm, kmod-lantiq-tdm-pcm and kmod-lantiq-usif-uart
-# download from their own repositories; where one is not reachable (a private repository in CI) the
+# download from their own repositories; where one is not reachable (no network, a fork without access) the
 # lantiq build goes without it.
 set -eu
 
@@ -56,7 +56,7 @@ case $target in
 lantiq/*)
 	# TRANSPORTS names the ones this build must contain (default: all three). A wanted one that is
 	# not reachable stops the build, so a release cannot lose a board's driver unnoticed; only
-	# ALLOW_MISSING_KMOD=1 (a CI run without access to the private repositories) turns that into a
+	# ALLOW_MISSING_KMOD=1 (a build without access to those repositories) turns that into a
 	# warning and drops the package and openDECTcell's dependency on it.
 	for t in lantiq-ssc-pcm lantiq-tdm-pcm lantiq-usif-uart; do
 		case " ${TRANSPORTS:-lantiq-ssc-pcm lantiq-tdm-pcm lantiq-usif-uart} " in

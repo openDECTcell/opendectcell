@@ -1,0 +1,53 @@
+name: Handset or box report
+description: Which handsets and boxes work with opendectcell, and which do not
+title: "[handset] <maker> <model> on <box>"
+labels: ["handset"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports from real hardware are the most useful contribution right now.
+        **Remove personal data from logs first:** phone numbers, SIP user names and server addresses, and the handset's IPEI if you want to keep it private.
+  - type: input
+    id: box
+    attributes:
+      label: Box and OpenWrt version
+      placeholder: "FRITZ!Box 7520, OpenWrt 25.12.6"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: opendectcell version
+      placeholder: "0.3.5 (Status > DECT, or `apk list -I opendectcell`)"
+    validations:
+      required: true
+  - type: input
+    id: handset
+    attributes:
+      label: Handset (maker, model, firmware version if the handset shows it)
+    validations:
+      required: true
+  - type: checkboxes
+    id: tried
+    attributes:
+      label: What you tried
+      options:
+        - label: Registering
+        - label: Call in
+        - label: Call out
+        - label: HD voice (wideband)
+        - label: Caller ID / name display
+        - label: Calls between handsets
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log of that moment
+      description: "Status > DECT, tab Log (or `logread -e dect` on the box). Personal data removed."
+      render: text
