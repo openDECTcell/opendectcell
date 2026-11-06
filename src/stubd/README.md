@@ -10,17 +10,24 @@ radio switch, the park). In base mode (`-g`) it runs the registration
 window, the handsets and their calls and talks to the SIP side (baresip)
 over two local sockets. In cell mode (`-K`) it keeps no stack at all: every
 chip mail goes verbatim to `dect-cell` ([../cell/](../cell/README.md)) and
-the radio stays parked until the controller switches it on. Most of it
-is one file, `dect-stubd.c`, which is being split by region (cell mode is out; the map below still names it for the rest); the DECT layers themselves
-are in [../libopendectcell/](../libopendectcell/).
+the radio stays parked until the controller switches it on. The daemon is
+nine source files around one shared header (below); the DECT layers
+themselves are in [../libopendectcell/](../libopendectcell/).
 
 ## Files
 
 | File | What it is |
 |---|---|
-| `dect-stubd.c` | The daemon: transport, mail pump, host callbacks of `dect_base`, sockets, cell mode, option parsing, `main()`. Map below |
-| `stubd_cell.c` | Cell mode (`-K`): the socket to `dect-cell`, the chip's mails passed up and down, the controller's media sessions bound to chip lanes, `cell.json`. Moved out of `dect-stubd.c` with no change of code |
-| `stubd_internal.h` | What the files share: the structs (`struct stubd` and the rest), the constants, and the prototypes and variables that more than one file uses. What only one file uses stays `static` in it |
+| `dect-stubd.c` | The core: clock and signals, `handle_reg_mail()` (every chip mail enters the stack here), the main loop (`loop_tick()`, `run_loop()`, the park at the end of a run) and `main()` |
+| `stubd_link.c` | The link to the chip: which STUB build runs, the mail log and verification table, SSC realignment glue, sending mails, control-slot search, bring-up and tear-down |
+| `stubd_audio.c` | Speech: the lanes of a bridged call, the transmit block `tx_block()`, the audio socket |
+| `stubd_host.c` | The host of the base stack: the `dect_base` callbacks, the subscription store and the keys written into the chip, roaming fetch, stored capabilities, the park and its read-back |
+| `stubd_calls.c` | Calls: binding the chip's audio, connection status, the ring state machine, side links (second and third call), internal calls, deregistration, the library's call callbacks |
+| `stubd_handsets.c` | Handset data and state: the LED, `state.json`, the registration window, names, lines, contact and call lists, handset profiles |
+| `stubd_ctl.c` | The control socket and its commands, the bridge to the SIP side |
+| `stubd_cell.c` | Cell mode (`-K`): the socket to `dect-cell`, the chip's mails passed up and down, the controller's media sessions bound to chip lanes, `cell.json` |
+| `stubd_opts.c` | Options: the `-a` key list, `usage()`, profile loading, and the helper modes (`--ctl`, `--bridge-echo`, `--check-profile`) |
+| `stubd_internal.h` | What the files share: the structs (`struct stubd` and the rest), the constants, and the functions and variables that more than one file uses. What one file alone uses is `static` in it |
 | `ssc_align.c`, `ssc_align.h` | Bit and byte realignment for the 7412 / 7362 SL transports ("SSC": no frame sync, so the lanes start at an arbitrary bit). No I/O; tested by `tests/test_ssc_align.c` |
 
 Headers it needs come from `../libopendectcell/` (stack, mail framing, session,
@@ -74,39 +81,17 @@ under procd, after `load_chip()` has loaded the kernel module and run
   and line names are written by the init script to
   `/etc/opendectcell/handset<N>.override` and `.lines`.
 
-## Map of dect-stubd.c
+## Finding things
 
-Line numbers are those of this checkout and drift; the function names and
-the banner comments are the stable handles (`grep -n '^static .* name('`).
-The file reads roughly from the chip upward to the sockets, then the loop,
-then options and `main()`.
+`grep -n 'name(' src/stubd/*.c` finds a function. The files above are the map: a function
+that more than one file calls has its prototype in `stubd_internal.h`, under the heading
+naming the file that defines it. A new function goes into the file whose row fits it; one
+that another file needs gets its prototype there and loses `static`.
 
-| Lines | Region | Functions and what to find there |
-|---|---|---|
-| 1-335 | Header, constants, clock, signals | File comment, includes. `clock_is_trustworthy()`, `clock_now()` (is the box clock fit to be sent to handsets: `adjtimex` plus the NTP marker file `/var/run/opendectcell/time-valid`). `DECT_CTL_PATH`, park timing (`PARK_DRAIN_MS`, `PARK_FLUSH_MS`), the signal handlers `on_signal`, `on_usr1`, `on_usr2`, `on_hup`, `mono_ms()`. `#ifdef STUBD_TEST` hooks for the tests (`stubd_test_ms`, `stubd_test_run()`) |
-| 337-1150 | Data structures | `struct handset`, `struct side_link`, `struct xlane` (audio lane of a side link), `struct ab_lane` (speech lane on the audio socket), `struct stubd` (the whole daemon state, including `struct audio_cfg`, which holds what `-a` keys set) |
-| 1150-1240 | STUB build record | `DECT_RUN_DIR`, `stub_build_read()`: which second-stage firmware the chip runs, from `stub.second`; the chip RAM addresses used for key read-back belong to one build. `fopen_root_only()` (files only root may have written) |
-| 1240-1475 | Mail log and verification table | `log_mail()` (`-v`, `-p`), `verify_count()`, `verify_report()` (what we can and cannot check after a command) |
-| 1475-1733 | Transport glue, mail send | SSC (7412 / 7362 SL) alignment: `pcm_block_ok()`, `ssc_rx_fix()`, `ssc_watch()`, `pcm_write()`. `send_mail()` (queues mails for the control slot), `chip_mail()`, `chip_mem_read()` |
-| 1733-2220 | Speech lanes and transmit block | `ab_pop()`, `ab_up()`, `ab_down()`, `ab_frame()` (a bridged call's speech, frame by frame, G.722 or linear), `xlane_tx()`, `tx_templates()`, `lane0_play()`, `tx_block()` (builds each outgoing DMA block: pacing of control mails, idle fill, speech) |
-| 2221-2594 | Control-slot search and bring-up | `parse_mail_spec()` / `send_mail_spec()` (the `-M` and `latemail=` text form), `find_control_slot()` (probes every slot for the contact answer, transmit and receive separately), `ssc_measure()`, `ssc_flip()`, `ssc_bring_up()`, `bring_up()` (the six `DECT_IOC_PCM_STEP` steps on `/dev/dect0`, or the SSC info ioctl), `tear_down()` |
-| 2594-3400 | Host callbacks of dect_base | `gen_rand()` (kernel randomness only). The subscription store (`struct sub_record`, `sub_save()`, `sub_load()`, `hs_load()`). `base_ops` and the `base_*` callbacks (`base_save`, `base_send`, `base_install`, `base_event`, `base_pump`, `base_lanes`, `base_forget`, ...). Roaming fetch (`fetch_tick()`), stored capabilities (`cap_save()`, `cap_load()`), thin `*_tick()` wrappers around library timers, `send_subscription()` (writes the handset keys into the chip's slots) |
-| 3400-3540 | Park and park check | `PARK_RECORD`, `park_record()`, `park_check_start()`, `park_check_reply()`, `park_check_done()`: after the park mails, read the radio switch and beacon timer back (done for the 7412's 06.88 STUB, otherwise the mails on the wire count). `mem_reply()` |
-| 3540-4000 | Chip audio bind, debug reads, ring | `send_audio_bind()`, `send_audio_connect()`, `send_audio_disconnect()`, `remode_tick()`, `seq_tick()` (`-a seq=`), `mem_dump_tick()` (`-a memdump=`), connection-status polling (`send_conn_status_req()`, `report_conn_status()`), `ring_tick()` |
-| 4004-4245 | LED, state file | `led_open()`, `led_write()`, `led_tick()` (on while the radio is up, blinks on traffic). `state_write()` writes `state.json` at most once a second: stub build, radio, links, handsets. Field meanings: [../../docs/diagnostics.md](../../docs/diagnostics.md). `pump_lapc()` |
-| 4246-4780 | Registration window, handset data | `reg_window()`, `reg_window_tick()` (SIGUSR1 and the control socket's `register-window`), `base_link_up()`. Names, lines, contact list and call lists: `hs_name()`, `lines_load()`, `contacts_tick()`, `calls_tick()`, `name_load()`, `name_save()`. Handset profiles: `profile_resolve()`, `reg_profile_apply()`, `profiles_resolve_all()` ([../../docs/handset-profiles.md](../../docs/handset-profiles.md)) |
-| 4780-5105 | Side links, internal call, deregistration | `side_find()`, `xlane_*()` (audio lanes for the second and third call), `side_route()`, `side_call_tick()`, `ic_*()` (internal call), `base_forget()`, `dereg_start()` (SIGUSR2 reads `/var/run/opendectcell/deregister`), `dereg_tick()`, `time_tick()` |
-| 5105-5330 | Control socket | `ctl_drop()`, `ctl_send*()`, `ctl_hello()`, `ctl_hs()`, `bridge_call_out()`, `bridge_command()`, `bridge_tick()`. Banner comment at 5105. Protocol: [../../docs/bridge-interface.md](../../docs/bridge-interface.md) |
-| 5330-5570 | Audio socket | `ab_listen()`, `ab_open()`, `ab_hello()` (a connection names its call: `call=N codec=g722` or `rate=`), `ab_tick()`. Used by baresip and, in cell mode, by `dect-cell` |
-| 5569-5780 | Control commands and clients | `ctl_command()` (verbs: `register-window`, `reload-profiles`, plus `dect_base_ctl_admin()` and `bridge_command()`), `ctl_open()`, `ctl_close()`, `ctl_read()`, `ctl_tick()`, `ic_tick()` |
-| 5779-6020 | Call plumbing and library callbacks | `side_pump()`, `side_cipher_tick()`, `start_call_cipher()`, `base_registered()`, `base_call_up()`, `base_side_call()`, `base_call_down()`, `base_swapped()` |
-| 6020-6327 | Mail entry, starvation, capture | `handle_reg_mail()`: every mail from the chip enters the base stack here (with `-g`). `report_tx_starvation()`, `voice_slot_probe()`, `voice_capture()` (`-w`, `-V`) |
-| 6327-7050 | Cell mode (`-K`) | Banner comment at 6327. `cell_open()` (listens on `/var/run/opendectcell-cell.sock`), `cell_send()`, `cell_status()`, `cell_stats()`, `cell_snapshot()`, `cell_mail_up()` (every chip mail up as it came), `cell_mail_down()` (MAIL_DOWN to the chip), `cell_state()` (CELL_STATE: radio on and off, grace and orphan timers), `cell_media_open()`, `cell_media_close()`, `cell_media_tx()` (the controller's sessions bound to lanes), `cell_frame()` (dispatch on frame type), `cell_state_write()` (`cell.json`), `cell_tick()`, `rfpi_check()` |
-| 7054-7450 | Main loop | `loop_tick()` (all periodic work), `run_loop()`: reads PCM blocks, runs `tx_block()`, pulls mails, hands them to the session and `handle_reg_mail()` or `cell_mail_up()`, then `loop_tick()`. The park at the end of a run is done inside this loop; see below |
-| 7450-7892 | The `-a` option string | `audio_word_keys[]`, `parse_audio()`, `parse_chip_cipher()` (`-k`) |
-| 7893-8096 | Usage text | `usage()`: the authoritative list of options and `-a` keys |
-| 8097-8390 | Profile loading and helper modes | `profile_load()`; `ctl_client()` (`--ctl`), `bridge_echo()` (`--bridge-echo`), `check_profile()` (`--check-profile`) |
-| 8391-9138 | `main()` | Helper modes first (`--version`, `--ctl`, `--profile-keys`, `--bridge-echo`, `--check-profile`), defaults, `getopt` loop, auto bring-up mail list for `-g`, copy of options into `s.base.cfg`, handset stores, profiles, then `open(dev)`, `bring_up()`, control-slot search (three passes, twenty on the SSC transports), lane set-up, `run_loop()`, shutdown |
+The two timing-sensitive pieces are kept in the files that run every frame: `tx_block()`
+(`stubd_audio.c`) builds each outgoing block, and `run_loop()` (`dect-stubd.c`) reads the
+blocks and pumps the mails. The 7412's transport already loses frames at high rates, so
+do not move work into them or split them across more files without measuring.
 
 ### Park and stop
 
@@ -121,7 +106,7 @@ start, so the file always belongs to the current run.
 
 ## Options
 
-`dect-stubd [options]`; the full text is `usage()` (line 7893). Options are
+`dect-stubd [options]`; the full text is `usage()` (`stubd_opts.c`). Options are
 parsed by `getopt` with `"d:c:T:R:t:vpM:gKb:P:s:k:w:V:Ca:h"`.
 
 | Option | Meaning |
@@ -207,7 +192,7 @@ and key read-back uses a guessed address).
 
 ## Tests
 
-`dect-stubd.c` is compiled into the tests with `-DSTUBD_TEST`: `main()` hands
+The daemon's files are compiled into the tests as one unit (`tests/stubd_unit.h`) with `-DSTUBD_TEST`: `main()` hands
 its set-up state to `stubd_test_run()` where it would open the chip, each mail
 the daemon sends goes to `stubd_test_sent()`, and the clocks are the test's
 own (`stubd_test_ms`, `stubd_test_wall`). The history is in
@@ -221,8 +206,8 @@ own (`stubd_test_ms`, `stubd_test_wall`). The history is in
 | `tests/test_base.c`, `tests/test_trace.c` and the per-layer tests | The library underneath (`dect_base`, `dect_link`, layers) |
 
 Run them with `make check`; `make build/test_stubd` builds one. The sources
-used by the daemon and its tests are listed in `STUBD_SRC` in the top-level
-`Makefile`. `make cross` builds the ARM binary (plain `make` builds a PC
+used by the daemon and its tests are listed in `STUBD_C` and `STUBD_SRC` in the top-level
+`Makefile`; a new file of the daemon goes into both `STUBD_C` and `tests/stubd_unit.h`. `make cross` builds the ARM binary (plain `make` builds a PC
 build that compiles but only runs on a box). Several of the stack's
 behaviours (for instance the 7412's 06.88 specifics, or the park read-back)
 can only be shown on hardware; the golden traces do not cover the transport.

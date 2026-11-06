@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * dect-stubd -K, the cell side's media (opendectcell-controller
- * docs/cell-protocol.md §8, §14.2): dect-stubd.c compiled in with
+ * docs/cell-protocol.md §8, §14.2): the daemon's files (stubd_unit.h) compiled in with
  * STUBD_TEST as for tests/test_stubd.c, dect-cell played on a socket pair
  * and the audio socket, the chip by the mails cell_mail_up() takes, the TDM
  * by cell_media_tx() one frame at a time.

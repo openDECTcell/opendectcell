@@ -10,4 +10,11 @@
  * Add a new file of src/stubd/ here and to STUBD_C in the Makefile.
  */
 #include "../src/stubd/dect-stubd.c"
+#include "../src/stubd/stubd_link.c"
+#include "../src/stubd/stubd_audio.c"
+#include "../src/stubd/stubd_host.c"
+#include "../src/stubd/stubd_calls.c"
+#include "../src/stubd/stubd_handsets.c"
+#include "../src/stubd/stubd_ctl.c"
 #include "../src/stubd/stubd_cell.c"
+#include "../src/stubd/stubd_opts.c"

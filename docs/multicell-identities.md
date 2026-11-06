@@ -106,7 +106,7 @@ controller `docs/cell-protocol.md` §7.4, `docs/architecture.md` §8, `ROADMAP.m
 | what | where | state |
 |---|---|---|
 | RFPI on air | STUB patch TLV tag 1, 5 bytes, from the factory DECT block; placeholder "0270" replaced from the `maca` MAC (`stub-image-format.md` §4 step 5, `fwi_rfpi_from_maca()`) | set **only at chip upload** by `dect-fwload`; no override option exists. `mac-bringup.md` "RFPI / identity" assumes the STUB takes its identity from the patch and reports it |
-| RFPI in the host | `dect-stubd` copies it from mail `0xF601` (`dect-stubd.c`, `DECT_PRIM_CONTACT_ACK1`) into `mcfg.rfpi` | learned, never set |
+| RFPI in the host | `dect-stubd` copies it from mail `0xF601` (`dect-stubd.c` `handle_reg_mail()`, `DECT_PRIM_CONTACT_ACK1`) into `mcfg.rfpi` | learned, never set |
 | placeholder RFPI | class A (ARC 000), a fixed EMC, FPN = 17 low bits of the MAC, **RPN 0** | decoded from `fwi_rfpi_from_maca()` |
 | PARK in `<<FIXED-IDENTITY>>` | `dect_mm_fixed_identity()`: type 32 PARK, length 37 (PLI 36 + 1), the 5 RFPI bytes copied verbatim | copies the RPN bits (and the E bit) into the PARK's non-significant bits; fine for RPN 0 / E 0, see §7.4 |
 | LAL in `{LOCATE-ACCEPT}` | `dect_mm.c`: `0x40 | 36` for class A ("stock's value in every capture" [CR A-0127]); other classes echo the handset's | the whole PARI is one LA |

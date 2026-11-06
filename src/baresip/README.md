@@ -83,7 +83,7 @@ the bridge without SIP, `dect-stubd --bridge-echo` plays a stand-in client.
 
 | You want | Look at |
 |---|---|
-| The messages and who may send what | [../../docs/bridge-interface.md](../../docs/bridge-interface.md); `ctl_line()` here, `ctl_command()` and `bridge_command()` in `../stubd/dect-stubd.c` |
+| The messages and who may send what | [../../docs/bridge-interface.md](../../docs/bridge-interface.md); `ctl_line()` here, `ctl_command()` and `bridge_command()` in `../stubd/stubd_ctl.c` |
 | Lines, which handset rings for which account | `lines_load()`, `call_in()`; [../../docs/lines-and-calls.md](../../docs/lines-and-calls.md) |
 | Two calls at once, hold, call waiting | `struct bcall`, `call_hold()` use in `ctl_line()`; [../../docs/two-calls.md](../../docs/two-calls.md) |
 | The account and baresip config the box generates | `bs_line()`, `baresip_write()` in the init script; VoIP profile fields in [../../docs/luci-manual.md](../../docs/luci-manual.md) |

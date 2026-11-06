@@ -1124,6 +1124,25 @@ enum { STUB_UNKNOWN, STUB_0825, STUB_OTHER };
  */
 #define AB_SIGNAL 32	/* a sample above this (about -60 dBFS) counts as signal */
 
+/*
+ * What lane 0, the main link's call, carries towards the handset, in order
+ * of precedence:
+ *
+ *   BRIDGE  the bridge's speech (docs/bridge-interface.md §3);
+ *   PEER    an internal call's other party, its uplink word as it comes;
+ *   RAW     -a playraw: a verbatim TDM lane, two bytes every frame;
+ *   PLAY    -a play/playpcm: G.722, one coded word per two frames;
+ *   LOOP    -a loopback: the handset's own word, straight back -- the
+ *           lane carries the coded bearer, so this needs no encoder;
+ *   IDLE    the voice filler.
+ *
+ * A narrowband call's lane stays silent until the mode-2 re-assign has gone
+ * out: before it the chip is in mode 9, where linear PCM decodes as a burst
+ * of noise. None of the inputs changes within a block, so tx_block() asks
+ * once per block.
+ */
+enum lane0_src { L0_IDLE, L0_BRIDGE, L0_PEER, L0_RAW, L0_PLAY, L0_LOOP };
+
 #define SSC_N_DESC	16u	/* 64 ms of blocks queued for read() */
 
 
@@ -1140,6 +1159,37 @@ enum { STUB_UNKNOWN, STUB_0825, STUB_OTHER };
 #define SUB_MAGIC	0x44535531u	/* "DSU1" */
 
 #define SUB_MAGIC2	0x44535532u	/* "DSU2": adds the identities below */
+
+/* The original layout, so files written before version 2 still load. */
+struct sub_record_v1 {
+	uint32_t magic;
+	uint8_t  slot;
+	uint8_t  uak[DECT_MM_UAK_LEN];
+	uint8_t  port_id_len;
+	uint8_t  port_id[DECT_MM_PORTID_MAX];
+};
+
+/*
+ * Version 2 adds the two identity IEs an FP-originated SETUP must carry, so a
+ * call *to* the handset does not depend on the handset having called us first
+ * in this session. They are copied verbatim from a CC-SETUP the handset sent:
+ * their encodings (identity type, bit length, octet padding) are easy to get
+ * wrong and the handset puts the authoritative form on the wire.
+ *
+ * A version 1 file still loads; it simply has no identities, and they are
+ * learned and saved the first time the handset places a call.
+ */
+struct sub_record {
+	uint32_t magic;
+	uint8_t  slot;
+	uint8_t  uak[DECT_MM_UAK_LEN];
+	uint8_t  port_id_len;
+	uint8_t  port_id[DECT_MM_PORTID_MAX];
+	uint8_t  cc_port_id_len;
+	uint8_t  cc_port_id[DECT_CC_ID_MAX];
+	uint8_t  cc_fixed_id_len;
+	uint8_t  cc_fixed_id[DECT_CC_ID_MAX];
+};
 
 /*
  * The 7412's 06.88 STUB: what a park leaves in RAM [CR A-0009, A-0011]. The
@@ -1298,17 +1348,151 @@ enum { STUB_UNKNOWN, STUB_0825, STUB_OTHER };
 #define ECHO_DELAY	25u	/* 20 ms frames: 0.5 s */
 
 /* ---- defined in dect-stubd.c ---- */
+extern volatile sig_atomic_t stop;
+extern volatile sig_atomic_t want_register;
 extern uint64_t g_start;
+extern volatile sig_atomic_t want_deregister;
+extern volatile sig_atomic_t want_profiles;
+extern uint32_t sub_uak_base;
+void clock_any(struct dect_time *dt);
+int clock_now(uint8_t mode, struct dect_time *dt, long *off_s);
+void on_signal(int sig);
 uint64_t mono_ms(void);
+FILE *fopen_private(const char *path);
+
+/* ---- defined in stubd_link.c ---- */
+FILE *fopen_root_only(const char *path);
+int stub_build_read(char *name, size_t cap);
 void log_mail(const struct dect_mail *m, const char *dir, int show_params);
+void verify_report(const struct stubd *s);
+int pcm_block_ok(const struct stubd *s, const void *hdr);
+void ssc_rx_fix(struct stubd *s, uint8_t *fr, size_t len);
+void lanes_str(char *out, size_t cap, uint64_t mask);
+void ssc_watch(struct stubd *s, const uint8_t *raw, size_t len, uint64_t now);
+ssize_t pcm_write(struct stubd *s, const uint8_t *frames, size_t len, int burst);
 int send_mail(struct stubd *s, unsigned int tx_slot, const struct dect_mail *m);
 void chip_mail_to(struct stubd *s, uint8_t dst, uint16_t prim, const uint8_t *p, uint16_t n);
+void chip_mail(struct stubd *s, uint16_t prim, const uint8_t *p, uint16_t n);
+void chip_mem_read(struct stubd *s, uint32_t addr, uint16_t n);
+void chip_assign(struct stubd *s, uint8_t handle, uint8_t flags, uint16_t mask, uint8_t mode, uint8_t codec);
+int lane_word_live(uint32_t v);
+int parse_mail_spec(const char *spec, struct dect_mail *m);
+int send_mail_spec(struct stubd *s, const char *spec);
+int find_control_slot(struct stubd *s, unsigned int fpb);
+void ssc_flip(struct stubd *s);
+int bring_up(struct stubd *s, struct dect_pcm_config *cfg);
+void tear_down(struct stubd *s);
+
+/* ---- defined in stubd_audio.c ---- */
 void ab_frame(struct ab_lane *l, uint8_t *fr, unsigned int w, const uint8_t *src);
-void send_audio_disconnect(struct stubd *s, uint8_t handle);
-void json_str(FILE *f, const char *v);
+void tx_templates(const struct stubd *s, uint8_t *t);
+void tx_block(struct stubd *s, unsigned int fpb, uint8_t *frames, const uint8_t *rx);
+void ab_init(struct stubd *s);
+int sock_perms(const struct stubd *s, const char *path);
 void ab_listen(struct stubd *s);
+void ab_open(struct stubd *s);
 void ab_end(struct ab_lane *l, const char *why);
 void ab_close(struct stubd *s);
+void ab_tick(struct stubd *s, uint64_t now);
+
+/* ---- defined in stubd_host.c ---- */
+extern const struct dect_base_ops base_ops;
+uint8_t stubd_sub_slot(const struct stubd *s);
+void hs_load(struct stubd *s, unsigned i);
+int sub_load(struct stubd *s);
+void fetch_tick(struct stubd *s, uint64_t now);
+void cap_load(struct stubd *s, unsigned i);
+void cap_tick(struct stubd *s, struct dect_link *l);
+void lapc_failed_note(struct stubd *s, struct dect_link *l, const char *which);
+void nlr_tick(struct stubd *s, uint64_t now);
+void info_tick(struct stubd *s, uint64_t now);
+int call_auth_ok(const struct stubd *s, const struct dect_link *l);
+void dial_tick(struct stubd *s, uint64_t now);
+void connect_tick(struct stubd *s, uint64_t now);
+void holdback_tick(struct stubd *s, uint64_t now);
+int any_uak(const struct stubd *s);
+void send_subscription(struct stubd *s);
+void send_subscription_tail(struct stubd *s);
+void park_record(const char *how);
+int park_check_start(struct stubd *s, uint64_t now);
+int park_check_done(struct stubd *s, uint64_t now);
+void mem_reply(struct stubd *s, const struct dect_mail *m);
+
+/* ---- defined in stubd_calls.c ---- */
+void send_audio_disconnect(struct stubd *s, uint8_t handle);
+void send_audio_connect(struct stubd *s, uint8_t handle, uint8_t chan);
+void audio_connect_fallback(struct stubd *s, uint64_t now);
+void remode_tick(struct stubd *s, uint64_t now);
+void seq_tick(struct stubd *s, uint64_t now);
+void mem_dump_tick(struct stubd *s, uint64_t now);
+void send_conn_status_req(struct stubd *s, uint64_t now);
+void log_nwk_out(void *ctx, const uint8_t *msg, size_t len);
+uint8_t target_svc(const struct stubd *s, int i, uint8_t configured);
+void cs_connect_tick(struct stubd *s, uint64_t now);
+void ring_tick(struct stubd *s, uint64_t now);
+void report_conn_status(struct stubd *s, const struct dect_mail *m);
+struct side_link *side_find(struct stubd *s, uint8_t handle);
+void log_nwk_out_side(void *ctx, const uint8_t *msg, size_t len);
+int lanes_available(const struct stubd *s, const struct side_link *me);
+struct xlane *xlane_of(struct stubd *s, uint8_t handle);
+void xlane_connect(struct stubd *s, struct xlane *x);
+void xlane_release(struct stubd *s, struct side_link *sl);
+void side_call_tick(struct stubd *s, struct side_link *sl, uint64_t now);
+struct dect_cc *ic_cc(struct stubd *s, int side);
+int ic_active(const struct stubd *s, int p);
+void base_forget(void *ctx, unsigned i, const char *why);
+void base_mask(void *ctx);
+void dereg_tick(struct stubd *s, uint64_t now);
+void base_wall(void *ctx, struct dect_time *dt);
+int base_clock(void *ctx, struct dect_time *dt, long *off_s);
+void time_tick(struct stubd *s, uint64_t now, int radio_on);
+void ic_tick(struct stubd *s, uint64_t now);
+int ic_word(const struct stubd *s, int side);
+void side_pump(struct stubd *s, struct side_link *sl);
+void side_cipher_tick(struct stubd *s, struct side_link *sl, uint64_t now);
+void base_registered(void *ctx, uint64_t now);
+void base_call_up(void *ctx, uint64_t now);
+void base_side_call(void *ctx, unsigned k, uint64_t now);
+void base_call_down(void *ctx);
+void base_swapped(void *ctx, unsigned k);
+
+/* ---- defined in stubd_handsets.c ---- */
+extern struct dect_contacts stubd_contacts;
+extern struct dect_calls stubd_calls;
+void led_write(struct stubd *s, int on);
+void led_open(struct stubd *s);
+void led_tick(struct stubd *s, uint64_t now, int radio_on);
+void json_str(FILE *f, const char *v);
+void state_write(struct stubd *s, uint64_t now, int radio_on, int force);
+void pump_lapc(struct stubd *s);
+void reg_window(struct stubd *s, int open, unsigned secs, uint64_t now, const char *why);
+void reg_window_tick(struct stubd *s, uint64_t now);
+void base_link_up(void *ctx, int p);
+void base_side_down(void *ctx, unsigned k);
+unsigned hs_slot(const struct stubd *s, unsigned i);
+void hs_name(const struct stubd *s, unsigned i, char *buf, size_t cap);
+void name_path(const struct stubd *s, unsigned i, char *buf, size_t cap);
+void contacts_tick(struct stubd *s, uint64_t now);
+void calls_tick(uint64_t now, int force);
+void contacts_init(struct stubd *s);
+void name_load(struct stubd *s, unsigned i);
+void name_save(const struct stubd *s, unsigned i);
+void reg_profile_apply(struct stubd *s);
+int reg_profile_ok(const struct stubd *s, const char *id);
+void profiles_resolve_all(struct stubd *s, const char *why);
+void missed_changed_tick(struct stubd *s);
+void base_named(void *ctx, unsigned i);
+void names_tick(struct stubd *s);
+
+/* ---- defined in stubd_ctl.c ---- */
+void ctl_send_bridge(struct stubd *s, struct dect_ctl_out *o);
+void ctl_hs(struct stubd *s, unsigned i, const char *state);
+int bridge_call_out(struct stubd *s, int p, uint64_t now);
+struct dect_base_call *bc_active(struct stubd *s, int p);
+void bridge_tick(struct stubd *s, uint64_t now);
+void ctl_open(struct stubd *s);
+void ctl_close(struct stubd *s);
+void ctl_tick(struct stubd *s, uint64_t now);
 
 /* ---- defined in stubd_cell.c ---- */
 void cell_open(struct stubd *s);
@@ -1319,5 +1503,14 @@ void cell_mail_up(struct stubd *s, const struct dect_mail *m, uint64_t now);
 void cell_tick(struct stubd *s, uint64_t now);
 int cell_rfpi_note(struct stubd *s, const struct dect_mail *m);
 void rfpi_check(const struct stubd *s, const struct dect_mail *m);
+
+/* ---- defined in stubd_opts.c ---- */
+int parse_audio(struct audio_cfg *a, const char *spec);
+int parse_chip_cipher(struct chip_cipher *cc, const char *spec);
+void usage(void);
+int profile_load(const char *path, struct dect_profile *p);
+int ctl_client(int n, char **lines);
+int bridge_echo(int argc, char **argv);
+int check_profile(const char *path, const char *fw);
 
 #endif /* STUBD_INTERNAL_H */

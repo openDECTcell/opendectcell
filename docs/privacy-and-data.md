@@ -94,12 +94,12 @@ SIP addresses still appear in normal lines.
 ### 2.1 What a deregistration does
 
 Deregister on Network > DECT, Handsets (or a handset deregistering itself) runs `dect_base_dereg_begin` and then
-`dect_base_dereg_erase` in `src/libopendectcell/dect_base.c`, and `base_forget` in `src/stubd/dect-stubd.c`:
+`dect_base_dereg_erase` in `src/libopendectcell/dect_base.c`, and `base_forget` in `src/stubd/stubd_calls.c`:
 
 - The key is cleared **in the chip**: the daemon writes zeros to the chip's key slot and subscription slot.
 - The handset is dropped from the daemon's tables and the internal names list; its settings in memory are reset.
 - On flash, the subscription store and its `.name`, `.profile` and `.cap` files are **renamed** to `*.deregistered`,
-  not deleted, "so a mistake can be undone by moving them back" (comment in `dect-stubd.c`). The key stays on flash.
+  not deleted, "so a mistake can be undone by moving them back" (comment in `stubd_calls.c`). The key stays on flash.
 - The web page then runs `/etc/init.d/opendectcell forget N`, which deletes the handset's UCI section
   (`opendectcell.dectN`), the two generated files `handsetN.override` and `handsetN.lines`, and restarts the service if the
   handset had a line. The VoIP profiles it used stay, free (they hold SIP credentials).

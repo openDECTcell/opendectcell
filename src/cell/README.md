@@ -96,9 +96,9 @@ not need mbedTLS.
 | You want | Look at |
 |---|---|
 | The wire protocol itself | `docs/cell-protocol.md` in the opendectcell-controller repository; frame layouts in `../libopendectcell/dect_cell.h` |
-| The `-K` side of the relay | `cell_*()` in `../stubd/dect-stubd.c`; [../stubd/README.md](../stubd/README.md) |
+| The `-K` side of the relay | `cell_*()` in `../stubd/stubd_cell.c`; [../stubd/README.md](../stubd/README.md) |
 | How a cell is enrolled and started | `enroll()`, `run()`; `start_cell()`, `enroll()` and `cell_leave()` in `openwrt/net/opendectcell/files/opendectcell.init` |
 | Certificate checks and pinning | `verify_controller()`, `spki_pin()`, `creds_load()` |
-| Media and SRTP | `media_*()` in `dect-cell.c`, `dect_srtp.c`; the audio socket is `ab_*()` in `../stubd/dect-stubd.c` |
+| Media and SRTP | `media_*()` in `dect-cell.c`, `dect_srtp.c`; the audio socket is `ab_*()` in `../stubd/stubd_audio.c` |
 | Why the controller can host a cell's stack | [../../docs/hosting-dect-base.md](../../docs/hosting-dect-base.md), [../../docs/stack-in-library.md](../../docs/stack-in-library.md), [../../docs/notes-for-the-controller.md](../../docs/notes-for-the-controller.md) |
 | Identities (RFPI) for several cells | [../../docs/multicell-identities.md](../../docs/multicell-identities.md) |

@@ -26,7 +26,8 @@ XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 # dect-stubd: framing, session, the C-plane stack, and the A-law codec for the
 # transmit test tone (dect_audio.c pulls in libm).
 # The daemon's own files (src/stubd/README.md); the tests compile them into one unit (tests/stubd_unit.h).
-STUBD_C := src/stubd/dect-stubd.c src/stubd/stubd_cell.c
+STUBD_C := src/stubd/dect-stubd.c src/stubd/stubd_link.c src/stubd/stubd_audio.c src/stubd/stubd_host.c src/stubd/stubd_calls.c \
+	src/stubd/stubd_handsets.c src/stubd/stubd_ctl.c src/stubd/stubd_cell.c src/stubd/stubd_opts.c
 STUBD_H := src/stubd/stubd_internal.h src/stubd/ssc_align.h
 STUBD_SRC := $(STUBD_C) src/stubd/ssc_align.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
 	src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c \

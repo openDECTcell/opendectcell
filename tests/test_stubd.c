@@ -6,7 +6,7 @@
  * compared with what tests/stubd-traces/ holds. The stack is moving into
  * libopendectcell; these traces say whether the move changed anything.
  *
- * dect-stubd.c is compiled into this file with STUBD_TEST: main() hands
+ * The daemon's files (tests/stubd_unit.h) are compiled into this file with STUBD_TEST: main() hands
  * its fully set-up state to stubd_test_run() where it would open the chip,
  * send_mail() hands each mail to stubd_test_sent(), and the clocks are
  * ours. The handset side is played as in tests/test_trace.c: I-frames with

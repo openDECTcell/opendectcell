@@ -11,7 +11,7 @@
  * The radio half comes from the chip's 0xF625 answer to a 0xF624 poll, the
  * per-link row AVM's DECT Monitor displays. Its layout was settled from our
  * own corpus of 554 answers and from the clean room [CR A-0087..A-0090]; see
- * report_conn_status() in dect-stubd.c, which now calls this module. Offsets
+ * report_conn_status() in stubd_calls.c, which now calls this module. Offsets
  * are parameter-byte indices, i.e. the chip's answer[N+2] [CR A-0088].
  */
 #ifndef OPENDECTCELL_DECT_DIAG_H

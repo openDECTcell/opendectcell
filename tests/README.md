@@ -77,7 +77,7 @@ to the chip then shows up here even where no unit test asserts it.
 | Directory | Replayed by | Level | Actions | Expected output lines |
 |---|---|---|---|---|
 | `tests/traces/` (4 files) | `test_trace.c` | `dect_link`: Cs, Lc, LAPC, MM, CC | `hold`, `callstatus`, `pp`, `setup`, `release`, `tick` | `fp HEX`: each NWK message the base sends |
-| `tests/stubd-traces/` (16 files) | `test_stubd.c` | The whole of `dect-stubd` above the chip transport; `dect-stubd.c` is compiled in with `STUBD_TEST` | `sub`, `store`, `args`, `start`, `up`, `on`, `pp`, `down`, `chip`, `tick`, `ctl` | `fp HEX`, `mail PRIM HEX`, `ev LINE` |
+| `tests/stubd-traces/` (16 files) | `test_stubd.c` | The whole of `dect-stubd` above the chip transport; the daemon's files are compiled in (`stubd_unit.h`) with `STUBD_TEST` | `sub`, `store`, `args`, `start`, `up`, `on`, `pp`, `down`, `chip`, `tick`, `ctl` | `fp HEX`, `mail PRIM HEX`, `ev LINE` |
 
 The syntax of each is documented in the comment at the top of `test_trace.c`
 and `test_stubd.c`. In both, the handset side is played properly (LAPC

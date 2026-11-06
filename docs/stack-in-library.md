@@ -7,15 +7,15 @@ and the record of each stage.
 
 ## Where things are
 
-`dect-stubd.c` was 13,400 lines, the library's C files 10,800 (2026-10-30); since the move the daemon is about 9,100 lines and the library 16,800.
+`dect-stubd.c` was 13,400 lines, the library's C files 10,800 (2026-10-30); since the move the daemon is about 9,100 lines and the library 16,800. On 2026-11-06 the daemon's one file became nine (`src/stubd/`, map in its README), without a change of code.
 
 | Part | Where |
 |---|---|
 | Layers: Cs, Lc, LAPC, NWK, MM, CC, DSAA, IWU, CLIP, call info, time, lists | `src/libopendectcell/` |
 | Glue per link: `dect_link` (Cs + Lc + LAPC + MM + CC) | `dect_link.[ch]` |
-| Chip transport: PCM/SSC framing, control-slot search, bring-up, park | `dect-stubd.c` |
+| Chip transport: PCM/SSC framing, control-slot search, bring-up, park | `stubd_link.c`, `stubd_host.c` (the park) |
 | The stack above the links: registration window and slot writes, the subscription store, locate, side links, paging, calls in and out, internal calls, parallel calls, cipher, lists, MWI, date and time, CLIP, the missed call notification | `dect-stubd.c`, most of it |
-| Control socket, cell mode, profiles, LED, state file | `dect-stubd.c` |
+| Control socket, cell mode, profiles, LED, state file | `stubd_ctl.c`, `stubd_cell.c`, `stubd_handsets.c` |
 
 Mails enter the stack at `handle_reg_mail()` and leave through
 `send_mail()`. Everything between them is what moves.
