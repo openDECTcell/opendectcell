@@ -17,6 +17,7 @@ extra_command "enroll" "Make this box a cell of an openDECTcell controller: enro
 extra_command "enroll_start" "enroll in the background (what LuCI uses): enroll_start @<file with the string>; the outcome is in the status file, the time limit is 90 seconds"
 extra_command "ui_dir" "Make the root-only directory LuCI hands files to this service over in"
 extra_command "cell_leave" "Leave cell mode: erase the cell's credentials and run the base again"
+extra_command "cell_leave_start" "cell_leave with the restart in the background (what LuCI uses: a call to the box ends after 20 to 30 seconds)"
 
 PROG=/usr/sbin/dect-stubd
 CELL=/usr/sbin/dect-cell
@@ -965,11 +966,25 @@ enroll_start() {
 	return 0
 }
 
-cell_leave() {
+# The credentials and the role; the restart that makes it true is the caller's.
+cell_leave_config() {
 	[ -x "$CELL" ] && "$CELL" forget
 	uci -q set opendectcell.main.role=base && uci -q commit opendectcell
 	log "cell mode left: the base runs with the handsets it had"
 	# a chip patched with the system's identity goes back to the factory one
 	rm -f /var/run/opendectcell/stub.second
+}
+
+cell_leave() {
+	cell_leave_config
 	restart
+}
+
+# What LuCI uses. The service restart alone can take 15 seconds and LuCI's call to the box ends after 20 to 30 (the same reason
+# as enroll_start), so the page's click found no answer and never reloaded (found on the 7520, 2026-11-06). The credentials and
+# the role are changed before this returns; the restart follows on its own.
+cell_leave_start() {
+	cell_leave_config
+	( restart ) </dev/null >/dev/null 2>&1 &
+	return 0
 }

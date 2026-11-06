@@ -471,12 +471,20 @@ function leaveDialog() {
 				'class': 'btn cbi-button-negative',
 				'click': function() {
 					ui.hideModal();
-					return fs.exec(INIT, [ 'cell_leave' ]).then(function(r) {
-						if (r.code != 0)
+					/* the restart takes longer than a call to the box may last, so it runs on its own and the page waits */
+					return fs.exec(INIT, [ 'cell_leave_start' ]).then(function(r) {
+						if (r.code != 0) {
 							ui.addNotification(null, E('p', {}, [ _('Could not leave cell mode: %s').format(
 								(r.stderr || String(r.code)).trim()) ]), 'warning');
-						else
-							reloadSoon();
+							return;
+						}
+						ui.showModal(_('Leaving cell mode'), [
+							E('p', { 'class': 'spinning' }, _('The base restarts as a DECT base. The page reloads when it is back.'))
+						]);
+						window.setTimeout(function() { location.reload(); }, 20000);
+					}).catch(function(e) {
+						ui.hideModal();
+						ui.addNotification(null, E('p', {}, [ _('Could not leave cell mode: %s').format(e.message || String(e)) ]), 'warning');
 					});
 				}
 			}, _('Leave cell mode'))

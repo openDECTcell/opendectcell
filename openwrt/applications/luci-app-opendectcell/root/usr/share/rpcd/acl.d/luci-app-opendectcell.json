@@ -48,6 +48,7 @@
 				"/var/run/opendectcell-ui/opendectcell-enroll.*": [ "write" ],
 				"/tmp/run/opendectcell-ui/opendectcell-enroll.*": [ "write" ],
 				"/etc/init.d/opendectcell cell_leave": [ "exec" ],
+				"/etc/init.d/opendectcell cell_leave_start": [ "exec" ],
 				"/var/run/opendectcell-ui/opendectcell-carddav-discover.json": [ "write" ],
 				"/tmp/run/opendectcell-ui/opendectcell-carddav-discover.json": [ "write" ],
 				"/usr/share/opendectcell/carddav.uc discover /var/run/opendectcell-ui/opendectcell-carddav-discover.json": [ "exec" ],
