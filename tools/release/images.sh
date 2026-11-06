@@ -5,7 +5,7 @@
 # official ImageBuilder, from the .apk files tools/release/build.sh made:
 #
 #   tools/release/images.sh ipq40xx/generic APKDIR OUTDIR   # FRITZ!Box 7520/7530
-#   tools/release/images.sh lantiq/xrx200 APKDIR OUTDIR     # FRITZ!Box 7412
+#   tools/release/images.sh lantiq/xrx200 APKDIR OUTDIR     # FRITZ!Box 7412 and 7362 SL (two images)
 #
 # OPENWRT picks the release (default: tools/release/OPENWRT_VERSION); it must be the one APKDIR's packages were built
 # against (the kernel module only fits that kernel). The ImageBuilder is
@@ -67,7 +67,18 @@ files=$work/files
 mkdir -p "$files/etc/apk/keys"
 cp "$root/openwrt/opendectcell-signing-key.pem" "$files/etc/apk/keys/"
 
-(cd "$ib" && make image PROFILE="$profile" PACKAGES="$pkgs" FILES="$files")
+# One image per board of the target. The lantiq target has two: the 7412, and the 7362 SL when the build made its meta package
+# (it brings the board profile and, with the two transports, the PCM bus and the firmware-load UART).
+profiles=$profile
+case $target in
+lantiq/*)
+	ls "$apks"/opendectcell-fritz7362sl-*.apk >/dev/null 2>&1 && profiles="$profiles avm_fritz7362sl" ;;
+esac
+for p in $profiles; do
+	ppk=$pkgs
+	[ "$p" = avm_fritz7362sl ] && ppk="$pkgs opendectcell-fritz7362sl kmod-lantiq-tdm-pcm kmod-lantiq-usif-uart"
+	(cd "$ib" && make image PROFILE="$p" PACKAGES="$ppk" FILES="$files")
+done
 
 bin=$ib/bin/targets/$target
 cp "$bin"/*sysupgrade* "$bin"/*.manifest "$out/"

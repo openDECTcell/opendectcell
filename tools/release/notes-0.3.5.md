@@ -9,7 +9,7 @@ What is new since 0.3.4:
 - **Motorola O201:** a device profile (`motorola-o201`, basic service 0x80) lets it ring and play audio both ways. For handsets that
   need the progress indication inside the call message there is the key `cc.progress_in_band` (API 159). The reason a handset gives
   when it releases a call is kept and named in the log (API 158). Details: docs/vendor-specific-support.md §7.
-- **FRITZ!Box 7362 SL:** runs as a cell of a controller (calls in and out seen on the air). The firmware-load UART's device node is
+- **FRITZ!Box 7362 SL:** runs as a cell of a controller (calls in and out seen on the air; a ready-made image is in the release). The firmware-load UART's device node is
   awaited after its module loads; frames in the first seconds after start are still dropped.
 - **LuCI: "Leave cell mode" reloads the page.** The restart took longer than LuCI's call to the box may last, so the click found no
   answer; the restart now runs in the background. (Not yet tried on a box when this was written.)
@@ -28,7 +28,8 @@ Known limits: the cell announces **three** voice channels for every box. The 752
   Open defect: in about 4 of 190 service stops (2026-10-30/31) the box's network died; 640 stops since could not
   reproduce it (docs/7412-stop-hang.md). A box that hangs needs a power cycle.
 - **FRITZ!Box 7362 SL:** the same lantiq packages plus `opendectcell-fritz7362sl`, `kmod-lantiq-tdm-pcm` (commit `4450891`) and
-  `kmod-lantiq-usif-uart` (commit `f359106`). It has no image of its own: install the packages on OpenWrt {OPENWRT}.
+  `kmod-lantiq-usif-uart` (commit `f359106`); image `openwrt-{OPENWRT}-lantiq-xrx200-avm_fritz7362sl-squashfs-sysupgrade.bin`
+  (added to the release after it was first published; not flashed on a box yet).
 - **All:** `luci-app-opendectcell` (web pages), `opendectcell-baresip` (SIP lines, standalone mode), `opendectcell-carddav`.
 
 The DECT chip firmware is not included and never will be: each user extracts it from an official FRITZ!OS image

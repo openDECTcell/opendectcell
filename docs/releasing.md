@@ -1,7 +1,7 @@
 # Making a release
 
 How an openDECTcell release is built and published. A release has the OpenWrt packages for the 7520/7530 (`ipq40xx`)
-and the 7412 (`lantiq`), a flashable image for each with the packages inside, a checksum file and release notes.
+and the 7412 and 7362 SL (`lantiq`), a flashable image for each of the three with the packages inside, a checksum file and release notes.
 
 ## One OpenWrt version per release
 
