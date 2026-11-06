@@ -1,8 +1,8 @@
 # What works, and what doesn't yet
 
-The state of openDECTcell **0.3.4** (a pre-release; November 2026), tested on a FRITZ!Box 7520 (OpenWrt 25.12.5)
+The state of openDECTcell **0.3.5** (a pre-release; November 2026), tested on a FRITZ!Box 7520 (OpenWrt 25.12.5)
 and a FRITZ!Box 7412 (25.12.6). "Tested" means seen working on real hardware with real handsets, not only in the
-unit tests. The 0.3.4 images and packages themselves (OpenWrt 25.12.6) are built but not yet flashed on a box.
+unit tests. The 0.3.5 packages (OpenWrt 25.12.6) run on the lab 7520 and the 7412; the images are built but not yet flashed on a box.
 Per feature, what is only unit-tested or only built is marked 🟡. The dated bench results are in
 [journals/bench-status-2026-11-02.md](journals/bench-status-2026-11-02.md).
 

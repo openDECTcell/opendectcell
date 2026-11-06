@@ -18,6 +18,11 @@
   ([docs/handset-variation-catalog.md](docs/handset-variation-catalog.md)), then the DECT Command Finder in tiers: a frame
   decoder, a `probe` verb and a support bundle first, a guided fitter and a LuCI page only when a second handset needs
   them ([docs/vendor-specific-support.md](docs/vendor-specific-support.md) §7.8).
+- **Five calls at once on the 7520 (planned, November 2026):** the 08.25 chip has five voice channel chains (the room's A-0141; the 7412's
+  06.88 and 07.56 have three) and the cell announces three for every build. Needed first: the TDM words of channels 4 and 5 on 08.25
+  (a question for the room), then lanes 4 and 5 in `dect-stubd` (a bearer each, `0x0230`/`0x0242` for channels 4 and 5) behind an option,
+  a bench run on the spare 7520, and only then the count announced per build (5 on 08.25, 3 elsewhere). Details:
+  [docs/more-than-six.md](docs/more-than-six.md) (A-0141), [docs/two-calls.md](docs/two-calls.md).
 - **Then:** call lists and the phonebook on the handset (M9b, optional),
   the FRITZ!Box 7412 as a release target (section Later), the multi-cell
   controller (M10, M11).
