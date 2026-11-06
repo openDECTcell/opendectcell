@@ -46,7 +46,7 @@
  *   build/test_stubd [TRACE...]     (default: every tests/stubd-traces/ *.trace)
  */
 #define main stubd_main
-#include "../src/stubd/dect-stubd.c"
+#include "stubd_unit.h"
 #undef main
 
 #include <ctype.h>

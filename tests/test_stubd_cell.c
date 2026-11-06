@@ -14,7 +14,7 @@
  * release closing a session with MEDIA_CLOSED reason 1.
  */
 #define main stubd_main
-#include "../src/stubd/dect-stubd.c"
+#include "stubd_unit.h"
 #undef main
 
 #include "check.h"

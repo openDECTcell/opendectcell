@@ -10,8 +10,8 @@ radio switch, the park). In base mode (`-g`) it runs the registration
 window, the handsets and their calls and talks to the SIP side (baresip)
 over two local sockets. In cell mode (`-K`) it keeps no stack at all: every
 chip mail goes verbatim to `dect-cell` ([../cell/](../cell/README.md)) and
-the radio stays parked until the controller switches it on. Almost all of it
-is one file, `dect-stubd.c` (about 9,100 lines); the DECT layers themselves
+the radio stays parked until the controller switches it on. Most of it
+is one file, `dect-stubd.c`, which is being split by region (cell mode is out; the map below still names it for the rest); the DECT layers themselves
 are in [../libopendectcell/](../libopendectcell/).
 
 ## Files
@@ -19,6 +19,8 @@ are in [../libopendectcell/](../libopendectcell/).
 | File | What it is |
 |---|---|
 | `dect-stubd.c` | The daemon: transport, mail pump, host callbacks of `dect_base`, sockets, cell mode, option parsing, `main()`. Map below |
+| `stubd_cell.c` | Cell mode (`-K`): the socket to `dect-cell`, the chip's mails passed up and down, the controller's media sessions bound to chip lanes, `cell.json`. Moved out of `dect-stubd.c` with no change of code |
+| `stubd_internal.h` | What the files share: the structs (`struct stubd` and the rest), the constants, and the prototypes and variables that more than one file uses. What only one file uses stays `static` in it |
 | `ssc_align.c`, `ssc_align.h` | Bit and byte realignment for the 7412 / 7362 SL transports ("SSC": no frame sync, so the lanes start at an arbitrary bit). No I/O; tested by `tests/test_ssc_align.c` |
 
 Headers it needs come from `../libopendectcell/` (stack, mail framing, session,

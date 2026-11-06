@@ -25,7 +25,10 @@ XCC     := $(TCBIN)/arm-openwrt-linux-gcc
 
 # dect-stubd: framing, session, the C-plane stack, and the A-law codec for the
 # transmit test tone (dect_audio.c pulls in libm).
-STUBD_SRC := src/stubd/dect-stubd.c src/stubd/ssc_align.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
+# The daemon's own files (src/stubd/README.md); the tests compile them into one unit (tests/stubd_unit.h).
+STUBD_C := src/stubd/dect-stubd.c src/stubd/stubd_cell.c
+STUBD_H := src/stubd/stubd_internal.h src/stubd/ssc_align.h
+STUBD_SRC := $(STUBD_C) src/stubd/ssc_align.c src/libopendectcell/dect_mail.c src/libopendectcell/dect_session.c \
 	src/libopendectcell/dect_cs.c src/libopendectcell/dect_lc.c src/libopendectcell/dect_lapc.c \
 	src/libopendectcell/dect_nwk.c src/libopendectcell/dect_dsaa.c src/libopendectcell/dect_mm.c src/libopendectcell/dect_cc.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c \
 	src/libopendectcell/dect_clip.c src/libopendectcell/dect_callinfo.c src/libopendectcell/dect_audio.c \
@@ -53,7 +56,7 @@ $(BUILD)/dect-maildump: src/tools/dect-maildump.c src/libopendectcell/dect_mail.
 	$(CC) $(CFLAGS) -Isrc/libopendectcell -o $@ src/tools/dect-maildump.c src/libopendectcell/dect_mail.c
 
 # Host build of dect-stubd: compiles everywhere, runs only on the box.
-$(BUILD)/dect-stubd: $(STUBD_SRC) src/stubd/ssc_align.h src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
+$(BUILD)/dect-stubd: $(STUBD_SRC) $(STUBD_H) src/libopendectcell/dect_mail.h src/libopendectcell/dect_session.h src/libopendectcell/dect_proto.h kernel/include/uapi/opendectcell.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(DEFS) $(LDFLAGS) $(STUBD_INC) -o $@ $(STUBD_SRC) -lm
 
@@ -116,20 +119,20 @@ $(BUILD)/test_iwu: tests/test_iwu.c src/libopendectcell/dect_iwu.c src/libopende
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SAN) -o $@ tests/test_iwu.c src/libopendectcell/dect_iwu.c src/libopendectcell/dect_contacts.c src/libopendectcell/dect_calls.c src/libopendectcell/dect_time.c src/libopendectcell/dect_nwk.c
 
-# Daemon-level golden traces: dect-stubd.c compiled in with STUBD_TEST
+# Daemon-level golden traces: the daemon's files compiled in with STUBD_TEST
 # (docs/stack-in-library.md, stage S0); its files go to build/stubd-test-run.
-$(BUILD)/test_stubd: tests/test_stubd.c $(STUBD_SRC) src/stubd/ssc_align.h tests/check.h $(wildcard tests/stubd-traces/*.trace)
+$(BUILD)/test_stubd: tests/test_stubd.c tests/stubd_unit.h $(STUBD_SRC) $(STUBD_H) tests/check.h $(wildcard tests/stubd-traces/*.trace)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(DEFS) $(SAN) $(STUBD_INC) -DSTUBD_TEST -DDECT_RUN_DIR='"$(BUILD)/stubd-test-run"' \
 		-DAB_PATH='"$(BUILD)/stubd-test-run/audio.sock"' \
-		-o $@ tests/test_stubd.c $(filter-out src/stubd/dect-stubd.c,$(STUBD_SRC)) -lm
+		-o $@ tests/test_stubd.c $(filter-out $(STUBD_C),$(STUBD_SRC)) -lm
 
 # The cell side's media (dect-stubd -K, cell-protocol.md §8), the same way
-$(BUILD)/test_stubd_cell: tests/test_stubd_cell.c $(STUBD_SRC) src/stubd/ssc_align.h tests/check.h
+$(BUILD)/test_stubd_cell: tests/test_stubd_cell.c tests/stubd_unit.h $(STUBD_SRC) $(STUBD_H) tests/check.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(DEFS) $(SAN) $(STUBD_INC) -DSTUBD_TEST -DDECT_RUN_DIR='"$(BUILD)/stubd-cell-run"' \
 		-DAB_PATH='"$(BUILD)/stubd-cell-run/audio.sock"' \
-		-o $@ tests/test_stubd_cell.c $(filter-out src/stubd/dect-stubd.c,$(STUBD_SRC)) -lm
+		-o $@ tests/test_stubd_cell.c $(filter-out $(STUBD_C),$(STUBD_SRC)) -lm
 
 $(BUILD)/test_base: tests/test_base.c $(filter src/libopendectcell/%,$(STUBD_SRC)) src/libopendectcell/dect_base.h tests/check.h
 	@mkdir -p $(BUILD)
