@@ -87,4 +87,4 @@ show where each layer lives.
 | **Golden trace** | A recorded exchange of mails between host and chip that the tests replay against the library and compare, line by line ([../tests/README.md](../tests/README.md)). |
 | **API version** | The number in `dect_proto.h` that changes whenever the library's public interface does; every change is described in [api-versions.md](api-versions.md). |
 | **Controller** | The separate project (`opendectcell-controller`) that runs many cells as one DECT system, with one web interface and database. |
-| **Evidence labels** | `[observed]`, `[derived statically]`, `[CR A-NNNN]`, *assumed*: how sure a statement in the documents is ([README.md](README.md#labels-used-in-the-documents)). |
+| **Evidence labels** | `[observed]`, `[analysed]`, `[CR A-NNNN]`, *assumed*: how sure a statement in the documents is ([README.md](README.md#labels-used-in-the-documents)). |

@@ -102,6 +102,6 @@ Many statements carry a label saying how we know them:
 | Label | Meaning |
 |---|---|
 | `[observed]`, `[observed on hardware]` | Seen on a real box or handset |
-| `[derived statically]` | Worked out from analysing files, not yet seen running |
+| `[analysed]` | Worked out by interoperability analysis of the hardware, not yet seen running |
 | `[CR A-NNNN]` | A fact from the clean-room process: answer NNNN, given by a separate analysis that is not part of this repository |
 | *assumed*, `[inferred]` | Our reasoning, not yet checked |

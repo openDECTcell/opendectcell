@@ -6,6 +6,11 @@ A's 7 cells, GAP table 51 on IPUI type N, -3 6.2.2.1.1 on synchronisation)
 were checked against the PDFs afterwards. Standards side only. Nothing here
 was measured; chip facts are listed as questions (§10), not answered.
 
+> **Made-up identities are test values.** The EIC and ARI values this project generates for class B multi-cell setups
+> are private test values; they are **not allocated by ETSI**. They can collide with a real installation and the resulting
+> network is not conformant on identity. Obtain an EIC (manufacturer code) from ETSI before any deployment outside the lab
+> or a small group of friends, such as a makerspace.
+
 **Sources on disk** (`opendectcell/docs/specs/`, extracted with `pdftotext -layout`):
 
 | short | document |

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 name: Handset or box report
 description: Which handsets and boxes work with opendectcell, and which do not
 title: "[handset] <maker> <model> on <box>"
@@ -7,7 +8,7 @@ body:
     attributes:
       value: |
         Reports from real hardware are the most useful contribution right now.
-        **Remove personal data from logs first:** phone numbers, SIP user names and server addresses, and the handset's IPEI if you want to keep it private.
+        **Remove personal data from logs first:** phone numbers, SIP user names and server addresses, and the handset's IPEI if you want to keep it private. **Never attach firmware images, configuration backups or captures with real identities.**
   - type: input
     id: box
     attributes:

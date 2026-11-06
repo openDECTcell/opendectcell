@@ -29,7 +29,7 @@ EXTRA=clip=0301234567,cnip=Wednesday,cnipalpha=0,infoie=2811020a1a91020209576564
 |---|---|
 | "Wednesday" in the first ring | the name has to come as display text; plain text is enough |
 | "Wednesday" only in the second | it needs the Gigaset's display framing: a Gigaset profile entry |
-| the number only, both times | the name comes some other way still; the agent asks the the hardware-analysis step |
+| the number only, both times | the name comes some other way still; the agent asks the analysis side |
 
 If the C430A shows the name, repeat the same ring on the **AS690H**
 (`./ringone.sh as690h`).
@@ -628,7 +628,7 @@ service display.
 
 ## Results, 2026-10-28 evening, at home `[observed on hardware]`
 
-The box on the the local network (192.168.1.1), Line 1 of DECT 1 as an IP phone of
+The box on the local network (192.168.1.1), Line 1 of DECT 1 as an IP phone of
 the a FRITZ!Box.
 
 | card | result |

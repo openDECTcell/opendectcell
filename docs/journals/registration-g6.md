@@ -138,7 +138,7 @@ identity (IPUI, tag, RFPI) is redacted and must never be committed.
 
 ## AVM host-side MM facts to match (from A-0011/A-0012/A-0014) — not yet coded
 
-These are host-driver (`avm_dect.ko`) facts to align our `dect_mm` with. All are
+These are host-driver (the vendor's host driver) facts to align our `dect_mm` with. All are
 clean-room answers; cite `[CR A-00NN]`. No identity bytes here.
 
 **Choosing KEY-ALLOCATE vs AUTHENTICATION-REQUEST.** On ACCESS-RIGHTS-REQUEST
@@ -276,7 +276,7 @@ CAT-iq we implement naming and clock-setting from specifications we already
 cite; if it is genuinely proprietary we have a format to decode and a harder
 interoperability question. ~~**Do not build either feature until this is
 settled.**~~ **Settled 2026-10-22 -- see the next section; the hold is
-lifted.** The raw capture is archived in the the hardware-analysis step, so settling it needed no
+lifted.** The raw capture is archived in the analysis side, so settling it needed no
 hardware.
 
 Also present in that capture and archived: the idle beacon, the paging that
@@ -391,7 +391,7 @@ fact to document, not to hide.
 
 **Work this unblocks:** naming and clock-setting are now ordinary
 implementation -- build the IE, fill a BCD payload. No further capture needed.
-The the hardware-analysis step holds the raw frames if a conformance test wants exact byte
+The the analysis side holds the raw frames if a conformance test wants exact byte
 windows.
 
 #### EMC ownership and the trigger, answered (`[CR A-StockTrace-4 §4a]`, 2026-10-22)

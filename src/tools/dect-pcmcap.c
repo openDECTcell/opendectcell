@@ -77,7 +77,7 @@ static void usage(void)
 		"           -m to send several in order (e.g. contact then connect)\n"
 		"  -A       per-slot tone analysis (A-law low byte: RMS and frequency)\n"
 		"  -G SLOT:FREQ  transmit an A-law sine of FREQ Hz in SLOT while\n"
-		"           capturing (for the dect_loop loopback test; implies -T)\n"
+		"           capturing (for the loopback test; implies -T)\n"
 		"  -p       show decoded mail parameter bytes (may hold identity data)\n"
 		"  -l SLOT  control slot for -m and the mail decoder (default 1)\n"
 		"  -P HEX   transmit frame template, slots*2 bytes in DMA-buffer\n"
@@ -595,7 +595,7 @@ static int send_mail(int fd, const char *spec, unsigned int slots,
 
 /*
  * Child process that transmits a continuous A-law sine of `freq` Hz in one
- * voice slot (low byte), idle elsewhere, for the dect_loop loopback test.
+ * voice slot (low byte), idle elsewhere, for the loopback test.
  * The parent captures and kills it when done.
  */
 static pid_t spawn_tone(int fd, unsigned int slots, unsigned int slot,

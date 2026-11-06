@@ -174,7 +174,7 @@ var CALL = {
 
 var CODEC = { 2: _('G.726, narrowband'), 3: _('G.722, wideband (HD)') };
 
-/* the counters' names as FRITZ!OS's the vendor's DECT application has them [CR A-0123] */
+/* the counters' names as FRITZ!OS's DECT application has them [CR A-0123] */
 var EVENTS = [
 	[ 'acrc', _('A-field CRC errors') ],
 	[ 'xcrc', _('X-field CRC errors') ],

@@ -78,7 +78,7 @@ Rule: **a call whose key could not be loaded is refused**, never made
 unciphered.
 
 Not changed by this: concurrent calls stay at about three or four voice
-channels per chip (`DECT=4` in the host's `PCM-link` [CR A-0013 F6]). More
+channels per chip (`DECT=4` in the host's PCM-link channel table [CR A-0013 F6]). More
 stand-by handsets do not buy more simultaneous calls; that is what more
 cells are for.
 

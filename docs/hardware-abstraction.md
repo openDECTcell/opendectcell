@@ -13,7 +13,7 @@ openDECTcell must run on several FRITZ!Box models without per-model builds, and 
 
 ## 2. How the models differ
 
-The differences fall into three kinds. Values are from the model analyses in `docs/models/` (*derived statically*).
+The differences fall into three kinds. Values are from the model analyses in `docs/models/` (*analysed*).
 
 | Kind | 7412 | 7362 SL | 7520 / 7530 | Handled by |
 |---|---|---|---|---|

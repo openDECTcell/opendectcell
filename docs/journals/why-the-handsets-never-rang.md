@@ -254,7 +254,7 @@ eliminated for this handset.
 ### We were running a different chip firmware than the reference capture
 
 `[observed]` `fwload.sh` defaulted to the **08.25** second-stage STUB; the
-stock capture and every address the the hardware-analysis step derived are **07.56**
+stock capture and every address the analysis side derived are **07.56**
 (`[CR A-0109]`: different dispatcher, different config base, "entirely
 different addresses"). So every stock-vs-ours RAM comparison made before this
 was cross-build, including "`0x96ad` is all zeros on our base".

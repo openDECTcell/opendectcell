@@ -3,7 +3,7 @@
 Status: research complete 2026-10-17. This document is the **only input** needed to write Phase B of `kernel/opendectcell_ipq40xx.c` (the PCM receive path to the DECT chip on the FRITZ!Box 7520/7530). It is written in our own words; no vendor code is reproduced.
 
 **Sources and tags** (AGENTS.md §2):
-- **[AVM]** *derived statically* from AVM's **published GPL source** for FRITZ!OS 08.25 on the 7520 (`osp.avm.de/fritzbox/fritzbox-7520/source-files-FRITZ.Box_7520-cortexa9-08.25.tar.gz`, kernel tree `sources/kernel/linux`). Function names are given for traceability (mostly `sound/soc/qcom/ipq/ipq-adss-avm.c`). This is the code that runs this DECT chip in stock FRITZ!OS, in **TDM slave mode**.
+- **[AVM]** *analysed* from AVM's **published GPL source** for FRITZ!OS 08.25 on the 7520 (`osp.avm.de/fritzbox/fritzbox-7520/source-files-FRITZ.Box_7520-cortexa9-08.25.tar.gz`, kernel tree `sources/kernel/linux`). Function names are given for traceability (mostly `sound/soc/qcom/ipq/ipq-adss-avm.c`). This is the code that runs this DECT chip in stock FRITZ!OS, in **TDM slave mode**.
 - **[QC]** Qualcomm code in the same tree (`ipq-adss.h`, `ipq-mbox.h`, `drivers/clk/qcom/adcc-ipq4019.c`, `qcom-ipq4019-audio.dtsi`).
 - **[ML]** mainline Linux v6.12.94. **[OBS]** *observed on hardware* (spare 7520, OpenWrt 25.12.5, 2026-10-17).
 
@@ -252,7 +252,7 @@ So the A-law sample sits in the low byte of the 16-bit slot word, and buffer slo
 
 ## 14. Transmit side (MBOX0 / STEREO0) [CR A-0002]
 
-*Derived statically* by the the hardware-analysis step from AVM's GPL source (FRITZ!OS 08.25, 7520: `ipq-adss-avm.c`, `ipq-mbox.h`, `qcom-ipq4019-audio.dtsi`, the HW247 board table, `avm_gpio.c`). Transmit = MBOX0 `0x07708000` (GIC SPI 156) + STEREO0 `0x07709000`.
+*Analysed* by the analysis side from AVM's GPL source (FRITZ!OS 08.25, 7520: `ipq-adss-avm.c`, `ipq-mbox.h`, `qcom-ipq4019-audio.dtsi`, the HW247 board table, `avm_gpio.c`). Transmit = MBOX0 `0x07708000` (GIC SPI 156) + STEREO0 `0x07709000`.
 
 **Registers.** The naming trap again, the other way round: transmit uses the MBOX **RX** registers.
 

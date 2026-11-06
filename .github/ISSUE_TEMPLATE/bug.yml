@@ -1,7 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 name: Bug
 description: Something in opendectcell does not work as documented
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never attach firmware images, configuration backups or captures with real identities** (IPEI, IPUI, keys, PINs, phone numbers, SIP credentials) to an issue; mask them.
   - type: input
     id: version
     attributes:

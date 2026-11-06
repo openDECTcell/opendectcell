@@ -22,6 +22,9 @@ A handset that needs special treatment can get a profile file; see
 [docs/handset-profiles.md](docs/handset-profiles.md). A tested profile is a
 welcome pull request.
 
+**Never attach firmware images, configuration backups or captures that contain real identities** (IPEI, IPUI, keys, PINs,
+phone numbers, SIP credentials) to an issue; mask them, or describe what you saw.
+
 ## Reporting a bug
 
 The same information as above, plus the steps that lead to the problem. For
@@ -87,6 +90,18 @@ Packages built without the project's signing key install only with
 - New files carry an SPDX header: `GPL-2.0-or-later`, except under `kernel/`
   (`GPL-2.0-only`).
 - One logical change per commit, with a message that says why.
+
+## Licence, sign-off and AI assistance
+
+- **Licence.** By contributing you license your change under the licence of the file you change: GPL-2.0-or-later for the
+  programs, libraries and tools, GPL-2.0-only for `kernel/` ([LICENSES/](LICENSES/)). Every new source file starts with an
+  `SPDX-License-Identifier` line.
+- **Sign-off.** Every commit carries a `Signed-off-by: Your Name <you@example.org>` line (`git commit -s`): your statement
+  that you wrote the change or have the right to submit it under that licence (the
+  [Developer Certificate of Origin](https://developercertificate.org/)).
+- **AI assistance.** This project is largely written with AI coding agents under the rules in [AGENTS.md](AGENTS.md). If
+  you used an AI tool for a contribution, say so in the pull request, and check the output yourself: you remain responsible
+  for it, including for any text it may have copied from elsewhere.
 
 ## The clean-room rules
 

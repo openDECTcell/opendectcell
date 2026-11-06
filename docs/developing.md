@@ -87,5 +87,5 @@ experiment's radio on after you are done.
 - `make check` and, for anything touching the box, `make cross` must pass.
 - Say what you tested on which box and handset, and what you could not test.
 - Do not paste analysed or copied vendor code, firmware or keys; describe facts in your own words and name how
-  you know them (`[observed]`, `[derived statically]`, *assumed*).
+  you know them (`[observed]`, `[analysed]`, *assumed*).
 - The conventions for maintainers and their agents (push discipline, work log) are in [../AGENTS.md](../AGENTS.md).

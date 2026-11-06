@@ -4,7 +4,7 @@ Status: **decided** 2026-10-17. **Upload page built** 2026-10-31 (§2a). **Built
 
 ## 1. Why every user needs it
 
-The DECT chip has only a small boot loader in ROM; its RAM is lost at every power-off. FRITZ!OS therefore uploads the STUB over the UART after every chip reset (*derived statically*, the first-stage loader loader on 7412, 7362 SL and 7520). openDECTcell must do the same, and it may not ship the STUB (`AGENTS.md` §2.5). So each user fetches it once, for their own box, from an official AVM image.
+The DECT chip has only a small boot loader in ROM; its RAM is lost at every power-off. FRITZ!OS therefore uploads the STUB over the UART after every chip reset (*analysed*, the vendor loader on 7412, 7362 SL and 7520). openDECTcell must do the same, and it may not ship the STUB (`AGENTS.md` §2.5). So each user fetches it once, for their own box, from an official AVM image.
 
 The per-device **calibration data** is different: it is read at runtime from the box's own factory partition and never comes from an image (M1, `factory_cfg` in the board profile).
 
@@ -53,9 +53,9 @@ For developers, the UCI option `fw_allow_unverified` lets an unknown build throu
 
 **Two 7520 builds are listed since 2026-10-21.** Everything this project has measured was observed against the 08.25 second-stage STUB; the 07.56 one was added so the chip build can itself be tested as a variable, and because the stock-capture reference box runs 07.56 (see the maintainers' notes). Facts carried over from one build to the other must say which build they came from.
 
-**Which build is actually on the chip** is visible in the log: the STUB sends its ASCII build stamp (`0xFFF2`, "RAM: <date>") as the first mail after the first contact *following a chip boot*, so a `dect-stubd` run that reuses an already-loaded STUB never shows it. Run `dect-stubd` straight after `fwload.sh` and read the first mails. `[observed]` 2026-10-17 at gate G2, and `dect-stubd` now decodes the stamp as text. The two builds stamp **`Jan 29 2026`** (08.25) and **`Mar 31 2022`** (07.56) `[CR, the hardware-analysis step, 2026-10-21]`, so label chip-side findings with the stamp rather than the FRITZ!OS version — nearly four years separate them.
+**Which build is actually on the chip** is visible in the log: the STUB sends its ASCII build stamp (`0xFFF2`, "RAM: <date>") as the first mail after the first contact *following a chip boot*, so a `dect-stubd` run that reuses an already-loaded STUB never shows it. Run `dect-stubd` straight after `fwload.sh` and read the first mails. `[observed]` 2026-10-17 at gate G2, and `dect-stubd` now decodes the stamp as text. The two builds stamp **`Jan 29 2026`** (08.25) and **`Mar 31 2022`** (07.56) `[CR, 2026-10-21]`, so label chip-side findings with the stamp rather than the FRITZ!OS version — nearly four years separate them.
 
-`[CR, the hardware-analysis step, 2026-10-21]` The **first-stage loader is byte-identical** between the two builds (`0d855b5929f8b2ad0b8d8fb38065b32e27f9357cd44a2b4e60573b1b5b6da895`), so the upload protocol is unchanged. The **factory parameter block** sits at the same position in both images with the same tag/length sequence — tags 1 (len 5), 2 (len 2), 3 (len 1), 4 (len 1), 6 (len 1), 7 (len 1) — so `dect-fwload`'s patching of tags 1–4 and the mode byte needs no change. `[derived statically, both images]`
+`[CR, 2026-10-21]` The **first-stage loader is byte-identical** between the two builds (`0d855b5929f8b2ad0b8d8fb38065b32e27f9357cd44a2b4e60573b1b5b6da895`), so the upload protocol is unchanged. The **factory parameter block** sits at the same position in both images with the same tag/length sequence — tags 1 (len 5), 2 (len 2), 3 (len 1), 4 (len 1), 6 (len 1), 7 (len 1) — so `dect-fwload`'s patching of tags 1–4 and the mode byte needs no change. `[analysed, both images]`
 
 ## 5. Alternatives considered
 

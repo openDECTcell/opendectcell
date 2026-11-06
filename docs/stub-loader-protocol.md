@@ -1,6 +1,6 @@
 # STUB upload protocol over the UART
 
-Status: *derived statically*, then **confirmed on hardware** (§8) from `the first-stage loader.ko` of FRITZ!OS 08.25 on the FRITZ!Box 7520 (its loader entry point; a build string inside names a 14488 part), 2026-10-17. Partly confirmed by the loader's log on a running 7520 (`7520-DECT-analysis.md` §8: "slow" boot mode, upload of the STUB in about 6 s). These notes describe behaviour in our own words; they contain no AVM code. Image formats: `stub-image-format.md`.
+Status: *analysed*, then **confirmed on hardware** (§8) from the vendor's firmware-loader module of FRITZ!OS 08.25 on the FRITZ!Box 7520 (a build string inside names a 14488 part), 2026-10-17. Partly confirmed by the loader's log on a running 7520 (`7520-DECT-analysis.md` §8: "slow" boot mode, upload of the STUB in about 6 s). These notes describe behaviour in our own words; they contain no AVM code. Image formats: `stub-image-format.md`.
 
 The host uploads two images in two **stages**, over the same UART:
 1. **Stage 1:** the chip's ROM boot loader receives the **first-level image**.

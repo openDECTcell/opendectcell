@@ -19,7 +19,7 @@ fw_secondlevel=dectfw_secondlevel_441-07.18-7362sl.hex
 fw_firstlevel_sha256=72f8e27a0d01c301a05a8b373a71887af882a6cebcb1a30bd4a435580e1045f2
 fw_secondlevel_sha256=8aae3b5e3450fd2c9999e003068e786096c11d8ef53f7d47c25cebd057a797d3
 
-# Stock mode word (derived statically, FRITZ!OS 07.18): 8 slots of 16 bit
+# Stock mode word (analysed, FRITZ!OS 07.18): 8 slots of 16 bit
 # per frame on this box [CR 7362SL/A-0004].
 dect_mode=0x101
 

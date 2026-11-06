@@ -123,7 +123,7 @@ summary:
 - **Legal basis** as stated in the README: EU Directive 2009/24/EC Art. 5(3) and Art. 6 (interoperability), in Germany
   §69d and §69e UrhG. This is the project's statement, not an assessment of it.
 
-The evidence labels (`[observed]`, `[derived statically]`, `[CR A-NNNN]`, *assumed*) are explained in
+The evidence labels (`[observed]`, `[analysed]`, `[CR A-NNNN]`, *assumed*) are explained in
 [docs/README.md](README.md#labels-used-in-the-documents).
 
 ## 7. For redistributors

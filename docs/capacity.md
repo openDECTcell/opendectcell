@@ -78,7 +78,7 @@ larger than assumed. This costs one test card and settles the premise.
 
 ## Host-driver confirmations (A-0013 / A-0014)
 
-Analysis of AVM's host driver (`avm_dect.ko`, 7520) sharpens the picture:
+Analysis of the vendor's host driver (7520) sharpens the picture:
 
 - **The "439" ceiling is a TPUI namespace, not a handset count.** The boot log's
   `avmTpui 16/390, etsiTpui 406/40` means two TPUI number ranges (AVM 16..405,
@@ -93,9 +93,9 @@ Analysis of AVM's host driver (`avm_dect.ko`, 7520) sharpens the picture:
   ordinary GAP handsets is still not demonstrated; host-side virtualisation
   (option 3) remains the lever. [CR A-0014 F1/F2, A-0012 F2]
 - **Concurrent voice is likely below six.** The host reports `DECT=4` logical
-  DECT codec/channel resources (`PCM-link`), and the TDM timing (`FS 8000 Hz`,
+  DECT codec/channel resources (the vendor's PCM driver), and the TDM timing (`FS 8000 Hz`,
   CLK ~1.026 MHz) confirms 8×16-bit PCM frames. Six connection contexts ≠ six
-  simultaneous voice paths; measure `PCM-link` allocation before claiming a number.
+  simultaneous voice paths; measure the vendor PCM driver's allocation before claiming a number.
   [CR A-0013 F6]
 - **Chip-identity caveat:** the 7520 boots the `_441` STUB image, but the filename
   does not prove SC14441 silicon — some reports identify the 7520/7530 DECT chip

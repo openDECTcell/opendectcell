@@ -1,6 +1,6 @@
 # FRITZ!Box 7412: SPI-TDM link, firmware patching, control channel (working notes)
 
-Status: **derived statically** from the FRITZ!OS 06.88 modules on 2026-10-16 (the analysis tooling 12.1.4, MIPS BE). Not yet verified on hardware. These are clean-room notes: behaviour and parameters only.
+Status: **analysed** from the FRITZ!OS 06.88 modules on 2026-10-16 (the analysis tooling 12.1.4, MIPS BE). Not yet verified on hardware. These are clean-room notes: behaviour and parameters only.
 
 ## 1. PCM bus = VR9 SSC in SPI-slave mode
 
@@ -16,7 +16,7 @@ Status: **derived statically** from the FRITZ!OS 06.88 modules on 2026-10-16 (th
 | TXFCON | 0x103 | TX FIFO enabled and flushed, interrupt level 1 |
 | RXFCON | (n << 8) \| 3 | RX FIFO enabled and flushed, interrupt level n = words per frame (≤ 63) |
 
-- **Clock and frame sync:** because the SSC is a slave, the bit clock (DCL, GPIO18) comes from outside the SSC. Candidates are the DECT chip or a clock source gated by GPIO7 (`(vendor-internal name)` / `the PCM clock-enable line`). Frame sync is on GPIO9. `PCM-link` also uses GPTU timers. **Who drives DCL and FSC is still to be decided.** This matters for multi-cell synchronisation.
+- **Clock and frame sync:** because the SSC is a slave, the bit clock (DCL, GPIO18) comes from outside the SSC. Candidates are the DECT chip or a clock source gated by GPIO7 (the clock-enable line). Frame sync is on GPIO9. The vendor's PCM driver also uses GPTU timers. **Who drives DCL and FSC is still to be decided.** This matters for multi-cell synchronisation.
 - **Frame handling:** each frame is a fixed number of 32-bit words. The module keeps two copy descriptors (RX/TX double buffering) and per-slot copy routines. The real-time work runs in a MIPS MT **"yield" handler**, with a fall-back to a normal IRQ (`PCMLINK_IRQ`).
 - **SSC module clock:** the SSC's power-management domain is enabled before setup (PMU bit 8).
 - **GPIO handling:** GPIO33 (DECT reset) is driven low during link reset. The SPI pins are taken over from the generic SPI use: GPIO16/17/18 are shared with the SPI flash signals in the AVM GPIO table.
@@ -169,13 +169,13 @@ did not reproduce. Since `539ea43` a missing answer is asked for once more.
 
 ### 06.88 against 08.25 [CR A-0007]
 
-*Derived statically* from both STUB blobs' mail dispatch tables:
+*Analysed* from both STUB blobs' mail dispatch tables:
 
 - Every bring-up, registration and subscription mail `dect-stubd` sends has a 06.88 handler with the same dispatch flags. Dispatch is by primitive, not by source task. The `0x020A` record handler is the same routine (16-byte record plus flag, stride 0x11, six slots).
 - The UAK record table is **not** at 0x9518 on 06.88; A-0007 gave only the displacement `0x067F`, and the command check found it there. `dect-stubd` uses it since `c9d16f6`.
 - Missing on 06.88: `0x0251` (channel parameter, sent at call set-up, presumably ignored), `0x015E` and `0x015F` (sent only by the optional paging sequence or not at all), `0x0159`, `0x015C`.
 
-## 2. STUB firmware patching (the first-stage loader, `the loader routine`)
+## 2. STUB firmware patching (the vendor loader)
 
 - **First-level loader:** loaded from Intel HEX at chip address 0x10080. If the file name contains `_slow`, a slow boot variant is used.
 - **Second-level image (STUB):**
@@ -208,4 +208,4 @@ The same design as described in `stub-pcm-control-channel.md`:
 2. DCL/FSC source and direction on the 7412 (GPIO7 / GPIO9 / GPTU usage).
 3. Frame length (words per frame), control-slot position and voice-slot mapping in SPI-TDM mode.
 4. The factory DECT config block: where it is stored in flash and its full TLV catalogue.
-5. Whether the `PCM-link*` lines (GPIO10/12) are used at runtime.
+5. Whether the "flash" lines of the PCM link (GPIO10/12) are used at runtime.

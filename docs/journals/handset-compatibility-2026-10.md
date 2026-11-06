@@ -29,7 +29,7 @@ two demonstrably *conformant* handsets need genuinely different FP behaviour.**
 | | FRITZ!Fon C4 | Gigaset A540 CAT | Gigaset C430A |
 |---|---|---|---|
 | vendor | AVM | Gigaset | Gigaset |
-| role here | the handset G1-G7 were developed against | current bench handset | arrived with the A540; used by the the hardware-analysis step for stock captures |
+| role here | the handset G1-G7 were developed against | current bench handset | arrived with the A540; used by the analysis side for stock captures |
 | registered to our base | yes (2026-10-18) | **yes, 2026-10-22**; again after factory reset, slot 1 | **yes, 2026-10-24**, after factory reset, slot 2 |
 | local status | a handset, on the a second unit, **off-limits for experiments** | spare | spare |
 

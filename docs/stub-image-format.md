@@ -1,6 +1,6 @@
 # STUB upload images: format and patching
 
-Status: *derived statically* from `the first-stage loader.ko` of FRITZ!OS 08.25 on the FRITZ!Box 7520 (ARM build; functions `the HEX reader`, the address mapper, `replace_tag`, `the loader patch routine`, `the loader routine`), 2026-10-17. Checked against the 7520 STUB file (`dectfw_secondlevel_441.hex`, SHA-256 `7cac33c7…7b31`) and against the loader's log on a running 7520 (`7520-DECT-analysis.md` §8). These notes describe behaviour in our own words; they contain no AVM code.
+Status: *analysed* from the vendor's firmware-loader module of FRITZ!OS 08.25 on the FRITZ!Box 7520 (ARM build), 2026-10-17. Checked against the 7520 STUB file (`dectfw_secondlevel_441.hex`, SHA-256 `7cac33c7…7b31`) and against the loader's log on a running 7520 (`7520-DECT-analysis.md` §8). These notes describe behaviour in our own words; they contain no AVM code.
 
 The firmware files are Intel HEX. Before upload, the host turns each file into a binary **upload image**. The first-level loader and the STUB use two different image layouts.
 
@@ -64,6 +64,8 @@ The segment address is the record address plus the current extended base: type 0
    - RFPI bytes: `02 70` followed by the low 24 bits of v, most significant byte first
 6. **Mode byte.** If the low byte of `the loader mode value` is not zero, TLV **tag 7, length 1** is set to it (0x05 on the 7520, 0x19 on the 7412, 0x01 on the 7362 SL).
 7. **Tag 9 = STUB version information.** It is not patched: the host only looks for tag 9 with length 22 in the patch area and logs it. The 7520's 08.25 STUB has none ("tag 9 not found").
+
+**What the four factory tags are, and what openDECTcell does with them.** Tag 1 is the RFPI (5 bytes, the base's identity). Tags 2 (2 bytes), 3 (1 byte) and 4 (1 byte) are **not decoded**: on the 7520 tags 2 and 4 differ from the STUB's built-in defaults and tag 3 equals it, so they are very likely per-unit radio calibration values, but our documents do not establish whether any of them encodes transmit power or the carrier frequency, and this repository cannot say that none does. What is established is how they are handled: `dect-fwload` copies the box's own factory values into the image unchanged (replace-only, same tag and length) and sets no value of its own except the RFPI placeholder rule (item 5) and the mode byte (tag 7, item 6). openDECTcell therefore does not change radio parameters; it passes on what the box's factory block holds. Open: what exactly tags 2 to 4 encode (see the open questions below).
 8. **Checksum.** The XOR of the whole payload is recomputed and stored after it.
 
 **Skipped in factory test mode:** if the urlader variable `ptest` is set to the calibration value, no patching happens.

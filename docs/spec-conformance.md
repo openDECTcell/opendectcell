@@ -319,7 +319,7 @@ reason is better.
 
 - **Clause 14 (LCE).** Link establishment and the "short LCE confirm" that
   stock sends between the page response and the SETUP, which we do not send.
-  Bytes are in hand from the the hardware-analysis step (`00 91 21 01 45`). Clause 8.2 and
+  Bytes are in hand from the analysis side (`00 91 21 01 45`). Clause 8.2 and
   §14.2.3 are now audited -- see Gap 5.
 - **Part 4 (DLC / LAPC).** Timer values done (Gap 3). Still to check: the
   class A/B establishment procedures and the NLF handling.

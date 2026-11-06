@@ -26,7 +26,7 @@
 /* Task identifiers (the src/dst bytes of a mail). */
 #define DECT_TASK_CONTACT_DST	0x02u	/* contact destination task [CR A-0003] */
 #define DECT_TASK_CPLANE	0x03u	/* C-plane / DLC events [CR COMMAND_SET §8.2] */
-#define DECT_TASK_PCM		0x22u	/* PCM task, host side (observed; 7520 analysis) */
+#define DECT_TASK_PCM		0x22u	/* PCM task, host side (observed) */
 #define DECT_TASK_PCM_REMOTE	0x23u	/* PCM task, remote side (observed) */
 
 /* Primitive identifiers (mail offset 4, see dect_mail_set_swap()). */

@@ -17,6 +17,11 @@ interface.
 > Gigaset handsets register, ring, and call out and in over SIP, alone or as cells of a
 > controller. Some comfort features are still missing. See [what works and what doesn't](docs/status.md).
 
+> **Please read: experimental software.** openDECTcell is provided as is, without any warranty, and is not a finished product.
+> **Do not rely on it for emergency calls (112, 110 or any other emergency number).** An openDECTcell base can fail, restart or
+> lose its network at any time; keep a phone that does not depend on it. openDECTcell is non-commercial free software, written
+> for interoperability with hardware people already own.
+
 ## Features
 
 - **Your handsets on OpenWrt:** register GAP and CAT-iq handsets with a
@@ -178,8 +183,12 @@ hardware people already own.
 
 See [docs/clean-room-process.md](docs/clean-room-process.md) for how the two sides work and what the `[CR A-nnnn]` citations mean.
 
-openDECTcell is not affiliated with or endorsed by AVM. FRITZ!Box and FRITZ!Fon are
-trademarks of AVM GmbH; Gigaset is a trademark of Gigaset Communications GmbH.
+## Trademarks and affiliation
+
+openDECTcell is not affiliated with or endorsed by AVM GmbH, Gigaset Communications GmbH, Motorola, ETSI, the DECT Forum, the
+OpenWrt project or the Software Freedom Conservancy. DECT is a trademark of ETSI; CAT-iq is a mark of the DECT Forum;
+OpenWrt is a trademark of the Software Freedom Conservancy; FRITZ!, FRITZ!Box and FRITZ!Fon are trademarks of AVM GmbH;
+Gigaset and Motorola are trademarks of their owners. They are named here only to say which hardware openDECTcell works with.
 
 ## About this project
 
@@ -233,8 +242,6 @@ Reports of handsets and boxes, bug reports and code are welcome:
 
 ## License
 
-openDECTcell is **GPL-2.0-or-later**, except the kernel modules under `kernel/`, which are GPL-2.0-only (the texts are in [LICENSES/](LICENSES/), `LICENSE` is the GPL-2.0). The licence of each component is listed in [docs/licensing.md](docs/licensing.md), the third-party parts in [THIRD_PARTY.md](THIRD_PARTY.md); the policy for reporting a vulnerability is [SECURITY.md](SECURITY.md); what data the box keeps is in [docs/privacy-and-data.md](docs/privacy-and-data.md).
+Copyright (C) 2026 the openDECTcell authors.
 
-GPL-2.0, see [LICENSE](LICENSE). The kernel driver under `kernel/` is
-GPL-2.0-only; everything else (programs, `libopendectcell`, tools) is
-GPL-2.0-or-later.
+openDECTcell is **GPL-2.0-or-later**, except the kernel modules under `kernel/`, which are GPL-2.0-only (the texts are in [LICENSES/](LICENSES/), `LICENSE` is the GPL-2.0). The licence of each component is listed in [docs/licensing.md](docs/licensing.md), the third-party parts in [THIRD_PARTY.md](THIRD_PARTY.md); the policy for reporting a vulnerability is [SECURITY.md](SECURITY.md); what data the box keeps is in [docs/privacy-and-data.md](docs/privacy-and-data.md).
