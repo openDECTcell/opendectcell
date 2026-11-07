@@ -58,6 +58,15 @@ stages by their hash and saves them under these names; running it on the 7412
 image has not been tested yet. The 7520's firmware does not drive the 7412's
 bus.
 
+**Unplugging a 7412.** On one tester's 7412 the DECT chip stayed silent after the box was unplugged for a short
+time (the log `/var/run/opendectcell/dect-fwload.log` ends in `upload FAILED ... error -145`, 16 stage 1 attempts and no
+byte from the chip). Pulls of 2 s and 60 s failed, pulls of 5 minutes and longer worked, and restarting the service
+never revived a failed chip: a longer reset and a clock restart did not either. It is one box, with a few runs per
+duration, and the cause is not known (the files, the loader and the configuration were the same in the good and the
+failing boots). So: wait at least **five minutes** before plugging a 7412 back in, and use
+`/etc/init.d/opendectcell restart` instead of pulling the plug. If the chip is silent, switch the box off for
+five minutes or more and start again.
+
 ## 2. Install
 
 The box needs internet access while installing: OpenWrt's package manager
