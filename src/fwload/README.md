@@ -78,6 +78,11 @@ and for the identity a controller sets on a cell. `--dect-fd` lets another
 program (`dect-pcmcap -e`, see [../tools/](../tools/README.md)) hand over its
 open device.
 
+When the chip never sends STX after its reset (every stage 1 attempt times out, no stage 2, no NAK byte),
+`main()` adds one line to the usual error: the firmware files were never involved, so look at the box's power supply, the
+UART lines and a power-off of a minute or more. A tester's 7412 showed exactly this after a short power pull and booted
+normally later; the same image, loader and configuration were used in both cases.
+
 ## Tests
 
 | Test | What it covers |

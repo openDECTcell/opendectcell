@@ -495,6 +495,18 @@ int main(int argc, char **argv)
 	if (r) {
 		fprintf(stderr, "error %d (%s); last NAK code bytes: %u\n", r,
 			strerror(-r), res.last_nak_len);
+		/*
+		 * Silent chip: it never sent STX after its reset, so no stage 2
+		 * was tried and no NAK was seen. The files and the protocol are
+		 * not in question then; say where else to look.
+		 */
+		if (r == -ETIMEDOUT && !res.stage2_attempts && !res.last_nak_len)
+			fprintf(stderr,
+				"the chip never sent STX after its reset (%u stage 1 attempts): it was "
+				"not even sent a file, so the firmware files are not the cause. Worth checking: the "
+				"power supply of the box, the UART lines to the chip, and a power-off of "
+				"a minute or more before the next start\n",
+				res.stage1_attempts);
 		/* leave the pins as we found them */
 		dev_reset(&d, 0);
 		dev_strap(&d, 0);
