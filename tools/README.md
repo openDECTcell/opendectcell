@@ -32,6 +32,12 @@ them with `python3 -I`.
 These helped bring up the chip and the calls. They read captures and logs
 that `dect-stubd` writes during experiments (`-w FILE`, `-a memdump`, …).
 
+`-a memdump=ADDR[:LEN]` reads chip peripheral space too (`0xff....`), not
+only RAM, on the 08.25 STUB (measured 2026-11-07 on a 7520: the reply echoes
+the address and live registers change between reads). A zero is no evidence:
+addresses that are certainly unused also read `0000`, so check a read against
+a register that changes before you trust a zero.
+
 | Tool | What it does |
 |---|---|
 | [voice-decode.py](voice-decode.py) | Works out how a captured voice slot is encoded |
