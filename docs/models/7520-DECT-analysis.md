@@ -51,7 +51,7 @@ Firmware hashes (SHA-256), for verifying later extractions:
 | USB power | GPIO49 |
 
 - **Console conflict.** The vendor loader stops the Linux console and talks to the DECT chip over the console UART; afterwards the same UART carries DECT debug and "LED dim" events. **An OpenWrt build with DECT cannot keep a serial console on UART0.**
-- **DECT chip type: SC14448** (*observed*: board photo of a 7520, reported by the user on 2026-10-17; matches a 2019 OpenWrt mailing-list post about the 7530). The firmware family is nevertheless named `_441`, while a build string inside the loader module names a 14488 part. At runtime, the vendor's host driver can print the chip's `OTP_VERSION` and `HW_CFG` (`dect_chip_hw_cfg`).
+- **DECT chip type: SC14448** (*observed*: the chip top marking of a 7520 reads "dialog SC14448 B96R101QNC H0MA80.1 1933EHAB", read by the maintainer from a photo on 2026-11-07; the date code 1933 most likely means 2019, week 33. Earlier, a board photo reported on 2026-10-17 had given the type only; matches a 2019 OpenWrt mailing-list post about the 7530). The firmware family is nevertheless named `_441`, while a build string inside the loader module names a 14488 part. At runtime, the vendor's host driver can print the chip's `OTP_VERSION` and `HW_CFG` (`dect_chip_hw_cfg`).
 
 ## 4. Firmware boot protocol
 
