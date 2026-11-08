@@ -24,6 +24,18 @@ interface.
 > lose its network at any time; keep a phone that does not depend on it. openDECTcell is non-commercial free software, written
 > for interoperability with hardware people already own.
 
+## Screenshots
+
+![Status > DECT: the DECT Monitor with four handsets, one of them in a call](docs/images/luci-monitor.png)
+
+*Status > DECT: the live monitor. Handsets with their state and field strength, and the radio link of a call in progress.*
+
+![Network > DECT: the registered handsets with their two VoIP lines](docs/images/luci-handsets.png)
+
+*Network > DECT: the handsets of the box, their lines, and the registration of a new handset.*
+
+More pages, with example entries, are in [docs/screenshots.md](docs/screenshots.md). Everything on them is made up.
+
 ## Features
 
 - **Your handsets on OpenWrt:** register GAP and CAT-iq handsets with a

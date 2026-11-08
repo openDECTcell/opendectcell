@@ -31,6 +31,7 @@ Where to start depends on what you want:
 | [status.md](status.md) | What works, what doesn't yet, tested boxes and handsets |
 | [install.md](install.md) | Installing a release, the chip firmware, registering handsets, phone lines |
 | [luci-manual.md](luci-manual.md) | The web pages (Network > DECT, Status > DECT), field by field, with troubleshooting |
+| [screenshots.md](screenshots.md) | The web pages as they look, with example entries |
 | [privacy-and-data.md](privacy-and-data.md) | What personal and secret data the box stores, where, for how long, and how to remove it |
 | [firmware-sourcing.md](firmware-sourcing.md) | Why you supply the DECT chip firmware yourself, and which FRITZ!OS builds are known |
 | [handset-profiles.md](handset-profiles.md) | Handset profiles: per-model settings in `/etc/opendectcell/profiles/`, and how to write one |
