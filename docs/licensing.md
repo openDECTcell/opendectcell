@@ -125,6 +125,25 @@ summary:
 The evidence labels (`[observed]`, `[analysed]`, `[CR A-NNNN]`, *assumed*) are explained in
 [docs/README.md](README.md#labels-used-in-the-documents).
 
+### Similarity check against libdect (2026-11-08)
+
+libopendectcell is GPL-2.0-or-later so that the AGPL controller can link it; libdect (osmocom, GPL-2.0-only) was used as a
+cross-check while it was written. To show that nothing was copied, `src/libopendectcell/` and `src/stubd/` were compared
+mechanically with libdect's current source (`gitea.osmocom.org/dect/libdect`, all 89 `.c`/`.h` files): identical
+code lines of 25 characters or more, comments removed, and shared runs of 12 tokens.
+
+- Every file except one: at most a few identical lines, all generic (`for (i = 0; i < len; i++)`, `case
+  DECT_MM_AUTHENTICATION_REQUEST:` and the like), and at most 5 % shared 12-token runs, from declarations and
+  loops.
+- `dect_dsaa.c` (the DSAA authentication cipher) shares the 256-byte S-box table and the names of the algorithm's
+  steps (`bitperm`, `mix1`..`mix3`, `cassable`, `step1`, `step2`) with libdect's `dsaa.c`. Both come from the public
+  description of DSAA (deDECTed, Tews' thesis appendix B.1, Lucks et al. 2010), where the cipher is called
+  `cassable`; the table is the algorithm itself. The code differs: libopendectcell works on 64-bit words
+  (`load64`/`store64`/`rev64`), libdect on byte arrays, and the functions' signatures and bodies are different.
+  Outside the table the shared 8-token runs are loop headers and the calls of the named steps.
+
+The check was mechanical; it says that no code was copied, not that the result is legally reviewed.
+
 ## 7. For redistributors
 
 If you give out openDECTcell, in binary packages or in an image:
