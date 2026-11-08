@@ -1,6 +1,6 @@
 # AGENTS.md: rules for AI agents (and humans) working on openDECTcell
 
-This file keeps work consistent across sessions and agents. Read it completely before changing anything. For the current project state and next steps, see the maintainers' notes. When a rule here conflicts with a habit, the rule wins. If a rule is unclear or wrong, propose a change to this file in its own commit; don't silently deviate.
+This file keeps work consistent across sessions and agents. Read it completely before changing anything. For the current project state see `docs/status.md`, `ROADMAP.md` and the open issues; who works on what, and every hand-over, is in the issues (CONTRIBUTING.md, "Working on an issue"). the maintainers' notes, where your checkout has it, is the maintainers' private note on their lab and is not part of the public repository. When a rule here conflicts with a habit, the rule wins. If a rule is unclear or wrong, propose a change to this file in its own commit; don't silently deviate.
 
 ## 1. Project in one paragraph
 
@@ -89,8 +89,8 @@ alter their behaviour.**
    behaves exactly as the 7412 and 7520 run today; `make check` and
    `make cross` green with it on and off.
 5. **Record every change to shared code** (`dect-stubd`, the init script,
-   packaging, keep lists) in the maintainers' notes: what it does on the other
-   boxes and how to bench it there, so their owner can check it.
+   packaging, keep lists) in the issue and the pull request: what it does on
+   the other boxes and how to bench it there, so their owner can check it.
 
 ## 2. Clean-room and blob rules (non-negotiable)
 

@@ -30,6 +30,24 @@ phone numbers, SIP credentials) to an issue; mask them, or describe what you saw
 The same information as above, plus the steps that lead to the problem. For
 the web interface, the browser's console output helps.
 
+## Working on an issue: claim, progress, hand-over
+
+Several people and AI agents work on openDECTcell. Who works on what is settled in the GitHub issues, so that nobody does
+the same work twice and anybody can pick up where someone else stopped. The same rules apply to people and agents.
+
+1. **One issue per piece of work.** Search the open issues first; if there is none, open one that says what and why.
+2. **Claim it before you start**, with a comment: `Claiming this: <one line on what you will do>`. An AI agent writes
+   `Claiming this as an AI agent working for @<person>: ...`. A maintainer then assigns the issue and sets the label
+   `in progress` (or you do, if you can).
+3. **Respect a claim.** If an issue is claimed and the claimant posted in the last 14 days, do not start on it; ask in
+   the issue. A claim without an update for 14 days lapses: say so in a comment and claim it yourself.
+4. **The hand-over is in the issue.** At the end of every working session post a comment: what was done (commits),
+   what was tested and how (on the PC, or on which box with which result), what is still open, and what the next person
+   should do first. Nothing another contributor needs may live only in a private note or a chat.
+5. **Finish with a pull request** that says `Fixes #N`, one issue per pull request. If you stop without finishing,
+   release the claim in a comment that gives the state.
+6. **Ask first for big or risky work.** A change to shared code (`libopendectcell`, `dect-stubd`, the init script, packaging; AGENTS.md §1b), to the cell protocol, or anything that makes the radio transmit waits for a maintainer's OK in the issue before work starts.
+
 ## Working on the code
 
 ### Layout
