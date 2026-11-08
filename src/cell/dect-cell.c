@@ -53,6 +53,11 @@
 #define OPENDECTCELL_VERSION "dev"
 #endif
 
+/* names checked by their length through sizeof, so a rename needs no other change */
+#define ENROLL_PREFIX	"opendectcell-enroll:v1?"
+#define URN_CONTROLLER	"urn:opendectcell:controller:"
+#define URN_CELL	"urn:opendectcell:cell:"
+
 #define CELL_DIR	"/etc/opendectcell/cell"
 #define STUBD_SOCK	"/var/run/opendectcell-cell.sock"
 #define AUDIO_SOCK	"/var/run/opendectcell-audio.sock"	/* dect-stubd's */
@@ -297,9 +302,9 @@ static int verify_controller(const mbedtls_ssl_context *ssl,
 				continue;
 			hit = sn.type ==
 				MBEDTLS_X509_SAN_UNIFORM_RESOURCE_IDENTIFIER &&
-			      sn.san.unstructured_name.len > 23u &&
+			      sn.san.unstructured_name.len > sizeof(URN_CONTROLLER) - 1 &&
 			      !memcmp(sn.san.unstructured_name.p,
-				      "urn:opendectcell:controller:", 23);
+				      URN_CONTROLLER, sizeof(URN_CONTROLLER) - 1);
 			mbedtls_x509_free_subject_alt_name(&sn);
 			if (hit)
 				return 0;
@@ -635,11 +640,11 @@ static int enroll(const char *s)
 	mbedtls_x509_crt cacrt;
 	char capin[48], text[512];
 
-	if (strncmp(s, "opendectcell-enroll:v1?", 18)) {
+	if (strncmp(s, ENROLL_PREFIX, sizeof(ENROLL_PREFIX) - 1)) {
 		fprintf(stderr, "not a opendectcell-enroll:v1 string\n");
 		return 2;
 	}
-	q = s + 18;
+	q = s + sizeof(ENROLL_PREFIX) - 1;
 	if (query_get(q, "h", addr, sizeof(addr)) ||
 	    query_get(q, "t", tok, sizeof(tok)) ||
 	    query_get(q, "ca", pin[0], sizeof(pin[0])) ||
@@ -1663,10 +1668,10 @@ static int cell_uri(const mbedtls_x509_crt *c, char *out, size_t cap)
 		if (mbedtls_x509_parse_subject_alt_name(&san->buf, &sn))
 			continue;
 		hit = sn.type == MBEDTLS_X509_SAN_UNIFORM_RESOURCE_IDENTIFIER &&
-		      sn.san.unstructured_name.len > 17u &&
+		      sn.san.unstructured_name.len > sizeof(URN_CELL) - 1 &&
 		      sn.san.unstructured_name.len < cap &&
-		      !memcmp(sn.san.unstructured_name.p, "urn:opendectcell:cell:",
-			      17);
+		      !memcmp(sn.san.unstructured_name.p, URN_CELL,
+			      sizeof(URN_CELL) - 1);
 		if (hit) {
 			memcpy(out, sn.san.unstructured_name.p,
 			       sn.san.unstructured_name.len);

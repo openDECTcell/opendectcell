@@ -10,6 +10,9 @@
 
 #include "dect_contacts.h"
 
+/* the header line of a contacts list; lengths come from sizeof, so a rename needs no other change */
+#define CONTACTS_MAGIC "#opendectcell-contacts 1"
+
 void dect_contacts_init(struct dect_contacts *c)
 {
 	memset(c, 0, sizeof(*c));
@@ -432,7 +435,7 @@ int dect_contacts_load(struct dect_contacts *c, const char *text, size_t len)
 
 	/* the header */
 	nl = memchr(p, '\n', len);
-	if (!nl || (size_t)(nl - p) < 19u || memcmp(p, "#opendectcell-contacts 1", 19))
+	if (!nl || (size_t)(nl - p) < sizeof(CONTACTS_MAGIC) - 1 || memcmp(p, CONTACTS_MAGIC, sizeof(CONTACTS_MAGIC) - 1))
 		return -1;
 	s = find(p, (size_t)(nl - p), "seq=");
 	if (s)

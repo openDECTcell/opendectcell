@@ -9,6 +9,9 @@
 
 #include "dect_calls.h"
 
+/* the header line of the stored list; lengths come from sizeof, so a rename needs no other change */
+#define CALLS_MAGIC "#opendectcell-calls 1\n"
+
 void dect_calls_init(struct dect_calls *c)
 {
 	memset(c, 0, sizeof(*c));
@@ -282,7 +285,7 @@ size_t dect_calls_save(const struct dect_calls *c, char *out, size_t cap)
 	unsigned l, i, k;
 	int n;
 
-	n = snprintf(out, cap, "#opendectcell-calls 1\n");
+	n = snprintf(out, cap, "%s", CALLS_MAGIC);
 	if (n < 0 || (size_t)n >= cap)
 		return 0;
 	at = (size_t)n;
@@ -334,10 +337,10 @@ int dect_calls_load(struct dect_calls *c, const char *text, size_t len)
 	const char *p = text, *end = text + len, *nl;
 	unsigned max_id = 0;
 
-	if (len < 17u || memcmp(text, "#opendectcell-calls 1\n", 17))
+	if (len < sizeof(CALLS_MAGIC) - 1 || memcmp(text, CALLS_MAGIC, sizeof(CALLS_MAGIC) - 1))
 		return -1;
 	dect_calls_init(c);
-	for (p = text + 17; p < end; p = nl + 1) {
+	for (p = text + sizeof(CALLS_MAGIC) - 1; p < end; p = nl + 1) {
 		char f[8][2u * DECT_CALLS_TERMINALS + 4u];
 		struct dect_call e;
 		unsigned v[4], k, dt[6];
