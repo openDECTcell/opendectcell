@@ -77,9 +77,9 @@ The 7412 and 7362 SL transports live in their own repositories and are fetched a
 
 | Package | Source (git) | Pinned commit | Mirror hash | `PKG_LICENSE` |
 |---|---|---|---|---|
-| `lantiq-ssc-pcm` | `https://github.com/openDECTcell/kmod-lantiq-ssc-pcm.git` | `e3c898d6f877c8f6bde2fb597ea5e7b2a2aefbf6` (2026-10-29) | `3f30a7eb...749db83` | GPL-2.0-only |
-| `lantiq-tdm-pcm` | `https://github.com/openDECTcell/kmod-lantiq-tdm-pcm.git` | `44508910c4375de38e4b4e89f6138457056f035e` (2026-11-01) | `e35e62e0...dc1a11` | GPL-2.0-only |
-| `lantiq-usif-uart` | `https://github.com/openDECTcell/kmod-lantiq-usif-uart.git` | `f3591066c33cb4a007c9fde19d9596200b7e2468` (2026-11-01) | `9858849c...72669` | GPL-2.0-or-later GPL-2.0-only |
+| `lantiq-ssc-pcm` | `https://github.com/openDECTcell/kmod-lantiq-ssc-pcm.git` | `829a378daae951f02cf492cad7cddf3dedfd4957` (2026-10-29) | `9458deb7...7591759` | GPL-2.0-only |
+| `lantiq-tdm-pcm` | `https://github.com/openDECTcell/kmod-lantiq-tdm-pcm.git` | `4b3a55ed8a33f6679c65084ef551d0b93c1e8741` (2026-11-01) | `e35e62e0...dc1a11` | GPL-2.0-only |
+| `lantiq-usif-uart` | `https://github.com/openDECTcell/kmod-lantiq-usif-uart.git` | `1789c38ff01ca958bb2c05a6df46eb44241b7736` (2026-11-01) | `9858849c...72669` | GPL-2.0-or-later GPL-2.0-only |
 
 The full hashes are in each `Makefile` (`PKG_MIRROR_HASH`). None of the three sets `PKG_LICENSE_FILES`. The provenance
 review of those repositories (where their code came from, and under which licences) is a separate task and is the
