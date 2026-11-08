@@ -2,11 +2,20 @@
 maintainer's machine with the official SDK and ImageBuilder. The packages carry the SDK's own throwaway signature, not the
 project's key, so install them with `apk add --allow-untrusted` (the images need nothing). The kernel module loads only into that OpenWrt version's kernel.
 
-**Nothing of this release has been installed on a box yet:** the packages were built and checked (`make check`, the cell-link test with the sanitizers, the controller's tests), not run on hardware. The functional code is that of 0.3.6 plus the changes below.
+**Tried on hardware (2026-11-08), no call placed:** installed over openDECTcell on a FRITZ!Box 7412 (these packages) and a 7520
+(the same commit built for OpenWrt 25.12.5, the 7520's lab image): firmware upload at the first attempt, control slot, radio
+on, the web pages' files, park on stop, restart. On the 7520 the old configuration, handset store and SIP line were carried
+over by hand (steps below): the handset came back without being registered again and authenticated, and the SIP line
+registered. The 7412 was put back on openDECTcell afterwards.
 
 What is new since 0.3.6:
 
-- **The project is now called openDECTcell (it was openDECTcell).** Packages, programs, files, the UCI config and the paths carry the new name (`opendectcell`, `/etc/config/opendectcell`, `/etc/opendectcell`). **There is no migration from the openDECTcell 0.3.x packages:** remove them, install these, and register the handsets again. Keeping the registrations by copying `/etc/opendectcell-sub.*` to `/etc/opendectcell-sub.*` has not been tried.
+- **The project is now called openDECTcell (it was openDECTcell).** Packages, programs, files, the UCI config and the paths carry the new name (`opendectcell`, `/etc/config/opendectcell`, `/etc/opendectcell`). **There is no automatic migration from the openDECTcell 0.3.x packages.** By hand, on a standalone box (tried on a 7520):
+  save the old settings first (`cp /etc/config/opendectcell /root/`), stop and remove the openDECTcell packages
+  (`/etc/init.d/opendectcell stop`, `apk del opendectcell opendectcell-cell opendectcell-baresip opendectcell-carddav luci-app-opendectcell ucode-mod-opendectcell-uclient kmod-opendectcell-...`),
+  install these, then `sed s/opendectcell/opendectcell/g /root/opendectcell > /etc/config/opendectcell`, copy `/etc/opendectcell/firmware/*.hex`
+  to `/etc/opendectcell/firmware/` and each `/etc/opendectcell-sub.N` (and `.cap`) to `/etc/opendectcell-sub.N`, and start
+  `/etc/init.d/opendectcell`. A box that is a cell of an openDECTcell controller cannot move on its own: the controller has to move too.
 - **A rename bug caught before it shipped:** the cell checked its enrolment string, the calls-list header and two certificate URN prefixes with lengths of the old name. These checks now use the length of the text itself (`sizeof`), so the enrolment of a cell works with the new name. The same bytes are compared as before.
 - **The README, the controller's standard text and the notes say plainly** that the code is almost entirely AI-written, unreviewed in large parts, and without warranty.
 - `dect-stubd.c` is split into nine files (no change in what the daemon does; tried on the lab 7520 and a 7412 start, no call).
