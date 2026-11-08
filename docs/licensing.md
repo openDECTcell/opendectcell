@@ -22,8 +22,8 @@ Counts are of files carrying `SPDX-License-Identifier` (build artefacts and git-
 | Firmware loader | `src/fwload/` | GPL-2.0-or-later | all 5 files; includes `kernel/include/uapi/opendectcell.h` |
 | baresip module | `src/baresip/` | GPL-2.0-or-later | 1 file; built as a baresip module (section 3) |
 | Capture tools | `src/tools/` | GPL-2.0-or-later | all 3 files |
-| Kernel modules | `kernel/` | GPL-2.0-only | `opendectcell_pcm.c`, `opendectcell_pcm.h`, `opendectcell_ipq40xx.c`, `opendectcell_lantiq.c`, `Makefile`, `include/uapi/opendectcell.h` |
-| Kernel UAPI header | `kernel/include/uapi/ssc_pcm.h` | GPL-2.0 WITH Linux-syscall-note | the only file with the exception |
+| Kernel modules | `kernel/` | GPL-2.0-only | `opendectcell_pcm.c`, `opendectcell_pcm.h`, `opendectcell_ipq40xx.c`, `opendectcell_lantiq.c`, `Makefile` |
+| Kernel UAPI headers | `kernel/include/uapi/opendectcell.h`, `kernel/include/uapi/ssc_pcm.h` | GPL-2.0-only WITH Linux-syscall-note (`ssc_pcm.h`: GPL-2.0 WITH Linux-syscall-note) | the interface userspace includes; the exception keeps the programs that include them free to carry their own licence, as for the kernel's own UAPI headers |
 | PC tools | `tools/` | GPL-2.0-or-later | 28 files with a header; `tools/release/OPENWRT_VERSION` (a version string) has none |
 | Tests | `tests/` | GPL-2.0-or-later | 36 files; the `*.trace` replay files have no header |
 | OpenWrt feed: package and scripts | `openwrt/net/opendectcell/` | GPL-2.0-or-later (headers) | `PKG_LICENSE:=GPL-2.0-or-later GPL-2.0-only`, `PKG_LICENSE_FILES:=LICENSE`. The config, keep lists and `opendectcell.ntp-hotplug` have no header |
@@ -35,9 +35,8 @@ Counts are of files carrying `SPDX-License-Identifier` (build artefacts and git-
 
 Notes:
 
-- `kernel/include/uapi/opendectcell.h` is GPL-2.0-only **without** the Linux-syscall-note, and `dect-stubd`, `dect-fwload`
-  and two tools include it. `ssc_pcm.h` (included by `dect-stubd`) has the note. The repository does not say whether
-  the first one should carry it too; this is a question for the legal review.
+- `kernel/include/uapi/opendectcell.h` carries the Linux-syscall-note since 2026-11-08 (the maintainers' decision; before, it was
+  GPL-2.0-only without it while `dect-stubd`, `dect-fwload` and two tools include it).
 - The three `openwrt/kernel/*/Makefile` files are GPL-2.0-only although AGENTS.md section 5 says GPL-2.0-only
   belongs under `kernel/`. They package kernel modules.
 - Source files carry SPDX identifiers but no copyright lines; a statement of the copyright holders is not
