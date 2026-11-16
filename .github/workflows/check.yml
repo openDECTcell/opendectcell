@@ -3,9 +3,9 @@
 # each push and pull request. The packages are the Packages workflow's.
 name: Check
 
-# Manual while the repository is private (Actions minutes); push and pull_request triggers return when it is public.
 on:
-  workflow_dispatch:
+  push:
+  pull_request:
 
 permissions:
   contents: read
