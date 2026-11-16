@@ -558,6 +558,34 @@ void dect_base_mem_reply(struct dect_base *b, const struct dect_mail *m)
 	}
 }
 
+/* -v: every NWK message we send, as log_segment() shows the ones we get (redacted unless -p). */
+static void log_nwk_out(struct dect_base *b, const char *who, const uint8_t *msg, size_t len)
+{
+	char hex[3 * DECT_LAPC_MSG_MAX + 64];
+	size_t i, o = 0;
+
+	if (!b->cfg.verbose && !b->cfg.log_raw)
+		return;
+	if (!b->cfg.log_raw) {
+		(void)dect_nwk_format_redacted(msg, len, hex, sizeof(hex));
+	} else {
+		for (i = 0; i < len && o + 4 < sizeof(hex); i++)
+			o += (size_t)snprintf(hex + o, sizeof(hex) - o, "%02x ", msg[i]);
+		hex[o] = '\0';
+	}
+	dect_base_log(b, "%s: nwk out --> %s", who, hex);
+}
+
+static void tx_log_main(void *ctx, const uint8_t *msg, size_t len)
+{
+	log_nwk_out(ctx, "reg", msg, len);
+}
+
+static void tx_log_side(void *ctx, const uint8_t *msg, size_t len)
+{
+	log_nwk_out(ctx, "side", msg, len);
+}
+
 void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 			 uint8_t handle, const struct dect_mm_cfg *cfg,
 			 unsigned hold_mask)
@@ -574,6 +602,8 @@ void dect_base_link_open(struct dect_base *b, struct dect_base_link *bl,
 	bl->enrol_switched = 0;
 	bl->handle = handle;
 	dect_link_init(&bl->link, handle, cfg);
+	if (b->cfg.verbose || b->cfg.log_raw)
+		dect_link_set_tx_log(&bl->link, bl == &b->main_link ? tx_log_main : tx_log_side, b);
 	bl->link.auth_required = b->cfg.auth_first && !b->cfg.no_cipher;
 	if (b->rec.port_id_len) {
 		memcpy(mm->port_id, b->rec.port_id, b->rec.port_id_len);
@@ -697,6 +727,8 @@ void dect_base_side_open(struct dect_base *b, struct dect_base_link *bl,
 	bl->enrol_switched = 0;
 	bl->handle = handle;
 	dect_link_init(&bl->link, handle, cfg);
+	if (b->cfg.verbose || b->cfg.log_raw)
+		dect_link_set_tx_log(&bl->link, bl == &b->main_link ? tx_log_main : tx_log_side, b);
 	for (i = 0; i < b->n_hs && i < DECT_BASE_HS_MAX; i++) {
 		const struct dect_hs_rec *r = i == b->cur ? &b->rec : &b->hs[i];
 
@@ -1240,21 +1272,15 @@ void dect_base_ring_page(struct dect_base *b)
 	dect_base_tpui(b, b->ring.hs, tpui);
 	info = dect_base_page_info(b, dect_base_ring_narrow(b));
 	dect_base_page(b, info, tpui);
+	/*
+	 * No "TPUI never acknowledged" here any more: it read the idle main link's state, so it fired on every page, also for
+	 * handsets that answered (more-than-six.md, TPUI test run 3). The outcome of the assignment is logged when the link that
+	 * carried it is released ("reg: connection released -- TPUI assignment ...").
+	 */
 	dect_base_log(b, "ring: paged the handset, attempt %u of %u "
-		      "(0x0300 {%02x %02x %02x}, basic service %02x)%s",
+		      "(0x0300 {%02x %02x %02x}, basic service %02x)",
 		      b->ring.pages, DECT_BASE_PAGE_RETRIES, info,
-		      tpui[1], tpui[2], b->cfg.basic_svc,
-		      /*
-		       * We page BY the TPUI we assigned. If the handset never
-		       * acknowledged the assignment (EN 300 175-5 §13.2.2,
-		       * {TEMPORARY-IDENTITY-ASSIGN-ACK}) it may not be
-		       * listening for it, and the page is silent in a way that
-		       * looks exactly like a handset that will not answer --
-		       * which we have chased more than once. Say so rather
-		       * than letting it look normal.
-		       */
-		      dect_mm_tpui_confirmed(&b->main_link.link.mm)
-		      ? "" : " -- WARNING: TPUI never acknowledged");
+		      tpui[1], tpui[2], b->cfg.basic_svc);
 }
 
 /*
@@ -1734,6 +1760,24 @@ int dect_base_party_active(const struct dect_base *b, int p)
 static struct dect_cc *party_cc(struct dect_base *b, int p)
 {
 	return &dect_base_party_link(b, p)->link.cc;
+}
+
+/*
+ * cc.alert_off_on_release: a handset that is ringing when the far end hangs up gets <<SIGNAL>> "alerting off" in a {CC-INFO}
+ * before the {CC-RELEASE} (EN 300 175-5 §7.6.8; catalog B-INC-07). The Motorola O201 goes on ringing for 10 to 15 seconds
+ * after a plain release (bench 2026-11-09).
+ */
+static void alert_off_before_release(struct dect_base *b, int p)
+{
+	static const uint8_t ie[2] = { DECT_IE_SIGNAL, DECT_SIGNAL_ALERT_OFF };
+	struct dect_base_link *bl = dect_base_party_link(b, p);
+	int i = dect_base_hs_of_link(b, &bl->link);
+
+	if (i < 0 || !b->prof[i].cc_alert_off_on_release ||
+	    bl->link.cc.state != DECT_CC_ST_RINGING)
+		return;
+	if (!dect_cc_info(&bl->link.cc, ie, sizeof(ie)))
+		dect_base_log(b, "bridge: ring switched off with <<SIGNAL>> 4F before the release (profile)");
 }
 
 static int lanes(struct dect_base *b, int p)
@@ -3121,9 +3165,11 @@ int dect_base_ctl_call(struct dect_base *b, const struct dect_ctl_msg *m,
 			reply(r, NULL, "call", id);
 			return 1;		/* paging stops */
 		}
-		if (dect_base_party_active(b, p) && dect_cc_busy(party_cc(b, p)))
+		if (dect_base_party_active(b, p) && dect_cc_busy(party_cc(b, p))) {
+			alert_off_before_release(b, p);
 			(void)dect_cc_release_reason(party_cc(b, p),
 						     bridge_reason(rs));
+		}
 	} else if (!c->out || !dect_base_party_active(b, p)) {
 		reply(r, "no-call", NULL, 0);
 		return 1;
@@ -5345,6 +5391,24 @@ static void link_up(struct dect_base *b, int p)
 		b->ops->link_up(b->ctx, p);
 }
 
+/*
+ * What became of the TPUI a {LOCATE-ACCEPT} assigned, as the log may say it when that link is released. "" when this link made
+ * no assignment. A handset that never takes the TPUI is never paged by it (the ring then goes unheard), and the page itself
+ * shows nothing: this line, from the link that carried the assignment, is the only place the outcome is known.
+ */
+static const char *tpui_outcome(const struct dect_mm *mm)
+{
+	if (mm->tpui_confirmed)
+		return " -- TPUI assignment acknowledged";
+	if (mm->tpui_rejected)
+		return " -- TPUI assignment REFUSED by the handset";
+	if (mm->tpui_timed_out)
+		return " -- TPUI assignment: no answer within 10 s";
+	if (mm->ident_pending)
+		return " -- TPUI assignment: no answer before the release";
+	return "";
+}
+
 static void side_down(struct dect_base *b, unsigned k)
 {
 	if (b->ops && b->ops->side_down)
@@ -5426,8 +5490,10 @@ void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known)
 	int k = known ? side_of(b, handle) : -1;
 
 	if (k >= 0 && !(ml->active && handle == ml->handle)) {
+		const char *tp = tpui_outcome(&b->side[k].link.mm);
+
 		side_down(b, (unsigned)k);
-		dect_base_log(b, "side: connection released (handle %u)", handle);
+		dect_base_log(b, "side: connection released (handle %u)%s", handle, tp);
 		return;
 	}
 	if (ml->active && known && handle != ml->handle) {
@@ -5437,7 +5503,7 @@ void dect_base_conn_down(struct dect_base *b, uint8_t handle, int known)
 		return;
 	}
 	if (ml->active)
-		dect_base_log(b, "reg: connection released");
+		dect_base_log(b, "reg: connection released%s", tpui_outcome(&ml->link.mm));
 	dect_mm_wipe(&ml->link.mm);
 	ml->active = 0;
 	(void)dect_base_serve(b, 0, " (link released)");

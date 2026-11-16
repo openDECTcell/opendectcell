@@ -67,10 +67,12 @@ Gigaset A540. The full list is in [docs/status.md](docs/status.md), and what com
 | **FRITZ!Box 7520** | ✅ works: the development box |
 | **FRITZ!Box 7530** | 🟡 same hardware as the 7520, not yet tested |
 | FRITZ!Box 7412 | 🟡 handsets register and calls work, standalone and as a cell (needs `kmod-lantiq-ssc-pcm`, which the releases include); in rare cases the box's network dies at a service stop ([details](docs/7412-stop-hang.md)) |
-| FRITZ!Box 7362 SL | 🟡 works as a cell of a controller: SIP calls in and out in HD voice (needs `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm`, not in the release); as a standalone base not tested yet |
+| FRITZ!Box 7362 SL | 🟡 works as a cell of a controller: SIP calls in and out in HD voice (needs `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm`, which the releases include); as a standalone base not tested yet |
 
-**Tested handsets:** Gigaset A540 CAT, Gigaset C430A, Gigaset AS690H and AVM
-FRITZ!Fon C4. openDECTcell follows the DECT standards, so other GAP or CAT-iq
+**Tested handsets:** Gigaset A540 CAT, Gigaset C430A, Gigaset AS690H, AVM
+FRITZ!Fon C4 and, with its device profile, the Motorola O201. **Known problems:** the Siemens C45 and C450 register and
+can dial out, but do not ring on incoming calls; the Motorola O201 goes on ringing for 10 to 15 seconds after the caller
+hangs up ([docs/status.md](docs/status.md)). openDECTcell follows the DECT standards, so other GAP or CAT-iq
 handsets should work as well. Please [tell us](CONTRIBUTING.md) how yours
 does.
 

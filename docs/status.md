@@ -66,7 +66,7 @@ tested · ❌ not built yet · ➖ out of scope for now
 | FRITZ!Box 7520 | ✅ | The development box |
 | FRITZ!Box 7530 | 🟡 | Same hardware as the 7520 and the same OpenWrt image, but not tested on one yet |
 | FRITZ!Box 7412 | 🟡 | Works as a standalone base and as a cell of a controller, with the `kmod-lantiq-ssc-pcm` transport, which the release includes: handsets register, SIP calls in and out with HD voice, calls between handsets (2026-10-29 to 2026-11-02). In rare cases the box's network died at a service stop (4 in about 190 stops on 2026-10-30/31; 640 stops since did not reproduce it): [7412-stop-hang.md](7412-stop-hang.md) |
-| FRITZ!Box 7362 SL | 🟡 | With `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm` (their own repositories, not in the release): works as a cell of a controller (2026-11-04): a handset registered, SIP calls in and out with HD voice, the cell survives service restarts and reboots. As a standalone base with SIP it is not tested yet; how many calls at once is not measured. In the first seconds after a boot the transport once lost frames (the maintainers' notes; bench: [journals/bench-7362sl-g6-g7.md](journals/bench-7362sl-g6-g7.md)) |
+| FRITZ!Box 7362 SL | 🟡 | With `kmod-lantiq-usif-uart` and `kmod-lantiq-tdm-pcm` (their own repositories; the release includes the packages): works as a cell of a controller (2026-11-04): a handset registered, SIP calls in and out with HD voice, the cell survives service restarts and reboots. As a standalone base with SIP it is not tested yet; how many calls at once is not measured. In the first seconds after a boot the transport once lost frames (the maintainers' notes; bench: [journals/bench-7362sl-g6-g7.md](journals/bench-7362sl-g6-g7.md)) |
 | Other FRITZ!Boxes | ❌ | Many use the same DECT chip; see [hardware-abstraction.md](hardware-abstraction.md) for what a new model needs |
 
 A release is built for **one OpenWrt version** (named in `tools/release/OPENWRT_VERSION`, and on the release page):
@@ -81,7 +81,8 @@ the packages on exactly that OpenWrt release; a box on another release needs the
 | Gigaset C430A | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number. Shows no date and time from the base |
 | Gigaset AS690H | GAP / NG-DECT Part 1 | Registration, calls, HD voice, encryption, number |
 | AVM FRITZ!Fon C4 | CAT-iq | Registered and called during development; not tested with this release |
-| Motorola O201 | GAP only, narrowband only (not CAT-iq) | With its profile `motorola-o201` (2026-11-05, a standalone 7412): registration, calls in and out with audio both ways, 3 of 3 calls. It needs the profile: without it incoming calls are refused and outgoing calls are silent. Name display not working (it shows "Externer Anruf"); not tried through the controller; [handset-compatibility.md](handset-compatibility.md#the-motorola-o201) |
+| Motorola O201 | GAP only, narrowband only (not CAT-iq) | With its profile `motorola-o201` (2026-11-05, a standalone 7412): registration, calls in and out with audio both ways, 3 of 3 calls. It needs the profile: without it incoming calls are refused and outgoing calls are silent. Name display not working (it shows "Externer Anruf"); through the controller on a 7520 (2026-11-09): calls in and out with several handsets ringing from one line, narrowband speech converted to the line's G.722. **Known problem:** after the caller hangs up while it rings, it goes on ringing for 10 to 15 seconds; the release is acknowledged and its call is gone, so it looks like the handset's own ring timer (an extra "alerting off" signal did not help); [handset-compatibility.md](handset-compatibility.md#the-motorola-o201) |
+| Siemens C45, C450 | GAP only (old) | Register, dial out, and the end of a call from the far side works. **Incoming calls do not ring:** the base pages the handset every 3 seconds and never gets an answer, although the handset acknowledged its temporary identity at registration. Examined against GAP (2026-11-10): nothing mandatory is missing; open suspects are the validity limit we send in the registration answer and paging by the default identity. Under investigation |
 
 openDECTcell follows the DECT standards (GAP, CAT-iq) rather than one maker's
 habits, so other GAP or CAT-iq handsets should work too. Reports of other
@@ -102,7 +103,7 @@ handsets are very welcome; see [CONTRIBUTING.md](../CONTRIBUTING.md).
   a separate controller project. A box can already join a controller as a
   cell (`opendectcell-cell`), and the DECT stack now sits in the shared library
   `libopendectcell` so the controller can run it; the controller running
-  handsets through its cells is the next step. Handover during a call
+  handsets through its cells has been done since November 2026 (a 7520 and a 7412 as cells; see the controller's wiki, "Limits" for what has been tried). Handover during a call
   needs the boxes to be synchronised, which is unsolved.
 - **ULE** (DECT smart-home devices) and **SUOTA** (handset firmware updates):
   ➖.

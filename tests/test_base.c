@@ -1826,11 +1826,18 @@ int main(void)
 		CHECK_EQ(b.side[0].lane, -1);
 		dect_base_conn_down(&b, 3, 1);		/* not ours: ignored */
 		CHECK_EQ(b.main_link.active, 1);
+		/* a link that carried a TPUI assignment says what became of it when it is released (Siemens C45/C450 bench) */
+		b.side[0].link.mm.ident_pending = 1;
+		log_all[0] = '\0';
 		dect_base_conn_down(&b, 2, 1);
 		CHECK_EQ(b.side[0].active, 0);
 		CHECK_EQ(b.main_link.active, 1);
+		CHECK(strstr(log_all, "side: connection released (handle 2) -- TPUI assignment: no answer before the release") != NULL);
+		b.main_link.link.mm.tpui_confirmed = 1;
+		log_all[0] = '\0';
 		dect_base_conn_down(&b, 1, 1);
 		CHECK_EQ(b.main_link.active, 0);
+		CHECK(strstr(log_all, "reg: connection released -- TPUI assignment acknowledged") != NULL);
 		b.have_rfpi = 0;
 		{
 			struct dect_mail m;

@@ -50,6 +50,8 @@ static const struct key keys[] = {
 	  0, 0, 0, "call", "Switch the audio on before connecting" },
 	{ "cc.progress_in_band", T_WORDS, OFF(cc_progress_in_band), YN,
 	  0, 0, 0, "call", "Tell the handset in-band audio is available (it plays nothing without)" },
+	{ "cc.alert_off_on_release", T_WORDS, OFF(cc_alert_off_on_release), YN,
+	  0, 0, 0, "call", "Switch a ringing handset's ring off before releasing it (caller hung up)" },
 	{ "cc.name.method", T_WORDS, OFF(cc_name_method),
 	  "cnip|display|both|none", 0, 0, 0,
 	  "call", "How the caller's name is shown" },

@@ -1,31 +1,31 @@
 # Roadmap
 
-## Where we are (October 2026)
+## Where we are (November 2026)
 
-- **Done:** the DECT base works on a FRITZ!Box 7520. Handsets register,
-  ring and talk with HD voice, encrypted; calls go out and come in over SIP
-  through baresip; everything is set up in LuCI; signed packages are built
-  by GitHub Actions. User-level summary: [docs/status.md](docs/status.md).
-- **Next (M9b), built 2026-10-29 and waiting for the bench:** one SIP line
-  ringing several handsets, outgoing calls on Line 2, narrowband speech to
-  SIP with the codecs matched end to end, G.722 passed through, up to three
-  SIP calls at once, call waiting, hold and toggle, DTMF, the voicemail
-  indicator ([docs/lines-and-calls.md](docs/lines-and-calls.md); cards in
-  [docs/journals/bench-7412.md](docs/journals/bench-7412.md) and
-  [docs/journals/bench-next.md](docs/journals/bench-next.md)).
-- **Handsets that are not plain GAP or CAT-iq (November 2026):** the Motorola O201 works both ways through a device profile
-  (API 158, 159). Next: a catalogue of every variation of the basic functions the standards permit
-  ([docs/handset-variation-catalog.md](docs/handset-variation-catalog.md)), then the DECT Command Finder in tiers: a frame
-  decoder, a `probe` verb and a support bundle first, a guided fitter and a LuCI page only when a second handset needs
-  them ([docs/vendor-specific-support.md](docs/vendor-specific-support.md) §7.8).
-- **Five calls at once on the 7520 (planned, November 2026):** the 08.25 chip has five voice channel chains (the room's A-0141; the 7412's
+- **Done:** the DECT base works on a FRITZ!Box 7520 and a 7412 (and as a cell on the 7362 SL). Handsets register,
+  ring and talk with HD voice, encrypted; calls go out and come in over SIP through baresip; everything is set up in
+  LuCI; signed packages and ready-made images are built by GitHub Actions (0.3.7, a pre-release). User-level
+  summary: [docs/status.md](docs/status.md).
+- **The controller exists** (separate repo `opendectcell-controller`): it runs the DECT stack for many boxes (cells), with
+  SIP lines, a web interface, roaming of handsets between cells, organisations and per-user privacy. A 7520 and a 7412
+  have been run as cells of it; what is only built or simulated is listed in its wiki page "Limits".
+- **Built, only partly tried on handsets:** several handsets ringing from one SIP line, outgoing calls on Line 2,
+  narrowband speech converted to SIP, up to three SIP calls at once, call waiting, hold and toggle, DTMF, the voicemail
+  indicator, phonebook and call lists ([docs/lines-and-calls.md](docs/lines-and-calls.md); cards in
+  [docs/journals/bench-7412.md](docs/journals/bench-7412.md) and [docs/journals/bench-next.md](docs/journals/bench-next.md)).
+- **Handsets that are not plain GAP or CAT-iq:** the Motorola O201 works both ways through a device profile (API 158,
+  159), with one known problem (it keeps ringing 10 to 15 s after the caller hangs up). The Siemens C45 and C450 do not
+  ring on incoming calls (investigation in [docs/status.md](docs/status.md)). The catalogue of every variation of the
+  basic functions the standards permit is [docs/handset-variation-catalog.md](docs/handset-variation-catalog.md); the
+  DECT Command Finder is built in tiers ([docs/vendor-specific-support.md](docs/vendor-specific-support.md) §7.8).
+- **Five calls at once on the 7520 (planned):** the 08.25 chip has five voice channel chains (the room's A-0141; the 7412's
   06.88 and 07.56 have three) and the cell announces three for every build. Needed first: the TDM words of channels 4 and 5 on 08.25
   (a question for the room), then lanes 4 and 5 in `dect-stubd` (a bearer each, `0x0230`/`0x0242` for channels 4 and 5) behind an option,
   a bench run on the spare 7520, and only then the count announced per build (5 on 08.25, 3 elsewhere). Details:
   [docs/more-than-six.md](docs/more-than-six.md) (A-0141), [docs/two-calls.md](docs/two-calls.md).
-- **Then:** call lists and the phonebook on the handset (M9b, optional),
-  the FRITZ!Box 7412 as a release target (section Later), the multi-cell
-  controller (M10, M11).
+- **Open defects:** the 7412's network can die when the service is stopped during the slot search
+  ([docs/7412-stop-hang.md](docs/7412-stop-hang.md)); after a restart of a controller worker, handsets show as offline
+  until they register again; handover during a call needs synchronised boxes and is unsolved.
 
 The rest of this file is the detailed plan, milestone by milestone, with the
 history of each item. `[x]` done, `[~]` partly done, `[ ]` open.
@@ -33,9 +33,8 @@ history of each item. `[x]` done, `[~]` partly done, `[ ]` open.
 **First target:** FRITZ!Box 7520 (identical hardware to the 7530; OpenWrt image `avm_fritzbox-7530`). Decided 2026-10-17 because a 7520 is available and the 7412 is not. The 7412 and 7362 SL follow with the same stack.
 
 - Each milestone (`## M…`) maps to a GitHub milestone, and each checkbox to an issue. Items marked **[hw]** need a real box.
-- **State and gaps as of 2026-10-25:** `docs/review-2026-10-25.md` (what works, what is built but unproven, what the roadmap still lacks, and the order of work).
-- **Order of work (maintainer, 2026-10-25, revised the same evening):** finish the DECT basics (the open bench tests), then the handset abstraction layer (M8b), then **a working standalone OpenWrt package with VoIP (M9b, baresip)** together with productising the cell (M9). The controller freeze is **lifted**: the controller works in parallel. Still open: whether the standalone package includes controller functions (a decision for Wednesday; `docs/review-2026-10-25.md`).
-- **Gates G1–G7 are go/no-go points on real hardware.** Work that depends on a gate starts only after the gate has passed (see `AGENTS.md` §6). The controller (separate repo `opendectcell-controller`) is designed in parallel but **implemented only after G7**.
+- **Order of work (maintainer, 2026-10-25, revised the same evening):** finish the DECT basics (the open bench tests), then the handset abstraction layer (M8b), then **a working standalone OpenWrt package with VoIP (M9b, baresip)** together with productising the cell (M9). The controller freeze is **lifted**: the controller works in parallel.
+- **Gates G1–G7 are go/no-go points on real hardware.** Work that depends on a gate starts only after the gate has passed (see `AGENTS.md` §6). The controller (separate repo `opendectcell-controller`) was designed in parallel and implemented after G7.
 
 | Gate | Proves | Pass criterion |
 |---|---|---|
@@ -58,7 +57,7 @@ history of each item. `[x]` done, `[~]` partly done, `[ ]` open.
 - [x] Complete mail header layout (source/destination task, primitive, length)
   - `docs/stub-api.md` §1 (2026-10-25)
 - [x] Primitive-ID catalogue host↔STUB (`docs/stub-api.md`)
-  - 2026-10-25: written by an outside helper from this repository only (brief: `docs/briefs/stub-api-catalogue.md`), and reviewed. Every claim is labelled measured, answered, inferred or unknown. §5 lists stale statements in our own docs and code comments (the `0x0202` "trigger" helper name, the "`0x017C` never sent" comment, the DLC split in `AGENTS.md` §1a) to fix
+  - 2026-10-25: written by an outside helper from this repository only (from a written brief), and reviewed. Every claim is labelled measured, answered, inferred or unknown. §5 lists stale statements in our own docs and code comments (the `0x0202` "trigger" helper name, the "`0x017C` never sent" comment, the DLC split in `AGENTS.md` §1a) to fix
 - [ ] STUB (CR16C) analysis: meaning of mode byte tag 7; channel configuration
 - [x] Minimal mail sequence for MAC start (G5): `0x015B:01` + `0x022B:41` [CR COMMAND_SET]. Registration/call-setup sequences (G6/G7) still to establish from COMMAND_SET §6.2-§6.4 + ETSI
 
@@ -208,7 +207,7 @@ All host-side modules below are built and PC-unit-tested (golden vectors / loopb
   - 2026-10-29: all four built (`07a57dc`, `ead1a36`): up to three SIP calls at once, a VoIP profile shared by several handsets rings them all, a handset's chosen line, narrowband resampled to the bridge's 16 kHz; not yet on air
   - 2026-10-29 night: codecs matched end to end instead of converted (`760bb12`): narrowband callers ring the handset narrowband, a narrowband handset's INVITE offers G.711 only, G.722 passes through untouched (`371e783`); DTMF to SIP, the voicemail indicator (`58cf49e`). **[hw]** Untested; cards 5-13 in `docs/journals/bench-7412.md`
 
-## M10: Controller (repo `opendectcell-controller`; implementation starts after G7)
+## M10: Controller (repo `opendectcell-controller`; implemented after G7, running since November 2026)
 - [x] Architecture, VoIP requirements and DECT feature framework (design docs in opendectcell-controller)
 - [ ] Implementation per the controller repo's own roadmap
 
